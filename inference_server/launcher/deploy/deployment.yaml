@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: launcher
+  name: launcher
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: launcher
+  strategy: {}
+  template:
+    metadata:
+      labels:
+        app: launcher
+    spec:
+      containers:
+        - image: IMAGE_NAME_HERE
+          name: launcher
