@@ -39,7 +39,7 @@ metadata:
           - vllm
           - serve
           - --port=8000
-          - deepseek-ai/DeepSeek-R1-Distill-Qwen-32B
+          - /pvcs/local/hf/models--deepseek-ai--DeepSeek-R1-Distill-Qwen-32B/snapshots/711ad2ea6aa40cfca18895e8aca02ab92df1a746
           - --max-model-len=32768
           env:
           - name: VLLM_CACHE_ROOT
@@ -48,6 +48,14 @@ metadata:
             limits:
               cpu: "2"
               memory: 1Gi
+          volumeMounts:
+          - name: local
+            readOnly: true
+            mountPath: /pvcs/local
+        volumes:
+        - name: local
+          persistentVolumeClaim:
+            claimName: {{ .LocalVolume }}
 spec:
   affinity:
     nodeAffinity:
@@ -107,7 +115,7 @@ spec:
     - vllm
     - serve
     - --port=8000
-    - deepseek-ai/DeepSeek-R1-Distill-Qwen-32B
+    - /pvcs/local/hf/models--deepseek-ai--DeepSeek-R1-Distill-Qwen-32B/snapshots/711ad2ea6aa40cfca18895e8aca02ab92df1a746
     - --max-model-len=32768
     env:
     - name: VLLM_CACHE_ROOT
@@ -122,10 +130,16 @@ spec:
     volumeMounts:
     - name: shared
       mountPath: /pvcs/shared
+    - name: local
+      readOnly: true
+      mountPath: /pvcs/local
   volumes:
   - name: shared
     persistentVolumeClaim:
       claimName: shared
+  - name: local
+    persistentVolumeClaim:
+      claimName: somenode-local
 ```
 
 Explicitly specifying a quantity of "0" GPUs gets this container

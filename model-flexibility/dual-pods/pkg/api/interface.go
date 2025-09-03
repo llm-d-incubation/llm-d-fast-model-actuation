@@ -14,7 +14,8 @@ package api
 
 // ServerPatchAnnotationName is the name of the annotation on the
 // server-requesting Pod that defines how to transform it into the
-// corresponding server-running Pod. The value of the annotation is a patch
+// corresponding server-running Pod. The value of the annotation is a
+// [Golang template](https://pkg.go.dev/text/template) that expands to a patch
 // in Kubernetes YAML (which subsumes JSON). In particular, it is a
 // strategic merge patch, as described in
 // https://kubernetes.io/docs/tasks/manage-kubernetes-objects/update-api-object-kubectl-patch/#use-strategic-merge-patch-to-update-a-deployment-using-the-retainkeys-strategy .
@@ -31,3 +32,13 @@ const ServerPatchAnnotationName = "dual-pod.llm-d.ai/server-patch"
 // is the name of the port on the "inference-server" container to be
 // queried to get the set of associated accelerators.
 const AdminPortAnnotationName = "dual-pod.llm-d.ai/admin-port"
+
+// RunnerData is the data made available to the server patch.
+type RunnerData struct {
+  // NodeName is the name of the Node to which the Pod is bound
+  NodeName string
+
+  // LocalVolume is the name of the PVC that is dedicated to storage specific
+  // to that node.
+  LocalVolume string
+}
