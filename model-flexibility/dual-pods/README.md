@@ -14,11 +14,23 @@ the inference servers.
 See [the interface declarations](pkg/api) for more details of the
 technique.
 
-## Example: vLLM sleep/wake and 1 nvidia GPU
+When using vLLM as the inference server code, the server-requesting
+Pod has a command of the form `vllm serve <common flags> <model
+reference> <model-specific flags>`, where each flag starts with `-`
+and the model reference does not. The dual-pod controller concludes
+that to create a server-running Pod for a particular model, it uses
+the command `vllm serve <common flags> <model reference>
+<model-specific flags>`. To swap a model out, the controller issues a
+POST request that does not include the model reference nor the
+model-specific flags. To swap a model in, the controller issues a POST
+request that includes the model reference and the model-specific flags
+according to a pattern fixed at controller development time.
 
-Here is an example using vLLM level 1 sleep/wake and a model that runs
-on a single nvidia GPU via the nvidia GPU operator. Details here are
-specific to nvidia GPUs and software.
+## Example: vLLM and 1 nvidia GPU
+
+Here is an example using vLLM and a model that runs on a single nvidia
+GPU via the nvidia GPU operator. Details here are specific to nvidia
+GPUs and software.
 
 Following is what a client might submit to the kube-apiserver in a
 request to create a server-requesting Pod.
