@@ -32,7 +32,6 @@ metadata:
     dual-pod.llm-d.ai/admin-port: 8001
     dual-pod.llm-d.ai/server-patch: |
       spec:
-        affinity: null
         containers:
         - name: inference-server
           image: docker.io/vllm/vllm-openai@v0.10.1.1
@@ -42,11 +41,13 @@ metadata:
           - --port=8000
           - deepseek-ai/DeepSeek-R1-Distill-Qwen-32B
           - --max-model-len=32768
+          env:
+          - name: VLLM_CACHE_ROOT
+            value: /pvcs/shared/vllm
           resources:
             limits:
               cpu: "2"
               memory: 1Gi
-
 spec:
   affinity:
     nodeAffinity:
@@ -70,6 +71,13 @@ spec:
         nvidia.com/gpu: "1"
         cpu: "1"
         memory: 250Mi
+    volumeMounts:
+    - name: shared
+      mountPath: /pvcs/shared
+  volumes:
+  - name: shared
+    persistentVolumeClaim:
+      claimName: shared
 ```
 
 From such a server-requesting Pod, after it is placed on the Node
@@ -102,12 +110,22 @@ spec:
     - deepseek-ai/DeepSeek-R1-Distill-Qwen-32B
     - --max-model-len=32768
     env:
-      CUDA_VISIBLE_DEVICES: "3"
+    - name: VLLM_CACHE_ROOT
+      value: /pvcs/shared/vllm
+    - name: CUDA_VISIBLE_DEVICES
+      value: "3"
     resources:
       limits:
         nvidia.com/gpu: "0"
         cpu: "2"
         memory: 1Gi
+    volumeMounts:
+    - name: shared
+      mountPath: /pvcs/shared
+  volumes:
+  - name: shared
+    persistentVolumeClaim:
+      claimName: shared
 ```
 
 Explicitly specifying a quantity of "0" GPUs gets this container
