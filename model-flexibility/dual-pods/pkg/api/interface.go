@@ -22,12 +22,12 @@ package api
 // --- by the following procedure ---
 // into the spec and label and annotation metadata given to the kube-apiserver
 // to define the server-running Pod.
-// 1. Remove the annotations whose names begin with "dual-pod.llm-d.cncf.io/".
+// 1. Remove the annotations whose names begin with "dual-pod.llm-d.ai/".
 // 2. Apply the patch
 
-const ServerPatchAnnotationName = "dual-pod.llm-d.cncf.io/server-patch"
+const ServerPatchAnnotationName = "dual-pod.llm-d.ai/server-patch"
 
 // AdminPortAnnotationName is the name of an annotation whose value
 // is the name of the port on the "inference-server" container to be
 // queried to get the set of associated accelerators.
-const AdminPortAnnotationName = "dual-pod.llm-d.cncf.io/admin-port"
+const AdminPortAnnotationName = "dual-pod.llm-d.ai/admin-port"

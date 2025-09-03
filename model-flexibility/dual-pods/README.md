@@ -5,7 +5,7 @@ Kubernetes milieu. Model flexibility refers to vLLM sleep/wake and
 model swapping. These things do not fit simply and directly into
 Kubernetes Pods because each container in a Pod: (1) is allocated a
 constant amount of accelerator resources and (2) has a constant image
-and command. Yet clientss and users most naturally will use a single
+and command. Yet clients and users most naturally will use a single
 Pod to describe a single desired inference server. The dual-pod
 technique has a dichotomy between (1) the server-requesting Pods that
 clients/users create and (2) the server-running Pods that actually run
@@ -29,8 +29,8 @@ kind: Pod
 metadata:
   name: example-request
   annotations:
-    dual-pod.llm-d.cncf.io/admin-port: 8001
-    dual-pod.llm-d.cncf.io/server-patch: |
+    dual-pod.llm-d.ai/admin-port: 8001
+    dual-pod.llm-d.ai/server-patch: |
       spec:
         affinity: null
         containers:
