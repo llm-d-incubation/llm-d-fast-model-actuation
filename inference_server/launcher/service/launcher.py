@@ -1,54 +1,63 @@
 """
-vLLM Launcher
+vLLM Launcher - FastAPI Version
 """
 
+import logging
 from http import HTTPStatus  # HTTP Status Codes
-from flask import Flask, jsonify, make_response
-from .common import log_handlers
 
-# Create Flask application
-app = Flask(__name__)
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+
+# Create FastAPI application
+app = FastAPI(
+    title="REST API Service", version="1.0", description="vLLM Management API"
+)
+
+# Setup logging
+logger = logging.getLogger(__name__)
 
 
 ############################################################
 # Health Endpoint
 ############################################################
-@app.route("/health")
-def health():
+@app.get("/health")
+async def health():
     """Health Status"""
-    return jsonify({"status": "OK"}), HTTPStatus.OK
+    return JSONResponse(content={"status": "OK"}, status_code=HTTPStatus.OK)
 
 
 ######################################################################
 # GET INDEX
 ######################################################################
-@app.route("/")
-def index():
+@app.get("/")
+async def index():
     """Root URL response"""
-    return (
-        jsonify(
-            name="REST API Service",
-            version="1.0",
-        ),
-        HTTPStatus.OK,
+    return JSONResponse(
+        content={"name": "REST API Service", "version": "1.0"},
+        status_code=HTTPStatus.OK,
     )
 
 
 ######################################################################
-# CREATE A NEW ACCOUNT
+# vLLM MANAGEMENT ENDPOINTS
 ######################################################################
-@app.route("/create_vllm", methods=["POST"])
-def create_vllm():
-    """
-    Creates a vllm instance
-    This endpoint will create a vllm instance
-    """
-    app.logger.info("Request to create an vLLM instance")
+@app.post("/vllm")
+async def create_vllm():
+    """Create/swap in a new vLLM instance"""
+    logger.info("Swap in an vLLM instance")
     message = {"vLLM instance created": "this is a test"}
-    return make_response(jsonify(message), HTTPStatus.CREATED)
+    return JSONResponse(content=message, status_code=HTTPStatus.CREATED)
+
+
+@app.delete("/vllm")
+async def delete_vllm():
+    """Delete/swap out the vLLM instance"""
+    logger.info("Swap out vLLM instance")
+    message = {"vLLM instance deleted": "this is a test"}
+    return JSONResponse(content=message, status_code=HTTPStatus.ACCEPTED)
 
 
 if __name__ == "__main__":
-    app.run(port=8000, debug=True)
-else:
-    log_handlers.init_logging(app, "gunicorn.error")
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
