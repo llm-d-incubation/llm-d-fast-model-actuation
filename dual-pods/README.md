@@ -17,14 +17,18 @@ technique.
 When using vLLM as the inference server code, the server-requesting
 Pod has a command of the form `vllm serve <common flags> <model
 reference> <model-specific flags>`, where each flag starts with `-`
-and the model reference does not. The dual-pod controller concludes
-that to create a server-running Pod for a particular model, it uses
-the command `vllm serve <common flags> <model reference>
-<model-specific flags>`. To swap a model out, the controller issues a
-POST request that does not include the model reference nor the
-model-specific flags. To swap a model in, the controller issues a POST
-request that includes the model reference and the model-specific flags
-according to a pattern fixed at controller development time.
+and the model reference does not. Various dual-pod controllers are
+possible. The dual-pod controller that works with just the existing
+sleep/wake functionality concludes that to create a server-running Pod
+for a particular model, it uses the command `vllm serve <common flags>
+<model reference> <model-specific flags>`. The dual-pod controller
+that works with the first edition (i.e., launcher based) of model
+swapping uses a launcher-specific command to run the launcher. To swap
+a model in, the controller issues a POST request (to the launcher)
+that includes the model reference and the model-specific flags
+according to a pattern fixed at controller development time. To swap a
+model out, the controller issues a POST request that does not include
+the model reference nor the model-specific flags.
 
 ## Example: vLLM and 1 nvidia GPU
 
