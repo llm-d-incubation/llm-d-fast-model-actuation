@@ -1,10 +1,9 @@
 """
-Account Service
-
-This microservice handles the lifecycle of Accounts
+vLLM Launcher
 """
 from flask import Flask, jsonify, make_response
-from .common import status, log_handlers # HTTP Status Codes
+from .common import log_handlers # HTTP Status Codes
+from http import HTTPStatus
 
 # Create Flask application
 app = Flask(__name__)
@@ -16,7 +15,7 @@ app = Flask(__name__)
 @app.route("/health")
 def health():
     """Health Status"""
-    return jsonify(dict(status="OK")), status.HTTP_200_OK
+    return jsonify(dict(status="OK")), HTTPStatus.OK
 
 
 ######################################################################
@@ -27,11 +26,10 @@ def index():
     """Root URL response"""
     return (
         jsonify(
-            name="Account REST API Service",
+            name="REST API Service",
             version="1.0",
-            # paths=url_for("list_accounts", _external=True),
         ),
-        status.HTTP_200_OK,
+        HTTPStatus.OK,
     )
 
 
@@ -47,7 +45,7 @@ def create_vllm():
     app.logger.info("Request to create an vLLM instance")
     message = {"vLLM instance created":"this is a test"}
     return make_response(
-        jsonify(message), status.HTTP_201_CREATED
+        jsonify(message), HTTPStatus.CREATED
     )
 
 
