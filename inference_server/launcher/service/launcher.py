@@ -1,9 +1,10 @@
 """
 vLLM Launcher
 """
+
+from http import HTTPStatus  # HTTP Status Codes
 from flask import Flask, jsonify, make_response
-from .common import log_handlers # HTTP Status Codes
-from http import HTTPStatus
+from .common import log_handlers
 
 # Create Flask application
 app = Flask(__name__)
@@ -15,7 +16,7 @@ app = Flask(__name__)
 @app.route("/health")
 def health():
     """Health Status"""
-    return jsonify(dict(status="OK")), HTTPStatus.OK
+    return jsonify({"status": "OK"}), HTTPStatus.OK
 
 
 ######################################################################
@@ -43,13 +44,11 @@ def create_vllm():
     This endpoint will create a vllm instance
     """
     app.logger.info("Request to create an vLLM instance")
-    message = {"vLLM instance created":"this is a test"}
-    return make_response(
-        jsonify(message), HTTPStatus.CREATED
-    )
+    message = {"vLLM instance created": "this is a test"}
+    return make_response(jsonify(message), HTTPStatus.CREATED)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     app.run(port=8000, debug=True)
 else:
     log_handlers.init_logging(app, "gunicorn.error")
