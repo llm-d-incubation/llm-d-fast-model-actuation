@@ -2,11 +2,11 @@ package api
 
 // In the "dual Pod" technique, clients/users create a server-requesting Pod
 // that describes one desired inference server Pod but when it runs is actually
-// a reverse proxy to the real inference server. A dual-pod controller manages
+// just a stub. A dual-pod controller manages
 // server-running Pods that actually run the inference servers.
 
-// In addition to the reverse proxy function, the server-requesting Pod
-// also can be queried to discover the set of accelerators (e.g., GPUs)
+// The server-requesting Pod
+// can be queried to discover the set of accelerators (e.g., GPUs)
 // that it is associated with.
 // Once the server-requesting Pod's container named "inference-server"
 // is running, the controller will rapidly poll that container until this query
@@ -23,7 +23,7 @@ package api
 // --- by the following procedure ---
 // into the spec and label and annotation metadata given to the kube-apiserver
 // to define the server-running Pod.
-// 1. Remove the annotations whose names begin with "dual-pod.llm-d.ai/".
+// 1. Remove the annotations whose name begins with "dual-pod.llm-d.ai/".
 // 2. Apply the patch
 
 const ServerPatchAnnotationName = "dual-pod.llm-d.ai/server-patch"

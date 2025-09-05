@@ -4,14 +4,15 @@ Dual pods is a technique for making model flexibility usable in the
 Kubernetes milieu. Model flexibility refers to vLLM sleep/wake and
 model swapping. These things do not fit simply and directly into
 Kubernetes Pods because each container in a Pod: (1) is allocated a
-constant amount of accelerator resources and (2) has a constant image
-and command. Yet clients and users most naturally will use a single
+constant amount of accelerator resources and (2) has a constant
+command. Yet clients and users most naturally will use a single
 Pod to describe a single desired inference server. The dual-pod
 technique has a dichotomy between (1) the server-requesting Pods that
 clients/users create and (2) the server-running Pods that actually run
 the inference servers.
 
-See [the interface declarations](pkg/api) for more details of the
+See [the user interface](../pkg/api/interface.go) and [the stub
+interface](../pkt/stub/api/interface.go) for more details of the
 technique.
 
 When using vLLM as the inference server code, the server-requesting
