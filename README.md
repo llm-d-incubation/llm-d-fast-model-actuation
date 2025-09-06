@@ -20,7 +20,8 @@ management process that can run various subsidiary inference server
 processes over time. The management process does basic code loading
 and initialization work of the inference server so that this work does
 not have to be done at the startup of the inference server process,
-reducing that startup latency.
+reducing that startup latency. The inference servers may be able to
+sleep and wake up.
 
 A process with such flexibility does not easily fit into the
 Kubernetes milieu. The most obvious and natural way in Kubernetes to
@@ -34,14 +35,10 @@ way(s) of fitting the process flexibility into the Kubernetes milieu.
 The topics above are divided into subdirectories of this repo as follows.
 
 - [inference_server](inference_server) is about a particular model
-  swapping technique. This technique's management process is developed
-  here and uses vLLM without changing it.
+  swapping technique that has a management process that launches `vllm
+  serve` processes. The management process is developed here.
 
-- [dual-pods](dual-pods) is about one technique for fitting process
-  flexilibility into the Kuberntes milieu. In this techique, clients
-  and users create single-purpose `Pod` objects (called
-  "server-requesting Pods") in the usual Kubernetes way. Behind the
-  scenes, there are other `Pod` objects (called "server-running Pods")
-  that run the flexible processes. A new controller manages the
-  server-running Pods to implement the behavior specified by the
-  server-requesting Pods.
+- **dual-pods** is one technique for fitting process flexilibility
+  into the Kuberntes milieu. It is described in [the docs
+  directory](docs) and implemented by the Go language module in this
+  repository.
