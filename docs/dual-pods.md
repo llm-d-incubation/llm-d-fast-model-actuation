@@ -28,8 +28,8 @@ swapping uses a launcher-specific command to run the launcher. To swap
 a model in, the controller issues a POST request (to the launcher)
 that includes the model reference and the model-specific flags
 according to a pattern fixed at controller development time. To swap a
-model out, the controller issues a POST request that does not include
-the model reference nor the model-specific flags.
+model out, the controller issues a request that does not include the
+model reference nor the model-specific flags.
 
 ## Example: vLLM and 1 nvidia GPU
 
