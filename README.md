@@ -39,6 +39,6 @@ The topics above are divided into subdirectories of this repo as follows.
   serve` processes. The management process is developed here.
 
 - **dual-pods** is one technique for fitting process flexilibility
-  into the Kuberntes milieu. It is described in [the docs
+  into the Kubernetes milieu. It is described in [the docs
   directory](docs) and implemented by the Go language module in this
   repository.
