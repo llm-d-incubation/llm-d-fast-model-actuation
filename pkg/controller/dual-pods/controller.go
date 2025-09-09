@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package controller
+package dualpods
 
 import (
 	"context"
@@ -30,7 +30,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
 
-	genctlr "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/generic-controller"
+	genctlr "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/generic"
 )
 
 const ControllerName = "dual-pods-controller"

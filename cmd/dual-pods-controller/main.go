@@ -29,7 +29,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
 
-	dpctlr "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/dual-pods-controller"
+	dpctlr "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/dual-pods"
 )
 
 func main() {
