@@ -19,13 +19,11 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
 
 	"github.com/spf13/pflag"
 
 	kubeinformers "k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
 
@@ -47,7 +45,9 @@ func main() {
 		logger.V(1).Info("Flag", "name", f.Name, "value", f.Value.String())
 	})
 
-	restConfig, err := getRestConfig(ctx)
+	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	overrides := &clientcmd.ConfigOverrides{}
+	restConfig, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, overrides).ClientConfig()
 	if err != nil {
 		klog.Fatal(err)
 	}
@@ -75,22 +75,4 @@ func main() {
 		klog.Fatal(err)
 	}
 	<-ctx.Done()
-}
-
-func getRestConfig(ctx context.Context) (*rest.Config, error) {
-	logger := klog.FromContext(ctx)
-	if config, err := rest.InClusterConfig(); err == nil {
-		logger.V(1).Info("Successfully loaded in-cluster config")
-		return config, nil
-	}
-
-	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
-	overrides := &clientcmd.ConfigOverrides{}
-	config, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, overrides).ClientConfig()
-	if err != nil {
-		return nil, fmt.Errorf("failed to load kubeconfig: %w", err)
-	}
-
-	logger.V(1).Info("Successfully loaded out-of-cluster kubeconfig")
-	return config, nil
 }
