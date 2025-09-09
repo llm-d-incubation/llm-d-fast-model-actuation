@@ -1,4 +1,6 @@
-# Dual Pods
+# Dual-Pod Architecture
+
+## Overview
 
 Dual pods is a technique for making model flexibility usable in the
 Kubernetes milieu. Model flexibility refers to vLLM sleep/wake and
@@ -16,13 +18,12 @@ interface](../pkt/stub/api/interface.go) for more details of the
 technique.
 
 When using vLLM as the inference server code, the server-requesting
-Pod has a command of the form `vllm serve <common flags> <model
-reference> <model-specific flags>`, where each flag starts with `-`
-and the model reference does not. Various dual-pod controllers are
-possible. The dual-pod controller that works with just the existing
+Pod has a command conforming to the [`vllm serve`] CLI.
+Various dual-pod controllers are possible.
+The dual-pod controller that works with just the existing
 sleep/wake functionality concludes that to create a server-running Pod
-for a particular model, it uses the command `vllm serve <common flags>
-<model reference> <model-specific flags>`. The dual-pod controller
+for a particular model, it uses the command `vllm serve <options>`.
+The dual-pod controller
 that works with the first edition (i.e., launcher based) of model
 swapping uses a launcher-specific command to run the launcher. To swap
 a model in, the controller issues a POST request (to the launcher)
@@ -166,3 +167,36 @@ directs the `vllm serve` process to use the indicated one.
 The name of this Pod combines the name of the relevant node (which is
 presumed to also appear as the value of the hostname label) and the
 set of associated GPUs (hexadecimal rendering of bitmask).
+
+## Sequence Flows
+
+### Inference Server Creation Flow
+
+![dual-pod architecture](./dual-pods-arch.drawio.png)
+
+The key steps for requesting an inference server are:
+
+1. An actor (e.g., a Kubernetes controller or an end-user) creates an inference
+   server requester pod (see example above).
+2. The `inference-server-gpu-allocator` container exposes which accelerators have
+   been allocated on the node and marks itself as ready (i.e., its readiness probe
+   succeeds).
+3. The `inference-server-provider-controller` container watches inference server
+   requester pods (i.e., those with the annotation `dual-pod.llm-d.ai/role: requester`)
+   and delegates lifecycle events (ie. `create`, `update` and `delete`) to
+   the `inference-server-provider` component. Note: multiple implementations of
+   the provider component may exists, but only one is active at any given time.
+4. The `inference-server-provider` implementation selects an inference server that
+   matches the inference server requester pod specification. If no suitable server pod is found,
+   it falls back to the `cold-start provider`.
+5. The `inference-server-provider` sets the `dual-pod.llm-d.ai/inference-server-ip`
+   with the selected server pod's IP address.
+6. The `inference-server-requester` containers periodically (TODO: rate?) reads
+   the [file containing the `dual-pod.llm-d.ai/inference-server-ip` annotation value](https://kubernetes.io/docs/concepts/storage/volumes/#downwardapi) and when this value is
+   not empty anymore, it optionally starts redirecting traffic to the selected
+   inference server pod. It then mark itself as ready (i.e., its readiness probe
+   succeeds).
+
+### Inference Server Deletion Flow
+
+TDB.
