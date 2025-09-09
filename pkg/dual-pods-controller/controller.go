@@ -81,12 +81,12 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 	case *corev1.Pod:
 		objM = typed
 		kind = podKind
+		ref := typedRef{kind, cache.MetaObjectToName(objM)}
+		ctl.enqueueLogger.V(5).Info("Enqueuing reference due to notification of add", "ref", ref, "isInInitialList", isInInitialList)
+		ctl.Queue.Add(ref)
 	default:
 		ctl.enqueueLogger.Error(nil, "Notified of add of unexpected type of object", "type", fmt.Sprintf("%T", obj))
 	}
-	ref := typedRef{kind, cache.MetaObjectToName(objM)}
-	ctl.enqueueLogger.V(5).Info("Enqueuing reference due to notification of add", "ref", ref, "isInInitialList", isInInitialList)
-	ctl.Queue.Add(ref)
 }
 
 func (ctl *controller) OnUpdate(prev, obj any) {
@@ -96,12 +96,12 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 	case *corev1.Pod:
 		objM = typed
 		kind = podKind
+		ref := typedRef{kind, cache.MetaObjectToName(objM)}
+		ctl.enqueueLogger.V(5).Info("Enqueuing reference due to notification of update", "ref", ref)
+		ctl.Queue.Add(ref)
 	default:
 		ctl.enqueueLogger.Error(nil, "Notified of update of unexpected type of object", "type", fmt.Sprintf("%T", obj))
 	}
-	ref := typedRef{kind, cache.MetaObjectToName(objM)}
-	ctl.enqueueLogger.V(5).Info("Enqueuing reference due to notification of update", "ref", ref)
-	ctl.Queue.Add(ref)
 }
 
 func (ctl *controller) OnDelete(obj any) {
@@ -114,12 +114,12 @@ func (ctl *controller) OnDelete(obj any) {
 	case *corev1.Pod:
 		objM = typed
 		kind = podKind
+		ref := typedRef{kind, cache.MetaObjectToName(objM)}
+		ctl.enqueueLogger.V(5).Info("Enqueuing reference due to notification of delete", "ref", ref)
+		ctl.Queue.Add(ref)
 	default:
 		ctl.enqueueLogger.Error(nil, "Notified of delete of unexpected type of object", "type", fmt.Sprintf("%T", obj))
 	}
-	ref := typedRef{kind, cache.MetaObjectToName(objM)}
-	ctl.enqueueLogger.V(5).Info("Enqueuing reference due to notification of delete", "ref", ref)
-	ctl.Queue.Add(ref)
 }
 
 func (ctl *controller) Start(ctx context.Context) error {

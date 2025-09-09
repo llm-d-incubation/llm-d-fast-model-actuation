@@ -4,8 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"github.com/spf13/pflag"
 
@@ -65,25 +63,18 @@ func main() {
 
 func getRestConfig(ctx context.Context) (*rest.Config, error) {
 	logger := klog.FromContext(ctx)
-	config, err := rest.InClusterConfig()
-	if err == nil {
+	if config, err := rest.InClusterConfig(); err == nil {
 		logger.V(1).Info("Successfully loaded in-cluster config")
 		return config, nil
 	}
 
-	logger.V(1).Info("In-cluster config not found, falling back to local kubeconfig")
-	kubeconfigPath := os.Getenv("KUBECONFIG")
-	if kubeconfigPath == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get user home directory: %w", err)
-		}
-		kubeconfigPath = filepath.Join(home, ".kube", "config")
-	}
-	config, err = clientcmd.BuildConfigFromFlags("", kubeconfigPath)
+	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	overrides := &clientcmd.ConfigOverrides{}
+	config, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, overrides).ClientConfig()
 	if err != nil {
-		return nil, fmt.Errorf("unable to load kubeconfig from %s: %w", kubeconfigPath, err)
+		return nil, fmt.Errorf("failed to load kubeconfig: %w", err)
 	}
-	logger.V(1).Info("Successfully loaded kubeconfig", "path", kubeconfigPath)
+
+	logger.V(1).Info("Successfully loaded out-of-cluster kubeconfig")
 	return config, nil
 }
