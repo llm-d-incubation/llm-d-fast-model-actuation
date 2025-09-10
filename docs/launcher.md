@@ -3,11 +3,11 @@
 
 ## Description
 
-This document describes a vLLM launcher to be used in model swapping techniques. The launcher initializes and manages various subsidiary inference vLLM servers and keep an inventory with it's ID's and the model (in addition to other information like the type of accelerator and the GPU number). The launcher does basic vLLM code loading and initialization work (like import modules) of the inference server so that this work does not have to be done at the startup of the inference server process, reducing the startup latency. In future work, the launcher could be extended to sleep and wake up the inference servers that have been initialize by its POST method.
+This document describes a vLLM launcher that can be used to achieve model swapping without changes to vLLM. The launcher initializes and manages various subsidiary inference vLLM servers and keeps the ID and the model (in addition to other information like the type of accelerator and the GPU number). The launcher does basic vLLM code loading and initialization work (like import modules) of the inference server so that this work does not have to be done at the startup of the inference server process, reducing the startup latency. In future work, the launcher could be extended to sleep and wake up the inference servers that have been initialize by its POST method, and support mutiple instances.
 
 ## Launcher Methods and functionalities
 
-The dual-pod controller will use a launcher-specific command to run the launcher. To swap a model in, the controller will issue a POST request (to the launcher) that includes the model reference and the model-specific flags.
+The client/user will use a launcher-specific command to run the launcher. To swap a model in, the controller will issue a POST request (to the launcher) that includes the model reference and the model-specific flags.
 
 Setting up process to create a new vLLM inference instance using POST:
 
@@ -50,7 +50,7 @@ where the `JSON_EXAMPLE` is:
 }
 ```
 
-The controller will keep track of the inventory of the inference instances and its IDs. To swap a model out, the controller will issue a request that does not include the model reference nor the model-specific flags, but it will include an ID to identify the inference instance to be deleted.
+To swap a model out, the controller will issue a request that does not include the model reference nor the model-specific flags, but it will include an ID to identify the inference instance to be deleted.
 
 Deleting process of a vLLM inference instance using DELETE:
 
@@ -74,7 +74,7 @@ curl -X DELETE \
   http://localhost:8000/vllm
 ```
 
-Finally, the controller will fetch all the inference ID's, the models, and the accelerators using a GET method. The launcher will keep track of the instance ID's and its models. The information will be sent to the controller:
+Finally, the controller will fetch the inference ID, the models, and the accelerator using a GET method. The launcher will keep track of the instance ID and model. The information will be sent to the controller:
 
 ```mermaid
 sequenceDiagram
@@ -83,4 +83,14 @@ sequenceDiagram
 
     Controller->>Launcher: GET
     Launcher->>Controller: HTTP 200 OK, Data
+```
+
+JSON reply example:
+
+```json
+{
+    "instance_ID": "0EFA",
+    "model": "facebook/opt-125m",
+    "GPU": 3
+}
 ```
