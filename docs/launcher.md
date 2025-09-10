@@ -15,13 +15,13 @@ Setting up process to create a new vLLM inference instance using POST:
 sequenceDiagram
     participant Controller
     participant Launcher
-    participant vLLM instance
+    participant vLLM instance HTTP server
 
     Controller->>Launcher: POST create new instance
-    Launcher-->>vLLM instance: create vLLM instance
+    Launcher-->>vLLM instance HTTP server: create vLLM instance
     Launcher->>Controller: HTTP 200 OK, Data
-    Controller->>vLLM instance: POST Request
-    vLLM instance->>Controller: JSON text-generated response
+    Controller->>vLLM instance HTTP server: POST Request
+    vLLM instance HTTP server->>Controller: JSON text-generated response
 ```
 
 An example of a CURL command that could be sent to the launcher can be seen below:
@@ -58,10 +58,10 @@ Deleting process of a vLLM inference instance using DELETE:
 sequenceDiagram
     participant Controller
     participant Launcher
-    participant vLLM instance
+    participant vLLM instance HTTP server
 
     Controller->>Launcher: DELETE instance_ID
-    Launcher-->>vLLM instance: delete vLLM instance
+    Launcher-->>vLLM instance HTTP server: delete vLLM instance
     Launcher->>Controller: HTTP 200 OK, Data
 ```
 
