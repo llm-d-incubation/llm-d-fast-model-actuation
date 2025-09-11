@@ -5,8 +5,6 @@ vLLM Launcher - FastAPI Version
 import logging
 import multiprocessing
 import os
-
-# import vllm locally (for development)
 from http import HTTPStatus  # HTTP Status Codes
 from typing import Any, Dict, Optional
 
@@ -14,6 +12,11 @@ import uvloop
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+
+# # (for development) we import vllm locally
+# import sys
+# vllm_path = "~/Documents/my_stuff/llm-d-fast-model-actuation/.venv/bin/vllm"
+# sys.path.append(os.path.dirname(vllm_path))
 from vllm.entrypoints.openai.api_server import run_server
 from vllm.entrypoints.openai.cli_args import make_arg_parser, validate_parsed_serve_args
 from vllm.entrypoints.utils import cli_env_setup
