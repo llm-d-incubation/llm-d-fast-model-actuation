@@ -16,13 +16,11 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from vllm.entrypoints.openai.api_server import run_server
 from vllm.entrypoints.openai.cli_args import make_arg_parser, validate_parsed_serve_args
-
-# from vllm import LLM, SamplingParams
 from vllm.entrypoints.utils import cli_env_setup
 from vllm.utils import FlexibleArgumentParser
 
 
-# Define a the expected JSON structure
+# Define a the expected JSON structure in dataclass
 class VllmConfig(BaseModel):
     options: str
     env_var: Optional[Dict[str, Any]] = None
@@ -35,6 +33,11 @@ class VllmProcessManager:
         self.config: Optional[VllmConfig] = None
 
     def start_process(self, vllm_config: VllmConfig) -> dict:
+        """
+        Start new vLLM instance
+        :param vllm_config: parameters for the vLLM process.
+        :return: Status of the process and its PID.
+        """
         # Stop existing process if running
         if self.is_running():
             self.stop_process()
@@ -50,6 +53,11 @@ class VllmProcessManager:
         }
 
     def stop_process(self, timeout: int = 10) -> dict:
+        """
+        Stop existing vLLM instance
+        :param timeout: waits for the process to stop, defaults to 10
+        :return: a dictionary with the status "terminated" and the process ID
+        """
         if not self.process or not self.process.is_alive():
             return {"status": "no_process_to_stop"}
 
@@ -67,16 +75,23 @@ class VllmProcessManager:
         return {"status": "terminated", "pid": pid}
 
     def is_running(self) -> bool:
+        """
+        Returns if the process in the manager is running or not.
+        :return: True is running, `False` otherwise.
+        """
         return self.process is not None and self.process.is_alive()
 
     def get_status(self) -> dict:
+        """
+        Returns the status of the process and its PID or the no process
+        :return: Status and PID of the running process.
+        """
         if not self.process:
             return {"status": "no_process", "pid": None}
 
         return {
             "status": "running" if self.process.is_alive() else "stopped",
             "pid": self.process.pid,
-            "config": self.config.dict() if self.config else None,
         }
 
 
@@ -130,6 +145,7 @@ async def create_vllm(vllm_config: VllmConfig):
 @app.delete("/vllm")
 async def delete_vllm():
     """Delete/swap out the vLLM instance"""
+
     logger.info("Swap out vLLM instance")
     if not vllm_manager.is_running():
         raise HTTPException(status_code=404, detail="No running vLLM process found")
