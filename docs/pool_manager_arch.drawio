@@ -1,0 +1,52 @@
+<mxfile host="app.diagrams.net" agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36" version="28.2.1">
+  <diagram name="Dual-Pod + Pool Manager Architecture" id="dual-pod-vllm">
+    <mxGraphModel dx="1234" dy="858" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1920" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="actor" value="Actor / EPP Director" style="shape=umlActor;verticalLabelPosition=bottom;verticalAlign=top;html=1;" parent="1" vertex="1">
+          <mxGeometry x="50" y="50" width="30" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="isr" value="&lt;b&gt;Inference Server Requester (ISR) Pod&lt;/b&gt;&lt;br&gt;Annotations:&lt;br&gt;- dual-pod.llm-d.ai/role: requester&lt;br&gt;- dual-pod.llm-d.ai/inference-server-ip: xxx" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;verticalAlign=top;align=left;spacingLeft=2;" parent="1" vertex="1">
+          <mxGeometry x="140" y="41.25" width="230" height="77.5" as="geometry" />
+        </mxCell>
+        <mxCell id="controller" value="&lt;b&gt;Dual-Pod Controller&lt;/b&gt;&lt;br&gt;&lt;div style=&quot;text-align: left;&quot;&gt;&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;- Watches ISR pods&lt;/span&gt;&lt;/div&gt;&lt;div style=&quot;text-align: left;&quot;&gt;&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;- Requests vLLM pod from Pool manager passing in server patch&lt;/span&gt;&lt;/div&gt;&lt;div&gt;&lt;div style=&quot;text-align: center;&quot;&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;verticalAlign=top;align=center;spacingTop=4;" parent="1" vertex="1">
+          <mxGeometry x="450" y="40" width="250" height="180" as="geometry" />
+        </mxCell>
+        <mxCell id="poolmanager" value="&lt;b&gt;Pool Manager&lt;br&gt;&lt;/b&gt;&lt;div style=&quot;text-align: left;&quot;&gt;&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;- Maintains N pods&lt;/span&gt;&lt;/div&gt;&lt;div style=&quot;text-align: left;&quot;&gt;&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;- Registers pods to IGW InferencePool&lt;/span&gt;&lt;/div&gt;&lt;div style=&quot;text-align: left;&quot;&gt;&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;- Adds server-running pod annotations&lt;/span&gt;&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;verticalAlign=middle;align=center;" parent="controller" vertex="1">
+          <mxGeometry x="10" y="100" width="230" height="68.75" as="geometry" />
+        </mxCell>
+        <mxCell id="vllm" value="vLLM Pod&lt;div&gt;&lt;br/&gt;&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D5E8D4;strokeColor=#82B366;verticalAlign=top;align=center;" parent="1" vertex="1">
+          <mxGeometry x="780" y="89.38" width="270" height="170" as="geometry" />
+        </mxCell>
+        <mxCell id="vllmstate" value="States: idle → active → sleeping" style="shape=note;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;fontSize=10;" parent="vllm" vertex="1">
+          <mxGeometry y="-33.99999999999999" width="270" height="33.99999999999999" as="geometry" />
+        </mxCell>
+        <mxCell id="6METYEvPE3ANo43et5e9-2" value="&lt;b&gt;Launcher&lt;/b&gt;&lt;br&gt;- Receives POST/DELETE from controller with server patch&lt;br&gt;- Creates inference servers" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;verticalAlign=middle;align=center;" vertex="1" parent="vllm">
+          <mxGeometry x="10.38" y="30" width="249.62" height="58.37" as="geometry" />
+        </mxCell>
+        <mxCell id="6METYEvPE3ANo43et5e9-3" value="&lt;b&gt;Inference Server&lt;/b&gt;&lt;br&gt;- vLLM server running&lt;br&gt;&amp;nbsp;- Ready to serve inference requests" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;verticalAlign=middle;align=center;" vertex="1" parent="vllm">
+          <mxGeometry x="10.384615384615385" y="102" width="249.23076923076925" height="54.366" as="geometry" />
+        </mxCell>
+        <mxCell id="giepool" value="&lt;b&gt;IGW InferencePool&lt;/b&gt;&lt;br&gt;&lt;div style=&quot;text-align: left;&quot;&gt;&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;- Pool of available inference pods&amp;nbsp;&lt;/span&gt;&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;registered by Pool Manager&lt;/span&gt;&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;verticalAlign=middle;align=center;" parent="1" vertex="1">
+          <mxGeometry x="787.5" y="310" width="255" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="arrow1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=classic;" parent="1" source="actor" target="isr" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="arrow2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=classic;dashed=1;" parent="1" source="isr" target="vllm" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="arrow3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=classic;" parent="1" source="controller" target="isr" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="arrow5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=classic;" parent="1" source="poolmanager" target="vllm" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="arrow6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=classic;" parent="1" source="vllm" target="giepool" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
