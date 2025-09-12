@@ -18,29 +18,35 @@ pip install -e .
 2- SOME TEST TO KEEP IN MIND
 
 ```python
-    ## TEST 1 ##
-    logger.info("Swap in an vLLM instance")
-    message = {"vLLM instance created": "this is a test"}
-    return JSONResponse(content=message, status_code=HTTPStatus.CREATED)
 
-    ## TEST 2 ##
-    # Check for MPS availability
-    use_mps = torch.backends.mps.is_available()
-    device_type = "mps" if use_mps else "cpu"
-    print(f"Using device: {device_type}")
-    # Initialize the LLM
-    # Note: For macOS, you'll want to use smaller models
-    llm = LLM(model="TinyLlama/TinyLlama-1.1B-Chat-v1.0",
-            download_dir="./models",
-            tensor_parallel_size=1,
-            trust_remote_code=True,
-            dtype="float16" if use_mps else "float32")
-    # Set sampling parameters
-    sampling_params = SamplingParams(temperature=0.7, top_p=0.95, max_tokens=100)
-    # Generate text
-    prompt = "Write a short poem about artificial intelligence."
-    outputs = llm.generate([prompt], sampling_params)
+# # (for development) we import vllm locally
+# import sys
+# vllm_path = "~/Documents/my_stuff/llm-d-fast-model-actuation/.venv/bin/vllm"
+# sys.path.append(os.path.dirname(vllm_path))
 
-    message = {"vLLM output": str(outputs)}
-    return JSONResponse(content=message, status_code=HTTPStatus.CREATED)
+## TEST 1 ##
+logger.info("Swap in an vLLM instance")
+message = {"vLLM instance created": "this is a test"}
+return JSONResponse(content=message, status_code=HTTPStatus.CREATED)
+
+## TEST 2 ##
+# Check for MPS availability
+use_mps = torch.backends.mps.is_available()
+device_type = "mps" if use_mps else "cpu"
+print(f"Using device: {device_type}")
+# Initialize the LLM
+# Note: For macOS, you'll want to use smaller models
+llm = LLM(model="TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+        download_dir="./models",
+        tensor_parallel_size=1,
+        trust_remote_code=True,
+        dtype="float16" if use_mps else "float32")
+# Set sampling parameters
+sampling_params = SamplingParams(temperature=0.7, top_p=0.95, max_tokens=100)
+# Generate text
+prompt = "Write a short poem about artificial intelligence."
+outputs = llm.generate([prompt], sampling_params)
+
+message = {"vLLM output": str(outputs)}
+return JSONResponse(content=message, status_code=HTTPStatus.CREATED)
 ```

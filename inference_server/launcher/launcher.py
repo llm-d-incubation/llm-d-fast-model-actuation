@@ -1,3 +1,18 @@
+# Copyright 2025 The llm-d Authors.
+
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+
+# 	http://www.apache.org/licenses/LICENSE-2.0
+
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
 """
 vLLM Launcher - FastAPI Version
 """
@@ -12,11 +27,6 @@ import uvloop
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-
-# # (for development) we import vllm locally
-# import sys
-# vllm_path = "~/Documents/my_stuff/llm-d-fast-model-actuation/.venv/bin/vllm"
-# sys.path.append(os.path.dirname(vllm_path))
 from vllm.entrypoints.openai.api_server import run_server
 from vllm.entrypoints.openai.cli_args import make_arg_parser, validate_parsed_serve_args
 from vllm.entrypoints.utils import cli_env_setup
@@ -41,9 +51,6 @@ class VllmProcessManager:
         :param vllm_config: parameters for the vLLM process.
         :return: Status of the process and its PID.
         """
-        # Stop existing process if running
-        if self.is_running():
-            self.stop_process()
 
         # Start new process
         self.process = multiprocessing.Process(target=vllm_kickoff, args=(vllm_config,))
@@ -134,9 +141,14 @@ async def index():
 ######################################################################
 # vLLM MANAGEMENT ENDPOINTS
 ######################################################################
-@app.post("/vllm")
+@app.post("/v1/vllm")
 async def create_vllm(vllm_config: VllmConfig):
     """Create/swap in a new vLLM instance"""
+
+    if vllm_manager.is_running():
+        raise HTTPException(
+            status_code=403, detail="A vLLM instance is already running."
+        )
 
     result = vllm_manager.start_process(vllm_config)
     return JSONResponse(
@@ -145,7 +157,7 @@ async def create_vllm(vllm_config: VllmConfig):
     )
 
 
-@app.delete("/vllm")
+@app.delete("/v1/vllm")
 async def delete_vllm():
     """Delete/swap out the vLLM instance"""
 
