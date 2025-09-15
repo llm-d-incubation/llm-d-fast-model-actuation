@@ -36,7 +36,7 @@ from vllm.utils import FlexibleArgumentParser
 # Define a the expected JSON structure in dataclass
 class VllmConfig(BaseModel):
     options: str
-    env_var: Optional[Dict[str, Any]] = None
+    env_vars: Optional[Dict[str, Any]] = None
 
 
 # VLLM process manager
@@ -178,8 +178,8 @@ def vllm_kickoff(vllm_config: VllmConfig):
 
     logger.info(f"VLLM process (PID: {os.getpid()}) started.")
     # Set env vars in the current process
-    if vllm_config.env_var:
-        set_env_vars(vllm_config.env_var)
+    if vllm_config.env_vars:
+        set_env_vars(vllm_config.env_vars)
 
     # prepare args
     receive_args = vllm_config.options.split()
