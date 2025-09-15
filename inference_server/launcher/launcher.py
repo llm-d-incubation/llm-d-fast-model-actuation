@@ -14,7 +14,7 @@
 
 
 """
-vLLM Launcher - FastAPI Version
+vLLM Launcher
 """
 
 import logging
