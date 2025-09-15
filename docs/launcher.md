@@ -7,7 +7,7 @@ This document describes a vLLM launcher that can be used to achieve model swappi
 
 ## Launcher Methods and functionalities
 
-The client/user will use a launcher-specific command to run the launcher. To swap a model in, the Client will issue a POST request (to the launcher) that includes the model reference and the model-specific flags. The launcher sends an `OK` response to the client/controller to indicate that queries can be sent to the vLLM instance directly.
+The client/user will use a launcher-specific command to run the launcher. To swap a model in, the Client will issue a POST request (to the launcher) that includes the model reference and other command line flags. The launcher sends an `OK` response to the client/controller to indicate that queries can be sent to the vLLM instance directly. at this stage of the code, the vLLM instance has not been fully guaranteed to be in a specific state. It may have executed few or no instructions, might not be listening on any port, and so forth.
 
 Setting up process to create a new vLLM inference instance using POST:
 
@@ -20,8 +20,6 @@ sequenceDiagram
     Client->>Launcher: POST create new instance
     Launcher-->>vLLM instance HTTP server: create vLLM instance
     Launcher->>Client: HTTP 200 OK, Data
-    Client->>vLLM instance HTTP server: POST Request
-    vLLM instance HTTP server->>Client: JSON text-generated response
 ```
 
 An example of a CURL command that could be sent to the launcher can be seen below:
@@ -38,7 +36,7 @@ where the `JSON_EXAMPLE` is:
 ```json
 {
   "options": "--model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --port 8005",
-  "env_var": {
+  "env_vars": {
     "VLLM_USE_V1": "1",
     "VLLM_LOGGING_LEVEL": "DEBUG"
   }
@@ -79,7 +77,15 @@ sequenceDiagram
     Launcher->>Client: HTTP 200 OK, Data
 ```
 
-JSON reply example:
+The cURL command in this case is:
+
+```bash
+curl -X GET \
+  -H "Content-Type: application/json" \
+  http://localhost:8000/v1/vllm
+```
+
+As a result, a JSON reply (like in the example below) will be sent to the client:
 
 ```json
 {
