@@ -147,7 +147,7 @@ async def create_vllm(vllm_config: VllmConfig):
 
     if vllm_manager.is_running():
         raise HTTPException(
-            status_code=403, detail="A vLLM instance is already running."
+            status_code=409, detail="A vLLM instance is already running."
         )
 
     result = vllm_manager.start_process(vllm_config)
@@ -176,7 +176,7 @@ def vllm_kickoff(vllm_config: VllmConfig):
     :param vllm_config: vLLM configuration parameters and env variables
     """
 
-    print(f"VLLM process (PID: {os.getpid()}) started.")
+    logger.info(f"VLLM process (PID: {os.getpid()}) started.")
     # Set env vars in the current process
     if vllm_config.env_var:
         set_env_vars(vllm_config.env_var)
