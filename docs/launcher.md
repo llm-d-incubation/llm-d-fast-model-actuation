@@ -7,7 +7,7 @@ This document describes a vLLM launcher that can be used to achieve model swappi
 
 ## Launcher Methods and functionalities
 
-The client/user will use a launcher-specific command to run the launcher. To swap a model in, the Client will issue a POST request (to the launcher) that includes the model reference and other command line flags. The launcher sends an `OK` response to the client/controller to indicate that queries can be sent to the vLLM instance directly. at this stage of the code, the vLLM instance has not been fully guaranteed to be in a specific state. It may have executed few or no instructions, might not be listening on any port, and so forth.
+The client/user will use a launcher-specific command to run the launcher. To swap a model in, the Client will issue a POST request (to the launcher) that includes the model reference and other command line flags. The launcher sends an `OK` response to the client/controller to indicate that queries can be sent to the vLLM instance directly. Upon receiving this response, the vLLM instance has not been fully guaranteed to be in a specific state. It may have executed few or no instructions, might not be listening on any port, and so forth.
 
 Setting up process to create a new vLLM inference instance using POST:
 
@@ -43,7 +43,7 @@ where the `JSON_EXAMPLE` is:
 }
 ```
 
-To swap a model out, the Client will issue a request that does not include the model reference nor the model-specific flags, but it will include an ID to identify the inference instance to be deleted.
+To swap a model out, the Client will issue a request that does not include the model reference nor the model-specific flags.
 
 Deleting process of a vLLM inference instance using DELETE:
 
@@ -64,6 +64,16 @@ Following the same example that we used for POST, a DELETE CURL command could be
 curl -X DELETE \
   -H "Content-Type: application/json" \
   http://localhost:8000/v1/vllm
+```
+
+The response is a JSON reply with a `terminated` status:
+
+```json
+{
+  "status": "terminated",
+  "pid": 46910
+}
+
 ```
 
 Finally, the Client will fetch the inference ID, and the status using a GET request. The information will be sent to the Client:
@@ -89,7 +99,7 @@ As a result, a JSON reply (like in the example below) will be sent to the client
 
 ```json
 {
-  "status": <"started" | "stopped" | "terminated">,
+  "status": <"started" | "stopped">,
   "pid": 46910
 }
 
