@@ -169,6 +169,16 @@ async def delete_vllm():
     return JSONResponse(content=result, status_code=HTTPStatus.ACCEPTED)
 
 
+@app.get("/v1/vllm")
+async def status_info():
+    """Get status of the vLLM instance"""
+    result = vllm_manager.get_status()
+    return JSONResponse(
+        content=result,
+        status_code=HTTPStatus.OK,
+    )
+
+
 # Define a function to be executed by the child process
 def vllm_kickoff(vllm_config: VllmConfig):
     """
