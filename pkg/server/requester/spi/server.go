@@ -69,7 +69,8 @@ func ipDeleteHandler(ipCh chan<- string) http.HandlerFunc {
 	}
 }
 
-// Start starts an HTTP server managing the /ip endpoint.
+// Start starts an HTTP server managing the endpoints
+// consumed by the dual-pod controller.
 func Start(ctx context.Context, port string, ipCh chan<- string) error {
 	logger := klog.FromContext(ctx).WithName("spi-server")
 

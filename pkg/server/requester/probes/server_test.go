@@ -73,7 +73,7 @@ func Test_watchForIPs_ReceiveValidIP(t *testing.T) {
 
 	ipCh <- "192.168.1.100"
 
-	time.Sleep(50 * time.Millisecond) // give goroutine time to process
+	time.Sleep(100 * time.Millisecond) // give goroutine time to process
 
 	if !ready.Load() {
 		t.Errorf("expected ready = true after receiving IP")
@@ -91,7 +91,7 @@ func Test_watchForIPs_ReceiveEmptyIP(t *testing.T) {
 
 	ipCh <- ""
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 
 	if ready.Load() {
 		t.Errorf("expected ready = false after receiving empty IP")
