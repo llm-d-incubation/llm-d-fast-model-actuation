@@ -1,36 +1,33 @@
-# What is the Pool Manager and what does it do?
+# Pool Manager overview
 
-👉 A component that provisions and manages vLLM pods within the Dual-Pod (DP) Controller architecture. Can be a Kubernetes native service that maintains a pool of idle pods running just the launcher, pre-labeled for IGW’s InferencePool, and transitions them through some different lifecycle states (idle → active → sleeping → deleted) to ensure fast activation of server-running vLLM pods while minimizing cold-start latency.
+👉 The Pool Manager is a sub-component of the dual-pod controller system. It provisions and manages a pool of idle pods that run only the Launcher process. When requested, it transitions these pods through different lifecycle states (idle → active → sleeping → awake → deleted). This ensures fast activation of server-running vLLM pods while minimizing cold-start latency.
 
-Flow may look like this for create:
+## Sequence Flow
 
-- EPP scheduler creates a server-requesting pod,
-- DP Controller watches it and asks the pool manager for a server-running pod,
-- Pool Manager allocates an idle pod and issues POST /v1/vllm to its launcher,
-- Launcher starts the vLLM inference server inside the same pod,
-- Pool Manager patches labels to add server-running pod to IGW InferencePool,
-- Queries may be routed directly to the inference server pod (without launcher),
-- When scaling down, pool manager may issue a DELETE /v1/vllm to terminate the inference server before pod deletion.
+### Example:
 
-Queries can now reach the inference server directly.
+- A user creates a server-requesting pod,
+- The Dual-Pod Controller watches it and asks Pool Manager for a server-running pod,
+- Pool Manager allocates an idle pod from its pool,
+- Pool Manager issues POST /v1/vllm to the pod's launcher with server-patch options,
+- Launcher starts the vLLM inference server subprocess inside the same pod,
+- Pool Manager patches labels so the pod joins an IGW InferencePool,
+- Requests may be routed directly to the pod bypassing the launcher,
+- On scale-down, Pool Manager may issue DELETE /v1/vllm to the launcher, terminating vLLM before pod deletion.
 
-## Pod States (WIP)
-
-Idle state at startup — the pod should boot with just the launcher (no model loaded). When dual-pod requests for an endpoint and Pool Manager assigns one, it calls POST /vllm inside the pod to start vllm serve. Once active, the pod becomes a valid serving endpoint in the InferencePool.
-
+## Pod States
 
 | State       | Description                                  |
 |------------|----------------------------------------------|
-| `idle`        | Pod only runs launcher                  |
-| `active`      | Pod has vLLM actively serving requests  |
-| `deleted`     | Pod removed from pool                   |
+| `idle`        | Pod only runs launcher as main process (no model loaded)                 |
+| `active`      | Pod has vLLM subprocess actively serving requests  |
+| `deleted`     | Pod removed from the pool                   |
 
-📝 Sleeping/wake logic will be introduced in future iterations but is not part of this version.
+📝 Sleeping/awake states will be introduced in future iterations.
+
 ---
 
-## Pod Requirements
-
-### Labels for EPP InferencePool Recognition
+## Pod labels for EPP InferencePool Recognition
 
 ```yaml
 metadata:
@@ -39,15 +36,7 @@ metadata:
     inference.k8s.io/model: meta-llama/Llama-3.1-8B-Instruct
 ```
 
-Pool manager ensures there enough idle pods exist in the pool so EPP can always schedule.
-
-### Pod spec: (WIP)
-
-Each vLLM pod contains:
-
- - Launcher - receives POST/DELETE to start/stop inference server
-
- - Inference Server (vLLM) – started dynamically by Launcher on POST..
+## Pod Spec
 
 ```
 apiVersion: v1
@@ -70,7 +59,7 @@ spec:
     resources:
       limits:
         nvidia.com/gpu: 1   # if GPU required
-  # vLLM container will be started by the launcher
+  # vLLM server process will be started by the launcher
 ...
 
 ```
@@ -78,6 +67,6 @@ spec:
 # Summary
 
 - Pool Manager runs inside the Dual-Pod Controller
-- It provisions idle pods with Launchers
-- It transitions pods via POST → active and DELETE → deleted
+- It provisions idle pods running the Launchers 
+- Pods are activated via POST (vLLM subprocess started) and torn down via DELETE.
 - IGW only sees active inference server pods; Launchers are not visible externally
