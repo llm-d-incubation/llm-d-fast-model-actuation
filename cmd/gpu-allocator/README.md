@@ -39,11 +39,11 @@ Check the readiness and exposed GPU.
 ```console
 (vllm) ubuntu@ip-172-31-58-228:~/llm-d-fast-model-actuation$ kubectl get po my-server-request -owide
 NAME                READY   STATUS    RESTARTS   AGE   IP           NODE               NOMINATED NODE   READINESS GATES
-my-server-request   1/1     Running   0          57s   10.0.0.106   ip-172-31-58-228   <none>           <none>
-(vllm) ubuntu@ip-172-31-58-228:~/llm-d-fast-model-actuation$ thepodip=10.0.0.106
+my-server-request   1/1     Running   0          26s   10.0.0.157   ip-172-31-58-228   <none>           <none>
+(vllm) ubuntu@ip-172-31-58-228:~/llm-d-fast-model-actuation$ thepodip=10.0.0.157
 (vllm) ubuntu@ip-172-31-58-228:~/llm-d-fast-model-actuation$ curl $thepodip:8080/readyz
 ready(vllm) ubuntu@ip-172-31-58-228:~/llm-d-fast-model-actuation$
-(vllm) ubuntu@ip-172-31-58-228:~/llm-d-fast-model-actuation$ curl $thepodip:8080/dual-pod/accelerators
-["GPU-b88683d2-a275-15af-5633-d569397bd622"]
+(vllm) ubuntu@ip-172-31-58-228:~/llm-d-fast-model-actuation$ curl $thepodip:8080/v1/dual-pod/accelerators
+["GPU-845e0388-9896-3a61-8ac9-3643833770d2"]
 (vllm) ubuntu@ip-172-31-58-228:~/llm-d-fast-model-actuation$
 ```

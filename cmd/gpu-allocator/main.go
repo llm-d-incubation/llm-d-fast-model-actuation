@@ -26,33 +26,41 @@ import (
 	stubapi "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/stub/api"
 )
 
-func getGPUUUIDs() ([]string, error) {
+var GPUUUIDs []string
+
+func getGPUUUIDs() error {
 	cmd := exec.Command("nvidia-smi", "--query-gpu=uuid", "--format=csv,noheader")
 	output, err := cmd.Output()
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-
 	var uuids []string
 	for _, line := range lines {
 		if line != "" {
 			uuids = append(uuids, line)
 		}
 	}
-	return uuids, nil
+	if len(uuids) == 0 {
+		return fmt.Errorf("no GPUs found")
+	}
+
+	GPUUUIDs = uuids
+	return nil
 }
 
 func gpuHandler(w http.ResponseWriter, r *http.Request) {
-	uuids, err := getGPUUUIDs()
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Error fetching GPU UUIDs: %v", err), http.StatusInternalServerError)
+	if len(GPUUUIDs) == 0 {
+		http.Error(w, "no GPUs found", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(uuids)
+	if err := json.NewEncoder(w).Encode(GPUUUIDs); err != nil {
+		http.Error(w, fmt.Sprintf("error encoding response: %v", err), http.StatusInternalServerError)
+		return
+	}
 }
 
 // Note:
@@ -68,17 +76,26 @@ func gpuHandler(w http.ResponseWriter, r *http.Request) {
 //
 // Here we are dealing with the 1st type of readiness.
 func readyHandler(w http.ResponseWriter, r *http.Request) {
-	uuids, err := getGPUUUIDs()
-	if err != nil || len(uuids) == 0 {
-		http.Error(w, "not ready: no GPUs available", http.StatusServiceUnavailable)
+	if len(GPUUUIDs) == 0 {
+		http.Error(w, "not ready", http.StatusServiceUnavailable)
 		return
 	}
+
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("ready"))
+	_, err := w.Write([]byte("ready"))
+	if err != nil {
+		http.Error(w, fmt.Sprintf("error writing response: %v", err), http.StatusInternalServerError)
+		return
+	}
 }
 
 func main() {
-	http.HandleFunc(stubapi.AcceleratorQueryPath, gpuHandler)
+	err := getGPUUUIDs()
+	if err != nil {
+		fmt.Printf("Error getting GPU UUIDs: %v\n", err)
+	}
+
+	http.HandleFunc("/v1"+stubapi.AcceleratorQueryPath, gpuHandler)
 	http.HandleFunc("/readyz", readyHandler)
 
 	if err := http.ListenAndServe(":8080", nil); err != nil {
