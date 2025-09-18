@@ -18,15 +18,55 @@ package spi
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"os/exec"
 	"strings"
 	"time"
 
+	stubapi "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/stub/api"
 	"k8s.io/klog/v2"
 )
+
+// gpuHandler responds with the list of allocated GPU UUIDs
+func gpuHandler(gpuUUIDs []string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if len(gpuUUIDs) == 0 {
+			http.Error(w, "no GPUs found", http.StatusInternalServerError) // TODO(waltforme): check the code
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(gpuUUIDs); err != nil {
+			http.Error(w, fmt.Sprintf("error encoding response: %v", err), http.StatusInternalServerError)
+			return
+		}
+	}
+}
+
+func getGpuUUIDs() ([]string, error) {
+	cmd := exec.Command("nvidia-smi", "--query-gpu=uuid", "--format=csv,noheader")
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	var uuids []string
+	for _, line := range lines {
+		if line != "" {
+			uuids = append(uuids, line)
+		}
+	}
+	if len(uuids) == 0 {
+		return nil, fmt.Errorf("no GPUs found")
+	}
+
+	return uuids, nil
+}
 
 // ipPutHandler receives the IP address of the inference server pod,
 // and sends it to the provided channel.
@@ -76,7 +116,18 @@ func Start(ctx context.Context, port string, ipCh chan<- string) error {
 
 	logger.Info("starting server", "port", port)
 
+	gpuUUIDs, err := getGpuUUIDs()
+	if err != nil {
+		logger.Error(err, "failed to get GPU UUIDs")
+	}
+	if len(gpuUUIDs) == 0 {
+		logger.Error(fmt.Errorf("no GPUs found"), "no GPU UUIDs available")
+	} else {
+		logger.Info("Got GPU UUIDs", "uuids", gpuUUIDs)
+	}
+
 	mux := http.NewServeMux()
+	mux.HandleFunc(strings.Join([]string{"GET", "/v1" + stubapi.AcceleratorQueryPath}, " "), gpuHandler(gpuUUIDs))
 	mux.HandleFunc("PUT /ip", ipPutHandler(ipCh))
 	mux.HandleFunc("DELETE /ip", ipDeleteHandler(ipCh))
 

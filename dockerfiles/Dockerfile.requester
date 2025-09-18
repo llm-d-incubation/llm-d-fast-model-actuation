@@ -19,16 +19,13 @@ COPY cmd/ cmd/
 COPY pkg/ pkg/
 
 # Build
-
 ENV CGO_ENABLED=1
 ENV GOOS=${TARGETOS:-linux}
 ENV GOARCH=${TARGETARCH}
 ARG BUILD_REF
 RUN go build -a -o bin/requester cmd/requester/main.go
 
-# Use ubi9 as a minimal base image
-# Refer to https://catalog.redhat.com/software/containers/ubi9/ubi-minimal/615bd9b4075b022acc111bf5 for more details
-FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
+FROM nvcr.io/nvidia/cuda:12.8.0-base-ubuntu22.04
 WORKDIR /
 COPY --from=builder /workspace/bin/requester /app/requester
 
