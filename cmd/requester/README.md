@@ -2,7 +2,6 @@ This document shows the steps to exercise the requester in a local k8s environme
 
 Build the requester container image (use your favorate `REQUESTER_IMG_REG`).
 ```shell
-REQUESTER_IMG_REG=quay.io/my-namespace
 make build-requester REQUESTER_IMG_REG=$REQUESTER_IMG_REG
 ```
 
