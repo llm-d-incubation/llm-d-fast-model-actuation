@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: requester-example
+spec:
+  containers:
+    - name: requester-container
+      image: ghcr.io/llm-d-incubation/llm-d-fast-model-actuation-requester:latest
+      ports:
+        - containerPort: 8080
+        - containerPort: 8081
+      env:
+        - name: PROBES_PORT
+          value: "8080"
+        - name: SPI_PORT
+          value: "8081"
+      readinessProbe:
+        httpGet:
+          path: /ready
+          port: 8080
+        initialDelaySeconds: 3
+        periodSeconds: 5
