@@ -170,3 +170,7 @@ Desktop.ini
 
 # Linux
 *~
+
+# draw.io
+*.drawio.bkp
+*.drawio.dtmp
