@@ -48,7 +48,7 @@ my-server-request   0/1     Running   0          26s   10.0.0.233   ip-172-31-58
 ```
 
 Mock the relayed readiness.
-```console 
+```console
 (vllm) ubuntu@ip-172-31-58-228:~/llm-d-fast-model-actuation$ curl $thepodip:8080/ready
 Service Unavailable
 (vllm) ubuntu@ip-172-31-58-228:~/llm-d-fast-model-actuation$ curl -X PUT "http://$thepodip:8081/ip"   -H "Content-Type: text/plain"   --data "1.2.3.4"
