@@ -26,4 +26,4 @@ package api
 // A 200 response's body must contain a JSON array of strings.
 // Each string identifies one accelerator, in a way that
 // is appropriate for the software used to access the accelerators.
-const AcceleratorQueryPath = "/dual-pod/accelerators"
+const AcceleratorQueryPath = "/v1/dual-pod/accelerators"
