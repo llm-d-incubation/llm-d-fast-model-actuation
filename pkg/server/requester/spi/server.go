@@ -127,7 +127,7 @@ func Start(ctx context.Context, port string, ipCh chan<- string) error {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc(strings.Join([]string{"GET", "/v1" + stubapi.AcceleratorQueryPath}, " "), gpuHandler(gpuUUIDs))
+	mux.HandleFunc(strings.Join([]string{"GET", stubapi.AcceleratorQueryPath}, " "), gpuHandler(gpuUUIDs))
 	mux.HandleFunc("PUT /ip", ipPutHandler(ipCh))
 	mux.HandleFunc("DELETE /ip", ipDeleteHandler(ipCh))
 
