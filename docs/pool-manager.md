@@ -1,6 +1,6 @@
 # Pool Manager overview
 
-👉 The Pool Manager is a sub-component of the dual-pod controller system. It provisions and manages a pool of idle pods that run only the Launcher process. When requested, it transitions these pods through different lifecycle states (idle → active → sleeping → awake → deleted). This ensures fast activation of server-running vLLM pods while minimizing cold-start latency.
+👉 The Pool Manager is a sub-component of the dual-pod controller system. It provisions and manages a pool of idle pods that run only the Launcher process. When requested, it transitions these pods through different lifecycle states (idle → active → deleted). This ensures fast activation of server-running vLLM pods while minimizing cold-start latency.
 
 ## Sequence Flow
 
@@ -12,8 +12,8 @@
 - Pool Manager issues POST /v1/vllm to the pod's launcher with server-patch options,
 - Launcher starts the vLLM inference server subprocess inside the same pod,
 - Pool Manager patches labels so the pod joins an IGW InferencePool,
-- Requests may be routed directly to the pod bypassing the launcher,
-- On scale-down, Pool Manager may issue DELETE /v1/vllm to the launcher, terminating vLLM before pod deletion.
+- Requests will be routed directly to the vLLM inference server process bypassing the launcher,
+- On scale-down, the Pool Manager issues DELETE /v1/vllm to the pod's launcher, terminating the vLLM subprocess. The server-running pod remains running with the launcher, and its status set back to idle so it can be reused for future allocations if there aren't a sufficient number of idle pods.
 
 ## Pod States
 
