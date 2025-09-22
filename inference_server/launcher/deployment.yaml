@@ -50,3 +50,7 @@ spec:
             - name: code-volume
               mountPath: /app
               readOnly: true
+            - mountPath: /root/.cache/huggingface
+              name: cache-volume
+            - name: shm
+              mountPath: /dev/shm
