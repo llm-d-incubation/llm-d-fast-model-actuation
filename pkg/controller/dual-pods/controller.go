@@ -60,7 +60,7 @@ func NewController(
 		podInformer:   corev1PreInformers.Pods().Informer(),
 		podLister:     corev1PreInformers.Pods().Lister(),
 	}
-	ctl.QueueAndWorkers = genctlr.NewQueueAndWorkers(string(ControllerName), numWorkers, ctl.process, makeSentinel, isSentinel, ctl.onceProcessedSync)
+	ctl.QueueAndWorkers = genctlr.NewQueueAndWorkers(string(ControllerName), numWorkers, ctl.process)
 	_, err := ctl.podInformer.AddEventHandler(ctl)
 	if err != nil {
 		panic(err)
@@ -88,7 +88,6 @@ func (ref typedRef) String() string {
 }
 
 const podKind = "Pod"
-const sentinelKind = "Senti nel"
 
 func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 	var kind string
@@ -147,17 +146,6 @@ func (ctl *controller) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to start workers: %w", err)
 	}
 	return nil
-}
-
-func makeSentinel(idx int) typedRef {
-	return typedRef{sentinelKind, cache.ObjectName{Name: fmt.Sprintf("%d", idx)}}
-}
-
-func isSentinel(item typedRef) bool {
-	return item.Kind == sentinelKind
-}
-
-func (ctl *controller) onceProcessedSync(context.Context) {
 }
 
 func (ctl *controller) process(ctx context.Context, ref typedRef) (error, bool) {
