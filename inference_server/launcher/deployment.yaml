@@ -30,23 +30,23 @@ spec:
         - name: launcher
           image: vllm/vllm-openai:latest
           ports:
-          - containerPort: 8001
+            - containerPort: 8001
           # Install dependencies and run the app
           command: ["sh", "-c"]
           args:
-          - |
-            pip install -r /app/requirements.txt && \
-            uvicorn --port 8001 --log-level info app.launcher:app
+            - |
+              cd /app && \
+              uvicorn --port 8001 --log-level info launcher:app
           resources:
-              limits:
-                cpu: "10"
-                memory: 200G
-                nvidia.com/gpu: "1"
-              requests:
-                cpu: "2"
-                memory: 60G
-                nvidia.com/gpu: "1"
+            limits:
+              cpu: "10"
+              memory: 200G
+              nvidia.com/gpu: "1"
+            requests:
+              cpu: "2"
+              memory: 60G
+              nvidia.com/gpu: "1"
           volumeMounts:
-          - name: code-volume
-            mountPath: /app
-            readOnly: true
+            - name: code-volume
+              mountPath: /app
+              readOnly: true

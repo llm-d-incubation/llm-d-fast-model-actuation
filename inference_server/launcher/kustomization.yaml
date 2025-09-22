@@ -3,24 +3,24 @@ kind: Kustomization
 
 # Generate ConfigMap from files
 configMapGenerator:
-- files:
-  - launcher.py
-  - requirements.txt
-  name: launcher-code
-  options:
-    labels:
-      app: launcher
-      version: "1.0"
+  - files:
+      - __init__.py
+      - launcher.py
+    name: launcher-code
+    options:
+      labels:
+        app: launcher
+        version: "1.0"
 
 # Include other Kubernetes resources
 resources:
-- deployment.yaml
-- service.yaml
+  - deployment.yaml
+  - service.yaml
 
 # Add common annotations and labels
 commonAnnotations:
   managed-by: kustomize
 labels:
-- includeSelectors: true
-  pairs:
-    app: launcher
+  - includeSelectors: true
+    pairs:
+      app: launcher
