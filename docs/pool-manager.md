@@ -67,6 +67,6 @@ spec:
 # Summary
 
 - Pool Manager runs inside the Dual-Pod Controller
-- It provisions idle pods running the Launchers 
-- Pods are activated via POST (vLLM subprocess started) and torn down via DELETE.
+- It provisions idle pods running the Launchers
+- Pods are activated via POST (vLLM subprocess started) and torn down via DELETE
 - IGW only sees active inference server pods; Launchers are not visible externally
