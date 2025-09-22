@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: launcher
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: launcher
+  template:
+    metadata:
+      labels:
+        app: launcher
+    spec:
+      volumes:
+        - name: cache-volume
+          persistentVolumeClaim:
+            claimName: launcher-pvc
+        # vLLM needs to access the host's shared memory for tensor parallel inference.
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: "2Gi"
+        - name: code-volume
+          configMap:
+            # Kustomize will automatically generate a unique name
+            name: launcher-code
+            defaultMode: 0755
+      containers:
+        - name: launcher
+          image: vllm/vllm-openai:latest
+          ports:
+          - containerPort: 8001
+          # Install dependencies and run the app
+          command: ["sh", "-c"]
+          args:
+          - |
+            pip install -r /app/requirements.txt && \
+            uvicorn --port 8001 --log-level info app.launcher:app
+          resources:
+              limits:
+                cpu: "10"
+                memory: 200G
+                nvidia.com/gpu: "1"
+              requests:
+                cpu: "2"
+                memory: 60G
+                nvidia.com/gpu: "1"
+          volumeMounts:
+          - name: code-volume
+            mountPath: /app
+            readOnly: true

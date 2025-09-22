@@ -1,0 +1,26 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Generate ConfigMap from files
+configMapGenerator:
+- name: launcher-code
+  files:
+  - launcher.py
+  - requirements.txt
+  options:
+    labels:
+      app: launcher
+      version: "1.0"
+
+# Include other Kubernetes resources
+resources:
+- deployment.yaml
+- service.yaml  # optional
+
+# Add common labels to all resources
+commonLabels:
+  app: launcher
+
+# Add common annotations
+commonAnnotations:
+  managed-by: kustomize
