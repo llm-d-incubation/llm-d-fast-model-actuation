@@ -19,8 +19,6 @@ package generic
 import (
 	"context"
 	"fmt"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -32,42 +30,35 @@ import (
 
 // QueueAndWorkers is generic code for a typical controller's workqueue and worker goroutines
 // that pull from that queue.
-// Untypically, this can also report when all of the initial load of workqueue items ---
-// those enqueued before the informers report `HasSynced` --- have been processed by
-// workers; this is what the `HasProcessedSync` method reports.
-// This is done by stuffing the queue with `NumWorkers` sentinel values between
-// those initial items and all the rest. Each worker, when it pops a sentinel, waits for
-// all the others to also pop a sentinel before continuing.
 type QueueAndWorkers[Item comparable] struct {
-	ControllerName    string
-	Queue             workqueue.TypedRateLimitingInterface[Item]
-	NumWorkers        int
-	Process           func(ctx context.Context, item Item) (err error, retry bool)
-	onceProcessedSync func(context.Context)
+	ControllerName string
+	Queue          workqueue.TypedRateLimitingInterface[Item]
+	NumWorkers     int
+	Process        func(ctx context.Context, item Item) (err error, retry bool)
 
-	// sentinel is a special value enqueued to delineate between
-	// the initial batch of items and the rest.
-	makeSentinel func(int) Item
-	isSentinel   func(Item) bool
-
-	// wg tracks the workers' completion of initial batch of items
-	wg            *sync.WaitGroup
-	processedSync *atomic.Bool
+	earlySync func(context.Context, Item) *bool
 }
 
 // NewQueueAndWorkers makes a new QueueAndWorkers.
-// Either makeSentinel and isSentinel are both nil or they both are not nil.
 func NewQueueAndWorkers[Item comparable](
 	controllerName string,
 	numWorkers int,
 	process func(ctx context.Context, item Item) (err error, retry bool),
-	makeSentinel func(distinguisher int) Item,
-	isSentinel func(Item) bool,
-	onceProcessedSync func(context.Context),
 ) QueueAndWorkers[Item] {
-	if (makeSentinel == nil) != (isSentinel == nil) {
-		panic("sentintel incoherence")
-	}
+	return newQueueAndWorkers(controllerName, numWorkers, process, noEarlySync[Item])
+}
+
+func noEarlySync[Item comparable](context.Context, Item) *bool {
+	return nil
+}
+
+// NewQueueAndWorkers makes a new QueueAndWorkers.
+func newQueueAndWorkers[Item comparable](
+	controllerName string,
+	numWorkers int,
+	process func(ctx context.Context, item Item) (err error, retry bool),
+	earlySync func(context.Context, Item) *bool,
+) QueueAndWorkers[Item] {
 	ans := QueueAndWorkers[Item]{
 		ControllerName: controllerName,
 		Queue: workqueue.NewTypedRateLimitingQueueWithConfig(
@@ -75,13 +66,9 @@ func NewQueueAndWorkers[Item comparable](
 			workqueue.TypedRateLimitingQueueConfig[Item]{
 				Name: controllerName,
 			}),
-		NumWorkers:        numWorkers,
-		Process:           process,
-		onceProcessedSync: onceProcessedSync,
-		makeSentinel:      makeSentinel,
-		isSentinel:        isSentinel,
-		wg:                &sync.WaitGroup{},
-		processedSync:     &atomic.Bool{},
+		NumWorkers: numWorkers,
+		Process:    process,
+		earlySync:  earlySync,
 	}
 	return ans
 }
@@ -91,18 +78,6 @@ func NewQueueAndWorkers[Item comparable](
 // ctx has already been specialized to this controller.
 func (ctl *QueueAndWorkers[Item]) StartWorkers(ctx context.Context) error {
 	logger := klog.FromContext(ctx)
-	if ctl.makeSentinel != nil {
-		ctl.wg.Add(ctl.NumWorkers)
-		go func() {
-			ctl.wg.Wait()
-			logger.V(1).Info("All workers have finished processing initial items")
-			ctl.processedSync.Store(true)
-			ctl.onceProcessedSync(ctx)
-		}()
-		for worker := range ctl.NumWorkers {
-			ctl.Queue.Add(ctl.makeSentinel(worker))
-		}
-	}
 	for workerIdx := range ctl.NumWorkers {
 		workLogger := logger.WithValues("worker", workerIdx)
 		workCtx := klog.NewContext(ctx, workLogger)
@@ -129,14 +104,9 @@ func (ctl *QueueAndWorkers[Item]) processNextWorkItem(ctx context.Context) bool 
 	}
 	defer ctl.Queue.Done(objRef)
 	logger.V(4).Info("Popped workqueue item", "item", objRef)
-	if ctl.isSentinel != nil && ctl.isSentinel(objRef) {
-		logger.V(3).Info("Done processing initial batch of items; waiting for others", "sentinel", objRef)
-		ctl.wg.Done()
-		ctl.wg.Wait()
-		logger.V(3).Info("Resuming normal processing of items", "sentinel", objRef)
-		return true
+	if ans := ctl.earlySync(ctx, objRef); ans != nil {
+		return *ans
 	}
-
 	var err error
 	var retry bool
 	defer func() {
@@ -155,13 +125,4 @@ func (ctl *QueueAndWorkers[Item]) processNextWorkItem(ctx context.Context) bool 
 	}()
 	err, retry = ctl.Process(ctx, objRef)
 	return true
-}
-
-// HasProcessedSync indicates whether the initial batch of items has been processed.
-// May only be called if the constructor was given non-nil sentinel functions.
-func (ctl *QueueAndWorkers[Item]) HasProcessedSync() bool {
-	if ctl.makeSentinel == nil {
-		panic("no sentinels")
-	}
-	return ctl.processedSync.Load()
 }
