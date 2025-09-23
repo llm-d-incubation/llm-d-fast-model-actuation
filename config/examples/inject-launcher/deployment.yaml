@@ -1,16 +1,21 @@
 apiVersion: apps/v1
-kind: Deployment
+kind: ReplicaSet
 metadata:
-  name: launcher
+  name: inference-server
+  labels:
+    app: inference-server
+    version: "1.0"
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: launcher
+      app: inference-server
+      version: "1.0"
   template:
     metadata:
       labels:
-        app: launcher
+        app: inference-server
+        version: "1.0"
     spec:
       volumes:
         - name: cache-volume
