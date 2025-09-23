@@ -14,7 +14,7 @@ configMapGenerator:
 
 # Include other Kubernetes resources
 resources:
-  - deployment.yaml
+  - replicaset.yaml
   - service.yaml
 
 # Add common annotations and labels
