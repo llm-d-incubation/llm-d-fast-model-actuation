@@ -25,9 +25,8 @@ spec:
           configMap:
             # Kustomize will automatically generate a unique name
             name: launcher-code
-            defaultMode: 0755
       containers:
-        - name: launcher
+        - name: inference-server
           image: vllm/vllm-openai:latest
           ports:
             - containerPort: 8001
