@@ -24,64 +24,30 @@ import (
 	"time"
 
 	"k8s.io/klog/v2"
+
+	stubapi "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/stub/api"
 )
 
-var (
-	ready atomic.Bool
-)
-
-// readyGetHandler responds with 200 OK if the service is ready,
-// otherwise 503 Service Unavailable.
-func readyGetHandler(w http.ResponseWriter, r *http.Request) {
-	if ready.Load() {
-		w.WriteHeader(http.StatusOK) // not strictly necessary, but explicit
-		fmt.Fprintln(w, "OK")        //nolint:errcheck
-	} else {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		fmt.Fprintln(w, "Service Unavailable") //nolint:errcheck
-	}
-}
-
-// watchForIPs listens for IP addresses on the provided channel and
-// sets the readiness state accordingly.
-func watchForIPs(ctx context.Context, ipCh <-chan string) {
-	logger := klog.FromContext(ctx)
-
-	for {
-		select {
-		case <-ctx.Done():
-			logger.Info("context done, stopping IP reception")
-			return
-		case ip := <-ipCh:
-			if ip == "" {
-				ready.Store(false)
-				logger.Info("received empty IP, setting readiness to false")
-
-			} else {
-				ready.Store(true)
-				logger.Info("received IP, setting readiness to true", "ip", ip)
-			}
-		}
-	}
-}
-
-// Start starts an HTTP server managing the /ready endpoint.
-func Start(ctx context.Context, port string, ipCh <-chan string) error {
+// Run runs an HTTP server managing the /ready endpoint.
+func Run(ctx context.Context, port string, ready *atomic.Bool) error {
 	logger := klog.FromContext(ctx).WithName("probes-server")
 	ctx = klog.NewContext(ctx, logger)
 
-	logger.Info("starting server", "port", port)
-
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /ready", readyGetHandler)
+	mux.HandleFunc("GET "+stubapi.ReadyPath, func(w http.ResponseWriter, r *http.Request) {
+		if ready.Load() {
+			w.WriteHeader(http.StatusOK) // not strictly necessary, but explicit
+			fmt.Fprintln(w, "OK")        //nolint:errcheck
+		} else {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprintln(w, "Service Unavailable") //nolint:errcheck
+		}
+	})
 
 	server := &http.Server{
 		Addr:    ":" + port,
 		Handler: mux,
 	}
-
-	// Goroutine to set readiness to true or false based on IP reception
-	go watchForIPs(ctx, ipCh)
 
 	// Setup graceful termination
 	go func() {
@@ -95,6 +61,7 @@ func Start(ctx context.Context, port string, ipCh <-chan string) error {
 		}
 	}()
 
+	logger.Info("starting server", "port", port)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("listen and serve error: %w", err)
 	}

@@ -27,3 +27,12 @@ package api
 // Each string identifies one accelerator, in a way that
 // is appropriate for the software used to access the accelerators.
 const AcceleratorQueryPath = "/v1/dual-pod/accelerators"
+
+// BecomeReadyPath is the path to POST to in order to set readiness to true
+const BecomeReadyPath = "/v1/become-ready"
+
+// BecomeUnreadyPath is the path to POST to in order to set readiness to false
+const BecomeUnreadyPath = "/v1/become-unready"
+
+// ReadyPath is where to send a GET to query readiness
+const ReadyPath = "/ready"

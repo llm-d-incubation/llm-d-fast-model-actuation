@@ -20,15 +20,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net"
 	"net/http"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"time"
 
-	stubapi "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/stub/api"
 	"k8s.io/klog/v2"
+
+	stubapi "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/stub/api"
 )
 
 // gpuHandler responds with the list of allocated GPU UUIDs
@@ -68,53 +68,10 @@ func getGpuUUIDs() ([]string, error) {
 	return uuids, nil
 }
 
-// ipPutHandler receives the IP address of the inference server pod,
-// and sends it to the provided channel.
-func ipPutHandler(ipCh chan<- string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Content-Type") != "text/plain" {
-			http.Error(w, "Unsupported Media Type", http.StatusUnsupportedMediaType)
-			return
-		}
-
-		reader, err := io.ReadAll(r.Body)
-		defer r.Body.Close() //nolint:errcheck
-
-		if err != nil {
-			http.Error(w, "Error reading body", http.StatusBadRequest)
-			return
-		}
-
-		ip := strings.TrimSpace(string(reader))
-
-		if net.ParseIP(ip) == nil {
-			http.Error(w, fmt.Sprintf("Invalid IP address %s", ip), http.StatusBadRequest)
-			return
-		}
-
-		ipCh <- ip
-
-		w.WriteHeader(http.StatusOK) // not strictly necessary, but explicit
-		fmt.Fprintln(w, "OK")        //nolint:errcheck
-	}
-}
-
-// ipDeleteHandler unsets the IP address of the inference server pod
-// by sending an empty string to the provided channel.
-func ipDeleteHandler(ipCh chan<- string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		ipCh <- ""
-
-		w.WriteHeader(http.StatusOK)
-	}
-}
-
-// Start starts an HTTP server managing the endpoints
+// Run starts an HTTP server managing the endpoints
 // consumed by the dual-pod controller.
-func Start(ctx context.Context, port string, ipCh chan<- string) error {
+func Run(ctx context.Context, port string, ready *atomic.Bool) error {
 	logger := klog.FromContext(ctx).WithName("spi-server")
-
-	logger.Info("starting server", "port", port)
 
 	gpuUUIDs, err := getGpuUUIDs()
 	if err != nil {
@@ -125,11 +82,25 @@ func Start(ctx context.Context, port string, ipCh chan<- string) error {
 	} else {
 		logger.Info("Got GPU UUIDs", "uuids", gpuUUIDs)
 	}
+	return runTestable(ctx, port, ready, gpuUUIDs)
+}
 
+func newSetReadyHandler(logger klog.Logger, ready *atomic.Bool, newReady bool) func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close() //nolint:errcheck
+		logger.Info("Setting ready", "newReady", newReady)
+		ready.Store(newReady)
+		w.WriteHeader(http.StatusOK) // not strictly necessary, but explicit
+		fmt.Fprintln(w, "OK")        //nolint:errcheck
+	}
+}
+
+func runTestable(ctx context.Context, port string, ready *atomic.Bool, gpuUUIDs []string) error {
+	logger := klog.FromContext(ctx).WithName("spi-server")
 	mux := http.NewServeMux()
 	mux.HandleFunc(strings.Join([]string{"GET", stubapi.AcceleratorQueryPath}, " "), gpuHandler(gpuUUIDs))
-	mux.HandleFunc("PUT /ip", ipPutHandler(ipCh))
-	mux.HandleFunc("DELETE /ip", ipDeleteHandler(ipCh))
+	mux.HandleFunc("POST "+stubapi.BecomeReadyPath, newSetReadyHandler(logger, ready, true))
+	mux.HandleFunc("POST "+stubapi.BecomeUnreadyPath, newSetReadyHandler(logger, ready, false))
 
 	server := &http.Server{
 		Addr:    ":" + port,
@@ -148,6 +119,7 @@ func Start(ctx context.Context, port string, ipCh chan<- string) error {
 		}
 	}()
 
+	logger.Info("starting server", "port", port)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("listen and serve error: %w", err)
 	}

@@ -51,11 +51,11 @@ Mock the relayed readiness.
 ```console
 (vllm) ubuntu@ip-172-31-58-228:~/llm-d-fast-model-actuation$ curl $thepodip:8080/ready
 Service Unavailable
-(vllm) ubuntu@ip-172-31-58-228:~/llm-d-fast-model-actuation$ curl -X PUT "http://$thepodip:8081/ip"   -H "Content-Type: text/plain"   --data "1.2.3.4"
+(vllm) ubuntu@ip-172-31-58-228:~/llm-d-fast-model-actuation$ curl -X POST "http://$thepodip:8081/v1/become-ready"
 OK
 (vllm) ubuntu@ip-172-31-58-228:~/llm-d-fast-model-actuation$ curl $thepodip:8080/ready
 OK
-(vllm) ubuntu@ip-172-31-58-228:~/llm-d-fast-model-actuation$ curl -X DELETE "http://$thepodip:8081/ip"
+(vllm) ubuntu@ip-172-31-58-228:~/llm-d-fast-model-actuation$ curl -X POST "http://$thepodip:8081/v1/become-unready"
 (vllm) ubuntu@ip-172-31-58-228:~/llm-d-fast-model-actuation$ curl $thepodip:8080/ready
 Service Unavailable
 ```
@@ -66,8 +66,8 @@ Show the log of the pod.
 I0918 05:42:24.411639       1 server.go:117] "starting server" logger="spi-server" port="8081"
 I0918 05:42:24.411640       1 server.go:73] "starting server" logger="probes-server" port="8080"
 I0918 05:42:24.431092       1 server.go:126] "Got GPU UUIDs" logger="spi-server" uuids=["GPU-7d4a903d-6045-642b-12fd-db4207cd82c4"]
-I0918 05:44:06.689257       1 server.go:62] "received IP, setting readiness to true" logger="probes-server" ip="1.2.3.4"
-I0918 05:44:22.127723       1 server.go:58] "received empty IP, setting readiness to false" logger="probes-server"
+I0923 06:28:34.915124       1 server.go:91] "Setting ready" logger="spi-server" newReady=true
+I0923 06:30:53.616685       1 server.go:91] "Setting ready" logger="spi-server" newReady=false
 ```
 
 Clean up.
