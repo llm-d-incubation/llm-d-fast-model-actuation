@@ -20,6 +20,7 @@ import (
 	"flag"
 	"os"
 	"sync"
+	"sync/atomic"
 
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/probes"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/spi"
@@ -47,7 +48,7 @@ func main() {
 		spiPort = "8081"
 	}
 
-	ipCh := make(chan string)
+	var ready atomic.Bool
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -55,7 +56,7 @@ func main() {
 	go func() {
 		defer wg.Done()
 
-		err := spi.Start(ctx, spiPort, ipCh)
+		err := spi.Run(ctx, spiPort, &ready)
 		if err != nil {
 			logger.Error(err, "failed to start requester SPI server")
 		}
@@ -65,7 +66,7 @@ func main() {
 	go func() {
 		defer wg.Done()
 
-		err := probes.Start(ctx, probesPort, ipCh)
+		err := probes.Run(ctx, probesPort, &ready)
 		if err != nil {
 			logger.Error(err, "failed to start requester probes server")
 		}
