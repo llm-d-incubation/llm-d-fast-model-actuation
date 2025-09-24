@@ -1,0 +1,154 @@
+<mxfile host="Electron" agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/26.0.9 Chrome/128.0.6613.186 Electron/32.2.5 Safari/537.36" version="26.0.9">
+  <diagram name="Page-1" id="pDYi24nOpNsDVsXnTBlD">
+    <mxGraphModel dx="1301" dy="836" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1200" pageHeight="1920" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-52" value="ISR pod&lt;div&gt;&amp;nbsp; annotations&lt;/div&gt;&lt;div&gt;&amp;nbsp; - dual-pod.llm-d.ai/role: requester&lt;/div&gt;&lt;div&gt;&amp;nbsp; - dual-pod.llm-d.ai/inference-server-ip: xxx&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;dashed=1;verticalAlign=top;align=left;spacingLeft=2;" vertex="1" parent="1">
+          <mxGeometry x="150" y="210" width="300" height="630" as="geometry" />
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-37" value="ISP pod" style="rounded=0;whiteSpace=wrap;html=1;dashed=1;verticalAlign=top;align=left;spacingLeft=2;" vertex="1" parent="1">
+          <mxGeometry x="720" y="220" width="320" height="362.5" as="geometry" />
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-42" value="&lt;font style=&quot;font-size: 14px;&quot;&gt;inference-server-provider-controller&lt;/font&gt;" style="whiteSpace=wrap;html=1;verticalAlign=top;align=center;" vertex="1" parent="1">
+          <mxGeometry x="730" y="256.25" width="300" height="287.5" as="geometry" />
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="Rpnd6F2rtuiKZIT-C58I-10" target="Rpnd6F2rtuiKZIT-C58I-52">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="300" y="160" as="sourcePoint" />
+            <mxPoint x="297.5" y="237.5" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-11" value="Create" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="Rpnd6F2rtuiKZIT-C58I-9">
+          <mxGeometry x="-0.1672" y="-1" relative="1" as="geometry">
+            <mxPoint y="20" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-10" value="Actor" style="shape=umlActor;verticalLabelPosition=bottom;verticalAlign=top;html=1;outlineConnect=0;" vertex="1" parent="1">
+          <mxGeometry x="285" y="30" width="30" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-13" value="Abbreviations:&lt;div&gt;- &lt;b&gt;IS&lt;/b&gt;: inference-server&lt;/div&gt;&lt;div&gt;- &lt;b&gt;ISR&lt;/b&gt;: inference-server-requester&lt;/div&gt;&lt;div&gt;- &lt;b&gt;ISP&lt;/b&gt;: inference-server-provider&lt;/div&gt;" style="text;html=1;align=left;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;" vertex="1" parent="1">
+          <mxGeometry x="480" y="512.5" width="200" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-38" value="ISR pods watcher" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="750" y="310" width="210" height="45" as="geometry" />
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-53" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="Rpnd6F2rtuiKZIT-C58I-38" target="Rpnd6F2rtuiKZIT-C58I-47">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-54" value="On lifecyle event: &lt;br&gt;delegate operation to ISP" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="Rpnd6F2rtuiKZIT-C58I-53">
+          <mxGeometry x="0.1329" y="-1" relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-55" value="" style="group;strokeWidth=3;" vertex="1" connectable="0" parent="1">
+          <mxGeometry x="760" y="412.5" width="190" height="97.5" as="geometry" />
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-47" value="&lt;font&gt;inference-server-provider API&lt;/font&gt;" style="whiteSpace=wrap;html=1;verticalAlign=top;align=center;strokeWidth=2;" vertex="1" parent="Rpnd6F2rtuiKZIT-C58I-55">
+          <mxGeometry width="180" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-44" value="sleep-wake provider" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="Rpnd6F2rtuiKZIT-C58I-55">
+          <mxGeometry x="10" y="30" width="160" height="22.5" as="geometry" />
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-45" value="model-swapping provider" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="Rpnd6F2rtuiKZIT-C58I-55">
+          <mxGeometry x="10" y="52.5" width="160" height="22.5" as="geometry" />
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-46" value="cold-start provider" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="Rpnd6F2rtuiKZIT-C58I-55">
+          <mxGeometry x="10" y="75" width="160" height="22.5" as="geometry" />
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-88" value="4" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="Rpnd6F2rtuiKZIT-C58I-55">
+          <mxGeometry x="170" y="-12.5" width="20" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-57" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.833;entryY=0.1;entryDx=0;entryDy=0;entryPerimeter=0;exitX=0;exitY=0.5;exitDx=0;exitDy=0;" edge="1" parent="1" source="Rpnd6F2rtuiKZIT-C58I-47">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="740.1" y="340.75" as="sourcePoint" />
+            <mxPoint x="390.0000000000001" y="270" as="targetPoint" />
+            <Array as="points">
+              <mxPoint x="520" y="428" />
+              <mxPoint x="520" y="270" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-58" value="Set IS pod IP annotation" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="Rpnd6F2rtuiKZIT-C58I-57">
+          <mxGeometry x="0.4543" y="-1" relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-77" value="" style="group" vertex="1" connectable="0" parent="1">
+          <mxGeometry x="162.5" y="285" width="270" height="210" as="geometry" />
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-59" value="&lt;font style=&quot;font-size: 14px;&quot;&gt;inference-server-gpu-allocator&lt;/font&gt;" style="whiteSpace=wrap;html=1;verticalAlign=top;align=center;" vertex="1" parent="Rpnd6F2rtuiKZIT-C58I-77">
+          <mxGeometry width="270" height="210" as="geometry" />
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-74" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="Rpnd6F2rtuiKZIT-C58I-77" source="Rpnd6F2rtuiKZIT-C58I-61" target="Rpnd6F2rtuiKZIT-C58I-73">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-61" value="Start HTTP server exposing allocated GPUs" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="Rpnd6F2rtuiKZIT-C58I-77">
+          <mxGeometry x="15" y="40" width="240" height="37" as="geometry" />
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-76" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="Rpnd6F2rtuiKZIT-C58I-77" source="Rpnd6F2rtuiKZIT-C58I-73" target="Rpnd6F2rtuiKZIT-C58I-75">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-73" value="Mark container as ready&lt;div&gt;&lt;font size=&quot;1&quot;&gt;Exposed via readiness probe&lt;/font&gt;&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="Rpnd6F2rtuiKZIT-C58I-77">
+          <mxGeometry x="15" y="94" width="240" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-75" value="Wait for termination signal" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="Rpnd6F2rtuiKZIT-C58I-77">
+          <mxGeometry x="15" y="150" width="240" height="37" as="geometry" />
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-86" value="2" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="Rpnd6F2rtuiKZIT-C58I-77">
+          <mxGeometry x="235" y="15" width="20" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-80" value="" style="group" vertex="1" connectable="0" parent="1">
+          <mxGeometry x="160" y="510" width="275" height="300" as="geometry" />
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-1" value="&lt;font style=&quot;font-size: 15px;&quot;&gt;inference-server-requester&lt;/font&gt;" style="whiteSpace=wrap;html=1;verticalAlign=top;align=center;" vertex="1" parent="Rpnd6F2rtuiKZIT-C58I-80">
+          <mxGeometry width="270" height="300" as="geometry" />
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-32" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="Rpnd6F2rtuiKZIT-C58I-80" source="Rpnd6F2rtuiKZIT-C58I-24" target="Rpnd6F2rtuiKZIT-C58I-30">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-24" value="Start HTTP server redirecting to inference-server pod" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="Rpnd6F2rtuiKZIT-C58I-80">
+          <mxGeometry x="15" y="108" width="240" height="44.848484848484844" as="geometry" />
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-70" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="Rpnd6F2rtuiKZIT-C58I-80" source="Rpnd6F2rtuiKZIT-C58I-30" target="Rpnd6F2rtuiKZIT-C58I-69">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-30" value="Mark container as ready&lt;div&gt;&lt;span style=&quot;font-size: x-small;&quot;&gt;Exposed via readiness probe&lt;/span&gt;&lt;br&gt;&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="Rpnd6F2rtuiKZIT-C58I-80">
+          <mxGeometry x="15" y="172" width="240" height="44.848484848484844" as="geometry" />
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-68" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="Rpnd6F2rtuiKZIT-C58I-80" source="Rpnd6F2rtuiKZIT-C58I-67" target="Rpnd6F2rtuiKZIT-C58I-24">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-67" value="Wait for IS Pod IP set&lt;div&gt;&lt;font size=&quot;1&quot;&gt;watch file in mounted downwardAPI volume&amp;nbsp;&lt;/font&gt;&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="Rpnd6F2rtuiKZIT-C58I-80">
+          <mxGeometry x="15" y="44.84848484848487" width="240" height="44.848484848484844" as="geometry" />
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-69" value="Wait for termination signal" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="Rpnd6F2rtuiKZIT-C58I-80">
+          <mxGeometry x="15" y="235.15303030303028" width="240" height="44.848484848484844" as="geometry" />
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-102" value="6" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="Rpnd6F2rtuiKZIT-C58I-80">
+          <mxGeometry x="230" y="57.270000000000046" width="20" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-83" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.7;exitY=0.066;exitDx=0;exitDy=0;exitPerimeter=0;startArrow=classic;startFill=1;endArrow=none;entryX=0;entryY=0.25;entryDx=0;entryDy=0;" edge="1" parent="1" source="Rpnd6F2rtuiKZIT-C58I-52" target="Rpnd6F2rtuiKZIT-C58I-38">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="510" y="251" as="sourcePoint" />
+            <mxPoint x="700" y="290" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-84" value="watch for pods with requester role" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="Rpnd6F2rtuiKZIT-C58I-83">
+          <mxGeometry x="-0.0316" y="-1" relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-85" value="1" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="340" y="130" width="20" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-87" value="3" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="780" y="320" width="20" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="Rpnd6F2rtuiKZIT-C58I-95" value="5" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="540" y="391.25" width="20" height="20" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
