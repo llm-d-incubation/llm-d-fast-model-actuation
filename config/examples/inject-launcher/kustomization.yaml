@@ -8,6 +8,7 @@ configMapGenerator:
       - launcher.py
     name: launcher-code
     options:
+      disableNameSuffixHash: true
       labels:
         app: launcher
         version: "1.0"

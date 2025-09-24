@@ -28,7 +28,6 @@ spec:
             sizeLimit: "2Gi"
         - name: code-volume
           configMap:
-            # Kustomize will automatically generate a unique name
             name: launcher-code
       containers:
         - name: inference-server
