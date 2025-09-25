@@ -25,6 +25,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
 
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/api"
@@ -36,11 +37,17 @@ func (ctl *controller) processServerRunningPod(ctx context.Context, runningPod *
 	logger.V(5).Info("Processing server-running pod", "name", runningPod.Name)
 
 	// get the server-requesting pod from the owner reference
-	if len(runningPod.OwnerReferences) == 0 {
+	ownerRef, found := metav1.OwnerReference{}, false
+	for _, r := range runningPod.OwnerReferences {
+		if r.Kind == "Pod" && r.Name+api.ServerRunningPodNameSuffix == runningPod.Name {
+			ownerRef, found = r, true
+			break
+		}
+	}
+	if !found {
 		logger.V(5).Info("No owner reference found", "name", runningPod.Name)
 		return nil, true
 	}
-	ownerRef := runningPod.OwnerReferences[0]
 	requestingPod, err := ctl.podLister.Pods(runningPod.Namespace).Get(ownerRef.Name)
 	if err != nil {
 		if errors.IsNotFound(err) {
@@ -54,22 +61,24 @@ func (ctl *controller) processServerRunningPod(ctx context.Context, runningPod *
 	// relay the readiness
 	port := requestingPod.Annotations[api.AdminPortAnnotationName]
 	if port == "" {
-		port = api.AdminPortAnnotationDefaultValue
+		port = api.AdminPortDefaultValue
 	}
-	url := fmt.Sprintf("http://%s:%s", requestingPod.Status.PodIP, port)
+	url, readiness := fmt.Sprintf("http://%s:%s", requestingPod.Status.PodIP, port), ""
 	if isPodReady(runningPod) {
 		logger.V(5).Info("Server-running pod is ready", "name", runningPod.Name)
 		url += stubapi.BecomeReadyPath
+		readiness = "ready"
 	} else {
 		logger.V(5).Info("Server-running pod is not ready", "name", runningPod.Name)
 		url += stubapi.BecomeUnreadyPath
+		readiness = "unready"
 	}
 	err = postToReadiness(url)
 	if err != nil {
-		logger.Error(err, "Failed to relay the readiness", "url", url)
+		logger.Error(err, "Failed to relay the readiness", "name", runningPod.Name, "readiness", readiness)
 		return err, true
 	}
-	logger.V(5).Info("Successfully relayed the readiness", "name", runningPod.Name)
+	logger.V(5).Info("Successfully relayed the readiness", "name", runningPod.Name, "readiness", readiness)
 
 	logger.V(5).Info("Processed server-running pod", "name", runningPod.Name)
 	return nil, false

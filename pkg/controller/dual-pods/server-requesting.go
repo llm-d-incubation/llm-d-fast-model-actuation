@@ -56,13 +56,13 @@ func (ctl *controller) processServerRequestingPod(ctx context.Context, requestin
 	}
 	port := requestingPod.Annotations[api.AdminPortAnnotationName]
 	if port == "" {
-		port = api.AdminPortAnnotationDefaultValue
+		port = api.AdminPortDefaultValue
 	}
 	logger.V(5).Info("Querying accelerators", "ip", ip, "port", port)
 	url := fmt.Sprintf("http://%s:%s%s", ip, port, stubapi.AcceleratorQueryPath)
 	gpuUUIDs, err := getGPUUUIDs(url)
 	if err != nil {
-		logger.Error(err, "Failed to fetch GPU UUIDs", "url", url)
+		logger.V(5).Info("Not able to get GPU UUIDs at this time", "url", url, "error", err)
 		return err, true
 	}
 	if len(gpuUUIDs) == 0 {
@@ -74,7 +74,7 @@ func (ctl *controller) processServerRequestingPod(ctx context.Context, requestin
 
 	// use the server patch to build the server-running pod
 	logger.V(5).Info("Building server-running pod from patch", "name", requestingPod.Name, "patch", serverPatch)
-	serverRunningPod, err := composeServerRunningPod(requestingPod, serverTemplateData{
+	serverRunningPod, err := composeServerRunningPod(requestingPod, api.RunnerData{
 		GPUIndices: gpuIndices,
 		// TODO: these should be exposed as command-line flags or envars
 		LocalVolume:  "vcp-local-ip-172-31-58-228",
@@ -97,7 +97,7 @@ func (ctl *controller) processServerRequestingPod(ctx context.Context, requestin
 		return nil, false
 	}
 
-	logger.V(5).Info("Creating server-running pod", "name", serverRunningPod.Name, "namespace", serverRunningPod.Namespace)
+	logger.V(2).Info("Creating server-running pod", "name", serverRunningPod.Name, "namespace", serverRunningPod.Namespace)
 	_, err = ctl.coreclient.Pods(serverRunningPod.Namespace).Create(ctx, serverRunningPod, metav1.CreateOptions{})
 	if err != nil {
 		logger.Error(err, "Failed to create server-running pod", "name", serverRunningPod.Name)
@@ -109,14 +109,7 @@ func (ctl *controller) processServerRequestingPod(ctx context.Context, requestin
 	return nil, false
 }
 
-// serverTemplateData defines values available to the server-running pod's template.
-type serverTemplateData struct {
-	GPUIndices   string
-	LocalVolume  string
-	SharedVolume string
-}
-
-func composeServerRunningPod(reqPod *corev1.Pod, data serverTemplateData) (*corev1.Pod, error) {
+func composeServerRunningPod(reqPod *corev1.Pod, data api.RunnerData) (*corev1.Pod, error) {
 	rawTmpl, ok := reqPod.Annotations[api.ServerPatchAnnotationName]
 	if !ok {
 		return nil, fmt.Errorf("annotation %q not found", api.ServerPatchAnnotationName)
@@ -137,8 +130,16 @@ func composeServerRunningPod(reqPod *corev1.Pod, data serverTemplateData) (*core
 		return nil, fmt.Errorf("yaml to json: %w", err)
 	}
 
-	reqPod.Spec.Containers = []corev1.Container{}
-	reqPod.Spec.InitContainers = nil
+	// remove the requester container
+	for i, c := range reqPod.Spec.Containers {
+		if c.Name == api.RequesterContainerName {
+			reqPod.Spec.Containers[i] = reqPod.Spec.Containers[len(reqPod.Spec.Containers)-1]
+			reqPod.Spec.Containers = reqPod.Spec.Containers[:len(reqPod.Spec.Containers)-1]
+			break
+		}
+	}
+
+	// marshal into json
 	origJSON, err := json.Marshal(reqPod)
 	if err != nil {
 		return nil, fmt.Errorf("marshal server-requesting pod: %w", err)
@@ -224,6 +225,7 @@ func getGPUUUIDs(url string) ([]string, error) {
 // findGPUIndices maps GPU UUIDs to GPU indices.
 // This is a stub implementation that just returns "0".
 // The real implementation is planned to be done in a component other than the controller.
+// This func will be moved into that component once that component exists.
 func mapToGPUIndices(gpuUUIDs []string) string {
 	return "0"
 }

@@ -44,7 +44,12 @@ package api
 
 const ServerPatchAnnotationName = "dual-pod.llm-d.ai/server-patch"
 
-// ServerPatchAnnotationName is the name of the container which is described by the server patch.
+// RequesterContainerName is the 'main' container in the server-requesting pod
+// whose job includes reporting the associated accelerators, exposing the
+// readiness from the server-running pod to server-requesting pod, etc.
+const RequesterContainerName = "requester"
+
+// InferenceServerContainerName is the name of the container which is described by the server patch.
 // This container is expected to run the inference server using vLLM.
 const InferenceServerContainerName = "inference-server"
 
@@ -53,19 +58,24 @@ const InferenceServerContainerName = "inference-server"
 const ServerRunningPodNameSuffix = "-server"
 
 // AdminPortAnnotationName is the name of an annotation whose value
-// is the name of the port on the "inference-server" container to be
+// is the name of the port on the server-requesting pod to be
 // queried to get the set of associated accelerators.
 const AdminPortAnnotationName = "dual-pod.llm-d.ai/admin-port"
 
-const AdminPortAnnotationDefaultValue = "8081"
+// AdminPortDefaultValue is the default port number of the server-requesting pod
+// to be queried to get the set of associated accelerators.
+const AdminPortDefaultValue = "8081"
 
-// RequesterRoleAnnotationName is the name of an annotation that
+// PodRoleAnnotationName is the name of an annotation that
 // indicates the role of a Pod. The value of the annotation is
 // either "requester" for a server-requesting Pod,
 // or "runner" for a server-running Pod.
 const PodRoleAnnotationName = "dual-pod.llm-d.ai/role"
 
+// PodRoleAnnotationValueRequesting signals a server-requesting pod among the dual pods.
 const PodRoleAnnotationValueRequesting = "requester"
+
+// PodRoleAnnotationValueRunning signals a server-running pod among the dual pods.
 const PodRoleAnnotationValueRunning = "runner"
 
 // RunnerData is the data made available to the server patch.
@@ -73,7 +83,13 @@ type RunnerData struct {
 	// NodeName is the name of the Node to which the Pod is bound
 	NodeName string
 
+	// GPUIndices is a string that represents accelerators by their indices.
+	GPUIndices string
+
 	// LocalVolume is the name of the PVC that is dedicated to storage specific
 	// to that node.
 	LocalVolume string
+
+	// SharedVolume is the name of the PVC that is shared across all nodes.
+	SharedVolume string
 }
