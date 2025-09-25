@@ -202,7 +202,7 @@ func getGPUUUIDs(url string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("http get %q: %w", url, err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("unexpected status %d", resp.StatusCode)

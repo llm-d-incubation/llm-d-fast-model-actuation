@@ -51,16 +51,17 @@ func (ctl *controller) processServerRunningPod(ctx context.Context, runningPod *
 		return err, true
 	}
 
+	// relay the readiness
 	port := requestingPod.Annotations[api.AdminPortAnnotationName]
 	if port == "" {
 		port = api.AdminPortAnnotationDefaultValue
 	}
 	url := fmt.Sprintf("http://%s:%s", requestingPod.Status.PodIP, port)
-	if runningPod.Status.PodIP != "" {
-		logger.V(5).Info("Server-running pod exists with IP", "name", runningPod.Name)
+	if isPodReady(runningPod) {
+		logger.V(5).Info("Server-running pod is ready", "name", runningPod.Name)
 		url += stubapi.BecomeReadyPath
 	} else {
-		logger.V(5).Info("Server-running pod exists but has no IP yet", "name", runningPod.Name)
+		logger.V(5).Info("Server-running pod is not ready", "name", runningPod.Name)
 		url += stubapi.BecomeUnreadyPath
 	}
 	err = postToReadiness(url)
@@ -83,7 +84,7 @@ func postToReadiness(url string) error {
 	if err != nil {
 		return fmt.Errorf("http post %q: %w", url, err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
@@ -91,4 +92,13 @@ func postToReadiness(url string) error {
 	}
 
 	return nil
+}
+
+func isPodReady(pod *corev1.Pod) bool {
+	for _, cond := range pod.Status.Conditions {
+		if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
 }

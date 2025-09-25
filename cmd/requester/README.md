@@ -185,13 +185,16 @@ $ curl $REQ_IP:8080/ready
 OK
 ```
 
-Check the log of the server-requesting pod.
+The log of the server-requesting pod should be something similar to:
 ```console
 $ kubectl logs my-request
-I0924 02:12:54.268374       1 server.go:73] "starting server" logger="probes-server" port="8080"
-I0924 02:12:54.268426       1 server.go:117] "starting server" logger="spi-server" port="8081"
-I0924 02:12:54.289478       1 server.go:126] "Got GPU UUIDs" logger="spi-server" uuids=["GPU-b26140c6-bd79-2798-d936-0ed16a4f0733"]
-I0924 02:18:34.915124       1 server.go:91] "Setting ready" logger="spi-server" newReady=true
+I0925 03:49:12.802218       1 server.go:64] "starting server" logger="probes-server" port="8080"
+I0925 03:49:12.822784       1 server.go:83] "Got GPU UUIDs" logger="spi-server" uuids=["GPU-7450f677-9aa8-0150-8b11-68727d721976"]
+I0925 03:49:12.822877       1 server.go:122] "starting server" logger="spi-server" port="8081"
+I0925 03:49:12.997258       1 server.go:91] "Setting ready" logger="spi-server" newReady=false
+I0925 03:49:13.007460       1 server.go:91] "Setting ready" logger="spi-server" newReady=false
+I0925 03:49:14.009086       1 server.go:91] "Setting ready" logger="spi-server" newReady=false
+I0925 03:50:25.022997       1 server.go:91] "Setting ready" logger="spi-server" newReady=true
 ```
 
 Clean up.
