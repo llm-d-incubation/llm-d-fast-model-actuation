@@ -76,8 +76,9 @@ func (ctl *controller) processServerRequestingPod(ctx context.Context, requestin
 	logger.V(5).Info("Building server-running pod from patch", "name", requestingPod.Name, "patch", serverPatch)
 	serverRunningPod, err := composeServerRunningPod(requestingPod, serverTemplateData{
 		GPUIndices: gpuIndices,
-		// TODO: this should be exposed as a command-line flag or environment variable
-		LocalVolume: "my-pvc",
+		// TODO: these should be exposed as command-line flags or envars
+		LocalVolume:  "vcp-local-ip-172-31-58-228",
+		SharedVolume: "vcp-shared",
 	})
 	if err != nil {
 		logger.Error(err, "Failed to build server-running pod from patch", "name", requestingPod.Name, "patch", serverPatch)
@@ -110,8 +111,9 @@ func (ctl *controller) processServerRequestingPod(ctx context.Context, requestin
 
 // serverTemplateData defines values available to the server-running pod's template.
 type serverTemplateData struct {
-	GPUIndices  string
-	LocalVolume string
+	GPUIndices   string
+	LocalVolume  string
+	SharedVolume string
 }
 
 func composeServerRunningPod(reqPod *corev1.Pod, data serverTemplateData) (*corev1.Pod, error) {
