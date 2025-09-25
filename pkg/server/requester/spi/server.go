@@ -35,7 +35,7 @@ import (
 func gpuHandler(gpuUUIDs []string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if len(gpuUUIDs) == 0 {
-			http.Error(w, "no GPUs found", http.StatusInternalServerError) // TODO(waltforme): check the code
+			http.Error(w, "no GPUs found", http.StatusInternalServerError)
 			return
 		}
 

@@ -44,17 +44,36 @@ package api
 
 const ServerPatchAnnotationName = "dual-pod.llm-d.ai/server-patch"
 
+// ServerPatchAnnotationName is the name of the container which is described by the server patch.
+// This container is expected to run the inference server using vLLM.
+const InferenceServerContainerName = "inference-server"
+
+// ServerRunningPodNameSuffix is the suffix that is appended to the name of the
+// server-requesting Pod to form the name of the server-running Pod.
+const ServerRunningPodNameSuffix = "-server"
+
 // AdminPortAnnotationName is the name of an annotation whose value
 // is the name of the port on the "inference-server" container to be
 // queried to get the set of associated accelerators.
 const AdminPortAnnotationName = "dual-pod.llm-d.ai/admin-port"
 
+const AdminPortAnnotationDefaultValue = "8081"
+
+// RequesterRoleAnnotationName is the name of an annotation that
+// indicates the role of a Pod. The value of the annotation is
+// either "requester" for a server-requesting Pod,
+// or "runner" for a server-running Pod.
+const PodRoleAnnotationName = "dual-pod.llm-d.ai/role"
+
+const PodRoleAnnotationValueRequesting = "requester"
+const PodRoleAnnotationValueRunning = "runner"
+
 // RunnerData is the data made available to the server patch.
 type RunnerData struct {
-  // NodeName is the name of the Node to which the Pod is bound
-  NodeName string
+	// NodeName is the name of the Node to which the Pod is bound
+	NodeName string
 
-  // LocalVolume is the name of the PVC that is dedicated to storage specific
-  // to that node.
-  LocalVolume string
+	// LocalVolume is the name of the PVC that is dedicated to storage specific
+	// to that node.
+	LocalVolume string
 }
