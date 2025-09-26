@@ -53,7 +53,7 @@ const InferenceServerContainerName = "inference-server"
 const ServerRunningPodNameSuffix = "-server"
 
 // AdminPortAnnotationName is the name of an annotation whose value
-// is the name of the port on the server-requesting pod to be
+// is the name of the port on the "inference-server" container to be
 // queried to get the set of associated accelerators.
 const AdminPortAnnotationName = "dual-pod.llm-d.ai/admin-port"
 
