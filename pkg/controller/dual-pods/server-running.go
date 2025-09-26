@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -37,17 +38,14 @@ func (ctl *controller) processServerRunningPod(ctx context.Context, runningPod *
 	logger.V(5).Info("Processing server-running pod", "name", runningPod.Name)
 
 	// get the server-requesting pod from the owner reference
-	ownerRef, found := metav1.OwnerReference{}, false
-	for _, r := range runningPod.OwnerReferences {
-		if r.Kind == "Pod" && r.Name+api.ServerRunningPodNameSuffix == runningPod.Name {
-			ownerRef, found = r, true
-			break
-		}
-	}
-	if !found {
+	i := slices.IndexFunc(runningPod.OwnerReferences, func(r metav1.OwnerReference) bool {
+		return r.Kind == "Pod" && r.Name+api.ServerRunningPodNameSuffix == runningPod.Name
+	})
+	if i == -1 {
 		logger.V(5).Info("No owner reference found", "name", runningPod.Name)
 		return nil, true
 	}
+	ownerRef := runningPod.OwnerReferences[i]
 	requestingPod, err := ctl.podLister.Pods(runningPod.Namespace).Get(ownerRef.Name)
 	if err != nil {
 		if errors.IsNotFound(err) {

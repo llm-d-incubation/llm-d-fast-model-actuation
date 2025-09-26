@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"text/template"
 	"time"
 
@@ -151,35 +152,36 @@ func composeServerRunningPod(reqPod *corev1.Pod, gpuIndices string, data api.Run
 	}
 	pod.Annotations[api.PodRoleAnnotationName] = api.PodRoleAnnotationValueRunning
 
-	for i, c := range pod.Spec.Containers {
-		if c.Name != api.InferenceServerContainerName {
-			continue
-		}
-		// ensure the value of CUDA_VISIBLE_DEVICES envar to be gpuIndices
-		found := false
-		for j, env := range pod.Spec.Containers[i].Env {
-			if env.Name == "CUDA_VISIBLE_DEVICES" {
-				found = true
-				pod.Spec.Containers[i].Env[j].Value = gpuIndices
-				break
-			}
-		}
-		if !found {
-			pod.Spec.Containers[i].Env = append(pod.Spec.Containers[i].Env, corev1.EnvVar{
-				Name:  "CUDA_VISIBLE_DEVICES",
-				Value: gpuIndices,
-			})
-		}
-		// set the inference server container's gpu limits and requests to zero to bypass the nvidia device plugin
-		if pod.Spec.Containers[i].Resources.Limits == nil {
-			pod.Spec.Containers[i].Resources.Limits = corev1.ResourceList{}
-		}
-		pod.Spec.Containers[i].Resources.Limits[corev1.ResourceName("nvidia.com/gpu")] = resource.Quantity{}
-		if pod.Spec.Containers[i].Resources.Requests == nil {
-			pod.Spec.Containers[i].Resources.Requests = corev1.ResourceList{}
-		}
-		pod.Spec.Containers[i].Resources.Requests[corev1.ResourceName("nvidia.com/gpu")] = resource.Quantity{}
+	// identify the inference server container
+	cIdx := slices.IndexFunc(pod.Spec.Containers, func(c corev1.Container) bool {
+		return c.Name == api.InferenceServerContainerName
+	})
+	if cIdx == -1 {
+		return nil, fmt.Errorf("container %q not found", api.InferenceServerContainerName)
 	}
+
+	// ensure the value of CUDA_VISIBLE_DEVICES envar for the inference server container
+	eIdx := slices.IndexFunc(pod.Spec.Containers[cIdx].Env, func(e corev1.EnvVar) bool {
+		return e.Name == "CUDA_VISIBLE_DEVICES"
+	})
+	if eIdx == -1 {
+		pod.Spec.Containers[cIdx].Env = append(pod.Spec.Containers[cIdx].Env, corev1.EnvVar{
+			Name:  "CUDA_VISIBLE_DEVICES",
+			Value: gpuIndices,
+		})
+	} else {
+		pod.Spec.Containers[cIdx].Env[eIdx].Value = gpuIndices
+	}
+
+	// set the inference server container's gpu limits and requests to zero to bypass the nvidia device plugin
+	if pod.Spec.Containers[cIdx].Resources.Limits == nil {
+		pod.Spec.Containers[cIdx].Resources.Limits = corev1.ResourceList{}
+	}
+	pod.Spec.Containers[cIdx].Resources.Limits[corev1.ResourceName("nvidia.com/gpu")] = resource.Quantity{}
+	if pod.Spec.Containers[cIdx].Resources.Requests == nil {
+		pod.Spec.Containers[cIdx].Resources.Requests = corev1.ResourceList{}
+	}
+	pod.Spec.Containers[cIdx].Resources.Requests[corev1.ResourceName("nvidia.com/gpu")] = resource.Quantity{}
 
 	// connect dual pods
 	pod.Name = reqPod.Name + api.ServerRunningPodNameSuffix
