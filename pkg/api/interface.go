@@ -44,11 +44,6 @@ package api
 
 const ServerPatchAnnotationName = "dual-pod.llm-d.ai/server-patch"
 
-// RequesterContainerName is the 'main' container in the server-requesting pod
-// whose job includes reporting the associated accelerators, exposing the
-// readiness from the server-running pod to server-requesting pod, etc.
-const RequesterContainerName = "requester"
-
 // InferenceServerContainerName is the name of the container which is described by the server patch.
 // This container is expected to run the inference server using vLLM.
 const InferenceServerContainerName = "inference-server"

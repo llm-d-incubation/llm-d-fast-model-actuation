@@ -130,15 +130,6 @@ func composeServerRunningPod(reqPod *corev1.Pod, data api.RunnerData) (*corev1.P
 		return nil, fmt.Errorf("yaml to json: %w", err)
 	}
 
-	// remove the requester container
-	for i, c := range reqPod.Spec.Containers {
-		if c.Name == api.RequesterContainerName {
-			reqPod.Spec.Containers[i] = reqPod.Spec.Containers[len(reqPod.Spec.Containers)-1]
-			reqPod.Spec.Containers = reqPod.Spec.Containers[:len(reqPod.Spec.Containers)-1]
-			break
-		}
-	}
-
 	// marshal into json
 	origJSON, err := json.Marshal(reqPod)
 	if err != nil {
