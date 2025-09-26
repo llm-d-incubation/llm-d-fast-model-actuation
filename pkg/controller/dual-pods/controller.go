@@ -23,6 +23,7 @@ import (
 	"github.com/spf13/pflag"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	corev1preinformers "k8s.io/client-go/informers/core/v1"
 	coreclient "k8s.io/client-go/kubernetes/typed/core/v1"
@@ -30,6 +31,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
 
+	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/api"
 	genctlr "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/generic"
 )
 
@@ -89,11 +91,23 @@ func (ref typedRef) String() string {
 
 const podKind = "Pod"
 
+func (ctl *controller) careAbout(pod *corev1.Pod) bool {
+	role := pod.Annotations[api.PodRoleAnnotationName]
+	if role != api.PodRoleAnnotationValueRequesting && role != api.PodRoleAnnotationValueRunning {
+		ctl.enqueueLogger.V(5).Info("Pod has no role annotation or unknown role so don't care", "name", pod.Name, "role", role)
+		return false
+	}
+	return true
+}
+
 func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 	var kind string
 	var objM metav1.Object
 	switch typed := obj.(type) {
 	case *corev1.Pod:
+		if !ctl.careAbout(typed) {
+			return
+		}
 		objM = typed
 		kind = podKind
 		ref := typedRef{kind, cache.MetaObjectToName(objM)}
@@ -109,6 +123,9 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 	var objM metav1.Object
 	switch typed := obj.(type) {
 	case *corev1.Pod:
+		if !ctl.careAbout(typed) {
+			return
+		}
 		objM = typed
 		kind = podKind
 		ref := typedRef{kind, cache.MetaObjectToName(objM)}
@@ -127,6 +144,9 @@ func (ctl *controller) OnDelete(obj any) {
 	var objM metav1.Object
 	switch typed := obj.(type) {
 	case *corev1.Pod:
+		if !ctl.careAbout(typed) {
+			return
+		}
 		objM = typed
 		kind = podKind
 		ref := typedRef{kind, cache.MetaObjectToName(objM)}
@@ -162,5 +182,25 @@ func (ctl *controller) process(ctx context.Context, ref typedRef) (error, bool) 
 func (ctl *controller) processPod(ctx context.Context, podRef cache.ObjectName) (error, bool) {
 	logger := klog.FromContext(ctx)
 	logger.V(5).Info("Processing Pod", "name", podRef.Name)
-	return nil, false
+
+	got, err := ctl.podLister.Pods(podRef.Namespace).Get(podRef.Name)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			logger.V(5).Info("Pod not found, skipping processing", "name", podRef.Name)
+			return nil, false
+		}
+		logger.Error(err, "Failed to get Pod", "name", podRef.Name)
+		return err, true
+	}
+
+	role := got.Annotations[api.PodRoleAnnotationName]
+	switch role {
+	case api.PodRoleAnnotationValueRequesting:
+		return ctl.processServerRequestingPod(ctx, got)
+	case api.PodRoleAnnotationValueRunning:
+		return ctl.processServerRunningPod(ctx, got)
+	default:
+		logger.V(5).Info("Pod has no role annotation or unknown role, skipping processing", "name", podRef.Name, "role", role)
+		return nil, false
+	}
 }
