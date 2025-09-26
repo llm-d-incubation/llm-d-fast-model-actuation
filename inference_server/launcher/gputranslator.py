@@ -17,9 +17,12 @@
 GPU Translator
 """
 
+import logging
 from typing import Dict
 
 import pynvml
+
+logger = logging.getLogger(__name__)
 
 
 # VLLM process manager
@@ -29,23 +32,24 @@ class GpuTranslator:
         """
         Initialize GPU Translator
         """
-        self.device_count = 0
         self.mapping = {}
-        # Create reverse mapping
-        self.reverse_mapping = {}
+        self._populate_mapping()
 
     def _populate_mapping(self):
         """
         Creates mapping and reverse_mapping for the GPU Translator
         """
-        pynvml.nvmlInit()
-        self.device_count = pynvml.nvmlDeviceGetCount()
-        for index in range(self.device_count):
-            handle = pynvml.nvmlDeviceGetHandleByIndex(index)
-            uuid = pynvml.nvmlDeviceGetUUID(handle).decode("utf-8")
-            self.mapping[uuid] = index
+        try:
+            pynvml.nvmlInit()
+            self.device_count = pynvml.nvmlDeviceGetCount()
+            for index in range(self.device_count):
+                handle = pynvml.nvmlDeviceGetHandleByIndex(index)
+                uuid = pynvml.nvmlDeviceGetUUID(handle).decode("utf-8")
+                self.mapping[uuid] = index
+            pynvml.nvmlShutdown()
 
-        pynvml.nvmlShutdown()
+        except pynvml.NVMLError as error:
+            logger.error(error)
 
         # Create reverse mapping
         self.reverse_mapping = {v: k for k, v in self.mapping.items()}
@@ -58,8 +62,6 @@ class GpuTranslator:
             Dict[str, int]: Dictionary mapping GPU UUID to index
 
         """
-        if self.mapping is None or self.device_count == 0:
-            self._populate_mapping()
         return self.mapping
 
     def uuid_to_index(self, uuid: str) -> int:
@@ -75,8 +77,6 @@ class GpuTranslator:
         Raises:
             ValueError: If UUID is not found
         """
-        if self.mapping is None or self.device_count == 0:
-            self._populate_mapping()
         if uuid not in self.mapping:
             available_uuids = list(self.mapping.keys())
             raise ValueError(
@@ -98,8 +98,6 @@ class GpuTranslator:
         Raises:
             ValueError: If index is not found
         """
-        if self.reverse_mapping is None or self.device_count == 0:
-            self._populate_mapping()
         if index not in self.reverse_mapping:
             available_indices = list(self.reverse_mapping.keys())
             raise ValueError(
