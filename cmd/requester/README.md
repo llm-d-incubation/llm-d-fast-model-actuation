@@ -34,8 +34,6 @@ metadata:
           - /pvcs/local/default/vcp/hf/models--ibm-granite--granite-3.3-2b-instruct/snapshots/c4179de4bf66635b0cf11f410a73ebf95f85d506
           - --max-model-len=32768
           env:
-          - name: CUDA_VISIBLE_DEVICES
-            value: "{{ .GPUIndices }}"
           - name: VLLM_CACHE_ROOT
             value: /pvcs/shared/vcp/vllm
           resources:
@@ -57,10 +55,7 @@ metadata:
         volumes:
         - name: local
           persistentVolumeClaim:
-            claimName: {{ .LocalVolume }}
-        - name: shared
-          persistentVolumeClaim:
-            claimName: {{ .SharedVolume }}
+            claimName: vcp-local-{{ .NodeName }}
 spec:
   containers:
     - name: inference-server
@@ -80,6 +75,10 @@ spec:
           nvidia.com/gpu: "1"
           cpu: "1"
           memory: 250Mi
+  volumes:
+  - name: shared
+    persistentVolumeClaim:
+      claimName: vcp-shared
 EOF
 ```
 

@@ -74,11 +74,8 @@ func (ctl *controller) processServerRequestingPod(ctx context.Context, requestin
 
 	// use the server patch to build the server-running pod
 	logger.V(5).Info("Building server-running pod from patch", "name", requestingPod.Name, "patch", serverPatch)
-	serverRunningPod, err := composeServerRunningPod(requestingPod, api.RunnerData{
-		GPUIndices: gpuIndices,
-		// TODO: these should be exposed as command-line flags or envars
-		LocalVolume:  "vcp-local-ip-172-31-58-228",
-		SharedVolume: "vcp-shared",
+	serverRunningPod, err := composeServerRunningPod(requestingPod, gpuIndices, api.RunnerData{
+		NodeName: requestingPod.Spec.NodeName,
 	})
 	if err != nil {
 		logger.Error(err, "Failed to build server-running pod from patch", "name", requestingPod.Name, "patch", serverPatch)
@@ -109,7 +106,7 @@ func (ctl *controller) processServerRequestingPod(ctx context.Context, requestin
 	return nil, false
 }
 
-func composeServerRunningPod(reqPod *corev1.Pod, data api.RunnerData) (*corev1.Pod, error) {
+func composeServerRunningPod(reqPod *corev1.Pod, gpuIndices string, data api.RunnerData) (*corev1.Pod, error) {
 	rawTmpl, ok := reqPod.Annotations[api.ServerPatchAnnotationName]
 	if !ok {
 		return nil, fmt.Errorf("annotation %q not found", api.ServerPatchAnnotationName)
@@ -154,11 +151,26 @@ func composeServerRunningPod(reqPod *corev1.Pod, data api.RunnerData) (*corev1.P
 	}
 	pod.Annotations[api.PodRoleAnnotationName] = api.PodRoleAnnotationValueRunning
 
-	// set the inference server container's gpu limits and requests to zero to bypass the nvidia device plugin
 	for i, c := range pod.Spec.Containers {
 		if c.Name != api.InferenceServerContainerName {
 			continue
 		}
+		// ensure the value of CUDA_VISIBLE_DEVICES envar to be gpuIndices
+		found := false
+		for j, env := range pod.Spec.Containers[i].Env {
+			if env.Name == "CUDA_VISIBLE_DEVICES" {
+				found = true
+				pod.Spec.Containers[i].Env[j].Value = gpuIndices
+				break
+			}
+		}
+		if !found {
+			pod.Spec.Containers[i].Env = append(pod.Spec.Containers[i].Env, corev1.EnvVar{
+				Name:  "CUDA_VISIBLE_DEVICES",
+				Value: gpuIndices,
+			})
+		}
+		// set the inference server container's gpu limits and requests to zero to bypass the nvidia device plugin
 		if pod.Spec.Containers[i].Resources.Limits == nil {
 			pod.Spec.Containers[i].Resources.Limits = corev1.ResourceList{}
 		}

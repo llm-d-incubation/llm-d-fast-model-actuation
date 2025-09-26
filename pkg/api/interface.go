@@ -78,13 +78,7 @@ type RunnerData struct {
 	// NodeName is the name of the Node to which the Pod is bound
 	NodeName string
 
-	// GPUIndices is a string that represents accelerators by their indices.
-	GPUIndices string
-
 	// LocalVolume is the name of the PVC that is dedicated to storage specific
 	// to that node.
 	LocalVolume string
-
-	// SharedVolume is the name of the PVC that is shared across all nodes.
-	SharedVolume string
 }
