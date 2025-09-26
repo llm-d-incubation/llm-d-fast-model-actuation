@@ -17,6 +17,8 @@ spec:
         app: inference-server
         version: "1.0"
     spec:
+      nodeSelector:
+        kubernetes.io/hostname: "your-node-name"
       volumes:
         - name: cache-volume
           persistentVolumeClaim:
