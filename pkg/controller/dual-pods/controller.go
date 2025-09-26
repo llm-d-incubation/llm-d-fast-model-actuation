@@ -91,11 +91,23 @@ func (ref typedRef) String() string {
 
 const podKind = "Pod"
 
+func (ctl *controller) careAbout(pod *corev1.Pod) bool {
+	role := pod.Annotations[api.PodRoleAnnotationName]
+	if role != api.PodRoleAnnotationValueRequesting && role != api.PodRoleAnnotationValueRunning {
+		ctl.enqueueLogger.V(5).Info("Pod has no role annotation or unknown role so don't care", "name", pod.Name, "role", role)
+		return false
+	}
+	return true
+}
+
 func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 	var kind string
 	var objM metav1.Object
 	switch typed := obj.(type) {
 	case *corev1.Pod:
+		if !ctl.careAbout(typed) {
+			return
+		}
 		objM = typed
 		kind = podKind
 		ref := typedRef{kind, cache.MetaObjectToName(objM)}
@@ -111,6 +123,9 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 	var objM metav1.Object
 	switch typed := obj.(type) {
 	case *corev1.Pod:
+		if !ctl.careAbout(typed) {
+			return
+		}
 		objM = typed
 		kind = podKind
 		ref := typedRef{kind, cache.MetaObjectToName(objM)}
@@ -129,6 +144,9 @@ func (ctl *controller) OnDelete(obj any) {
 	var objM metav1.Object
 	switch typed := obj.(type) {
 	case *corev1.Pod:
+		if !ctl.careAbout(typed) {
+			return
+		}
 		objM = typed
 		kind = podKind
 		ref := typedRef{kind, cache.MetaObjectToName(objM)}
