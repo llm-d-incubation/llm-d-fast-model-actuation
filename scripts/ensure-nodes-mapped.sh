@@ -31,7 +31,7 @@ spec:
   restartPolicy: OnFailure
   containers:
   - name: c1
-    image: docker.io/vllm/vllm-openai
+    image: nvcr.io/nvidia/cuda:12.8.0-base-ubuntu22.04
     command: [ "nvidia-smi", "--query-gpu=index,uuid", "--format=csv,noheader"]
     resources:
       limits:
