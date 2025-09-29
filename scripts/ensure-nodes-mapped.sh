@@ -44,7 +44,7 @@ spec:
     kubernetes.io/hostname: "$node"
 EOF
     kubectl wait pod/${node}-map --for='jsonpath={.status.phase}'=Succeeded
-    map=$(kubectl logs ${node}-map | sort -n -t, -k1 | while read index id; do echo -n " \"$id\": $index"; done)
+    map=$(kubectl logs ${node}-map | while read index id; do echo -n " \"$id\": $index"; done)
     kubectl delete pod ${node}-map
     map_qq=$(sed 's/"/\\\"/g' <<<$map)
     kubectl patch cm gpu-map -p "{\"data\": {\"${node}\": \"{${map_qq%,}}\"}}"
