@@ -1,6 +1,9 @@
-FROM quay.io/projectquay/golang:1.25 AS builder
+# This more efficient and avoids https://gitlab.com/qemu-project/qemu/-/issues/2027
+FROM --platform=$BUILDPLATFORM quay.io/projectquay/golang:1.25 AS builder
 ARG TARGETOS
 ARG TARGETARCH
+
+RUN echo "I'm building for OS=$TARGETOS ARCH=$TARGETARCH"
 
 # Install build tools
 # The builder is based on UBI8, so we need epel-release-8.
