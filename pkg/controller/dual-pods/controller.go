@@ -282,7 +282,7 @@ func (ctl *controller) processConfigMap(ctx context.Context, cmRef cache.ObjectN
 	for nodeName, mapStr := range cm.Data {
 		_, err := ctl.nodeLister.Get(nodeName)
 		if err != nil && errors.IsNotFound(err) {
-			logger.V(3).Info("Ignoring entry in GPU map because key is not a Node name", "nodeName", nodeName)
+			logger.V(3).Info("Ignoring entry in GPU map because key is not a Node name", "key", nodeName)
 			continue
 		}
 		var nodesMap map[string]uint
