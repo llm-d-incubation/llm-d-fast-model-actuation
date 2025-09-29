@@ -24,6 +24,8 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"strconv"
+	"strings"
 	"text/template"
 	"time"
 
@@ -71,7 +73,10 @@ func (ctl *controller) processServerRequestingPod(ctx context.Context, requestin
 		return nil, true
 	}
 	logger.V(5).Info("Found GPUs for Pod", "name", requestingPod.Name, "gpuUUIDs", gpuUUIDs)
-	gpuIndices := mapToGPUIndices(gpuUUIDs)
+	gpuIndices, err := ctl.mapToGPUIndices(requestingPod.Spec.NodeName, gpuUUIDs)
+	if err != nil {
+		return err, true
+	}
 
 	// use the server patch to build the server-running pod
 	logger.V(5).Info("Building server-running pod from patch", "name", requestingPod.Name, "patch", serverPatch)
@@ -231,6 +236,33 @@ func getGPUUUIDs(url string) ([]string, error) {
 // This is a stub implementation that just returns "0".
 // The real implementation is planned to be done in a component other than the controller.
 // This func will be moved into that component once that component exists.
-func mapToGPUIndices(gpuUUIDs []string) string {
-	return "0"
+func (ctl *controller) mapToGPUIndices(nodeName string, gpuUUIDs []string) (string, error) {
+	gpuMap := *ctl.gpuMap.Load()
+	indices, unknowns := SliceMap(gpuUUIDs, func(uuid string) (string, bool) {
+		loc, have := gpuMap[uuid]
+		if have {
+			return strconv.FormatUint(uint64(loc.Index), 10), true
+		} else {
+			return "", false
+		}
+	})
+	indicesStr := strings.Join(indices, ",")
+	if len(unknowns) == 0 {
+		return indicesStr, nil
+	}
+	return indicesStr, fmt.Errorf("some GPU UUID(s) are not known: %v", unknowns)
+}
+
+func SliceMap[Domain, Range any](slice []Domain, mapFn func(Domain) (Range, bool)) ([]Range, []Domain) {
+	var mapped []Range
+	var failed []Domain
+	for _, dom := range slice {
+		rng, have := mapFn(dom)
+		if have {
+			mapped = append(mapped, rng)
+		} else {
+			failed = append(failed, dom)
+		}
+	}
+	return mapped, failed
 }
