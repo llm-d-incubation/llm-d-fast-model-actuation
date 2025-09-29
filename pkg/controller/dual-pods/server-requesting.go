@@ -239,38 +239,29 @@ func getGPUUUIDs(url string) ([]string, error) {
 // This func will be moved into that component once that component exists.
 func (ctl *controller) mapToGPUIndices(nodeName string, gpuUUIDs []string) (string, error) {
 	gpuMap := *ctl.gpuMap.Load()
-	var otherErrors []string
-	indices, unknowns := SliceMap(gpuUUIDs, func(uuid string) (string, bool) {
+	indices, errs := SliceMap(gpuUUIDs, func(uuid string) (string, error) {
 		loc, have := gpuMap[uuid]
 		if !have {
-			return "", false
+			return "", fmt.Errorf("UUID %s is not known", uuid)
 		} else if loc.Node != nodeName {
-			otherErrors = append(otherErrors, fmt.Sprintf("UUID %s is on Node %s, not %s", uuid, loc.Node, nodeName))
-			return "", true
+			return "", fmt.Errorf("UUID %s is on Node %s, not %s", uuid, loc.Node, nodeName)
 		} else {
-			return strconv.FormatUint(uint64(loc.Index), 10), true
+			return strconv.FormatUint(uint64(loc.Index), 10), nil
 		}
 	})
-	indicesStr := strings.Join(indices, ",")
-	if len(unknowns) > 0 {
-		return indicesStr, fmt.Errorf("some GPU UUID(s) are not known: %v", unknowns)
-	}
-	if len(otherErrors) > 0 {
-		return indicesStr, errors.New(strings.Join(otherErrors, ", "))
-	}
-	return indicesStr, nil
+	return strings.Join(indices, ","), errors.Join(errs...)
 }
 
-func SliceMap[Domain, Range any](slice []Domain, mapFn func(Domain) (Range, bool)) ([]Range, []Domain) {
+func SliceMap[Domain, Range any](slice []Domain, mapFn func(Domain) (Range, error)) ([]Range, []error) {
 	var mapped []Range
-	var failed []Domain
+	var errors []error
 	for _, dom := range slice {
-		rng, have := mapFn(dom)
-		if have {
+		rng, err := mapFn(dom)
+		if err == nil {
 			mapped = append(mapped, rng)
 		} else {
-			failed = append(failed, dom)
+			errors = append(errors, err)
 		}
 	}
-	return mapped, failed
+	return mapped, errors
 }
