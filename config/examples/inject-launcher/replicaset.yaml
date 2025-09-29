@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: inference-server
+  labels:
+    app: inference-server
+    version: "1.0"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: inference-server
+      version: "1.0"
+  template:
+    metadata:
+      labels:
+        app: inference-server
+        version: "1.0"
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: "your-node-name"
+      volumes:
+        - name: cache-volume
+          persistentVolumeClaim:
+            claimName: launcher-pvc
+        # vLLM needs to access the host's shared memory for tensor parallel inference.
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: "2Gi"
+        - name: code-volume
+          configMap:
+            name: launcher-code
+      containers:
+        - name: inference-server
+          image: vllm/vllm-openai:latest
+          ports:
+            - containerPort: 8001
+          # Install dependencies and run the app
+          command: ["sh", "-c"]
+          args:
+            - |
+              cd /app && \
+              uvicorn --port 8001 --log-level info launcher:app
+          resources:
+            limits:
+              cpu: "10"
+              memory: 200G
+              nvidia.com/gpu: "1"
+            requests:
+              cpu: "2"
+              memory: 60G
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: code-volume
+              mountPath: /app
+              readOnly: true
+            - mountPath: /root/.cache/huggingface
+              name: cache-volume
+            - name: shm
+              mountPath: /dev/shm

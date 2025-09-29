@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: launcher-service
+spec:
+  selector:
+    app: launcher
+  ports:
+  - port: 8001
+    targetPort: 8001
+    protocol: TCP
+  type: ClusterIP
