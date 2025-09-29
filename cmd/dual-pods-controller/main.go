@@ -32,11 +32,13 @@ import (
 
 func main() {
 	numWorkers := 2
+	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	overrides := &clientcmd.ConfigOverrides{}
 
 	klog.InitFlags(flag.CommandLine)
 	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
 	pflag.CommandLine.IntVar(&numWorkers, "num-workers", numWorkers, "number of queue worker goroutines")
-
+	AddFlags(*pflag.CommandLine, loadingRules, *overrides)
 	pflag.Parse()
 	ctx := context.Background()
 	logger := klog.FromContext(ctx)
@@ -45,8 +47,6 @@ func main() {
 		logger.V(1).Info("Flag", "name", f.Name, "value", f.Value.String())
 	})
 
-	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
-	overrides := &clientcmd.ConfigOverrides{}
 	restConfig, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, overrides).ClientConfig()
 	if err != nil {
 		klog.Fatal(err)
@@ -75,4 +75,12 @@ func main() {
 		klog.Fatal(err)
 	}
 	<-ctx.Done()
+}
+
+func AddFlags(flags pflag.FlagSet, loadingRules *clientcmd.ClientConfigLoadingRules, overrides clientcmd.ConfigOverrides) {
+	flags.StringVar(&loadingRules.ExplicitPath, "kubeconfig", loadingRules.ExplicitPath, "Path to the kubeconfig file to use")
+	flags.StringVar(&overrides.CurrentContext, "context", overrides.CurrentContext, "The name of the kubeconfig context to use")
+	flags.StringVar(&overrides.Context.AuthInfo, "user", overrides.Context.AuthInfo, "The name of the kubeconfig user to use")
+	flags.StringVar(&overrides.Context.Cluster, "cluster", overrides.Context.Cluster, "The name of the kubeconfig cluster to use")
+	flags.StringVar(&overrides.Context.Namespace, "namespace", overrides.Context.Namespace, "The name of the Kubernetes Namespace to work in")
 }
