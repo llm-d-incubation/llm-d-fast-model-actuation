@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Usage: $0
+# Usage: $0 [-X]
 # Working directory is irrelevant.
 
 # Purpose: ensure that a ConfigMap named "gpu-map" exists in the current
@@ -9,6 +9,8 @@
 # for a map from GPU UUID to GPU index.
 
 set -e
+
+if [[ "$1" == "-X" ]]; then set -x; fi
 
 if ! kubectl get cm gpu-map &> /dev/null; then
     kubectl create cm gpu-map
@@ -46,6 +48,6 @@ EOF
     kubectl wait pod/${node}-map --for='jsonpath={.status.phase}'=Succeeded
     map=$(kubectl logs ${node}-map | while read index id; do echo -n " \"$id\": $index"; done)
     kubectl delete pod ${node}-map
-    map_qq=$(sed 's/"/\\\"/g' <<<$map)
+    map_qq=$(sed 's/"/\\\"/g' <<<"${map}")
     kubectl patch cm gpu-map -p "{\"data\": {\"${node}\": \"{${map_qq%,}}\"}}"
 done
