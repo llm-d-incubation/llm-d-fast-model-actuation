@@ -127,12 +127,11 @@ const podKind = "Pod"
 const cmKind = "ConfigMap"
 
 func (ctl *controller) careAbout(pod *corev1.Pod) bool {
-	role := pod.Annotations[api.PodRoleAnnotationName]
-	if role != api.PodRoleAnnotationValueRequesting && role != api.PodRoleAnnotationValueRunning {
-		ctl.enqueueLogger.V(5).Info("Pod has no role annotation or unknown role so don't care", "name", pod.Name, "role", role)
-		return false
+	if len(pod.Annotations[api.ServerPatchAnnotationName]) > 0 {
+		return true
 	}
-	return true
+	_, owned := IsOwnedByRequest(pod)
+	return owned
 }
 
 func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
@@ -141,6 +140,7 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 	switch typed := obj.(type) {
 	case *corev1.Pod:
 		if !ctl.careAbout(typed) {
+			ctl.enqueueLogger.V(5).Info("Ignoring irrelevant Pod", "name", typed.Name)
 			return
 		}
 		objM = typed
@@ -255,15 +255,11 @@ func (ctl *controller) processPod(ctx context.Context, podRef cache.ObjectName) 
 		return err, true
 	}
 
-	role := got.Annotations[api.PodRoleAnnotationName]
-	switch role {
-	case api.PodRoleAnnotationValueRequesting:
+	patch := got.Annotations[api.ServerPatchAnnotationName]
+	if len(patch) > 0 {
 		return ctl.processServerRequestingPod(ctx, got)
-	case api.PodRoleAnnotationValueRunning:
+	} else {
 		return ctl.processServerRunningPod(ctx, got)
-	default:
-		logger.V(5).Info("Pod has no role annotation or unknown role, skipping processing", "name", podRef.Name, "role", role)
-		return nil, false
 	}
 }
 

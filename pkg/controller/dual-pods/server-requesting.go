@@ -134,16 +134,29 @@ func composeServerRunningPod(reqPod *corev1.Pod, gpuIndices string, data api.Run
 		return nil, fmt.Errorf("yaml to json: %w", err)
 	}
 
+	basePod := &corev1.Pod{
+		TypeMeta: reqPod.TypeMeta,
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: reqPod.Annotations,
+			Labels:      reqPod.Labels,
+		},
+		Spec: reqPod.Spec,
+	}
+	for key := range basePod.Annotations {
+		if strings.HasPrefix(key, "dual-pod.llm-d.ai/") {
+			delete(basePod.Annotations, key)
+		}
+	}
 	// marshal into json
-	origJSON, err := json.Marshal(reqPod)
+	baseJSON, err := json.Marshal(basePod)
 	if err != nil {
-		return nil, fmt.Errorf("marshal server-requesting pod: %w", err)
+		return nil, fmt.Errorf("failed to marshal server-requesting pod: %w", err)
 	}
 
 	// apply strategic merge patch
-	modifiedJSON, err := strategicpatch.StrategicMergePatch(origJSON, patchJSON, &corev1.Pod{})
+	modifiedJSON, err := strategicpatch.StrategicMergePatch(baseJSON, patchJSON, &corev1.Pod{})
 	if err != nil {
-		return nil, fmt.Errorf("apply patch: %w", err)
+		return nil, fmt.Errorf("failed to apply patch: %w", err)
 	}
 
 	// decode back into Pod
@@ -151,12 +164,6 @@ func composeServerRunningPod(reqPod *corev1.Pod, gpuIndices string, data api.Run
 	if err := json.Unmarshal(modifiedJSON, &pod); err != nil {
 		return nil, fmt.Errorf("unmarshal patched pod: %w", err)
 	}
-
-	// ensure the correct role annotation
-	if pod.Annotations == nil {
-		pod.Annotations = map[string]string{}
-	}
-	pod.Annotations[api.PodRoleAnnotationName] = api.PodRoleAnnotationValueRunning
 
 	// identify the inference server container
 	cIdx := slices.IndexFunc(pod.Spec.Containers, func(c corev1.Container) bool {
@@ -194,13 +201,6 @@ func composeServerRunningPod(reqPod *corev1.Pod, gpuIndices string, data api.Run
 	pod.OwnerReferences = []metav1.OwnerReference{
 		*metav1.NewControllerRef(reqPod, corev1.SchemeGroupVersion.WithKind("Pod")),
 	}
-
-	// clean up
-	delete(pod.Annotations, api.AdminPortAnnotationName)
-	delete(pod.Annotations, api.ServerPatchAnnotationName)
-	pod.ResourceVersion = ""
-	pod.UID = ""
-	pod.CreationTimestamp = metav1.Time{}
 
 	return &pod, nil
 }
