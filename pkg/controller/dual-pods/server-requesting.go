@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -30,7 +31,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
@@ -89,7 +90,7 @@ func (ctl *controller) processServerRequestingPod(ctx context.Context, requestin
 	}
 
 	got, err := ctl.podLister.Pods(serverRunningPod.Namespace).Get(serverRunningPod.Name)
-	if err != nil && !errors.IsNotFound(err) {
+	if err != nil && !apierrors.IsNotFound(err) {
 		logger.Error(err, "Failed to get existing server-running pod", "name", serverRunningPod.Name)
 		return err, true
 	}
@@ -238,19 +239,26 @@ func getGPUUUIDs(url string) ([]string, error) {
 // This func will be moved into that component once that component exists.
 func (ctl *controller) mapToGPUIndices(nodeName string, gpuUUIDs []string) (string, error) {
 	gpuMap := *ctl.gpuMap.Load()
+	var otherErrors []string
 	indices, unknowns := SliceMap(gpuUUIDs, func(uuid string) (string, bool) {
 		loc, have := gpuMap[uuid]
-		if have {
-			return strconv.FormatUint(uint64(loc.Index), 10), true
-		} else {
+		if !have {
 			return "", false
+		} else if loc.Node != nodeName {
+			otherErrors = append(otherErrors, fmt.Sprintf("UUID %s is on Node %s, not %s", uuid, loc.Node, nodeName))
+			return "", true
+		} else {
+			return strconv.FormatUint(uint64(loc.Index), 10), true
 		}
 	})
 	indicesStr := strings.Join(indices, ",")
-	if len(unknowns) == 0 {
-		return indicesStr, nil
+	if len(unknowns) > 0 {
+		return indicesStr, fmt.Errorf("some GPU UUID(s) are not known: %v", unknowns)
 	}
-	return indicesStr, fmt.Errorf("some GPU UUID(s) are not known: %v", unknowns)
+	if len(otherErrors) > 0 {
+		return indicesStr, errors.New(strings.Join(otherErrors, ", "))
+	}
+	return indicesStr, nil
 }
 
 func SliceMap[Domain, Range any](slice []Domain, mapFn func(Domain) (Range, bool)) ([]Range, []Domain) {
