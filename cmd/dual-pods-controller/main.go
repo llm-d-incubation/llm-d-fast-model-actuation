@@ -22,6 +22,7 @@ import (
 
 	"github.com/spf13/pflag"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kubeinformers "k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
@@ -38,7 +39,7 @@ func main() {
 	klog.InitFlags(flag.CommandLine)
 	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
 	pflag.CommandLine.IntVar(&numWorkers, "num-workers", numWorkers, "number of queue worker goroutines")
-	AddFlags(*pflag.CommandLine, loadingRules, *overrides)
+	AddFlags(*pflag.CommandLine, loadingRules, overrides)
 	pflag.Parse()
 	ctx := context.Background()
 	logger := klog.FromContext(ctx)
@@ -58,11 +59,17 @@ func main() {
 	}
 
 	kubeClient := kubernetes.NewForConfigOrDie(restConfig)
-	kubePreInformers := kubeinformers.NewSharedInformerFactory(kubeClient, 0)
+	if overrides.Context.Namespace == metav1.NamespaceAll {
+		logger.Info("Working on all namespaces")
+	} else {
+		logger.Info("Focusing on one namespace", "name", overrides.Context.Namespace)
+	}
+	kubePreInformers := kubeinformers.NewSharedInformerFactoryWithOptions(kubeClient, 0, kubeinformers.WithNamespace(overrides.Context.Namespace))
 
 	ctlr, err := dpctlr.NewController(
 		logger,
 		kubeClient.CoreV1(),
+		overrides.Context.Namespace,
 		kubePreInformers.Core().V1(),
 		numWorkers,
 	)
@@ -77,7 +84,7 @@ func main() {
 	<-ctx.Done()
 }
 
-func AddFlags(flags pflag.FlagSet, loadingRules *clientcmd.ClientConfigLoadingRules, overrides clientcmd.ConfigOverrides) {
+func AddFlags(flags pflag.FlagSet, loadingRules *clientcmd.ClientConfigLoadingRules, overrides *clientcmd.ConfigOverrides) {
 	flags.StringVar(&loadingRules.ExplicitPath, "kubeconfig", loadingRules.ExplicitPath, "Path to the kubeconfig file to use")
 	flags.StringVar(&overrides.CurrentContext, "context", overrides.CurrentContext, "The name of the kubeconfig context to use")
 	flags.StringVar(&overrides.Context.AuthInfo, "user", overrides.Context.AuthInfo, "The name of the kubeconfig user to use")

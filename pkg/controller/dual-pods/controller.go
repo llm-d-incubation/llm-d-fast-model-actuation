@@ -53,15 +53,18 @@ func (cc *CommonConfig) AddToFlagSet(name string, flags *pflag.FlagSet) {
 }
 
 // NewController makes a new dual pods controller.
+// The given namespace is the one to focus on.
 func NewController(
 	logger klog.Logger,
 	coreClient coreclient.CoreV1Interface,
+	namespace string,
 	corev1PreInformers corev1preinformers.Interface,
 	numWorkers int,
 ) (*controller, error) {
 	ctl := &controller{
 		enqueueLogger: logger.WithName(ControllerName),
 		coreclient:    coreClient,
+		namespace:     namespace,
 		podInformer:   corev1PreInformers.Pods().Informer(),
 		podLister:     corev1PreInformers.Pods().Lister(),
 		cmInformer:    corev1PreInformers.ConfigMaps().Informer(),
@@ -85,6 +88,7 @@ func NewController(
 type controller struct {
 	enqueueLogger klog.Logger
 	coreclient    coreclient.CoreV1Interface
+	namespace     string
 	podInformer   cache.SharedIndexInformer
 	podLister     corev1listers.PodLister
 	cmInformer    cache.SharedIndexInformer
@@ -137,6 +141,7 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 		kind = podKind
 	case *corev1.ConfigMap:
 		if typed.Name != GPUMapName {
+			ctl.enqueueLogger.V(5).Info("Ignoring ConfigMap that is not the GPU map", "ref", cache.MetaObjectToName(typed))
 			return
 		}
 		objM = typed
