@@ -69,25 +69,17 @@ jobs:
             type=sha
             type=raw,value=latest,enable={{is_default_branch}}
 
-      # - name: Build & Push (official action)
-      #   id: build-and-push
-      #   uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
-      #   with:
-      #     context: .
-      #     file: ./dockerfiles/Dockerfile.requester
-      #     platforms: linux/amd64,linux/arm64
-      #     push: true
-      #     provenance: true
-      #     cache-from: type=gha
-      #     cache-to: type=gha,mode=max,oci-mediatypes=true
-      #     tags: ${{ steps.meta.outputs.tags }}
-      #     labels: ${{ steps.meta.outputs.labels }}
-      #     github-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build image and push
-        run: |
-          docker buildx build \
-            --platform linux/amd64,linux/arm64 \
-            --file ./dockerfiles/Dockerfile.requester \
-            -t ${{ inputs.registry }}/${{ inputs.image-name }}:${{ inputs.tag }} \
-            --push .
-        shell: bash
+      - name: Build & Push (official action)
+        id: build-and-push
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: .
+          file: ./dockerfiles/Dockerfile.requester
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
