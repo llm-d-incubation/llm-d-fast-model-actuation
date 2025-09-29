@@ -20,11 +20,12 @@ vLLM Launcher
 import logging
 import multiprocessing
 import os
+import uuid
 from http import HTTPStatus  # HTTP Status Codes
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import uvloop
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Path
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from vllm.entrypoints.openai.api_server import run_server
@@ -39,37 +40,50 @@ class VllmConfig(BaseModel):
     env_vars: Optional[Dict[str, Any]] = None
 
 
-# VLLM process manager
-class VllmProcessManager:
-    def __init__(self):
-        self.process: Optional[multiprocessing.Process] = None
-        self.config: Optional[VllmConfig] = None
+class VllmInstance:
+    """Represents a single vLLM instance"""
 
-    def start_process(self, vllm_config: VllmConfig) -> dict:
+    def __init__(self, instance_id: str, config: VllmConfig):
+        """_summary_
+
+        :param instance_id: TODO
+        :param config: TODO
         """
-        Start new vLLM instance
-        :param vllm_config: parameters for the vLLM process.
+        self.instance_id = instance_id
+        self.config = config
+        self.process: Optional[multiprocessing.Process] = None
+        self.name = config.instance_name or f"vllm-{instance_id[:8]}"
+
+    def start(self) -> dict:
+        """
+        Start this vLLM instance
         :return: Status of the process and its PID.
         """
+        if self.process and self.process.is_alive():
+            return {"status": "already_running", "instance_id": self.instance_id}
 
-        # Start new process
-        self.process = multiprocessing.Process(target=vllm_kickoff, args=(vllm_config,))
+        self.process = multiprocessing.Process(target=vllm_kickoff, args=(self.config,))
         self.process.start()
-        self.config = vllm_config
 
         return {
             "status": "started",
+            "instance_id": self.instance_id,
+            "instance_name": self.name,
             "pid": self.process.pid,
         }
 
-    def stop_process(self, timeout: int = 10) -> dict:
+    def stop(self, timeout: int = 10) -> dict:
         """
         Stop existing vLLM instance
         :param timeout: waits for the process to stop, defaults to 10
         :return: a dictionary with the status "terminated" and the process ID
         """
         if not self.process or not self.process.is_alive():
-            return {"status": "no_process_to_stop"}
+            return {
+                "status": "not_running",
+                "instance_id": self.instance_id,
+                "instance_name": self.name,
+            }
 
         pid = self.process.pid
 
@@ -82,7 +96,12 @@ class VllmProcessManager:
             self.process.kill()
             self.process.join()
 
-        return {"status": "terminated", "pid": pid}
+        return {
+            "status": "terminated",
+            "instance_id": self.instance_id,
+            "instance_name": self.name,
+            "pid": pid,
+        }
 
     def is_running(self) -> bool:
         """
@@ -97,20 +116,109 @@ class VllmProcessManager:
         :return: Status and PID of the running process.
         """
         if not self.process:
-            return {"status": "no_process", "pid": None}
+            return {
+                "status": "not_started",
+                "instance_id": self.instance_id,
+                "instance_name": self.name,
+                "pid": None,
+            }
 
         return {
             "status": "running" if self.process.is_alive() else "stopped",
+            "instance_id": self.instance_id,
+            "instance_name": self.name,
             "pid": self.process.pid,
         }
 
 
+# Multi-instance vLLM process manager
+class VllmMultiProcessManager:
+    def __init__(self):
+        self.instances: Dict[str, VllmInstance] = {}
+
+    def create_instance(
+        self, vllm_config: VllmConfig, instance_id: Optional[str] = None
+    ) -> dict:
+        """Create and start a new vLLM instance"""
+        if instance_id is None:
+            instance_id = str(uuid.uuid4())
+
+        if instance_id in self.instances:
+            raise ValueError(f"Instance with ID {instance_id} already exists")
+
+        instance = VllmInstance(instance_id, vllm_config)
+        self.instances[instance_id] = instance
+
+        return instance.start()
+
+    def stop_instance(self, instance_id: str, timeout: int = 10) -> dict:
+        """Stop a specific vLLM instance"""
+        if instance_id not in self.instances:
+            raise KeyError(f"Instance {instance_id} not found")
+
+        result = self.instances[instance_id].stop(timeout)
+
+        # Clean up stopped instance
+        if result["status"] in ["terminated", "not_running"]:
+            del self.instances[instance_id]
+
+        return result
+
+    def stop_all_instances(self, timeout: int = 10) -> dict:
+        """Stop all running vLLM instances"""
+        results = []
+        instance_ids = list(self.instances.keys())
+
+        for instance_id in instance_ids:
+            try:
+                result = self.stop_instance(instance_id, timeout)
+                results.append(result)
+            except KeyError:
+                continue  # Instance was already removed
+
+        return {
+            "status": "all_stopped",
+            "stopped_instances": results,
+            "total_stopped": len(results),
+        }
+
+    def get_instance_status(self, instance_id: str) -> dict:
+        """Get status of a specific instance"""
+        if instance_id not in self.instances:
+            raise KeyError(f"Instance {instance_id} not found")
+
+        return self.instances[instance_id].get_status()
+
+    def get_all_instances_status(self) -> dict:
+        """Get status of all instances"""
+        instances_status = []
+        running_count = 0
+
+        for instance in self.instances.values():
+            status = instance.get_status()
+            instances_status.append(status)
+            if status["status"] == "running":
+                running_count += 1
+
+        return {
+            "total_instances": len(self.instances),
+            "running_instances": running_count,
+            "instances": instances_status,
+        }
+
+    def list_instances(self) -> List[str]:
+        """List all instance IDs"""
+        return list(self.instances.keys())
+
+
 # Create global manager instance
-vllm_manager = VllmProcessManager()
+vllm_manager = VllmMultiProcessManager()
 
 # Create FastAPI application
 app = FastAPI(
-    title="REST API Service", version="1.0", description="vLLM Management API"
+    title="Multi-Instance vLLM Management API",
+    version="2.0",
+    description="REST API for managing multiple vLLM instances",
 )
 
 # Setup logging
@@ -133,7 +241,19 @@ async def health():
 async def index():
     """Root URL response"""
     return JSONResponse(
-        content={"name": "REST API Service", "version": "1.0"},
+        content={
+            "name": "Multi-Instance vLLM Management API",
+            "version": "2.0",
+            "endpoints": {
+                "create_instance": "POST /v1/vllm",
+                "create_named_instance": "POST /v1/vllm/{instance_id}",
+                "delete_instance": "DELETE /v1/vllm/{instance_id}",
+                "delete_all_instances": "DELETE /v1/vllm",
+                "get_instance_status": "GET /v1/vllm/{instance_id}",
+                "get_all_instances": "GET /v1/vllm",
+                "list_instances": "GET /v1/vllm/instances",
+            },
+        },
         status_code=HTTPStatus.OK,
     )
 
@@ -142,44 +262,94 @@ async def index():
 # vLLM MANAGEMENT ENDPOINTS
 ######################################################################
 @app.post("/v1/vllm")
-async def create_vllm(vllm_config: VllmConfig):
-    """Create/swap in a new vLLM instance"""
+async def create_vllm_instance(vllm_config: VllmConfig):
+    """Create a new vLLM instance with random instance ID"""
 
-    if vllm_manager.is_running():
-        raise HTTPException(
-            status_code=409, detail="A vLLM instance is already running."
-        )
+    try:
+        result = vllm_manager.create_instance(vllm_config)
+        return JSONResponse(content=result, status_code=HTTPStatus.CREATED)
+    except Exception as e:
+        logger.error(f"Failed to create vLLM instance: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-    result = vllm_manager.start_process(vllm_config)
-    return JSONResponse(
-        content=result,
-        status_code=HTTPStatus.OK,
-    )
+
+@app.post("/v1/vllm/{instance_id}")
+async def create_named_vllm_instance(
+    instance_id: str = Path(..., description="Custom instance ID"),
+    vllm_config: VllmConfig = None,
+):
+    """Create a new vLLM instance with instance ID"""
+    try:
+        result = vllm_manager.create_instance(vllm_config, instance_id)
+        return JSONResponse(content=result, status_code=HTTPStatus.CREATED)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to create vLLM instance {instance_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/v1/vllm/{instance_id}")
+async def delete_vllm_instance(
+    instance_id: str = Path(..., description="Instance ID to delete")
+):
+    """Delete a specific vLLM instance"""
+    try:
+        result = vllm_manager.stop_instance(instance_id)
+        return JSONResponse(content=result, status_code=HTTPStatus.OK)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Instance {instance_id} not found")
+    except Exception as e:
+        logger.error(f"Failed to delete vLLM instance {instance_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.delete("/v1/vllm")
-async def delete_vllm():
-    """Delete/swap out the vLLM instance"""
+async def delete_all_vllm_instances():
+    """Delete all vLLM instances"""
+    try:
+        result = vllm_manager.stop_all_instances()
+        return JSONResponse(content=result, status_code=HTTPStatus.OK)
+    except Exception as e:
+        logger.error(f"Failed to delete all vLLM instances: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-    logger.info("Swap out vLLM instance")
-    if not vllm_manager.is_running():
-        raise HTTPException(status_code=404, detail="No running vLLM process found")
 
-    result = vllm_manager.stop_process()
-    return JSONResponse(content=result, status_code=HTTPStatus.ACCEPTED)
+@app.get("/v1/vllm/{instance_id}")
+async def get_vllm_instance_status(
+    instance_id: str = Path(..., description="Instance ID")
+):
+    """Get status of a specific vLLM instance"""
+    try:
+        result = vllm_manager.get_instance_status(instance_id)
+        return JSONResponse(content=result, status_code=HTTPStatus.OK)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Instance {instance_id} not found")
 
 
 @app.get("/v1/vllm")
-async def status_info():
-    """Get status of the vLLM instance"""
-    result = vllm_manager.get_status()
+async def get_all_vllm_instances():
+    """Get status of all vLLM instances"""
+    result = vllm_manager.get_all_instances_status()
+    return JSONResponse(content=result, status_code=HTTPStatus.OK)
+
+
+@app.get("/v1/vllm/instances")
+async def list_vllm_instances():
+    """List all vLLM instance IDs"""
+    instances = vllm_manager.list_instances()
     return JSONResponse(
-        content=result,
+        content={"instance_ids": instances, "count": len(instances)},
         status_code=HTTPStatus.OK,
     )
 
 
-# Define a function to be executed by the child process
+######################################################################
+# HELPER FUNCTIONS
+######################################################################
+
+
+# Function to be executed by the child process
 def vllm_kickoff(vllm_config: VllmConfig):
     """
     Child function to kickoff vllm instance
@@ -205,6 +375,7 @@ def vllm_kickoff(vllm_config: VllmConfig):
     uvloop.run(run_server(args))
 
 
+# Function to set env variables
 def set_env_vars(env_vars: Dict[str, Any]):
     """
     Set environment variables from a dictionary
