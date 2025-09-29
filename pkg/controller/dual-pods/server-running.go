@@ -27,32 +27,43 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
 
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/api"
 	stubapi "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/stub/api"
 )
 
+func IsOwnedByRequest(runningPod *corev1.Pod) (string, bool) {
+	runningPodName := runningPod.Name
+	if suffStart := len(runningPodName) - len(api.ServerRunningPodNameSuffix); suffStart <= 0 || runningPodName[suffStart:] != api.ServerRunningPodNameSuffix {
+		return "", false
+	} else {
+		requestingPodName := runningPodName[:suffStart]
+		// get the server-requesting pod from the owner reference
+		has := slices.ContainsFunc(runningPod.OwnerReferences, func(r metav1.OwnerReference) bool {
+			return r.Kind == "Pod" && r.Name == requestingPodName
+		})
+		return requestingPodName, has
+	}
+}
+
 func (ctl *controller) processServerRunningPod(ctx context.Context, runningPod *corev1.Pod) (error, bool) {
 	logger := klog.FromContext(ctx)
 	logger.V(5).Info("Processing server-running pod", "name", runningPod.Name)
 
-	// get the server-requesting pod from the owner reference
-	i := slices.IndexFunc(runningPod.OwnerReferences, func(r metav1.OwnerReference) bool {
-		return r.Kind == "Pod" && r.Name+api.ServerRunningPodNameSuffix == runningPod.Name
-	})
-	if i == -1 {
-		logger.V(5).Info("No owner reference found", "name", runningPod.Name)
-		return nil, true
+	requestingPodName, has := IsOwnedByRequest(runningPod)
+	if !has {
+		logger.V(5).Info("Pod is not a server-running Pod", "ref", cache.MetaObjectToName(runningPod))
+		return nil, false
 	}
-	ownerRef := runningPod.OwnerReferences[i]
-	requestingPod, err := ctl.podLister.Pods(runningPod.Namespace).Get(ownerRef.Name)
+	requestingPod, err := ctl.podLister.Pods(runningPod.Namespace).Get(requestingPodName)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			logger.V(5).Info("server-requesting pod not found", "name", runningPod.Name, "ownerName", ownerRef.Name)
+			logger.V(5).Info("server-requesting pod not found", "name", runningPod.Name, "ownerName", requestingPodName)
 			return nil, true
 		}
-		logger.Error(err, "Failed to get server-requesting pod", "name", runningPod.Name, "ownerName", ownerRef.Name)
+		logger.Error(err, "Failed to get server-requesting pod", "name", runningPod.Name, "ownerName", requestingPodName)
 		return err, true
 	}
 

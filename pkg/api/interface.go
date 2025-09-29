@@ -61,18 +61,6 @@ const AdminPortAnnotationName = "dual-pod.llm-d.ai/admin-port"
 // to be queried to get the set of associated accelerators.
 const AdminPortDefaultValue = "8081"
 
-// PodRoleAnnotationName is the name of an annotation that
-// indicates the role of a Pod. The value of the annotation is
-// either "requester" for a server-requesting Pod,
-// or "runner" for a server-running Pod.
-const PodRoleAnnotationName = "dual-pod.llm-d.ai/role"
-
-// PodRoleAnnotationValueRequesting signals a server-requesting pod among the dual pods.
-const PodRoleAnnotationValueRequesting = "requester"
-
-// PodRoleAnnotationValueRunning signals a server-running pod among the dual pods.
-const PodRoleAnnotationValueRunning = "runner"
-
 // RunnerData is the data made available to the server patch.
 type RunnerData struct {
 	// NodeName is the name of the Node to which the Pod is bound
