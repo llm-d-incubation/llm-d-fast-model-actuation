@@ -52,7 +52,7 @@ class VllmInstance:
         self.instance_id = instance_id
         self.config = config
         self.process: Optional[multiprocessing.Process] = None
-        self.name = config.instance_name or f"vllm-{instance_id[:8]}"
+        self.name = f"vllm-{instance_id}"
 
     def start(self) -> dict:
         """
@@ -315,6 +315,23 @@ async def delete_all_vllm_instances():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/v1/vllm/instances")
+async def list_vllm_instances():
+    """List all vLLM instance IDs"""
+    instances = vllm_manager.list_instances()
+    return JSONResponse(
+        content={"instance_ids": instances, "count": len(instances)},
+        status_code=HTTPStatus.OK,
+    )
+
+
+@app.get("/v1/vllm")
+async def get_all_vllm_instances():
+    """Get status of all vLLM instances"""
+    result = vllm_manager.get_all_instances_status()
+    return JSONResponse(content=result, status_code=HTTPStatus.OK)
+
+
 @app.get("/v1/vllm/{instance_id}")
 async def get_vllm_instance_status(
     instance_id: str = Path(..., description="Instance ID")
@@ -325,23 +342,6 @@ async def get_vllm_instance_status(
         return JSONResponse(content=result, status_code=HTTPStatus.OK)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Instance {instance_id} not found")
-
-
-@app.get("/v1/vllm")
-async def get_all_vllm_instances():
-    """Get status of all vLLM instances"""
-    result = vllm_manager.get_all_instances_status()
-    return JSONResponse(content=result, status_code=HTTPStatus.OK)
-
-
-@app.get("/v1/vllm/instances")
-async def list_vllm_instances():
-    """List all vLLM instance IDs"""
-    instances = vllm_manager.list_instances()
-    return JSONResponse(
-        content={"instance_ids": instances, "count": len(instances)},
-        status_code=HTTPStatus.OK,
-    )
 
 
 ######################################################################
