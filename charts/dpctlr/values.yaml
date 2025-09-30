@@ -1,1 +1,2 @@
-Image: some.registry/dual-pod-controller:tag
+# Of course, you never really want to use `:latest`
+Image: ghcr.io/llm-d-incubation/llm-d-fast-model-actuation-controller:latest
