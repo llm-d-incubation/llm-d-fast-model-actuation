@@ -20,15 +20,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"slices"
+	"strconv"
+	"strings"
 	"text/template"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
@@ -71,7 +74,10 @@ func (ctl *controller) processServerRequestingPod(ctx context.Context, requestin
 		return nil, true
 	}
 	logger.V(5).Info("Found GPUs for Pod", "name", requestingPod.Name, "gpuUUIDs", gpuUUIDs)
-	gpuIndices := mapToGPUIndices(gpuUUIDs)
+	gpuIndices, err := ctl.mapToGPUIndices(requestingPod.Spec.NodeName, gpuUUIDs)
+	if err != nil {
+		return err, true
+	}
 
 	// use the server patch to build the server-running pod
 	logger.V(5).Info("Building server-running pod from patch", "name", requestingPod.Name, "patch", serverPatch)
@@ -84,7 +90,7 @@ func (ctl *controller) processServerRequestingPod(ctx context.Context, requestin
 	}
 
 	got, err := ctl.podLister.Pods(serverRunningPod.Namespace).Get(serverRunningPod.Name)
-	if err != nil && !errors.IsNotFound(err) {
+	if err != nil && !apierrors.IsNotFound(err) {
 		logger.Error(err, "Failed to get existing server-running pod", "name", serverRunningPod.Name)
 		return err, true
 	}
@@ -128,16 +134,29 @@ func composeServerRunningPod(reqPod *corev1.Pod, gpuIndices string, data api.Run
 		return nil, fmt.Errorf("yaml to json: %w", err)
 	}
 
+	basePod := &corev1.Pod{
+		TypeMeta: reqPod.TypeMeta,
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: reqPod.Annotations,
+			Labels:      reqPod.Labels,
+		},
+		Spec: reqPod.Spec,
+	}
+	for key := range basePod.Annotations {
+		if strings.HasPrefix(key, "dual-pod.llm-d.ai/") {
+			delete(basePod.Annotations, key)
+		}
+	}
 	// marshal into json
-	origJSON, err := json.Marshal(reqPod)
+	baseJSON, err := json.Marshal(basePod)
 	if err != nil {
-		return nil, fmt.Errorf("marshal server-requesting pod: %w", err)
+		return nil, fmt.Errorf("failed to marshal server-requesting pod: %w", err)
 	}
 
 	// apply strategic merge patch
-	modifiedJSON, err := strategicpatch.StrategicMergePatch(origJSON, patchJSON, &corev1.Pod{})
+	modifiedJSON, err := strategicpatch.StrategicMergePatch(baseJSON, patchJSON, &corev1.Pod{})
 	if err != nil {
-		return nil, fmt.Errorf("apply patch: %w", err)
+		return nil, fmt.Errorf("failed to apply patch: %w", err)
 	}
 
 	// decode back into Pod
@@ -145,12 +164,6 @@ func composeServerRunningPod(reqPod *corev1.Pod, gpuIndices string, data api.Run
 	if err := json.Unmarshal(modifiedJSON, &pod); err != nil {
 		return nil, fmt.Errorf("unmarshal patched pod: %w", err)
 	}
-
-	// ensure the correct role annotation
-	if pod.Annotations == nil {
-		pod.Annotations = map[string]string{}
-	}
-	pod.Annotations[api.PodRoleAnnotationName] = api.PodRoleAnnotationValueRunning
 
 	// identify the inference server container
 	cIdx := slices.IndexFunc(pod.Spec.Containers, func(c corev1.Container) bool {
@@ -189,13 +202,6 @@ func composeServerRunningPod(reqPod *corev1.Pod, gpuIndices string, data api.Run
 		*metav1.NewControllerRef(reqPod, corev1.SchemeGroupVersion.WithKind("Pod")),
 	}
 
-	// clean up
-	delete(pod.Annotations, api.AdminPortAnnotationName)
-	delete(pod.Annotations, api.ServerPatchAnnotationName)
-	pod.ResourceVersion = ""
-	pod.UID = ""
-	pod.CreationTimestamp = metav1.Time{}
-
 	return &pod, nil
 }
 
@@ -231,6 +237,31 @@ func getGPUUUIDs(url string) ([]string, error) {
 // This is a stub implementation that just returns "0".
 // The real implementation is planned to be done in a component other than the controller.
 // This func will be moved into that component once that component exists.
-func mapToGPUIndices(gpuUUIDs []string) string {
-	return "0"
+func (ctl *controller) mapToGPUIndices(nodeName string, gpuUUIDs []string) (string, error) {
+	gpuMap := *ctl.gpuMap.Load()
+	indices, errs := SliceMap(gpuUUIDs, func(uuid string) (string, error) {
+		loc, have := gpuMap[uuid]
+		if !have {
+			return "", fmt.Errorf("UUID %s is not known", uuid)
+		} else if loc.Node != nodeName {
+			return "", fmt.Errorf("UUID %s is on Node %s, not %s", uuid, loc.Node, nodeName)
+		} else {
+			return strconv.FormatUint(uint64(loc.Index), 10), nil
+		}
+	})
+	return strings.Join(indices, ","), errors.Join(errs...)
+}
+
+func SliceMap[Domain, Range any](slice []Domain, mapFn func(Domain) (Range, error)) ([]Range, []error) {
+	var mapped []Range
+	var errors []error
+	for _, dom := range slice {
+		rng, err := mapFn(dom)
+		if err == nil {
+			mapped = append(mapped, rng)
+		} else {
+			errors = append(errors, err)
+		}
+	}
+	return mapped, errors
 }

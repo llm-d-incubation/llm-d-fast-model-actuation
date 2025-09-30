@@ -2,14 +2,17 @@ This document shows the steps to exercise the requester and dual-pods controller
 in a local k8s environment with model `ibm-granite/granite-3.3-2b-instruct`
 cached on local PV in the cluster.
 
-Build the requester container image (use your favorate `REQUESTER_IMG_REG`).
+Build the requester container image (use your favorate
+`REQUESTER_IMG_REG`) with a command like the following. You can omit
+the `TARGETARCH` if the runtime ISA matches your build time ISA.
+
 ```shell
-make build-requester REQUESTER_IMG_REG=$REQUESTER_IMG_REG
+make build-requester REQUESTER_IMG_REG=$REQUESTER_IMG_REG TARGETARCH=amd64
 ```
 
 In a 2nd terminal, run the dual-pods controller.
 ```shell
-go run ./cmd/dual-pods-controller/ -v 5
+go run ./cmd/dual-pods-controller --namespace=vcp-${LOGNAME} -v=5
 ```
 
 Switch back to the 1st terminal, create a server-requesting pod.
@@ -20,13 +23,12 @@ kind: Pod
 metadata:
   name: my-request
   annotations:
-    dual-pod.llm-d.ai/role: requester
     dual-pod.llm-d.ai/admin-port: "8081"
     dual-pod.llm-d.ai/server-patch: |
       spec:
         containers:
         - name: inference-server
-          image: docker.io/vllm/vllm-openai:v0.8.5
+          image: docker.io/vllm/vllm-openai:v0.10.2
           command:
           - vllm
           - serve
@@ -60,7 +62,7 @@ spec:
   containers:
     - name: inference-server
       image: ${REQUESTER_IMG_REG}/requester:latest
-      imagePullPolicy: IfNotPresent
+      imagePullPolicy: Always
       ports:
         - containerPort: 8080
         - containerPort: 8081
@@ -78,7 +80,7 @@ spec:
   volumes:
   - name: shared
     persistentVolumeClaim:
-      claimName: vcp-shared
+      claimName: vcp-cephfs-shared
 EOF
 ```
 

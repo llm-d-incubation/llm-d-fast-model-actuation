@@ -1,0 +1,15 @@
+apiVersion: v2
+description: The dual-pod controller
+home: https://github.com/llm-d-incubation/llm-d-fast-model-actuation
+keywords:
+- llm-d
+- dual-pod
+- controller
+maintainers:
+- name: Mike Spreitzer
+- name: Jun Duan
+name: dual-pod-controller
+sources:
+- https://github.com/llm-d-incubation/llm-d-fast-model-actuation
+type: application
+version: 0.1.0

@@ -18,7 +18,9 @@ package dualpods
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/spf13/pflag"
 
@@ -37,6 +39,13 @@ import (
 
 const ControllerName = "dual-pods-controller"
 
+// GPUMapName is the name of the ConfigMap(s) parsed to discover the mapping from GPU UUID to location.
+// Any ConfigMap found with this name will be taken as the whole of the answer.
+// TODO: get clarity on whether to focus on one namespace.
+// Every data item in the ConfigMap is expected to have a name that is the name of a Node
+// and a value that is JSON for a map from UUID to index.
+const GPUMapName = "gpu-map"
+
 type Controller interface {
 	Start(context.Context) error
 }
@@ -50,20 +59,32 @@ func (cc *CommonConfig) AddToFlagSet(name string, flags *pflag.FlagSet) {
 }
 
 // NewController makes a new dual pods controller.
+// The given namespace is the one to focus on.
 func NewController(
 	logger klog.Logger,
 	coreClient coreclient.CoreV1Interface,
+	namespace string,
 	corev1PreInformers corev1preinformers.Interface,
 	numWorkers int,
 ) (*controller, error) {
 	ctl := &controller{
 		enqueueLogger: logger.WithName(ControllerName),
 		coreclient:    coreClient,
+		namespace:     namespace,
 		podInformer:   corev1PreInformers.Pods().Informer(),
 		podLister:     corev1PreInformers.Pods().Lister(),
+		cmInformer:    corev1PreInformers.ConfigMaps().Informer(),
+		cmLister:      corev1PreInformers.ConfigMaps().Lister(),
+		nodeInformer:  corev1PreInformers.Nodes().Informer(),
+		nodeLister:    corev1PreInformers.Nodes().Lister(),
 	}
+	ctl.gpuMap.Store(&map[string]GpuLocation{})
 	ctl.QueueAndWorkers = genctlr.NewQueueAndWorkers(string(ControllerName), numWorkers, ctl.process)
 	_, err := ctl.podInformer.AddEventHandler(ctl)
+	if err != nil {
+		panic(err)
+	}
+	_, err = ctl.cmInformer.AddEventHandler(ctl)
 	if err != nil {
 		panic(err)
 	}
@@ -73,9 +94,22 @@ func NewController(
 type controller struct {
 	enqueueLogger klog.Logger
 	coreclient    coreclient.CoreV1Interface
+	namespace     string
 	podInformer   cache.SharedIndexInformer
 	podLister     corev1listers.PodLister
+	cmInformer    cache.SharedIndexInformer
+	cmLister      corev1listers.ConfigMapLister
+	nodeInformer  cache.SharedIndexInformer
+	nodeLister    corev1listers.NodeLister
 	genctlr.QueueAndWorkers[typedRef]
+
+	// gpuMaps maps GPU UUID to GpuLocation
+	gpuMap atomic.Pointer[map[string]GpuLocation]
+}
+
+type GpuLocation struct {
+	Node  string
+	Index uint
 }
 
 var _ Controller = &controller{}
@@ -90,14 +124,14 @@ func (ref typedRef) String() string {
 }
 
 const podKind = "Pod"
+const cmKind = "ConfigMap"
 
 func (ctl *controller) careAbout(pod *corev1.Pod) bool {
-	role := pod.Annotations[api.PodRoleAnnotationName]
-	if role != api.PodRoleAnnotationValueRequesting && role != api.PodRoleAnnotationValueRunning {
-		ctl.enqueueLogger.V(5).Info("Pod has no role annotation or unknown role so don't care", "name", pod.Name, "role", role)
-		return false
+	if len(pod.Annotations[api.ServerPatchAnnotationName]) > 0 {
+		return true
 	}
-	return true
+	_, owned := IsOwnedByRequest(pod)
+	return owned
 }
 
 func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
@@ -106,16 +140,26 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 	switch typed := obj.(type) {
 	case *corev1.Pod:
 		if !ctl.careAbout(typed) {
+			ctl.enqueueLogger.V(5).Info("Ignoring irrelevant Pod", "name", typed.Name)
 			return
 		}
 		objM = typed
 		kind = podKind
-		ref := typedRef{kind, cache.MetaObjectToName(objM)}
-		ctl.enqueueLogger.V(5).Info("Enqueuing reference due to notification of add", "ref", ref, "isInInitialList", isInInitialList)
-		ctl.Queue.Add(ref)
+	case *corev1.ConfigMap:
+		if typed.Name != GPUMapName {
+			ctl.enqueueLogger.V(5).Info("Ignoring ConfigMap that is not the GPU map", "ref", cache.MetaObjectToName(typed))
+			return
+		}
+		objM = typed
+		kind = cmKind
 	default:
 		ctl.enqueueLogger.Error(nil, "Notified of add of unexpected type of object", "type", fmt.Sprintf("%T", obj))
+		return
 	}
+	ref := typedRef{kind, cache.MetaObjectToName(objM)}
+	ctl.enqueueLogger.V(5).Info("Enqueuing reference due to notification of add", "ref", ref, "isInInitialList", isInInitialList)
+	ctl.Queue.Add(ref)
+
 }
 
 func (ctl *controller) OnUpdate(prev, obj any) {
@@ -128,12 +172,19 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 		}
 		objM = typed
 		kind = podKind
-		ref := typedRef{kind, cache.MetaObjectToName(objM)}
-		ctl.enqueueLogger.V(5).Info("Enqueuing reference due to notification of update", "ref", ref)
-		ctl.Queue.Add(ref)
+	case *corev1.ConfigMap:
+		if typed.Name != GPUMapName {
+			return
+		}
+		objM = typed
+		kind = cmKind
 	default:
 		ctl.enqueueLogger.Error(nil, "Notified of update of unexpected type of object", "type", fmt.Sprintf("%T", obj))
+		return
 	}
+	ref := typedRef{kind, cache.MetaObjectToName(objM)}
+	ctl.enqueueLogger.V(5).Info("Enqueuing reference due to notification of update", "ref", ref)
+	ctl.Queue.Add(ref)
 }
 
 func (ctl *controller) OnDelete(obj any) {
@@ -149,16 +200,23 @@ func (ctl *controller) OnDelete(obj any) {
 		}
 		objM = typed
 		kind = podKind
-		ref := typedRef{kind, cache.MetaObjectToName(objM)}
-		ctl.enqueueLogger.V(5).Info("Enqueuing reference due to notification of delete", "ref", ref)
-		ctl.Queue.Add(ref)
+	case *corev1.ConfigMap:
+		if typed.Name != GPUMapName {
+			return
+		}
+		objM = typed
+		kind = cmKind
 	default:
 		ctl.enqueueLogger.Error(nil, "Notified of delete of unexpected type of object", "type", fmt.Sprintf("%T", obj))
+		return
 	}
+	ref := typedRef{kind, cache.MetaObjectToName(objM)}
+	ctl.enqueueLogger.V(5).Info("Enqueuing reference due to notification of delete", "ref", ref)
+	ctl.Queue.Add(ref)
 }
 
 func (ctl *controller) Start(ctx context.Context) error {
-	if !cache.WaitForNamedCacheSync(ControllerName, ctx.Done(), ctl.podInformer.HasSynced) {
+	if !cache.WaitForNamedCacheSync(ControllerName, ctx.Done(), ctl.cmInformer.HasSynced, ctl.podInformer.HasSynced, ctl.nodeInformer.HasSynced) {
 		return fmt.Errorf("caches not synced before end of Start context")
 	}
 	err := ctl.StartWorkers(ctx)
@@ -168,11 +226,15 @@ func (ctl *controller) Start(ctx context.Context) error {
 	return nil
 }
 
+// process returns (err error, retry bool).
+// There will be a retry iff `retry || err != nil`.
 func (ctl *controller) process(ctx context.Context, ref typedRef) (error, bool) {
 	logger := klog.FromContext(ctx)
 	switch ref.Kind {
 	case podKind:
 		return ctl.processPod(ctx, ref.ObjectName)
+	case cmKind:
+		return ctl.processConfigMap(ctx, ref.ObjectName)
 	default:
 		logger.Error(nil, "Asked to process unexpected Kind of object", "kind", ref.Kind)
 		return nil, false
@@ -193,14 +255,44 @@ func (ctl *controller) processPod(ctx context.Context, podRef cache.ObjectName) 
 		return err, true
 	}
 
-	role := got.Annotations[api.PodRoleAnnotationName]
-	switch role {
-	case api.PodRoleAnnotationValueRequesting:
+	patch := got.Annotations[api.ServerPatchAnnotationName]
+	if len(patch) > 0 {
 		return ctl.processServerRequestingPod(ctx, got)
-	case api.PodRoleAnnotationValueRunning:
+	} else {
 		return ctl.processServerRunningPod(ctx, got)
-	default:
-		logger.V(5).Info("Pod has no role annotation or unknown role, skipping processing", "name", podRef.Name, "role", role)
-		return nil, false
 	}
+}
+
+func (ctl *controller) processConfigMap(ctx context.Context, cmRef cache.ObjectName) (error, bool) {
+	logger := klog.FromContext(ctx)
+	cm, err := ctl.coreclient.ConfigMaps(cmRef.Namespace).Get(ctx, cmRef.Name, metav1.GetOptions{})
+	if err != nil {
+		if errors.IsNotFound(err) {
+			ctl.gpuMap.Store(nil)
+			logger.V(1).Info("ConfigMap " + GPUMapName + " does not exist")
+		}
+		return err, true
+	}
+	newMap := map[string]GpuLocation{}
+	nodeCount := 0
+	for nodeName, mapStr := range cm.Data {
+		_, err := ctl.nodeLister.Get(nodeName)
+		if err != nil && errors.IsNotFound(err) {
+			logger.V(3).Info("Ignoring entry in GPU map because key is not a Node name", "key", nodeName)
+			continue
+		}
+		var nodesMap map[string]uint
+		err = json.Unmarshal([]byte(mapStr), &nodesMap)
+		if err != nil {
+			logger.Error(err, "A GPU map entry failed to parse as JSON", "nodeName", nodeName)
+			continue
+		}
+		for uuid, index := range nodesMap {
+			newMap[uuid] = GpuLocation{Node: nodeName, Index: index}
+		}
+		nodeCount += 1
+	}
+	logger.V(1).Info("Parsed GPU map", "numNodes", nodeCount, "numGPUs", len(newMap))
+	ctl.gpuMap.Store(&newMap)
+	return nil, false
 }
