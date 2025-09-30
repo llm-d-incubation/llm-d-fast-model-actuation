@@ -40,7 +40,6 @@ jobs:
           echo "GITHUB_ACTION_REF=$GITHUB_ACTION_REF"
 
   build-llm-d-requester:
-    if: github.repository_owner == github.actor
     strategy:
       fail-fast: false
     runs-on: ubuntu-latest
@@ -76,7 +75,7 @@ jobs:
           context: .
           file: ./dockerfiles/Dockerfile.requester
           platforms: linux/amd64,linux/arm64
-          push: true
+          push: "${{ github.repository_owner == github.actor }}"
           provenance: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
