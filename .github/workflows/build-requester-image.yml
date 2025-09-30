@@ -2,9 +2,15 @@ name: Requester Image Build
 
 on:
   push:
-    branches:
-      - main
-  pull_request_target:
+    paths:
+      - ".github/workflows/build-requester-image.yml"
+      - Makefile
+      - dockerfiles/Dockerfile.requester
+      - cmd/requester/**
+      - pkg/api/**
+      - pkg/server/**
+      - pkg/stub/**
+  pull_request:
     branches:
       - main
 
@@ -18,7 +24,23 @@ env:
   IMAGE_NAME: requester
 
 jobs:
+  debug:
+    name: print relevant info
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "github.actor=${{ github.actor }}"
+          echo "github.action_ref=${{ github.action_ref }}"
+          echo "github.event_name=${{ github.event_name }}"
+          echo "github.head_ref=$GITHUB_HEAD_REF"
+          echo "github.ref=${{ github.ref }}"
+          echo "github.ref_name=${{ github.ref_name }}"
+          echo "github.repository_owner=${{ github.repository_owner }}"
+          echo "github.triggering_actor=${{ github.triggering_actor }}"
+          echo "GITHUB_ACTION_REF=$GITHUB_ACTION_REF"
+
   build-llm-d-requester:
+    if: github.repository_owner == github.actor
     strategy:
       fail-fast: false
     runs-on: ubuntu-latest
