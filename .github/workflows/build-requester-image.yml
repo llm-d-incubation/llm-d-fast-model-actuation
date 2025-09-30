@@ -2,9 +2,15 @@ name: Requester Image Build
 
 on:
   push:
-    branches:
-      - main
-  pull_request_target:
+    paths:
+      - ".github/workflows/build-requester-image.yml"
+      - Makefile
+      - dockerfiles/Dockerfile.requester
+      - cmd/requester/**
+      - pkg/api/**
+      - pkg/server/**
+      - pkg/stub/**
+  pull_request:
     branches:
       - main
 
