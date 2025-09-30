@@ -3,19 +3,27 @@ in a local k8s environment with model `ibm-granite/granite-3.3-2b-instruct`
 cached on local PV in the cluster.
 
 Build the requester container image (use your favorate
-`REQUESTER_IMG_REG`) with a command like the following. You can omit
+`CONTAINER_IMG_REG`) with a command like the following. You can omit
 the `TARGETARCH` if the runtime ISA matches your build time ISA.
 
 ```shell
-make build-requester REQUESTER_IMG_REG=$REQUESTER_IMG_REG TARGETARCH=amd64
+make build-requester CONTAINER_IMG_REG=$CONTAINER_IMG_REG TARGETARCH=amd64
 ```
 
-In a 2nd terminal, run the dual-pods controller.
+Build the dual-pods controller image. Omit TARGETARCH if not cross-compiling.
+
 ```shell
-go run ./cmd/dual-pods-controller --namespace=vcp-${LOGNAME} -v=5
+make controller CONTAINER_IMG_REG=$CONTAINER_IMG_REG TARGETARCH=amd64
 ```
 
-Switch back to the 1st terminal, create a server-requesting pod.
+Instantiate the Helm chart for the dual-pods controller. Specify the tag produced by the build above.
+
+```shell
+helm upgrade --install dpctlr charts/dpctlr --set Image="${CONTAINER_IMG_REG}/dual-pods-controller:9010ece"
+```
+
+Create a server-requesting pod.
+
 ```shell
 kubectl apply -f - <<EOF
 apiVersion: v1
@@ -61,7 +69,7 @@ metadata:
 spec:
   containers:
     - name: inference-server
-      image: ${REQUESTER_IMG_REG}/requester:latest
+      image: ${CONTAINER_IMG_REG}/requester:latest
       imagePullPolicy: Always
       ports:
         - containerPort: 8080
