@@ -1,0 +1,88 @@
+name: Build Controller Image
+
+on:
+  push:
+    paths:
+      - ".github/workflows/build-controller-image.yml"
+      - Makefile
+      - cmd/dual-pods-controller/**
+      - pkg/**
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  packages: write
+  attestations: write
+  id-token: write
+
+jobs:
+  debug:
+    name: print relevant info
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "github.actor=${{ github.actor }}"
+          echo "github.action_ref=${{ github.action_ref }}"
+          echo "github.event_name=${{ github.event_name }}"
+          echo "github.head_ref=$GITHUB_HEAD_REF"
+          echo "github.ref=${{ github.ref }}"
+          echo "github.ref_name=${{ github.ref_name }}"
+          echo "github.repository=${{ github.repository }}"
+          echo "github.repository_owner=${{ github.repository_owner }}"
+          echo "github.triggering_actor=${{ github.triggering_actor }}"
+          echo "GITHUB_ACTION_REF=$GITHUB_ACTION_REF"
+
+  build-and-push:
+    if: "${{ github.repository_owner == github.actor }}"
+    strategy:
+      fail-fast: false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install ko
+        uses: ko-build/setup-ko@d006021bd0c28d1ce33a07e7943d48b079944c8d
+
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1 # v3.5
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN  }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
+      - name: Doit
+        run: |
+          reg=${{ github.repository }}
+          make build-controller CONTAINER_IMG_REG=ghcr.io/${reg@L}
+
+  build-only:
+    if: "${{ github.repository_owner != github.actor }}"
+    strategy:
+      fail-fast: false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install ko
+        uses: ko-build/setup-ko@d006021bd0c28d1ce33a07e7943d48b079944c8d
+
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1 # v3.5
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN  }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
+      - name: Doit
+        run: |
+          make build-controller-local
