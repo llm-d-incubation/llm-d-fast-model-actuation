@@ -39,7 +39,7 @@ package api
 // --- by the following procedure ---
 // into the spec and label and annotation metadata given to the kube-apiserver
 // to define the server-running Pod.
-// 1. Remove the annotations whose name begins with "dual-pod.llm-d.ai/".
+// 1. Remove all annotations;
 // 2. Apply the patch
 
 const ServerPatchAnnotationName = "dual-pod.llm-d.ai/server-patch"
