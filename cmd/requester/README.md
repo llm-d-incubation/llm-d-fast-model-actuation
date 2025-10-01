@@ -2,18 +2,19 @@ This document shows the steps to exercise the requester and dual-pods controller
 in a local k8s environment with model `ibm-granite/granite-3.3-2b-instruct`
 cached on local PV in the cluster.
 
-Build the requester container image (use your favorate
+Build and push the requester container image (use your favorate
 `CONTAINER_IMG_REG`) with a command like the following. You can omit
 the `TARGETARCH` if the runtime ISA matches your build time ISA.
 
 ```shell
 make build-requester CONTAINER_IMG_REG=$CONTAINER_IMG_REG TARGETARCH=amd64
+make push-requester  CONTAINER_IMG_REG=$CONTAINER_IMG_REG
 ```
 
 Build the dual-pods controller image. Omit TARGETARCH if not cross-compiling.
 
 ```shell
-make controller CONTAINER_IMG_REG=$CONTAINER_IMG_REG TARGETARCH=amd64
+make build-controller CONTAINER_IMG_REG=$CONTAINER_IMG_REG TARGETARCH=amd64
 ```
 
 Instantiate the Helm chart for the dual-pods controller. Specify the tag produced by the build above.

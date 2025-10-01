@@ -74,8 +74,6 @@ func NewController(
 		podLister:     corev1PreInformers.Pods().Lister(),
 		cmInformer:    corev1PreInformers.ConfigMaps().Informer(),
 		cmLister:      corev1PreInformers.ConfigMaps().Lister(),
-		nodeInformer:  corev1PreInformers.Nodes().Informer(),
-		nodeLister:    corev1PreInformers.Nodes().Lister(),
 	}
 	ctl.gpuMap.Store(&map[string]GpuLocation{})
 	ctl.QueueAndWorkers = genctlr.NewQueueAndWorkers(string(ControllerName), numWorkers, ctl.process)
@@ -98,8 +96,6 @@ type controller struct {
 	podLister     corev1listers.PodLister
 	cmInformer    cache.SharedIndexInformer
 	cmLister      corev1listers.ConfigMapLister
-	nodeInformer  cache.SharedIndexInformer
-	nodeLister    corev1listers.NodeLister
 	genctlr.QueueAndWorkers[typedRef]
 
 	// gpuMaps maps GPU UUID to GpuLocation
@@ -215,7 +211,7 @@ func (ctl *controller) OnDelete(obj any) {
 }
 
 func (ctl *controller) Start(ctx context.Context) error {
-	if !cache.WaitForNamedCacheSync(ControllerName, ctx.Done(), ctl.cmInformer.HasSynced, ctl.podInformer.HasSynced, ctl.nodeInformer.HasSynced) {
+	if !cache.WaitForNamedCacheSync(ControllerName, ctx.Done(), ctl.cmInformer.HasSynced, ctl.podInformer.HasSynced) {
 		return fmt.Errorf("caches not synced before end of Start context")
 	}
 	err := ctl.StartWorkers(ctx)
@@ -275,11 +271,6 @@ func (ctl *controller) processConfigMap(ctx context.Context, cmRef cache.ObjectN
 	newMap := map[string]GpuLocation{}
 	nodeCount := 0
 	for nodeName, mapStr := range cm.Data {
-		_, err := ctl.nodeLister.Get(nodeName)
-		if err != nil && errors.IsNotFound(err) {
-			logger.V(3).Info("Ignoring entry in GPU map because key is not a Node name", "key", nodeName)
-			continue
-		}
 		var nodesMap map[string]uint
 		err = json.Unmarshal([]byte(mapStr), &nodesMap)
 		if err != nil {
