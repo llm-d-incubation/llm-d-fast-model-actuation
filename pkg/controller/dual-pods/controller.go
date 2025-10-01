@@ -244,12 +244,14 @@ func (ctl *controller) processPod(ctx context.Context, podRef cache.ObjectName) 
 	if err != nil {
 		if errors.IsNotFound(err) {
 			logger.V(5).Info("Pod not found, skipping processing", "name", podRef.Name)
+			// TODO: delete the server-running Pod
 			return nil, false
 		}
 		logger.Error(err, "Failed to get Pod", "name", podRef.Name)
 		return err, true
 	}
 
+	logger.V(5).Info("Pod exists", "annotations", got.Annotations)
 	patch := got.Annotations[api.ServerPatchAnnotationName]
 	if len(patch) > 0 {
 		return ctl.processServerRequestingPod(ctx, got)
