@@ -36,6 +36,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
 	"k8s.io/klog/v2"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/yaml"
 
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/api"
@@ -139,6 +140,7 @@ func composeServerRunningPod(reqPod *corev1.Pod, gpuIndices string, data api.Run
 		ObjectMeta: metav1.ObjectMeta{
 			Annotations: reqPod.Annotations,
 			Labels:      reqPod.Labels,
+			Namespace:   reqPod.Namespace,
 		},
 		Spec: reqPod.Spec,
 	}
@@ -198,9 +200,9 @@ func composeServerRunningPod(reqPod *corev1.Pod, gpuIndices string, data api.Run
 
 	// connect dual pods
 	pod.Name = reqPod.Name + api.ServerRunningPodNameSuffix
-	pod.OwnerReferences = []metav1.OwnerReference{
-		*metav1.NewControllerRef(reqPod, corev1.SchemeGroupVersion.WithKind("Pod")),
-	}
+	ownerRef := *metav1.NewControllerRef(reqPod, corev1.SchemeGroupVersion.WithKind("Pod"))
+	ownerRef.BlockOwnerDeletion = ptr.To(false)
+	pod.OwnerReferences = []metav1.OwnerReference{ownerRef}
 
 	return &pod, nil
 }
