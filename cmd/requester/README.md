@@ -23,56 +23,67 @@ Instantiate the Helm chart for the dual-pods controller. Specify the tag produce
 helm upgrade --install dpctlr charts/dpctlr --set Image="${CONTAINER_IMG_REG}/dual-pods-controller:9010ece"
 ```
 
-Create a server-requesting pod.
+Create a ReplicaSet of 1 server-requesting Pod.
 
 ```shell
 kubectl apply -f - <<EOF
-apiVersion: v1
-kind: Pod
+apiVersion: apps/v1
+kind: ReplicaSet
 metadata:
   name: my-request
-  annotations:
-    dual-pod.llm-d.ai/admin-port: "8081"
-    dual-pod.llm-d.ai/server-patch: |
-      spec:
-        containers:
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dp-example
+  template:
+    metadata:
+      labels:
+        app: dp-example
+      annotations:
+        dual-pod.llm-d.ai/admin-port: "8081"
+        dual-pod.llm-d.ai/server-patch: |
+          spec:
+            containers:
+            - name: inference-server
+              image: docker.io/vllm/vllm-openai:v0.10.2
+              command:
+              - vllm
+              - serve
+              - --port=8000
+              - ibm-granite/granite-3.3-2b-instruct
+              - --max-model-len=32768
+              resources:
+                limits:
+                  cpu: "2"
+                  memory: 6Gi
+              readinessProbe:
+                httpGet:
+                  path: /health
+                  port: 8000
+                initialDelaySeconds: 60
+                periodSeconds: 5
+    spec:
+      containers:
         - name: inference-server
-          image: docker.io/vllm/vllm-openai:v0.10.2
-          command:
-          - vllm
-          - serve
-          - --port=8000
-          - ibm-granite/granite-3.3-2b-instruct
-          - --max-model-len=32768
-          resources:
-            limits:
-              cpu: "2"
-              memory: 6Gi
+          image: ${CONTAINER_IMG_REG}/requester:latest
+          imagePullPolicy: Always
+          ports:
+            - name: probes
+              containerPort: 8080
+            - name: spi
+              containerPort: 8081
           readinessProbe:
             httpGet:
-              path: /health
-              port: 8000
-            initialDelaySeconds: 60
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 2
             periodSeconds: 5
-spec:
-  containers:
-    - name: inference-server
-      image: ${CONTAINER_IMG_REG}/requester:latest
-      imagePullPolicy: Always
-      ports:
-        - containerPort: 8080
-        - containerPort: 8081
-      readinessProbe:
-        httpGet:
-          path: /ready
-          port: 8080
-        initialDelaySeconds: 2
-        periodSeconds: 5
-      resources:
-        limits:
-          nvidia.com/gpu: "1"
-          cpu: "1"
-          memory: 250Mi
+          resources:
+            limits:
+              nvidia.com/gpu: "1"
+              cpu: "1"
+              memory: 250Mi
 EOF
 ```
 
