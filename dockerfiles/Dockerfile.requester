@@ -32,6 +32,4 @@ FROM nvcr.io/nvidia/cuda:12.8.0-base-ubuntu22.04
 WORKDIR /
 COPY --from=builder /workspace/bin/requester /app/requester
 
-USER 65532:65532
-
 ENTRYPOINT ["/app/requester"]
