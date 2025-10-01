@@ -1,4 +1,4 @@
-name: Requester Image Build
+name: Build Requester Image
 
 on:
   push:
