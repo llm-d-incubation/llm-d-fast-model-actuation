@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"slices"
 	"strconv"
@@ -36,6 +37,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
 	"k8s.io/klog/v2"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/yaml"
 
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/api"
@@ -102,12 +104,12 @@ func (ctl *controller) processServerRequestingPod(ctx context.Context, requestin
 	}
 
 	logger.V(2).Info("Creating server-running pod", "name", serverRunningPod.Name, "namespace", serverRunningPod.Namespace)
-	_, err = ctl.coreclient.Pods(serverRunningPod.Namespace).Create(ctx, serverRunningPod, metav1.CreateOptions{})
+	echo, err := ctl.coreclient.Pods(serverRunningPod.Namespace).Create(ctx, serverRunningPod, metav1.CreateOptions{})
 	if err != nil {
 		logger.Error(err, "Failed to create server-running pod", "name", serverRunningPod.Name)
 		return err, true
 	}
-	logger.V(2).Info("Created server-running pod", "name", serverRunningPod.Name)
+	logger.V(5).Info("Created server-running pod", "name", serverRunningPod.Name, "annotations", echo.Annotations)
 
 	logger.V(5).Info("Processed server-requesting pod", "name", requestingPod.Name)
 	return nil, false
@@ -137,13 +139,17 @@ func composeServerRunningPod(reqPod *corev1.Pod, gpuIndices string, data api.Run
 	basePod := &corev1.Pod{
 		TypeMeta: reqPod.TypeMeta,
 		ObjectMeta: metav1.ObjectMeta{
-			Annotations: reqPod.Annotations,
+			Annotations: maps.Clone(reqPod.Annotations),
 			Labels:      reqPod.Labels,
+			Namespace:   reqPod.Namespace,
 		},
 		Spec: reqPod.Spec,
 	}
 	for key := range basePod.Annotations {
-		if strings.HasPrefix(key, "dual-pod.llm-d.ai/") {
+		if strings.HasPrefix(key, "dual-pod.llm-d.ai/") ||
+			strings.Contains(key, "ovn.org/") ||
+			strings.Contains(key, "cni.cncf.io/") ||
+			strings.Contains(key, "kubernetes.io/") {
 			delete(basePod.Annotations, key)
 		}
 	}
@@ -198,9 +204,9 @@ func composeServerRunningPod(reqPod *corev1.Pod, gpuIndices string, data api.Run
 
 	// connect dual pods
 	pod.Name = reqPod.Name + api.ServerRunningPodNameSuffix
-	pod.OwnerReferences = []metav1.OwnerReference{
-		*metav1.NewControllerRef(reqPod, corev1.SchemeGroupVersion.WithKind("Pod")),
-	}
+	ownerRef := *metav1.NewControllerRef(reqPod, corev1.SchemeGroupVersion.WithKind("Pod"))
+	ownerRef.BlockOwnerDeletion = ptr.To(false)
+	pod.OwnerReferences = []metav1.OwnerReference{ownerRef}
 
 	return &pod, nil
 }

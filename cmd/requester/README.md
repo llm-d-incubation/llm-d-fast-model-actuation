@@ -2,20 +2,29 @@ This document shows the steps to exercise the requester and dual-pods controller
 in a local k8s environment with model `ibm-granite/granite-3.3-2b-instruct`
 cached on local PV in the cluster.
 
-Build the requester container image (use your favorate
-`REQUESTER_IMG_REG`) with a command like the following. You can omit
+Build and push the requester container image (use your favorate
+`CONTAINER_IMG_REG`) with a command like the following. You can omit
 the `TARGETARCH` if the runtime ISA matches your build time ISA.
 
 ```shell
-make build-requester REQUESTER_IMG_REG=$REQUESTER_IMG_REG TARGETARCH=amd64
+make build-requester CONTAINER_IMG_REG=$CONTAINER_IMG_REG TARGETARCH=amd64
+make push-requester  CONTAINER_IMG_REG=$CONTAINER_IMG_REG
 ```
 
-In a 2nd terminal, run the dual-pods controller.
+Build the dual-pods controller image. Omit TARGETARCH if not cross-compiling.
+
 ```shell
-go run ./cmd/dual-pods-controller --namespace=vcp-${LOGNAME} -v=5
+make build-controller CONTAINER_IMG_REG=$CONTAINER_IMG_REG TARGETARCH=amd64
 ```
 
-Switch back to the 1st terminal, create a server-requesting pod.
+Instantiate the Helm chart for the dual-pods controller. Specify the tag produced by the build above.
+
+```shell
+helm upgrade --install dpctlr charts/dpctlr --set Image="${CONTAINER_IMG_REG}/dual-pods-controller:9010ece"
+```
+
+Create a server-requesting pod.
+
 ```shell
 kubectl apply -f - <<EOF
 apiVersion: v1
@@ -33,7 +42,60 @@ metadata:
           - vllm
           - serve
           - --port=8000
-          - /pvcs/local/default/vcp/hf/models--ibm-granite--granite-3.3-2b-instruct/snapshots/c4179de4bf66635b0cf11f410a73ebf95f85d506
+          - ibm-granite/granite-3.3-2b-instruct
+          - --max-model-len=32768
+          resources:
+            limits:
+              cpu: "2"
+              memory: 6Gi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 60
+            periodSeconds: 5
+spec:
+  containers:
+    - name: inference-server
+      image: ${CONTAINER_IMG_REG}/requester:latest
+      imagePullPolicy: Always
+      ports:
+        - containerPort: 8080
+        - containerPort: 8081
+      readinessProbe:
+        httpGet:
+          path: /ready
+          port: 8080
+        initialDelaySeconds: 2
+        periodSeconds: 5
+      resources:
+        limits:
+          nvidia.com/gpu: "1"
+          cpu: "1"
+          memory: 250Mi
+EOF
+```
+
+Or, if you had caching working, something like the following.
+
+```shell
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: my-request
+  annotations:
+    dual-pod.llm-d.ai/admin-port: "8081"
+    dual-pod.llm-d.ai/server-patch: |
+      spec:
+        containers:
+        - name: inference-server
+          image: docker.io/vllm/vllm-openai:v0.10.2
+          command:
+          - vllm
+          - serve
+          - --port=8000
+          - /pvcs/local/default/vcp/hf/models--ibm-granite--granite-3.3-2b-instruct/snapshots/707f574c62054322f6b5b04b6d075f0a8f05e0f0
           - --max-model-len=32768
           env:
           - name: VLLM_CACHE_ROOT
@@ -61,7 +123,7 @@ metadata:
 spec:
   containers:
     - name: inference-server
-      image: ${REQUESTER_IMG_REG}/requester:latest
+      image: ${CONTAINER_IMG_REG}/requester:latest
       imagePullPolicy: Always
       ports:
         - containerPort: 8080
