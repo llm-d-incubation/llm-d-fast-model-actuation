@@ -40,8 +40,7 @@ import (
 const ControllerName = "dual-pods-controller"
 
 // GPUMapName is the name of the ConfigMap(s) parsed to discover the mapping from GPU UUID to location.
-// Any ConfigMap found with this name will be taken as the whole of the answer.
-// TODO: get clarity on whether to focus on one namespace.
+// Namespace is the focus namespace.
 // Every data item in the ConfigMap is expected to have a name that is the name of a Node
 // and a value that is JSON for a map from UUID to index.
 const GPUMapName = "gpu-map"

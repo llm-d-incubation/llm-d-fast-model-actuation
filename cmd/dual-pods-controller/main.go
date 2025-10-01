@@ -19,10 +19,11 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
+	"os"
 
 	"github.com/spf13/pflag"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kubeinformers "k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
@@ -59,8 +60,9 @@ func main() {
 	}
 
 	kubeClient := kubernetes.NewForConfigOrDie(restConfig)
-	if overrides.Context.Namespace == metav1.NamespaceAll {
-		logger.Info("Working on all namespaces")
+	if len(overrides.Context.Namespace) == 0 {
+		fmt.Fprint(os.Stderr, "Namespace must not be the empty string")
+		os.Exit(1)
 	} else {
 		logger.Info("Focusing on one namespace", "name", overrides.Context.Namespace)
 	}
@@ -89,5 +91,5 @@ func AddFlags(flags pflag.FlagSet, loadingRules *clientcmd.ClientConfigLoadingRu
 	flags.StringVar(&overrides.CurrentContext, "context", overrides.CurrentContext, "The name of the kubeconfig context to use")
 	flags.StringVar(&overrides.Context.AuthInfo, "user", overrides.Context.AuthInfo, "The name of the kubeconfig user to use")
 	flags.StringVar(&overrides.Context.Cluster, "cluster", overrides.Context.Cluster, "The name of the kubeconfig cluster to use")
-	flags.StringVar(&overrides.Context.Namespace, "namespace", overrides.Context.Namespace, "The name of the Kubernetes Namespace to work in")
+	flags.StringVarP(&overrides.Context.Namespace, "namespace", "n", overrides.Context.Namespace, "The name of the Kubernetes Namespace to work in (NOT optional)")
 }
