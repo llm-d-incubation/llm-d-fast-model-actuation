@@ -43,8 +43,11 @@ spec:
       annotations:
         dual-pod.llm-d.ai/admin-port: "8081"
         dual-pod.llm-d.ai/server-patch: |
-          labels:
-            model: ibm-granite/granite-3.3-2b-instruct
+          metadata:
+            labels: {
+              "model-reg": "ibm-granite",
+              "model-repo": "granite-3.3-2b-instruct",
+              "app": null}
           spec:
             containers:
             - name: inference-server

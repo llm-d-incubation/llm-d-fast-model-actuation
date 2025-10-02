@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -34,6 +35,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8sruntime "k8s.io/apimachinery/pkg/runtime"
+	k8sserializer "k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
@@ -43,21 +46,47 @@ import (
 	stubapi "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/stub/api"
 )
 
+func (ctl *controller) ensureReqStatus(ctx context.Context, requestingPod *corev1.Pod, errors ...string) (error, bool) {
+	status := api.ServerRequestingPodStatus{Errors: errors}
+	logger := klog.FromContext(ctx)
+	newStatusBytes, err := json.Marshal(status)
+	if err != nil { // impossible; handle by infinite retry
+		return fmt.Errorf("failed to marshal status (%#v): %w", status, err), true
+	}
+	newStatusStr := string(newStatusBytes)
+	oldStatusStr := requestingPod.Annotations[api.ServerPatchAnnotationErrorsName]
+	if oldStatusStr == string(newStatusStr) {
+		logger.V(5).Info("No need to update status", "serverRequestingPod", requestingPod.Name, "status", status)
+		return nil, false
+	}
+	requestingPod = requestingPod.DeepCopy()
+	if requestingPod.Annotations == nil {
+		requestingPod.Annotations = map[string]string{}
+	}
+	requestingPod.Annotations[api.ServerPatchAnnotationErrorsName] = newStatusStr
+	_, err = ctl.coreclient.Pods(requestingPod.Namespace).Update(ctx, requestingPod, metav1.UpdateOptions{FieldManager: ctl.ControllerName})
+	if err == nil {
+		logger.V(2).Info("Set status", "serverRequestingPod", requestingPod.Name, "status", status)
+	} else {
+		logger.V(3).Info("Failed to set status", "serverRequestingPod", requestingPod.Name, "status", status)
+	}
+	return err, false
+}
+
 func (ctl *controller) processServerRequestingPod(ctx context.Context, requestingPod *corev1.Pod) (error, bool) {
 	logger := klog.FromContext(ctx)
 	logger.V(5).Info("Processing server-requesting pod", "name", requestingPod.Name)
 
 	serverPatch := requestingPod.Annotations[api.ServerPatchAnnotationName]
 	if serverPatch == "" {
-		logger.V(5).Info("No server patch annotation found", "name", requestingPod.Name)
-		return nil, true
+		return ctl.ensureReqStatus(ctx, requestingPod, "server patch annotation not found")
 	}
 	logger.V(5).Info("Found server patch annotation", "name", requestingPod.Name, "patch", serverPatch)
 
 	// get allocated gpu
 	ip := requestingPod.Status.PodIP
 	if ip == "" {
-		return fmt.Errorf("pod %q has no PodIP yet", requestingPod.Name), true
+		return ctl.ensureReqStatus(ctx, requestingPod, "no IP assigned yet")
 	}
 	port := requestingPod.Annotations[api.AdminPortAnnotationName]
 	if port == "" {
@@ -67,27 +96,24 @@ func (ctl *controller) processServerRequestingPod(ctx context.Context, requestin
 	url := fmt.Sprintf("http://%s:%s%s", ip, port, stubapi.AcceleratorQueryPath)
 	gpuUUIDs, err := getGPUUUIDs(url)
 	if err != nil {
-		logger.V(5).Info("Not able to get GPU UUIDs at this time", "url", url, "error", err)
-		return err, true
+		return ctl.ensureReqStatus(ctx, requestingPod, fmt.Sprintf("GET %q fails: %s", url, err.Error()))
 	}
 	if len(gpuUUIDs) == 0 {
-		logger.V(5).Info("No GPUs found for Pod", "name", requestingPod.Name)
-		return nil, true
+		return ctl.ensureReqStatus(ctx, requestingPod, "the assigned set of GPUs is empty")
 	}
 	logger.V(5).Info("Found GPUs for Pod", "name", requestingPod.Name, "gpuUUIDs", gpuUUIDs)
 	gpuIndices, err := ctl.mapToGPUIndices(requestingPod.Spec.NodeName, gpuUUIDs)
 	if err != nil {
-		return err, true
+		return ctl.ensureReqStatus(ctx, requestingPod, err.Error())
 	}
 
 	// use the server patch to build the server-running pod
 	logger.V(5).Info("Building server-running pod from patch", "name", requestingPod.Name, "patch", serverPatch)
-	serverRunningPod, err := composeServerRunningPod(ctx, requestingPod, gpuIndices, api.RunnerData{
+	serverRunningPod, err := composeServerRunningPod(ctx, requestingPod, serverPatch, gpuIndices, api.RunnerData{
 		NodeName: requestingPod.Spec.NodeName,
 	})
 	if err != nil {
-		logger.Error(err, "Failed to build server-running pod from patch", "name", requestingPod.Name, "patch", serverPatch)
-		return err, true
+		return ctl.ensureReqStatus(ctx, requestingPod, fmt.Sprintf("failed to construct the nominal server-running Pod: %s", err.Error()))
 	}
 
 	got, err := ctl.podLister.Pods(serverRunningPod.Namespace).Get(serverRunningPod.Name)
@@ -105,21 +131,25 @@ func (ctl *controller) processServerRequestingPod(ctx context.Context, requestin
 	logger.V(2).Info("Creating server-running pod", "name", serverRunningPod.Name, "namespace", serverRunningPod.Namespace, "annotations", serverRunningPod.Annotations, "labels", serverRunningPod.Labels)
 	echo, err := ctl.coreclient.Pods(serverRunningPod.Namespace).Create(ctx, serverRunningPod, metav1.CreateOptions{})
 	if err != nil {
-		logger.Error(err, "Failed to create server-running pod", "name", serverRunningPod.Name)
+		errMsg := err.Error()
+		if invalidPodRE.MatchString(errMsg) {
+			return ctl.ensureReqStatus(ctx, requestingPod, "the nominal server-running "+errMsg)
+		}
+		innerErr, _ := ctl.ensureReqStatus(ctx, requestingPod, fmt.Sprintf("failed to create server-running Pod: %s", errMsg))
+		if innerErr != nil {
+			return errors.Join(err, innerErr), true
+		}
 		return err, true
 	}
 	logger.V(5).Info("Created server-running pod", "name", serverRunningPod.Name, "annotations", echo.Annotations, "labels", echo.Labels)
 
-	logger.V(5).Info("Processed server-requesting pod", "name", requestingPod.Name)
-	return nil, false
+	return ctl.ensureReqStatus(ctx, requestingPod)
 }
 
-func composeServerRunningPod(ctx context.Context, reqPod *corev1.Pod, gpuIndices string, data api.RunnerData) (*corev1.Pod, error) {
+var invalidPodRE = regexp.MustCompile(`^Pod "[a-z0-9.-]*" is invalid`)
+
+func composeServerRunningPod(ctx context.Context, reqPod *corev1.Pod, rawTmpl string, gpuIndices string, data api.RunnerData) (*corev1.Pod, error) {
 	logger := klog.FromContext(ctx)
-	rawTmpl, ok := reqPod.Annotations[api.ServerPatchAnnotationName]
-	if !ok {
-		return nil, fmt.Errorf("annotation %q not found", api.ServerPatchAnnotationName)
-	}
 
 	tmpl, err := template.New("serverPatch").Option("missingkey=error").Parse(rawTmpl)
 	if err != nil {
@@ -127,13 +157,13 @@ func composeServerRunningPod(ctx context.Context, reqPod *corev1.Pod, gpuIndices
 	}
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, data); err != nil {
-		return nil, fmt.Errorf("execute template: %w", err)
+		return nil, fmt.Errorf("failed to execute server patch template: %w", err)
 	}
 	renderedPatch := buf.Bytes()
 
 	patchJSON, err := yaml.YAMLToJSON(renderedPatch)
 	if err != nil {
-		return nil, fmt.Errorf("yaml to json: %w", err)
+		return nil, fmt.Errorf("failed to convert server patch yaml to json: %w", err)
 	}
 
 	basePod := &corev1.Pod{
@@ -153,13 +183,16 @@ func composeServerRunningPod(ctx context.Context, reqPod *corev1.Pod, gpuIndices
 	// apply strategic merge patch
 	modifiedJSON, err := strategicpatch.StrategicMergePatch(baseJSON, patchJSON, &corev1.Pod{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to apply patch: %w", err)
+		return nil, fmt.Errorf("failed to apply server patch: %w", err)
 	}
 
-	// decode back into Pod
+	// Decode back into Pod.
+	// Use a real Kubernetes decoder that will complain about spurious fields,
+	// to catch common errors here (before sending to apiserver).
 	var pod corev1.Pod
-	if err := json.Unmarshal(modifiedJSON, &pod); err != nil {
-		return nil, fmt.Errorf("unmarshal patched pod: %w", err)
+	_, _, err = podDecoder.Decode(modifiedJSON, nil, &pod)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal patched pod: %w", err)
 	}
 
 	// identify the inference server container
@@ -200,6 +233,16 @@ func composeServerRunningPod(ctx context.Context, reqPod *corev1.Pod, gpuIndices
 	pod.OwnerReferences = []metav1.OwnerReference{ownerRef}
 
 	return &pod, nil
+}
+
+var coreScheme *k8sruntime.Scheme
+var codecFactory k8sserializer.CodecFactory
+var podDecoder k8sruntime.Decoder
+
+func init() {
+	coreScheme = k8sruntime.NewScheme()
+	codecFactory = k8sserializer.NewCodecFactory(coreScheme, k8sserializer.EnableStrict)
+	podDecoder = codecFactory.UniversalDecoder(corev1.SchemeGroupVersion)
 }
 
 func getGPUUUIDs(url string) ([]string, error) {
