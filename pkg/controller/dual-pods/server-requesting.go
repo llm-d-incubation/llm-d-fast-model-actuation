@@ -241,6 +241,7 @@ var podDecoder k8sruntime.Decoder
 
 func init() {
 	coreScheme = k8sruntime.NewScheme()
+	corev1.AddToScheme(coreScheme)
 	codecFactory = k8sserializer.NewCodecFactory(coreScheme, k8sserializer.EnableStrict)
 	podDecoder = codecFactory.UniversalDecoder(corev1.SchemeGroupVersion)
 }
