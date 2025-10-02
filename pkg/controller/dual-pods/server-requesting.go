@@ -23,7 +23,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"net/http"
 	"slices"
 	"strconv"
@@ -103,7 +102,7 @@ func (ctl *controller) processServerRequestingPod(ctx context.Context, requestin
 		return nil, false
 	}
 
-	logger.V(2).Info("Creating server-running pod", "name", serverRunningPod.Name, "namespace", serverRunningPod.Namespace)
+	logger.V(2).Info("Creating server-running pod", "name", serverRunningPod.Name, "namespace", serverRunningPod.Namespace, "annotations", serverRunningPod.Annotations)
 	echo, err := ctl.coreclient.Pods(serverRunningPod.Namespace).Create(ctx, serverRunningPod, metav1.CreateOptions{})
 	if err != nil {
 		logger.Error(err, "Failed to create server-running pod", "name", serverRunningPod.Name)
@@ -139,19 +138,10 @@ func composeServerRunningPod(reqPod *corev1.Pod, gpuIndices string, data api.Run
 	basePod := &corev1.Pod{
 		TypeMeta: reqPod.TypeMeta,
 		ObjectMeta: metav1.ObjectMeta{
-			Annotations: maps.Clone(reqPod.Annotations),
-			Labels:      reqPod.Labels,
-			Namespace:   reqPod.Namespace,
+			Labels:    reqPod.Labels,
+			Namespace: reqPod.Namespace,
 		},
 		Spec: reqPod.Spec,
-	}
-	for key := range basePod.Annotations {
-		if strings.HasPrefix(key, "dual-pod.llm-d.ai/") ||
-			strings.Contains(key, "ovn.org/") ||
-			strings.Contains(key, "cni.cncf.io/") ||
-			strings.Contains(key, "kubernetes.io/") {
-			delete(basePod.Annotations, key)
-		}
 	}
 	// marshal into json
 	baseJSON, err := json.Marshal(basePod)
