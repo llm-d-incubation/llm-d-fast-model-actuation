@@ -82,7 +82,7 @@ func (ctl *controller) processServerRequestingPod(ctx context.Context, requestin
 
 	// use the server patch to build the server-running pod
 	logger.V(5).Info("Building server-running pod from patch", "name", requestingPod.Name, "patch", serverPatch)
-	serverRunningPod, err := composeServerRunningPod(requestingPod, gpuIndices, api.RunnerData{
+	serverRunningPod, err := composeServerRunningPod(ctx, requestingPod, gpuIndices, api.RunnerData{
 		NodeName: requestingPod.Spec.NodeName,
 	})
 	if err != nil {
@@ -102,19 +102,20 @@ func (ctl *controller) processServerRequestingPod(ctx context.Context, requestin
 		return nil, false
 	}
 
-	logger.V(2).Info("Creating server-running pod", "name", serverRunningPod.Name, "namespace", serverRunningPod.Namespace, "annotations", serverRunningPod.Annotations)
+	logger.V(2).Info("Creating server-running pod", "name", serverRunningPod.Name, "namespace", serverRunningPod.Namespace, "annotations", serverRunningPod.Annotations, "labels", serverRunningPod.Labels)
 	echo, err := ctl.coreclient.Pods(serverRunningPod.Namespace).Create(ctx, serverRunningPod, metav1.CreateOptions{})
 	if err != nil {
 		logger.Error(err, "Failed to create server-running pod", "name", serverRunningPod.Name)
 		return err, true
 	}
-	logger.V(5).Info("Created server-running pod", "name", serverRunningPod.Name, "annotations", echo.Annotations)
+	logger.V(5).Info("Created server-running pod", "name", serverRunningPod.Name, "annotations", echo.Annotations, "labels", echo.Labels)
 
 	logger.V(5).Info("Processed server-requesting pod", "name", requestingPod.Name)
 	return nil, false
 }
 
-func composeServerRunningPod(reqPod *corev1.Pod, gpuIndices string, data api.RunnerData) (*corev1.Pod, error) {
+func composeServerRunningPod(ctx context.Context, reqPod *corev1.Pod, gpuIndices string, data api.RunnerData) (*corev1.Pod, error) {
+	logger := klog.FromContext(ctx)
 	rawTmpl, ok := reqPod.Annotations[api.ServerPatchAnnotationName]
 	if !ok {
 		return nil, fmt.Errorf("annotation %q not found", api.ServerPatchAnnotationName)
@@ -148,7 +149,7 @@ func composeServerRunningPod(reqPod *corev1.Pod, gpuIndices string, data api.Run
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal server-requesting pod: %w", err)
 	}
-
+	logger.V(5).Info("Before StrategicMergePatch", "reqPodName", reqPod.Name, "baseJSON", baseJSON)
 	// apply strategic merge patch
 	modifiedJSON, err := strategicpatch.StrategicMergePatch(baseJSON, patchJSON, &corev1.Pod{})
 	if err != nil {
