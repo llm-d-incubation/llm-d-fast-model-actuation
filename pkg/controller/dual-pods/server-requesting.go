@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"regexp"
 	"slices"
 	"strconv"
@@ -241,7 +242,10 @@ var podDecoder k8sruntime.Decoder
 
 func init() {
 	coreScheme = k8sruntime.NewScheme()
-	corev1.AddToScheme(coreScheme)
+	err := corev1.AddToScheme(coreScheme)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Failed to corev1.AddToScheme: "+err.Error())
+	}
 	codecFactory = k8sserializer.NewCodecFactory(coreScheme, k8sserializer.EnableStrict)
 	podDecoder = codecFactory.UniversalDecoder(corev1.SchemeGroupVersion)
 }
