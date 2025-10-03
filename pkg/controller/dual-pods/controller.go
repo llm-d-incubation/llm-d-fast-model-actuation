@@ -47,6 +47,8 @@ const ControllerName = "dual-pods-controller"
 // and a value that is JSON for a map from UUID to index.
 const GPUMapName = "gpu-map"
 
+const runnerFinalizer = "dual-pods.llm-d.ai/runner"
+
 type Controller interface {
 	Start(context.Context) error
 }
@@ -78,6 +80,7 @@ func NewController(
 		cmLister:      corev1PreInformers.ConfigMaps().Lister(),
 		nodeInformer:  corev1PreInformers.Nodes().Informer(),
 		nodeLister:    corev1PreInformers.Nodes().Lister(),
+		requesters:    make(map[string]*requesterData),
 	}
 	ctl.gpuMap.Store(&map[string]GpuLocation{})
 	ctl.QueueAndWorkers = genctlr.NewQueueAndWorkers(string(ControllerName), numWorkers, ctl.process)
@@ -168,7 +171,7 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 		return
 	}
 	ref := typedRef{kind, cache.MetaObjectToName(objM)}
-	ctl.enqueueLogger.V(5).Info("Enqueuing reference due to notification of add", "ref", ref, "isInInitialList", isInInitialList)
+	ctl.enqueueLogger.V(5).Info("Enqueuing reference due to notification of add", "ref", ref, "isInInitialList", isInInitialList, "resourceVeresion", objM.GetResourceVersion())
 	ctl.Queue.Add(ref)
 
 }
@@ -194,7 +197,7 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 		return
 	}
 	ref := typedRef{kind, cache.MetaObjectToName(objM)}
-	ctl.enqueueLogger.V(5).Info("Enqueuing reference due to notification of update", "ref", ref)
+	ctl.enqueueLogger.V(5).Info("Enqueuing reference due to notification of update", "ref", ref, "resourceVeresion", objM.GetResourceVersion())
 	ctl.Queue.Add(ref)
 }
 
@@ -222,7 +225,7 @@ func (ctl *controller) OnDelete(obj any) {
 		return
 	}
 	ref := typedRef{kind, cache.MetaObjectToName(objM)}
-	ctl.enqueueLogger.V(5).Info("Enqueuing reference due to notification of delete", "ref", ref)
+	ctl.enqueueLogger.V(5).Info("Enqueuing reference due to notification of delete", "ref", ref, "resourceVeresion", objM.GetResourceVersion())
 	ctl.Queue.Add(ref)
 }
 
@@ -259,16 +262,20 @@ func (ctl *controller) processPod(ctx context.Context, podRef cache.ObjectName) 
 	got, err := ctl.podLister.Pods(podRef.Namespace).Get(podRef.Name)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			logger.V(5).Info("Pod not found, skipping processing", "name", podRef.Name)
+			// Two cases are possible.
+			// (1) This is a server-requesting Pod, in which case Kube GC will
+			// delete the server-running Pod (once this controller removes the runner's finalizer).
+			// (2) This is a server-running Pod and this controller has already
+			// removed its finalizer and started deletion of the server-requesting Pod.
+			logger.V(5).Info("Pod not found, nothing to do", "name", podRef.Name)
 			ctl.clearRequesterData(podRef.Name)
-			// TODO: delete the server-running Pod
 			return nil, false
 		}
 		logger.Error(err, "Failed to get Pod", "name", podRef.Name)
 		return err, true
 	}
 
-	logger.V(5).Info("Pod exists", "annotations", got.Annotations)
+	logger.V(5).Info("Pod exists", "labels", got.Labels, "IP", got.Status.PodIP, "resourceVersion", got.ResourceVersion)
 	patch := got.Annotations[api.ServerPatchAnnotationName]
 	if len(patch) > 0 {
 		return ctl.processServerRequestingPod(ctx, got, patch)

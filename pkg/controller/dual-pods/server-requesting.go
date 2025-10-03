@@ -127,7 +127,7 @@ func (ctl *controller) processServerRequestingPod(ctx context.Context, requestin
 	if node.Spec.Unschedulable {
 		// Reflect the inability to serve back to the client/user
 		logger.V(2).Info("Deleting server-requesting Pod because it is bound to an unschedulable Node and has no server-running Pod", "pod", requestingPod.Name, "node", requestingPod.Spec.NodeName)
-		err := ctl.coreclient.Pods(requestingPod.Namespace).Delete(ctx, requestingPod.Name, metav1.DeleteOptions{})
+		err := ctl.coreclient.Pods(requestingPod.Namespace).Delete(ctx, requestingPod.Name, metav1.DeleteOptions{PropagationPolicy: ptr.To(metav1.DeletePropagationBackground)})
 		return err, false
 	}
 
@@ -144,7 +144,7 @@ func (ctl *controller) processServerRequestingPod(ctx context.Context, requestin
 		}
 		return err, true
 	}
-	logger.V(5).Info("Created server-running pod", "name", serverRunningPod.Name, "annotations", echo.Annotations, "labels", echo.Labels)
+	logger.V(5).Info("Created server-running pod", "name", serverRunningPod.Name, "annotations", echo.Annotations, "labels", echo.Labels, "resourceVersion", echo.ResourceVersion)
 
 	return ctl.ensureReqStatus(ctx, requestingPod)
 }
@@ -241,6 +241,7 @@ func composeServerRunningPod(ctx context.Context, reqPod *corev1.Pod, rawTmpl st
 	ownerRef := *metav1.NewControllerRef(reqPod, corev1.SchemeGroupVersion.WithKind("Pod"))
 	ownerRef.BlockOwnerDeletion = ptr.To(false)
 	pod.OwnerReferences = []metav1.OwnerReference{ownerRef}
+	pod.Finalizers = append(pod.Finalizers, runnerFinalizer)
 
 	return &pod, nil
 }
@@ -263,11 +264,11 @@ func (ctl *controller) ensureReqStatus(ctx context.Context, requestingPod *corev
 		requestingPod.Annotations = map[string]string{}
 	}
 	requestingPod.Annotations[api.ServerPatchAnnotationErrorsName] = newStatusStr
-	_, err = ctl.coreclient.Pods(requestingPod.Namespace).Update(ctx, requestingPod, metav1.UpdateOptions{FieldManager: ctl.ControllerName})
+	echo, err := ctl.coreclient.Pods(requestingPod.Namespace).Update(ctx, requestingPod, metav1.UpdateOptions{FieldManager: ctl.ControllerName})
 	if err == nil {
-		logger.V(2).Info("Set status", "serverRequestingPod", requestingPod.Name, "status", status)
+		logger.V(2).Info("Set status", "serverRequestingPod", requestingPod.Name, "status", status, "newResourceVersion", echo.ResourceVersion)
 	} else {
-		logger.V(3).Info("Failed to set status", "serverRequestingPod", requestingPod.Name, "status", status)
+		logger.V(3).Info("Failed to set status", "serverRequestingPod", requestingPod.Name, "status", status, "resourceVersion", requestingPod.ResourceVersion)
 	}
 	return err, false
 }

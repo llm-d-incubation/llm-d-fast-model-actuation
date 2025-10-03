@@ -29,6 +29,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
+	"k8s.io/utils/ptr"
 
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/api"
 	stubapi "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/stub/api"
@@ -60,11 +61,33 @@ func (ctl *controller) processServerRunningPod(ctx context.Context, runningPod *
 	requestingPod, err := ctl.podLister.Pods(runningPod.Namespace).Get(requestingPodName)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			logger.V(5).Info("server-requesting pod not found", "name", runningPod.Name, "ownerName", requestingPodName)
-			return nil, true
+			requestingPod = nil
+		} else {
+			logger.Error(err, "Failed to get server-requesting pod", "name", runningPod.Name, "ownerName", requestingPodName)
+			return err, true
 		}
-		logger.Error(err, "Failed to get server-requesting pod", "name", runningPod.Name, "ownerName", requestingPodName)
-		return err, true
+	}
+
+	if requestingPod == nil || requestingPod.DeletionTimestamp != nil || runningPod.DeletionTimestamp != nil {
+		podOps := ctl.coreclient.Pods(runningPod.Namespace)
+		// Deletion requested, so remove finalizer and delete server-requesting Pod
+		if index := slices.Index(runningPod.Finalizers, runnerFinalizer); index >= 0 {
+			newFinalizers := slices.Delete(runningPod.Finalizers, index, index+1)
+			runningPod = runningPod.DeepCopy()
+			runningPod.Finalizers = newFinalizers
+			echo, err := podOps.Update(ctx, runningPod, metav1.UpdateOptions{FieldManager: ctl.ControllerName})
+			if err != nil {
+				return fmt.Errorf("failed to remove finalizer from server-running Pod %s (RV %s): %w", runningPod.Name, runningPod.ResourceVersion, err), false
+			}
+			logger.V(2).Info("Removed finalizer from server-running Pod", "runner", runningPod.Name, "newResourceVersion", echo.ResourceVersion)
+		}
+		if requestingPod != nil && requestingPod.DeletionTimestamp == nil {
+			logger.V(2).Info("Deleting server-requesting Pod because of deletion of server-runningPod", "requester", requestingPod.Name, "runner", runningPod.Name)
+			err = podOps.Delete(ctx, requestingPodName, metav1.DeleteOptions{PropagationPolicy: ptr.To(metav1.DeletePropagationBackground)})
+		} else {
+			err = nil
+		}
+		return err, false
 	}
 
 	// relay the readiness
