@@ -44,6 +44,18 @@ package api
 
 const ServerPatchAnnotationName = "dual-pod.llm-d.ai/server-patch"
 
+// ServerPatchAnnotationErrorsName is the name of an annotation that the dual-pods controller
+// maintains reporting the ServerRequestingPodStatus. The value of this annotation is the
+// JSON rendering of the status.
+const ServerPatchAnnotationErrorsName = "dual-pod.llm-d.ai/status"
+
+// ServerRequestingPodStatus is the status of a server-requesting Pod with respect
+// to the dual-pods technique.
+type ServerRequestingPodStatus struct {
+	// Errors reports problems in the input state.
+	Errors []string
+}
+
 // InferenceServerContainerName is the name of the container which is described by the server patch.
 // This container is expected to run the inference server using vLLM.
 const InferenceServerContainerName = "inference-server"

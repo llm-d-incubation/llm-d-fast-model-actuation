@@ -43,6 +43,11 @@ spec:
       annotations:
         dual-pod.llm-d.ai/admin-port: "8081"
         dual-pod.llm-d.ai/server-patch: |
+          metadata:
+            labels: {
+              "model-reg": "ibm-granite",
+              "model-repo": "granite-3.3-2b-instruct",
+              "app": null}
           spec:
             containers:
             - name: inference-server
@@ -51,7 +56,7 @@ spec:
               - vllm
               - serve
               - --port=8000
-              - ibm-granite/granite-3.3-2b-instruct
+              - --model=ibm-granite/granite-3.3-2b-instruct
               - --max-model-len=32768
               resources:
                 limits:
