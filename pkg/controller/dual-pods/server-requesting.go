@@ -47,15 +47,9 @@ import (
 	stubapi "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/stub/api"
 )
 
-func (ctl *controller) processServerRequestingPod(ctx context.Context, requestingPod *corev1.Pod) (error, bool) {
+func (ctl *controller) processServerRequestingPod(ctx context.Context, requestingPod *corev1.Pod, serverPatch string) (error, bool) {
 	logger := klog.FromContext(ctx)
 	logger.V(5).Info("Processing server-requesting pod", "name", requestingPod.Name)
-
-	serverPatch := requestingPod.Annotations[api.ServerPatchAnnotationName]
-	if serverPatch == "" {
-		return ctl.ensureReqStatus(ctx, requestingPod, "server patch annotation not found")
-	}
-	logger.V(5).Info("Found server patch annotation", "name", requestingPod.Name, "patch", serverPatch)
 
 	// get allocated gpu
 	ip := requestingPod.Status.PodIP
@@ -66,6 +60,24 @@ func (ctl *controller) processServerRequestingPod(ctx context.Context, requestin
 	if requestingPod.Spec.NodeName == "" {
 		return ctl.ensureReqStatus(ctx, requestingPod, "not scheduled yet")
 	}
+	node, err := ctl.nodeLister.Get(requestingPod.Spec.NodeName)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			node = nil
+		} else { // BTW, impossible
+			return err, true
+		}
+	}
+
+	if node == nil || node.DeletionTimestamp != nil {
+		// Node is gone or going away, do nothing to maintain server-running Pod.
+		logger.V(3).Info("Ignoring server-requesting Pod on absent or departing Node", "node", requestingPod.Spec.NodeName)
+		return nil, false
+	}
+	if node.Spec.Unschedulable {
+		return ctl.ensureReqStatus(ctx, requestingPod, fmt.Sprintf("node %s is unschedulable", requestingPod.Spec.NodeName))
+	}
+
 	port := requestingPod.Annotations[api.AdminPortAnnotationName]
 	if port == "" {
 		port = api.AdminPortDefaultValue
