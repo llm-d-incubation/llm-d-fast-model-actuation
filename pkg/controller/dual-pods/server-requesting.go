@@ -49,7 +49,8 @@ import (
 
 func (ctl *controller) processServerRequestingPod(ctx context.Context, requestingPod *corev1.Pod, serverPatch string) (error, bool) {
 	logger := klog.FromContext(ctx)
-	logger.V(5).Info("Processing server-requesting pod", "name", requestingPod.Name)
+	reqDat := ctl.getRequesterData(requestingPod.Name, requestingPod.UID, true)
+	logger.V(5).Info("Processing server-requesting pod", "name", requestingPod.Name, "reqDat", reqDat)
 
 	if requestingPod.DeletionTimestamp != nil {
 		logger.V(5).Info("Nothing to do because server-requesting Pod is being deleted and that will cascade to th server-running Pod", "name", requestingPod.Name)
@@ -84,24 +85,27 @@ func (ctl *controller) processServerRequestingPod(ctx context.Context, requestin
 	if port == "" {
 		port = api.AdminPortDefaultValue
 	}
-	logger.V(5).Info("Querying accelerators", "ip", ip, "port", port)
-	url := fmt.Sprintf("http://%s:%s%s", ip, port, stubapi.AcceleratorQueryPath)
-	gpuUUIDs, err := getGPUUUIDs(url)
-	if err != nil {
-		return ctl.ensureReqStatus(ctx, requestingPod, fmt.Sprintf("GET %q fails: %s", url, err.Error()))
-	}
-	if len(gpuUUIDs) == 0 {
-		return ctl.ensureReqStatus(ctx, requestingPod, "the assigned set of GPUs is empty")
-	}
-	logger.V(5).Info("Found GPUs for Pod", "name", requestingPod.Name, "gpuUUIDs", gpuUUIDs)
-	gpuIndices, err := ctl.mapToGPUIndices(requestingPod.Spec.NodeName, gpuUUIDs)
-	if err != nil {
-		return ctl.ensureReqStatus(ctx, requestingPod, err.Error())
+	if reqDat.GPUIndices == nil {
+		logger.V(5).Info("Querying accelerators", "ip", ip, "port", port)
+		url := fmt.Sprintf("http://%s:%s%s", ip, port, stubapi.AcceleratorQueryPath)
+		gpuUUIDs, err := getGPUUUIDs(url)
+		if err != nil {
+			return ctl.ensureReqStatus(ctx, requestingPod, fmt.Sprintf("GET %q fails: %s", url, err.Error()))
+		}
+		if len(gpuUUIDs) == 0 {
+			return ctl.ensureReqStatus(ctx, requestingPod, "the assigned set of GPUs is empty")
+		}
+		logger.V(5).Info("Found GPUs for Pod", "name", requestingPod.Name, "gpuUUIDs", gpuUUIDs)
+		gpuIndices, err := ctl.mapToGPUIndices(requestingPod.Spec.NodeName, gpuUUIDs)
+		if err != nil {
+			return ctl.ensureReqStatus(ctx, requestingPod, err.Error())
+		}
+		reqDat.GPUIndices = &gpuIndices
 	}
 
 	// use the server patch to build the server-running pod
 	logger.V(5).Info("Building server-running pod from patch", "name", requestingPod.Name, "patch", serverPatch)
-	serverRunningPod, err := composeServerRunningPod(ctx, requestingPod, serverPatch, gpuIndices, api.RunnerData{
+	serverRunningPod, err := composeServerRunningPod(ctx, requestingPod, serverPatch, *reqDat.GPUIndices, api.RunnerData{
 		NodeName: requestingPod.Spec.NodeName,
 	})
 	if err != nil {
