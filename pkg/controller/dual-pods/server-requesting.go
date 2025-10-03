@@ -89,6 +89,10 @@ func (ctl *controller) processServerRequestingPod(ctx context.Context, requestin
 	if ip == "" {
 		return ctl.ensureReqStatus(ctx, requestingPod, "no IP assigned yet")
 	}
+	// Getting an IP normally comes after scheduling, but check just to be sure.
+	if requestingPod.Spec.NodeName == "" {
+		return ctl.ensureReqStatus(ctx, requestingPod, "not scheduled yet")
+	}
 	port := requestingPod.Annotations[api.AdminPortAnnotationName]
 	if port == "" {
 		port = api.AdminPortDefaultValue
@@ -195,6 +199,13 @@ func composeServerRunningPod(ctx context.Context, reqPod *corev1.Pod, rawTmpl st
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal patched pod: %w", err)
 	}
+
+	nodeSelector := pod.Spec.NodeSelector
+	if nodeSelector == nil {
+		nodeSelector = map[string]string{}
+		pod.Spec.NodeSelector = nodeSelector
+	}
+	nodeSelector["kubernetes.io/hostname"] = reqPod.Spec.NodeName
 
 	// identify the inference server container
 	cIdx := slices.IndexFunc(pod.Spec.Containers, func(c corev1.Container) bool {
