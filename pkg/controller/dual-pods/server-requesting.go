@@ -47,33 +47,6 @@ import (
 	stubapi "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/stub/api"
 )
 
-func (ctl *controller) ensureReqStatus(ctx context.Context, requestingPod *corev1.Pod, errors ...string) (error, bool) {
-	status := api.ServerRequestingPodStatus{Errors: errors}
-	logger := klog.FromContext(ctx)
-	newStatusBytes, err := json.Marshal(status)
-	if err != nil { // impossible; handle by infinite retry
-		return fmt.Errorf("failed to marshal status (%#v): %w", status, err), true
-	}
-	newStatusStr := string(newStatusBytes)
-	oldStatusStr := requestingPod.Annotations[api.ServerPatchAnnotationErrorsName]
-	if oldStatusStr == string(newStatusStr) {
-		logger.V(5).Info("No need to update status", "serverRequestingPod", requestingPod.Name, "status", status)
-		return nil, false
-	}
-	requestingPod = requestingPod.DeepCopy()
-	if requestingPod.Annotations == nil {
-		requestingPod.Annotations = map[string]string{}
-	}
-	requestingPod.Annotations[api.ServerPatchAnnotationErrorsName] = newStatusStr
-	_, err = ctl.coreclient.Pods(requestingPod.Namespace).Update(ctx, requestingPod, metav1.UpdateOptions{FieldManager: ctl.ControllerName})
-	if err == nil {
-		logger.V(2).Info("Set status", "serverRequestingPod", requestingPod.Name, "status", status)
-	} else {
-		logger.V(3).Info("Failed to set status", "serverRequestingPod", requestingPod.Name, "status", status)
-	}
-	return err, false
-}
-
 func (ctl *controller) processServerRequestingPod(ctx context.Context, requestingPod *corev1.Pod) (error, bool) {
 	logger := klog.FromContext(ctx)
 	logger.V(5).Info("Processing server-requesting pod", "name", requestingPod.Name)
@@ -245,6 +218,33 @@ func composeServerRunningPod(ctx context.Context, reqPod *corev1.Pod, rawTmpl st
 	pod.OwnerReferences = []metav1.OwnerReference{ownerRef}
 
 	return &pod, nil
+}
+
+func (ctl *controller) ensureReqStatus(ctx context.Context, requestingPod *corev1.Pod, errors ...string) (error, bool) {
+	status := api.ServerRequestingPodStatus{Errors: errors}
+	logger := klog.FromContext(ctx)
+	newStatusBytes, err := json.Marshal(status)
+	if err != nil { // impossible; handle by infinite retry
+		return fmt.Errorf("failed to marshal status (%#v): %w", status, err), true
+	}
+	newStatusStr := string(newStatusBytes)
+	oldStatusStr := requestingPod.Annotations[api.ServerPatchAnnotationErrorsName]
+	if oldStatusStr == string(newStatusStr) {
+		logger.V(5).Info("No need to update status", "serverRequestingPod", requestingPod.Name, "status", status)
+		return nil, false
+	}
+	requestingPod = requestingPod.DeepCopy()
+	if requestingPod.Annotations == nil {
+		requestingPod.Annotations = map[string]string{}
+	}
+	requestingPod.Annotations[api.ServerPatchAnnotationErrorsName] = newStatusStr
+	_, err = ctl.coreclient.Pods(requestingPod.Namespace).Update(ctx, requestingPod, metav1.UpdateOptions{FieldManager: ctl.ControllerName})
+	if err == nil {
+		logger.V(2).Info("Set status", "serverRequestingPod", requestingPod.Name, "status", status)
+	} else {
+		logger.V(3).Info("Failed to set status", "serverRequestingPod", requestingPod.Name, "status", status)
+	}
+	return err, false
 }
 
 var coreScheme *k8sruntime.Scheme
