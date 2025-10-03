@@ -51,6 +51,11 @@ func (ctl *controller) processServerRequestingPod(ctx context.Context, requestin
 	logger := klog.FromContext(ctx)
 	logger.V(5).Info("Processing server-requesting pod", "name", requestingPod.Name)
 
+	if requestingPod.DeletionTimestamp != nil {
+		logger.V(5).Info("Nothing to do because server-requesting Pod is being deleted and that will cascade to th server-running Pod", "name", requestingPod.Name)
+		return nil, false
+	}
+
 	// get allocated gpu
 	ip := requestingPod.Status.PodIP
 	if ip == "" {
@@ -73,9 +78,6 @@ func (ctl *controller) processServerRequestingPod(ctx context.Context, requestin
 		// Node is gone or going away, do nothing to maintain server-running Pod.
 		logger.V(3).Info("Ignoring server-requesting Pod on absent or departing Node", "node", requestingPod.Spec.NodeName)
 		return nil, false
-	}
-	if node.Spec.Unschedulable {
-		return ctl.ensureReqStatus(ctx, requestingPod, fmt.Sprintf("node %s is unschedulable", requestingPod.Spec.NodeName))
 	}
 
 	port := requestingPod.Annotations[api.AdminPortAnnotationName]
@@ -116,6 +118,13 @@ func (ctl *controller) processServerRequestingPod(ctx context.Context, requestin
 
 		// TODO: we should reconcile the existing server-running pod with the one we just built
 		return nil, false
+	}
+
+	if node.Spec.Unschedulable {
+		// Reflect the inability to serve back to the client/user
+		logger.V(2).Info("Deleting server-requesting Pod because it is bound to an unschedulable Node and has no server-running Pod", "pod", requestingPod.Name, "node", requestingPod.Spec.NodeName)
+		err := ctl.coreclient.Pods(requestingPod.Namespace).Delete(ctx, requestingPod.Name, metav1.DeleteOptions{})
+		return err, false
 	}
 
 	logger.V(2).Info("Creating server-running pod", "name", serverRunningPod.Name, "namespace", serverRunningPod.Namespace, "annotations", serverRunningPod.Annotations, "labels", serverRunningPod.Labels)
