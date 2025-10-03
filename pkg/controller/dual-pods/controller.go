@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"sync/atomic"
 
 	"github.com/spf13/pflag"
@@ -27,6 +28,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	apitypes "k8s.io/apimachinery/pkg/types"
 	corev1preinformers "k8s.io/client-go/informers/core/v1"
 	coreclient "k8s.io/client-go/kubernetes/typed/core/v1"
 	corev1listers "k8s.io/client-go/listers/core/v1"
@@ -104,11 +106,21 @@ type controller struct {
 
 	// gpuMaps maps GPU UUID to GpuLocation
 	gpuMap atomic.Pointer[map[string]GpuLocation]
+
+	mutex sync.Mutex
+
+	// requesters maps sever-requesting Pod name to data
+	requesters map[string]*requesterData
 }
 
 type GpuLocation struct {
 	Node  string
 	Index uint
+}
+
+type requesterData struct {
+	PodUID     apitypes.UID
+	GPUIndices *string
 }
 
 var _ Controller = &controller{}
@@ -248,6 +260,7 @@ func (ctl *controller) processPod(ctx context.Context, podRef cache.ObjectName) 
 	if err != nil {
 		if errors.IsNotFound(err) {
 			logger.V(5).Info("Pod not found, skipping processing", "name", podRef.Name)
+			ctl.clearRequesterData(podRef.Name)
 			// TODO: delete the server-running Pod
 			return nil, false
 		}
@@ -291,4 +304,21 @@ func (ctl *controller) processConfigMap(ctx context.Context, cmRef cache.ObjectN
 	logger.V(1).Info("Parsed GPU map", "numNodes", nodeCount, "numGPUs", len(newMap))
 	ctl.gpuMap.Store(&newMap)
 	return nil, false
+}
+
+func (ctl *controller) getRequesterData(name string, podUID apitypes.UID, insist bool) *requesterData {
+	ctl.mutex.Lock()
+	defer ctl.mutex.Unlock()
+	ans := ctl.requesters[name]
+	if ans == nil && insist || ans != nil && podUID != ans.PodUID {
+		ans = &requesterData{PodUID: podUID}
+		ctl.requesters[name] = ans
+	}
+	return ans
+}
+
+func (ctl *controller) clearRequesterData(name string) {
+	ctl.mutex.Lock()
+	defer ctl.mutex.Unlock()
+	delete(ctl.requesters, name)
 }
