@@ -1,2 +1,7 @@
 # Of course, you never really want to use `:latest`
 Image: ghcr.io/llm-d-incubation/llm-d-fast-model-actuation-controller:latest
+
+# Name of the ClusterRole to bind to controller to authorize it to
+# get/list/watch Node objects.
+# Empty string means no new RoleBinding is needed.
+NodeViewClusterRole: ""

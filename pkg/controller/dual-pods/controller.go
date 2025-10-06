@@ -74,6 +74,8 @@ func NewController(
 		podLister:     corev1PreInformers.Pods().Lister(),
 		cmInformer:    corev1PreInformers.ConfigMaps().Informer(),
 		cmLister:      corev1PreInformers.ConfigMaps().Lister(),
+		nodeInformer:  corev1PreInformers.Nodes().Informer(),
+		nodeLister:    corev1PreInformers.Nodes().Lister(),
 	}
 	ctl.gpuMap.Store(&map[string]GpuLocation{})
 	ctl.QueueAndWorkers = genctlr.NewQueueAndWorkers(string(ControllerName), numWorkers, ctl.process)
@@ -96,6 +98,8 @@ type controller struct {
 	podLister     corev1listers.PodLister
 	cmInformer    cache.SharedIndexInformer
 	cmLister      corev1listers.ConfigMapLister
+	nodeInformer  cache.SharedIndexInformer
+	nodeLister    corev1listers.NodeLister
 	genctlr.QueueAndWorkers[typedRef]
 
 	// gpuMaps maps GPU UUID to GpuLocation
@@ -211,7 +215,7 @@ func (ctl *controller) OnDelete(obj any) {
 }
 
 func (ctl *controller) Start(ctx context.Context) error {
-	if !cache.WaitForNamedCacheSync(ControllerName, ctx.Done(), ctl.cmInformer.HasSynced, ctl.podInformer.HasSynced) {
+	if !cache.WaitForNamedCacheSync(ControllerName, ctx.Done(), ctl.cmInformer.HasSynced, ctl.podInformer.HasSynced, ctl.nodeInformer.HasSynced) {
 		return fmt.Errorf("caches not synced before end of Start context")
 	}
 	err := ctl.StartWorkers(ctx)
@@ -254,7 +258,7 @@ func (ctl *controller) processPod(ctx context.Context, podRef cache.ObjectName) 
 	logger.V(5).Info("Pod exists", "annotations", got.Annotations)
 	patch := got.Annotations[api.ServerPatchAnnotationName]
 	if len(patch) > 0 {
-		return ctl.processServerRequestingPod(ctx, got)
+		return ctl.processServerRequestingPod(ctx, got, patch)
 	} else {
 		return ctl.processServerRunningPod(ctx, got)
 	}

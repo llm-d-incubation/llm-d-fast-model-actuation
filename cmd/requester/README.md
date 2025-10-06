@@ -17,10 +17,10 @@ Build the dual-pods controller image. Omit TARGETARCH if not cross-compiling.
 make build-controller CONTAINER_IMG_REG=$CONTAINER_IMG_REG TARGETARCH=amd64
 ```
 
-Instantiate the Helm chart for the dual-pods controller. Specify the tag produced by the build above.
+Instantiate the Helm chart for the dual-pods controller. Specify the tag produced by the build above. Specify the name of the ClusterRole to use for Node get/list/watch authorization, or omit if not needed.
 
 ```shell
-helm upgrade --install dpctlr charts/dpctlr --set Image="${CONTAINER_IMG_REG}/dual-pods-controller:9010ece"
+helm upgrade --install dpctlr charts/dpctlr --set Image="${CONTAINER_IMG_REG}/dual-pods-controller:9010ece" --set NodeViewClusterRole=vcp-node-viewer
 ```
 
 Create a ReplicaSet of 1 server-requesting Pod.
