@@ -171,7 +171,7 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 		return
 	}
 	ref := typedRef{kind, cache.MetaObjectToName(objM)}
-	ctl.enqueueLogger.V(5).Info("Enqueuing reference due to notification of add", "ref", ref, "isInInitialList", isInInitialList, "resourceVeresion", objM.GetResourceVersion())
+	ctl.enqueueLogger.V(5).Info("Enqueuing reference due to notification of add", "ref", ref, "isInInitialList", isInInitialList, "resourceVersion", objM.GetResourceVersion())
 	ctl.Queue.Add(ref)
 
 }
@@ -197,7 +197,7 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 		return
 	}
 	ref := typedRef{kind, cache.MetaObjectToName(objM)}
-	ctl.enqueueLogger.V(5).Info("Enqueuing reference due to notification of update", "ref", ref, "resourceVeresion", objM.GetResourceVersion())
+	ctl.enqueueLogger.V(5).Info("Enqueuing reference due to notification of update", "ref", ref, "resourceVersion", objM.GetResourceVersion())
 	ctl.Queue.Add(ref)
 }
 
@@ -225,7 +225,7 @@ func (ctl *controller) OnDelete(obj any) {
 		return
 	}
 	ref := typedRef{kind, cache.MetaObjectToName(objM)}
-	ctl.enqueueLogger.V(5).Info("Enqueuing reference due to notification of delete", "ref", ref, "resourceVeresion", objM.GetResourceVersion())
+	ctl.enqueueLogger.V(5).Info("Enqueuing reference due to notification of delete", "ref", ref, "resourceVersion", objM.GetResourceVersion())
 	ctl.Queue.Add(ref)
 }
 
