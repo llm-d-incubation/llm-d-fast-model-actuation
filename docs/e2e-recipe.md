@@ -44,8 +44,8 @@ helm upgrade --install dpctlr charts/dpctlr --set Image="${CONTAINER_IMG_REG}/du
 ## Example 1: cycle server-requesting Pod
 
 Create a ReplicaSet of 1 server-requesting Pod. Following are two
-examples. The first is rather minimal. The second uses caching/staging
-from vcp-cache-manager.
+examples. The first is rather minimal. The second uses model staging
+and torch.compile caching.
 
 ### Simple ReplicaSet
 
@@ -118,6 +118,14 @@ EOF
 
 ### ReplicaSet using model staging and torch.compile caching
 
+This example supposes model staging and torch.compile caching. It
+supposes that, for each Node capable of running the model, the model
+has been staged to a file (in a subdirectory specific to the user, to
+finesse OpenShift access control issues) in a PVC (whose name includes
+the Node's name) dedicated to holding staged models for that
+Node. This example also supposes that the torch.compile cache is
+shared throughout the cluster in a shared PVC.
+
 ```shell
 kubectl apply -f - <<EOF
 apiVersion: apps/v1
@@ -168,7 +176,7 @@ spec:
               - name: local
                 readOnly: true
                 mountPath: /pvcs/local
-                subPath: vcp-mspreitz
+                subPath: vcp-${LOGNAME}
               - name: shared
                 mountPath: /pvcs/shared
             volumes:
