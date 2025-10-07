@@ -105,20 +105,20 @@ func (ctl *controller) processServerRequestingPod(ctx context.Context, requestin
 
 	// use the server patch to build the server-running pod
 	logger.V(5).Info("Building server-running pod from patch", "name", requestingPod.Name, "patch", serverPatch)
-	serverRunningPod, err := composeServerRunningPod(ctx, requestingPod, serverPatch, *reqDat.GPUIndices, api.RunnerData{
+	desiredRunningPod, err := composeServerRunningPod(ctx, requestingPod, serverPatch, *reqDat.GPUIndices, api.RunnerData{
 		NodeName: requestingPod.Spec.NodeName,
 	})
 	if err != nil {
 		return ctl.ensureReqStatus(ctx, requestingPod, fmt.Sprintf("failed to construct the nominal server-running Pod: %s", err.Error()))
 	}
 
-	got, err := ctl.podLister.Pods(serverRunningPod.Namespace).Get(serverRunningPod.Name)
+	actualRunningPod, err := ctl.podLister.Pods(desiredRunningPod.Namespace).Get(desiredRunningPod.Name)
 	if err != nil && !apierrors.IsNotFound(err) {
-		logger.Error(err, "Failed to get existing server-running pod", "name", serverRunningPod.Name)
+		logger.Error(err, "Failed to get existing server-running pod", "name", desiredRunningPod.Name)
 		return err, true
 	}
-	if got != nil {
-		logger.V(5).Info("Server-running pod exists", "name", serverRunningPod.Name)
+	if actualRunningPod != nil {
+		logger.V(5).Info("Server-running pod exists", "name", desiredRunningPod.Name)
 
 		// TODO: we should reconcile the existing server-running pod with the one we just built
 		return nil, false
@@ -131,8 +131,8 @@ func (ctl *controller) processServerRequestingPod(ctx context.Context, requestin
 		return err, false
 	}
 
-	logger.V(2).Info("Creating server-running pod", "name", serverRunningPod.Name, "namespace", serverRunningPod.Namespace, "annotations", serverRunningPod.Annotations, "labels", serverRunningPod.Labels)
-	echo, err := ctl.coreclient.Pods(serverRunningPod.Namespace).Create(ctx, serverRunningPod, metav1.CreateOptions{})
+	logger.V(2).Info("Creating server-running pod", "name", desiredRunningPod.Name, "namespace", desiredRunningPod.Namespace, "annotations", desiredRunningPod.Annotations, "labels", desiredRunningPod.Labels)
+	echo, err := ctl.coreclient.Pods(desiredRunningPod.Namespace).Create(ctx, desiredRunningPod, metav1.CreateOptions{})
 	if err != nil {
 		errMsg := err.Error()
 		if invalidPodRE.MatchString(errMsg) {
@@ -144,7 +144,7 @@ func (ctl *controller) processServerRequestingPod(ctx context.Context, requestin
 		}
 		return err, true
 	}
-	logger.V(5).Info("Created server-running pod", "name", serverRunningPod.Name, "annotations", echo.Annotations, "labels", echo.Labels, "resourceVersion", echo.ResourceVersion)
+	logger.V(5).Info("Created server-running pod", "name", desiredRunningPod.Name, "annotations", echo.Annotations, "labels", echo.Labels, "resourceVersion", echo.ResourceVersion)
 
 	return ctl.ensureReqStatus(ctx, requestingPod)
 }
