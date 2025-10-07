@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"sync/atomic"
 
 	"github.com/spf13/pflag"
@@ -27,6 +28,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	apitypes "k8s.io/apimachinery/pkg/types"
 	corev1preinformers "k8s.io/client-go/informers/core/v1"
 	coreclient "k8s.io/client-go/kubernetes/typed/core/v1"
 	corev1listers "k8s.io/client-go/listers/core/v1"
@@ -44,6 +46,8 @@ const ControllerName = "dual-pods-controller"
 // Every data item in the ConfigMap is expected to have a name that is the name of a Node
 // and a value that is JSON for a map from UUID to index.
 const GPUMapName = "gpu-map"
+
+const runnerFinalizer = "dual-pods.llm-d.ai/runner"
 
 type Controller interface {
 	Start(context.Context) error
@@ -76,6 +80,7 @@ func NewController(
 		cmLister:      corev1PreInformers.ConfigMaps().Lister(),
 		nodeInformer:  corev1PreInformers.Nodes().Informer(),
 		nodeLister:    corev1PreInformers.Nodes().Lister(),
+		requesters:    make(map[string]*requesterData),
 	}
 	ctl.gpuMap.Store(&map[string]GpuLocation{})
 	ctl.QueueAndWorkers = genctlr.NewQueueAndWorkers(string(ControllerName), numWorkers, ctl.process)
@@ -104,11 +109,21 @@ type controller struct {
 
 	// gpuMaps maps GPU UUID to GpuLocation
 	gpuMap atomic.Pointer[map[string]GpuLocation]
+
+	mutex sync.Mutex
+
+	// requesters maps sever-requesting Pod name to data
+	requesters map[string]*requesterData
 }
 
 type GpuLocation struct {
 	Node  string
 	Index uint
+}
+
+type requesterData struct {
+	PodUID     apitypes.UID
+	GPUIndices *string
 }
 
 var _ Controller = &controller{}
@@ -156,7 +171,7 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 		return
 	}
 	ref := typedRef{kind, cache.MetaObjectToName(objM)}
-	ctl.enqueueLogger.V(5).Info("Enqueuing reference due to notification of add", "ref", ref, "isInInitialList", isInInitialList)
+	ctl.enqueueLogger.V(5).Info("Enqueuing reference due to notification of add", "ref", ref, "isInInitialList", isInInitialList, "resourceVeresion", objM.GetResourceVersion())
 	ctl.Queue.Add(ref)
 
 }
@@ -182,7 +197,7 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 		return
 	}
 	ref := typedRef{kind, cache.MetaObjectToName(objM)}
-	ctl.enqueueLogger.V(5).Info("Enqueuing reference due to notification of update", "ref", ref)
+	ctl.enqueueLogger.V(5).Info("Enqueuing reference due to notification of update", "ref", ref, "resourceVeresion", objM.GetResourceVersion())
 	ctl.Queue.Add(ref)
 }
 
@@ -210,7 +225,7 @@ func (ctl *controller) OnDelete(obj any) {
 		return
 	}
 	ref := typedRef{kind, cache.MetaObjectToName(objM)}
-	ctl.enqueueLogger.V(5).Info("Enqueuing reference due to notification of delete", "ref", ref)
+	ctl.enqueueLogger.V(5).Info("Enqueuing reference due to notification of delete", "ref", ref, "resourceVeresion", objM.GetResourceVersion())
 	ctl.Queue.Add(ref)
 }
 
@@ -247,15 +262,20 @@ func (ctl *controller) processPod(ctx context.Context, podRef cache.ObjectName) 
 	got, err := ctl.podLister.Pods(podRef.Namespace).Get(podRef.Name)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			logger.V(5).Info("Pod not found, skipping processing", "name", podRef.Name)
-			// TODO: delete the server-running Pod
+			// Two cases are possible.
+			// (1) This is a server-requesting Pod, in which case Kube GC will
+			// delete the server-running Pod (once this controller removes the runner's finalizer).
+			// (2) This is a server-running Pod and this controller has already
+			// removed its finalizer and started deletion of the server-requesting Pod.
+			logger.V(5).Info("Pod not found, nothing to do", "name", podRef.Name)
+			ctl.clearRequesterData(podRef.Name)
 			return nil, false
 		}
 		logger.Error(err, "Failed to get Pod", "name", podRef.Name)
 		return err, true
 	}
 
-	logger.V(5).Info("Pod exists", "annotations", got.Annotations)
+	logger.V(5).Info("Pod exists", "labels", got.Labels, "IP", got.Status.PodIP, "resourceVersion", got.ResourceVersion)
 	patch := got.Annotations[api.ServerPatchAnnotationName]
 	if len(patch) > 0 {
 		return ctl.processServerRequestingPod(ctx, got, patch)
@@ -291,4 +311,21 @@ func (ctl *controller) processConfigMap(ctx context.Context, cmRef cache.ObjectN
 	logger.V(1).Info("Parsed GPU map", "numNodes", nodeCount, "numGPUs", len(newMap))
 	ctl.gpuMap.Store(&newMap)
 	return nil, false
+}
+
+func (ctl *controller) getRequesterData(name string, podUID apitypes.UID, insist bool) *requesterData {
+	ctl.mutex.Lock()
+	defer ctl.mutex.Unlock()
+	ans := ctl.requesters[name]
+	if ans == nil && insist || ans != nil && podUID != ans.PodUID {
+		ans = &requesterData{PodUID: podUID}
+		ctl.requesters[name] = ans
+	}
+	return ans
+}
+
+func (ctl *controller) clearRequesterData(name string) {
+	ctl.mutex.Lock()
+	defer ctl.mutex.Unlock()
+	delete(ctl.requesters, name)
 }

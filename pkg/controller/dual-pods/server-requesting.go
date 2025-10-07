@@ -49,7 +49,13 @@ import (
 
 func (ctl *controller) processServerRequestingPod(ctx context.Context, requestingPod *corev1.Pod, serverPatch string) (error, bool) {
 	logger := klog.FromContext(ctx)
-	logger.V(5).Info("Processing server-requesting pod", "name", requestingPod.Name)
+	reqDat := ctl.getRequesterData(requestingPod.Name, requestingPod.UID, true)
+	logger.V(5).Info("Processing server-requesting pod", "name", requestingPod.Name, "reqDat", reqDat)
+
+	if requestingPod.DeletionTimestamp != nil {
+		logger.V(5).Info("Nothing to do because server-requesting Pod is being deleted and that will cascade to th server-running Pod", "name", requestingPod.Name)
+		return nil, false
+	}
 
 	// get allocated gpu
 	ip := requestingPod.Status.PodIP
@@ -74,32 +80,32 @@ func (ctl *controller) processServerRequestingPod(ctx context.Context, requestin
 		logger.V(3).Info("Ignoring server-requesting Pod on absent or departing Node", "node", requestingPod.Spec.NodeName)
 		return nil, false
 	}
-	if node.Spec.Unschedulable {
-		return ctl.ensureReqStatus(ctx, requestingPod, fmt.Sprintf("node %s is unschedulable", requestingPod.Spec.NodeName))
-	}
 
 	port := requestingPod.Annotations[api.AdminPortAnnotationName]
 	if port == "" {
 		port = api.AdminPortDefaultValue
 	}
-	logger.V(5).Info("Querying accelerators", "ip", ip, "port", port)
-	url := fmt.Sprintf("http://%s:%s%s", ip, port, stubapi.AcceleratorQueryPath)
-	gpuUUIDs, err := getGPUUUIDs(url)
-	if err != nil {
-		return ctl.ensureReqStatus(ctx, requestingPod, fmt.Sprintf("GET %q fails: %s", url, err.Error()))
-	}
-	if len(gpuUUIDs) == 0 {
-		return ctl.ensureReqStatus(ctx, requestingPod, "the assigned set of GPUs is empty")
-	}
-	logger.V(5).Info("Found GPUs for Pod", "name", requestingPod.Name, "gpuUUIDs", gpuUUIDs)
-	gpuIndices, err := ctl.mapToGPUIndices(requestingPod.Spec.NodeName, gpuUUIDs)
-	if err != nil {
-		return ctl.ensureReqStatus(ctx, requestingPod, err.Error())
+	if reqDat.GPUIndices == nil {
+		logger.V(5).Info("Querying accelerators", "ip", ip, "port", port)
+		url := fmt.Sprintf("http://%s:%s%s", ip, port, stubapi.AcceleratorQueryPath)
+		gpuUUIDs, err := getGPUUUIDs(url)
+		if err != nil {
+			return ctl.ensureReqStatus(ctx, requestingPod, fmt.Sprintf("GET %q fails: %s", url, err.Error()))
+		}
+		if len(gpuUUIDs) == 0 {
+			return ctl.ensureReqStatus(ctx, requestingPod, "the assigned set of GPUs is empty")
+		}
+		logger.V(5).Info("Found GPUs for Pod", "name", requestingPod.Name, "gpuUUIDs", gpuUUIDs)
+		gpuIndices, err := ctl.mapToGPUIndices(requestingPod.Spec.NodeName, gpuUUIDs)
+		if err != nil {
+			return ctl.ensureReqStatus(ctx, requestingPod, err.Error())
+		}
+		reqDat.GPUIndices = &gpuIndices
 	}
 
 	// use the server patch to build the server-running pod
 	logger.V(5).Info("Building server-running pod from patch", "name", requestingPod.Name, "patch", serverPatch)
-	serverRunningPod, err := composeServerRunningPod(ctx, requestingPod, serverPatch, gpuIndices, api.RunnerData{
+	serverRunningPod, err := composeServerRunningPod(ctx, requestingPod, serverPatch, *reqDat.GPUIndices, api.RunnerData{
 		NodeName: requestingPod.Spec.NodeName,
 	})
 	if err != nil {
@@ -118,6 +124,13 @@ func (ctl *controller) processServerRequestingPod(ctx context.Context, requestin
 		return nil, false
 	}
 
+	if node.Spec.Unschedulable {
+		// Reflect the inability to serve back to the client/user
+		logger.V(2).Info("Deleting server-requesting Pod because it is bound to an unschedulable Node and has no server-running Pod", "pod", requestingPod.Name, "node", requestingPod.Spec.NodeName)
+		err := ctl.coreclient.Pods(requestingPod.Namespace).Delete(ctx, requestingPod.Name, metav1.DeleteOptions{PropagationPolicy: ptr.To(metav1.DeletePropagationBackground)})
+		return err, false
+	}
+
 	logger.V(2).Info("Creating server-running pod", "name", serverRunningPod.Name, "namespace", serverRunningPod.Namespace, "annotations", serverRunningPod.Annotations, "labels", serverRunningPod.Labels)
 	echo, err := ctl.coreclient.Pods(serverRunningPod.Namespace).Create(ctx, serverRunningPod, metav1.CreateOptions{})
 	if err != nil {
@@ -131,7 +144,7 @@ func (ctl *controller) processServerRequestingPod(ctx context.Context, requestin
 		}
 		return err, true
 	}
-	logger.V(5).Info("Created server-running pod", "name", serverRunningPod.Name, "annotations", echo.Annotations, "labels", echo.Labels)
+	logger.V(5).Info("Created server-running pod", "name", serverRunningPod.Name, "annotations", echo.Annotations, "labels", echo.Labels, "resourceVersion", echo.ResourceVersion)
 
 	return ctl.ensureReqStatus(ctx, requestingPod)
 }
@@ -228,6 +241,7 @@ func composeServerRunningPod(ctx context.Context, reqPod *corev1.Pod, rawTmpl st
 	ownerRef := *metav1.NewControllerRef(reqPod, corev1.SchemeGroupVersion.WithKind("Pod"))
 	ownerRef.BlockOwnerDeletion = ptr.To(false)
 	pod.OwnerReferences = []metav1.OwnerReference{ownerRef}
+	pod.Finalizers = append(pod.Finalizers, runnerFinalizer)
 
 	return &pod, nil
 }
@@ -250,11 +264,11 @@ func (ctl *controller) ensureReqStatus(ctx context.Context, requestingPod *corev
 		requestingPod.Annotations = map[string]string{}
 	}
 	requestingPod.Annotations[api.ServerPatchAnnotationErrorsName] = newStatusStr
-	_, err = ctl.coreclient.Pods(requestingPod.Namespace).Update(ctx, requestingPod, metav1.UpdateOptions{FieldManager: ctl.ControllerName})
+	echo, err := ctl.coreclient.Pods(requestingPod.Namespace).Update(ctx, requestingPod, metav1.UpdateOptions{FieldManager: ctl.ControllerName})
 	if err == nil {
-		logger.V(2).Info("Set status", "serverRequestingPod", requestingPod.Name, "status", status)
+		logger.V(2).Info("Set status", "serverRequestingPod", requestingPod.Name, "status", status, "newResourceVersion", echo.ResourceVersion)
 	} else {
-		logger.V(3).Info("Failed to set status", "serverRequestingPod", requestingPod.Name, "status", status)
+		logger.V(3).Info("Failed to set status", "serverRequestingPod", requestingPod.Name, "status", status, "resourceVersion", requestingPod.ResourceVersion)
 	}
 	return err, false
 }
