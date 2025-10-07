@@ -11,7 +11,7 @@ registry that you intend to use. For example, the following might work
 for you.
 
 ```shell
-CONTAINER_IMG_REG=quay.io/${LOGNAME}
+CONTAINER_IMG_REG=quay.io/${LOGNAME}/fma
 ```
 
 Configure kubectl to work with the cluster of your choice.
