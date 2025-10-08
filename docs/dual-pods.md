@@ -235,13 +235,50 @@ The mutable internal state of the controller includes the following.
   accelerators on the Node. This server-requesting Pod may be bound
   (here, in this data structure) to a vLLM instance.
 
-When the server-requesting Pod is bound to a Node that is absent or in the process of being deleted, the dual-pods controller has nothing left to do and the following logic is irrelevant.
-When a server-requesting Pod is bound to a server-running Pod that is in the process of being deleted, the controller (a) ensures that its finalizer is not on the server-running Pod and (b) ensures that the server-requesting Pod is being deleted. (The controller creates server-running Pods with its finalizer on them, so that they cannot evaporate without this interaction with the controller.)
-When, for a given server-requesting Pod, (a) the assigned set of accelerators is not known and (b) the stub container is running (without regard to whether the container is marked as "ready"), the dual-pod controller tries until successful to query for the set of assigned accelerators.
-When there is a server-requesting Pod that has a known set of accelerators but is not bound (in the controller's internal state) to an existing vLLM instance in a server-running Pod that exists, it is time to do something about that. There is only one case: creating a new vLLM instance.
-However, if the Node is unschedulable then it is impossible to make the new vLLM instance and this should be reflected back to the user/client by deleting the server-requesting Pod. Otherwise the following logic applies.
-When making a new vLLM instance: the Kubernetes scheduler and kubelet have already assured that there is no other server-requesting Pod using any of those accelerators, and the behavior of this controller means that consequently there is no vLLM instance using any of those accelerators. The controller creates the new vLLM instance by creating a new server-running Pod. This Pod uses the CUDA_VISIBLE_DEVICES environment variable to convey the assigned set of accelerators. The controller also sets up the relay of readiness from the vLLM instance to the server-requesting Pod's inference-server container, as mentioned below.
-When there is a vLLM instance and its server-requesting Pod is non-existent or being deleted, the dual-pod controller deletes that instance. This is done by (1) ensuring that the controller's finalizer is not on the server-running Pod and (2) ensuring that Pod is being deleted. In this situation, the readiness relay is moot.
+When the server-requesting Pod is bound to a Node that is absent or in
+the process of being deleted, the dual-pods controller has nothing
+left to do and the following logic is irrelevant.
+
+When a server-requesting Pod is bound to a server-running Pod that is
+in the process of being deleted, the controller (a) ensures that its
+finalizer is not on the server-running Pod and (b) ensures that the
+server-requesting Pod is being deleted. (The controller creates
+server-running Pods with its finalizer on them, so that they cannot
+evaporate without this interaction with the controller.)
+
+When, for a given server-requesting Pod, (a) the assigned set of
+accelerators is not known and (b) the stub container is running
+(without regard to whether the container is marked as "ready"), the
+dual-pod controller tries until successful to query for the set of
+assigned accelerators.
+
+When there is a server-requesting Pod that has a known set of
+accelerators but is not bound (in the controller's internal state) to
+an existing vLLM instance in a server-running Pod that exists, it is
+time to do something about that. There is only one case: creating a
+new vLLM instance.
+
+However, if the Node is unschedulable then it is impossible to make
+the new vLLM instance and this should be reflected back to the
+user/client by deleting the server-requesting Pod. Otherwise the
+following logic applies.
+
+When making a new vLLM instance: the Kubernetes scheduler and kubelet
+have already assured that there is no other server-requesting Pod
+using any of those accelerators, and the behavior of this controller
+means that consequently there is no vLLM instance using any of those
+accelerators. The controller creates the new vLLM instance by creating
+a new server-running Pod. This Pod uses the CUDA_VISIBLE_DEVICES
+environment variable to convey the assigned set of accelerators. The
+controller also sets up the relay of readiness from the vLLM instance
+to the server-requesting Pod's inference-server container, as
+mentioned below.
+
+When there is a vLLM instance and its server-requesting Pod is
+non-existent or being deleted, the dual-pod controller deletes that
+instance. This is done by (1) ensuring that the controller's finalizer
+is not on the server-running Pod and (2) ensuring that Pod is being
+deleted. In this situation, the readiness relay is moot.
 
 #### Readiness Relay
 
