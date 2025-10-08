@@ -264,3 +264,20 @@ Start like example 1, but finish by deleting the server-running Pod
 instead of the ReplicaSet. Expect that the server-running and
 server-requesting Pods both go away, and then a replacement
 server-requesting Pod should appear and get satisfied as in example 1.
+
+## Example 3: deletions while controller is not running
+
+Modify the first two examples by surrounding the `kubectl delete` by
+first `helm delete dpctlr` to remove the controller and then, after
+the Pod deletion, re-instantiate the controller Helm chart. The right
+stuff should finish happening after the second controller starts up.
+
+## Example 4: create the gpu-map too late
+
+Like example 1 but start with the ConfigMap named `gpu-map` not
+existing (delete it if you already have it). After creating the
+ReplicaSet and waiting a while for the controller to do as much as it
+will, expect that there is no server-running Pod. Examine the
+contrdoller's log to see that it has stopped making progress. Then run
+the script to create and populate the `gpu-map` ConfigMap. After it
+finishes, the controller should soon create the server-running Pod.
