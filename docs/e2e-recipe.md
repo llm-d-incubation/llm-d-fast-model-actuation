@@ -31,6 +31,12 @@ Build the dual-pods controller image. Omit TARGETARCH if not cross-compiling.
 make build-controller CONTAINER_IMG_REG=$CONTAINER_IMG_REG TARGETARCH=amd64
 ```
 
+Run the script to populate the `gpu-map` ConfigMap.
+
+```shell
+scripts/ensure-nodes-mapped.sh
+```
+
 Instantiate the Helm chart for the dual-pods controller. Specify the
 tag produced by the build above. Specify the name of the ClusterRole
 to use for Node get/list/watch authorization, or omit if not
