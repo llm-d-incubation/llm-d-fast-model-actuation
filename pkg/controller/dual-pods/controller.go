@@ -304,23 +304,43 @@ func (ctl *controller) processConfigMap(ctx context.Context, cmRef cache.ObjectN
 		}
 		return err, true
 	}
+	oldMap := ctl.gpuMap.Load()
 	newMap := map[string]GpuLocation{}
 	nodeCount := 0
+	additions := 0
 	for nodeName, mapStr := range cm.Data {
-		var nodesMap map[string]uint
-		err = json.Unmarshal([]byte(mapStr), &nodesMap)
+		var newNodesMap map[string]uint
+		err = json.Unmarshal([]byte(mapStr), &newNodesMap)
 		if err != nil {
 			logger.Error(err, "A GPU map entry failed to parse as JSON", "nodeName", nodeName)
 			continue
 		}
-		for uuid, index := range nodesMap {
-			newMap[uuid] = GpuLocation{Node: nodeName, Index: index}
+		for uuid, index := range newNodesMap {
+			newLoc := GpuLocation{Node: nodeName, Index: index}
+			if oldMap == nil || (*oldMap)[uuid] != newLoc {
+				additions++
+			}
+			newMap[uuid] = newLoc
 		}
 		nodeCount += 1
 	}
-	logger.V(1).Info("Parsed GPU map", "numNodes", nodeCount, "numGPUs", len(newMap))
+	logger.V(1).Info("Parsed GPU map", "numNodes", nodeCount, "numGPUs", len(newMap), "additions", additions)
 	ctl.gpuMap.Store(&newMap)
+	if additions > 0 {
+		ctl.enqueueRequesters(ctx)
+	}
 	return nil, false
+}
+
+func (ctl *controller) enqueueRequesters(ctx context.Context) {
+	ctl.mutex.Lock()
+	defer ctl.mutex.Unlock()
+	logger := klog.FromContext(ctx)
+	for reqPodName := range ctl.requesters {
+		ref := typedRef{Kind: podKind, ObjectName: cache.ObjectName{Namespace: ctl.namespace, Name: reqPodName}}
+		logger.V(5).Info("Enqueuing server-requesting Pod because of change to GPU map", "ref", ref)
+		ctl.Queue.Add(ref)
+	}
 }
 
 func (ctl *controller) getRequesterData(name string, podUID apitypes.UID, insist bool) *requesterData {
