@@ -88,6 +88,15 @@ spec:
               - --port=8000
               - --model=ibm-granite/granite-3.3-2b-instruct
               - --max-model-len=32768
+              env:
+              - name: VLLM_CACHE_ROOT
+                value: /tmp
+              - name: FLASHINFER_WORKSPACE_BASE
+                value: /tmp
+              - name: XDG_CONFIG_HOME
+                value: /tmp
+              - name: TRITON_HOME
+                value: /tmp
               resources:
                 limits:
                   cpu: "2"
@@ -168,6 +177,12 @@ spec:
               env:
               - name: VLLM_CACHE_ROOT
                 value: /pvcs/shared/vcp/vllm
+              - name: FLASHINFER_WORKSPACE_BASE
+                value: /pvcs/shared/vcp/vllm
+              - name: XDG_CONFIG_HOME
+                value: /tmp
+              - name: TRITON_HOME
+                value: /tmp
               resources:
                 limits:
                   cpu: "2"
