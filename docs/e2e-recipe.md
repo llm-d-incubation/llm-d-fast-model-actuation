@@ -281,3 +281,20 @@ will, expect that there is no server-running Pod. Examine the
 contrdoller's log to see that it has stopped making progress. Then run
 the script to create and populate the `gpu-map` ConfigMap. After it
 finishes, the controller should soon create the server-running Pod.
+
+## Example 5: Node cordon
+
+Setup and create the ReplicaSet. Then `kubectl cordon` the node where
+the dual pods are. Observe that nothing changes. Prod the system,
+e.g., by adding unimportant annotations to the pods. Observe that
+still nothing happens.
+
+If you are fast, try doing `kubectl cordon` between (a) the time when
+the server-requesting Pod gets scheduled and (b) the time when the
+server-running Pod gets created. If you can do that, observe that the
+dual-pods controller deletes the server-requesting Pod.
+
+## Example 6: Node deletion
+
+Setup and create the dual pods. Then delete the Node that they are
+running on. Observe that eventually both Pods go away.
