@@ -373,7 +373,7 @@ class TestAPIEndpoints:
             "pid": 12345,
         }
 
-        response = client.post("/v1/vllm", json={"options": "--model test --port 8000"})
+        response = client.post("/v2/vllm", json={"options": "--model test --port 8000"})
 
         assert response.status_code == 201
         data = response.json()
@@ -390,7 +390,7 @@ class TestAPIEndpoints:
         }
 
         response = client.post(
-            "/v1/vllm/custom-id", json={"options": "--model test --port 8000"}
+            "/v2/vllm/custom-id", json={"options": "--model test --port 8000"}
         )
 
         assert response.status_code == 201
@@ -403,7 +403,7 @@ class TestAPIEndpoints:
         mock_manager.create_instance.side_effect = ValueError("already exists")
 
         response = client.post(
-            "/v1/vllm/duplicate-id", json={"options": "--model test --port 8000"}
+            "/v2/vllm/duplicate-id", json={"options": "--model test --port 8000"}
         )
 
         assert response.status_code == 409
@@ -417,7 +417,7 @@ class TestAPIEndpoints:
             "pid": 12345,
         }
 
-        response = client.delete("/v1/vllm/test-id")
+        response = client.delete("/v2/vllm/test-id")
 
         assert response.status_code == 200
         data = response.json()
@@ -428,7 +428,7 @@ class TestAPIEndpoints:
         """Test deleting nonexistent instance returns 404"""
         mock_manager.stop_instance.side_effect = KeyError("not found")
 
-        response = client.delete("/v1/vllm/nonexistent-id")
+        response = client.delete("/v2/vllm/nonexistent-id")
 
         assert response.status_code == 404
 
@@ -441,7 +441,7 @@ class TestAPIEndpoints:
             "total_stopped": 2,
         }
 
-        response = client.delete("/v1/vllm")
+        response = client.delete("/v2/vllm")
 
         assert response.status_code == 200
         data = response.json()
@@ -452,7 +452,7 @@ class TestAPIEndpoints:
         """Test listing instances via API"""
         mock_manager.list_instances.return_value = ["id-1", "id-2"]
 
-        response = client.get("/v1/vllm/instances")
+        response = client.get("/v2/vllm/instances")
 
         assert response.status_code == 200
         data = response.json()
@@ -468,7 +468,7 @@ class TestAPIEndpoints:
             "instances": [],
         }
 
-        response = client.get("/v1/vllm")
+        response = client.get("/v2/vllm")
 
         assert response.status_code == 200
         data = response.json()
@@ -483,7 +483,7 @@ class TestAPIEndpoints:
             "pid": 12345,
         }
 
-        response = client.get("/v1/vllm/test-id")
+        response = client.get("/v2/vllm/test-id")
 
         assert response.status_code == 200
         data = response.json()
@@ -494,7 +494,7 @@ class TestAPIEndpoints:
         """Test getting status of nonexistent instance returns 404"""
         mock_manager.get_instance_status.side_effect = KeyError("not found")
 
-        response = client.get("/v1/vllm/nonexistent-id")
+        response = client.get("/v2/vllm/nonexistent-id")
 
         assert response.status_code == 404
 
@@ -530,27 +530,27 @@ class TestIntegration:
 
         # Create instance
         create_response = client.post(
-            "/v1/vllm/lifecycle-test", json={"options": "--model test --port 8000"}
+            "/v2/vllm/lifecycle-test", json={"options": "--model test --port 8000"}
         )
         assert create_response.status_code == 201
         instance_id = create_response.json()["instance_id"]
 
         # Check status
-        status_response = client.get(f"/v1/vllm/{instance_id}")
+        status_response = client.get(f"/v2/vllm/{instance_id}")
         assert status_response.status_code == 200
         assert status_response.json()["status"] == "running"
 
         # List instances
-        list_response = client.get("/v1/vllm/instances")
+        list_response = client.get("/v2/vllm/instances")
         assert instance_id in list_response.json()["instance_ids"]
 
         # Delete instance
-        delete_response = client.delete(f"/v1/vllm/{instance_id}")
+        delete_response = client.delete(f"/v2/vllm/{instance_id}")
         assert delete_response.status_code == 200
         assert delete_response.json()["status"] == "terminated"
 
         # Verify deleted
-        list_response = client.get("/v1/vllm/instances")
+        list_response = client.get("/v2/vllm/instances")
         assert instance_id not in list_response.json()["instance_ids"]
 
 
