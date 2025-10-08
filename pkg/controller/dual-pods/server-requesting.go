@@ -47,25 +47,90 @@ import (
 	stubapi "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/stub/api"
 )
 
-func (ctl *controller) processServerRequestingPod(ctx context.Context, requestingPod *corev1.Pod, serverPatch string) (error, bool) {
-	logger := klog.FromContext(ctx)
-	reqDat := ctl.getRequesterData(requestingPod.Name, requestingPod.UID, true)
-	logger.V(5).Info("Processing server-requesting pod", "name", requestingPod.Name, "reqDat", reqDat)
+func (item infSvrItem) process(ctx context.Context, ctl *controller) (error, bool) {
+	logger := klog.FromContext(ctx).WithValues("serverUID", item.UID, "requesterName", item.RequesterName)
+	ctx = klog.NewContext(ctx, logger)
+	requesterRV := "(non existent)"
+	runnerRV := "(non existent)"
+	serverDat := ctl.getServerData(item.RequesterName, item.UID)
 
-	if requestingPod.DeletionTimestamp != nil {
-		logger.V(5).Info("Nothing to do because server-requesting Pod is being deleted and that will cascade to th server-running Pod", "name", requestingPod.Name)
+	requestingPod, err := ctl.podLister.Pods(ctl.namespace).Get(item.RequesterName)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			requestingPod = nil
+		} else { // BTW, impossible
+			logger.Error(err, "Failed to get Pod")
+			return err, true
+		}
+	} else {
+		requesterRV = requestingPod.ResourceVersion
+	}
+
+	runningPodName := item.RequesterName + api.ServerRunningPodNameSuffix
+	runningPod, err := ctl.podLister.Pods(ctl.namespace).Get(runningPodName)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			runningPod = nil
+		} else { // BTW, iimpossible
+			return err, false
+		}
+	} else {
+		runnerRV = runningPod.ResourceVersion
+	}
+
+	logger.V(5).Info("Processing inference server", "requesterResourceVersion", requesterRV, "runnerResourceVersion", runnerRV)
+
+	podOps := ctl.coreclient.Pods(ctl.namespace)
+
+	if requestingPod == nil && runningPod == nil {
+		ctl.clearServerData(item.UID)
+		logger.V(2).Info("End of life of inference server")
 		return nil, false
 	}
 
-	// get allocated gpu
-	ip := requestingPod.Status.PodIP
-	if ip == "" {
-		return ctl.ensureReqStatus(ctx, requestingPod, "no IP assigned yet")
+	if runningPod != nil &&
+		(runningPod.DeletionTimestamp != nil ||
+			requestingPod == nil || requestingPod.DeletionTimestamp != nil) {
+		if requestingPod != nil && requestingPod.DeletionTimestamp == nil {
+			err := podOps.Delete(ctx, requestingPod.Name, metav1.DeleteOptions{
+				PropagationPolicy: ptr.To(metav1.DeletePropagationBackground),
+				Preconditions:     &metav1.Preconditions{UID: &item.UID, ResourceVersion: &requestingPod.ResourceVersion}})
+			if err == nil {
+				logger.V(2).Info("Requested deletion of server-requesting Pod because of deletion of server-running Pod")
+			} else if apierrors.IsGone(err) || apierrors.IsNotFound(err) {
+				logger.V(5).Info("The server-requesting Pod is already gone")
+			} else {
+				return fmt.Errorf("failed to delete server-requesting Pod: %w", err), false
+			}
+			serverDat.RequesterDeleteRequested = true
+		}
+		// Ensure finalizer is absent from server-running Pod so that its deletion can complete
+		if index := slices.Index(runningPod.Finalizers, runnerFinalizer); index >= 0 {
+			newFinalizers := slices.Delete(runningPod.Finalizers, index, index+1)
+			runningPod = runningPod.DeepCopy()
+			runningPod.Finalizers = newFinalizers
+			echo, err := podOps.Update(ctx, runningPod, metav1.UpdateOptions{FieldManager: ctl.ControllerName})
+			if err != nil {
+				return fmt.Errorf("failed to remove finalizer from server-running Pod %s (RV %s): %w", runningPod.Name, runningPod.ResourceVersion, err), false
+			}
+			logger.V(2).Info("Removed finalizer from server-running Pod", "runner", runningPod.Name, "newResourceVersion", echo.ResourceVersion)
+			return nil, false // update and/or delete event will trigger more processing
+		}
+		logger.V(5).Info("Finalizer is absent from server-running Pod, waiting for deletions to finish")
+		return nil, false
 	}
-	// Getting an IP normally comes after scheduling, but check just to be sure.
+	// Now we know that requestingPod != nil
+
 	if requestingPod.Spec.NodeName == "" {
 		return ctl.ensureReqStatus(ctx, requestingPod, "not scheduled yet")
 	}
+	logger = logger.WithValues("node", requestingPod.Spec.NodeName)
+
+	if requestingPod.DeletionTimestamp != nil || serverDat.RequesterDeleteRequested {
+		logger.V(5).Info("Waiting for deletions to finish")
+		return nil, false
+	}
+
 	node, err := ctl.nodeLister.Get(requestingPod.Spec.NodeName)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
@@ -77,17 +142,63 @@ func (ctl *controller) processServerRequestingPod(ctx context.Context, requestin
 
 	if node == nil || node.DeletionTimestamp != nil {
 		// Node is gone or going away, do nothing to maintain server-running Pod.
-		logger.V(3).Info("Ignoring server-requesting Pod on absent or departing Node", "node", requestingPod.Spec.NodeName)
+		logger.V(3).Info("Ignoring inference server on absent or departing Node")
 		return nil, false
 	}
 
-	port := requestingPod.Annotations[api.AdminPortAnnotationName]
-	if port == "" {
-		port = api.AdminPortDefaultValue
+	// get allocated gpu
+	requesterIP := requestingPod.Status.PodIP
+	if requesterIP == "" {
+		return ctl.ensureReqStatus(ctx, requestingPod, "no IP assigned yet")
 	}
-	if reqDat.GPUIndices == nil {
-		logger.V(5).Info("Querying accelerators", "ip", ip, "port", port)
-		url := fmt.Sprintf("http://%s:%s%s", ip, port, stubapi.AcceleratorQueryPath)
+
+	adminPort := requestingPod.Annotations[api.AdminPortAnnotationName]
+	if adminPort == "" {
+		adminPort = api.AdminPortDefaultValue
+	}
+
+	serverPatch := requestingPod.Annotations[api.ServerPatchAnnotationName]
+	if serverPatch == "" {
+		return ctl.ensureReqStatus(ctx, requestingPod, "the "+api.ServerPatchAnnotationName+" annotation is missing")
+	}
+
+	if runningPod != nil {
+		ready := isPodReady(runningPod)
+		if serverDat.ReadinessRelayed == nil || ready != *serverDat.ReadinessRelayed {
+			url, readiness := fmt.Sprintf("http://%s:%s", requestingPod.Status.PodIP, adminPort), ""
+			if ready {
+				logger.V(5).Info("Server-running pod is ready", "name", runningPod.Name)
+				url += stubapi.BecomeReadyPath
+				readiness = "ready"
+			} else {
+				logger.V(5).Info("Server-running pod is not ready", "name", runningPod.Name)
+				url += stubapi.BecomeUnreadyPath
+				readiness = "unready"
+			}
+			err = postToReadiness(url)
+			if err != nil {
+				logger.Error(err, "Failed to relay the readiness", "name", runningPod.Name, "readiness", readiness)
+				return err, true
+			}
+			serverDat.ReadinessRelayed = &ready
+			logger.V(5).Info("Successfully relayed the readiness", "name", runningPod.Name, "readiness", readiness)
+		}
+		// TODO: sync desired and actual runningPod wrt labels (spec is mostly immutable, possible mutations are allowed)
+		logger.V(5).Info("Nothing more to do")
+		return ctl.ensureReqStatus(ctx, requestingPod)
+	}
+	// runningPod == nil
+
+	if node.Spec.Unschedulable {
+		// Reflect the inability to serve back to the client/user
+		logger.V(2).Info("Deleting server-requesting Pod because it is bound to an unschedulable Node and has no server-running Pod")
+		err := podOps.Delete(ctx, requestingPod.Name, metav1.DeleteOptions{PropagationPolicy: ptr.To(metav1.DeletePropagationBackground)})
+		return err, false
+	}
+
+	if serverDat.GPUIndices == nil {
+		logger.V(5).Info("Querying accelerators", "ip", requesterIP, "port", adminPort)
+		url := fmt.Sprintf("http://%s:%s%s", requesterIP, adminPort, stubapi.AcceleratorQueryPath)
 		gpuUUIDs, err := getGPUUUIDs(url)
 		if err != nil {
 			return ctl.ensureReqStatus(ctx, requestingPod, fmt.Sprintf("GET %q fails: %s", url, err.Error()))
@@ -95,44 +206,25 @@ func (ctl *controller) processServerRequestingPod(ctx context.Context, requestin
 		if len(gpuUUIDs) == 0 {
 			return ctl.ensureReqStatus(ctx, requestingPod, "the assigned set of GPUs is empty")
 		}
-		logger.V(5).Info("Found GPUs for Pod", "name", requestingPod.Name, "gpuUUIDs", gpuUUIDs)
+		logger.V(5).Info("Found GPUs", "gpuUUIDs", gpuUUIDs)
 		gpuIndices, err := ctl.mapToGPUIndices(requestingPod.Spec.NodeName, gpuUUIDs)
 		if err != nil {
 			return ctl.ensureReqStatus(ctx, requestingPod, err.Error())
 		}
-		reqDat.GPUIndices = &gpuIndices
+		serverDat.GPUIndices = &gpuIndices
 	}
 
 	// use the server patch to build the server-running pod
-	logger.V(5).Info("Building server-running pod from patch", "name", requestingPod.Name, "patch", serverPatch)
-	desiredRunningPod, err := composeServerRunningPod(ctx, requestingPod, serverPatch, *reqDat.GPUIndices, api.RunnerData{
+	logger.V(5).Info("Building server-running pod from patch", "patch", serverPatch)
+	desiredRunningPod, err := composeServerRunningPod(ctx, requestingPod, serverPatch, *serverDat.GPUIndices, api.RunnerData{
 		NodeName: requestingPod.Spec.NodeName,
 	})
 	if err != nil {
 		return ctl.ensureReqStatus(ctx, requestingPod, fmt.Sprintf("failed to construct the nominal server-running Pod: %s", err.Error()))
 	}
 
-	actualRunningPod, err := ctl.podLister.Pods(desiredRunningPod.Namespace).Get(desiredRunningPod.Name)
-	if err != nil && !apierrors.IsNotFound(err) {
-		logger.Error(err, "Failed to get existing server-running pod", "name", desiredRunningPod.Name)
-		return err, true
-	}
-	if actualRunningPod != nil {
-		logger.V(5).Info("Server-running pod exists", "name", desiredRunningPod.Name)
-
-		// TODO: we should reconcile the existing server-running pod with the one we just built
-		return nil, false
-	}
-
-	if node.Spec.Unschedulable {
-		// Reflect the inability to serve back to the client/user
-		logger.V(2).Info("Deleting server-requesting Pod because it is bound to an unschedulable Node and has no server-running Pod", "pod", requestingPod.Name, "node", requestingPod.Spec.NodeName)
-		err := ctl.coreclient.Pods(requestingPod.Namespace).Delete(ctx, requestingPod.Name, metav1.DeleteOptions{PropagationPolicy: ptr.To(metav1.DeletePropagationBackground)})
-		return err, false
-	}
-
-	logger.V(2).Info("Creating server-running pod", "name", desiredRunningPod.Name, "namespace", desiredRunningPod.Namespace, "annotations", desiredRunningPod.Annotations, "labels", desiredRunningPod.Labels)
-	echo, err := ctl.coreclient.Pods(desiredRunningPod.Namespace).Create(ctx, desiredRunningPod, metav1.CreateOptions{})
+	logger.V(3).Info("Creating server-running pod", "name", desiredRunningPod.Name, "namespace", desiredRunningPod.Namespace, "annotations", desiredRunningPod.Annotations, "labels", desiredRunningPod.Labels)
+	echo, err := podOps.Create(ctx, desiredRunningPod, metav1.CreateOptions{})
 	if err != nil {
 		errMsg := err.Error()
 		if invalidPodRE.MatchString(errMsg) {
@@ -144,7 +236,7 @@ func (ctl *controller) processServerRequestingPod(ctx context.Context, requestin
 		}
 		return err, true
 	}
-	logger.V(5).Info("Created server-running pod", "name", desiredRunningPod.Name, "annotations", echo.Annotations, "labels", echo.Labels, "resourceVersion", echo.ResourceVersion)
+	logger.V(2).Info("Created server-running pod", "name", desiredRunningPod.Name, "annotations", echo.Annotations, "labels", echo.Labels, "resourceVersion", echo.ResourceVersion)
 
 	return ctl.ensureReqStatus(ctx, requestingPod)
 }

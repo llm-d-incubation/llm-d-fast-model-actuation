@@ -61,6 +61,8 @@ func (cc *CommonConfig) AddToFlagSet(name string, flags *pflag.FlagSet) {
 	flags.IntVar(&cc.Verbosity, name+"-verbosity", cc.Verbosity, "-v setting for "+name)
 }
 
+const requesterUIDIndexName = "requesterUID"
+
 // NewController makes a new dual pods controller.
 // The given namespace is the one to focus on.
 func NewController(
@@ -80,9 +82,9 @@ func NewController(
 		cmLister:         corev1PreInformers.ConfigMaps().Lister(),
 		nodeInformer:     corev1PreInformers.Nodes().Informer(),
 		nodeLister:       corev1PreInformers.Nodes().Lister(),
-		requesters:       make(map[string]*requesterData),
 		inferenceServers: make(map[apitypes.UID]*serverData),
 	}
+	ctl.podInformer.AddIndexers(cache.Indexers{requesterUIDIndexName: requesterUIDIndexFunc})
 	ctl.gpuMap.Store(&map[string]GpuLocation{})
 	ctl.QueueAndWorkers = genctlr.NewQueueAndWorkers(string(ControllerName), numWorkers, ctl.process)
 	_, err := ctl.podInformer.AddEventHandler(ctl)
@@ -96,6 +98,14 @@ func NewController(
 	return ctl, nil
 }
 
+func requesterUIDIndexFunc(obj any) ([]string, error) {
+	pod := obj.(*corev1.Pod)
+	if item, have := GetOwner(pod); have {
+		return []string{string(item.UID)}, nil
+	}
+	return []string{}, nil
+}
+
 type controller struct {
 	enqueueLogger klog.Logger
 	coreclient    coreclient.CoreV1Interface
@@ -106,15 +116,12 @@ type controller struct {
 	cmLister      corev1listers.ConfigMapLister
 	nodeInformer  cache.SharedIndexInformer
 	nodeLister    corev1listers.NodeLister
-	genctlr.QueueAndWorkers[typedRef]
+	genctlr.QueueAndWorkers[queueItem]
 
 	// gpuMaps maps GPU UUID to GpuLocation
 	gpuMap atomic.Pointer[map[string]GpuLocation]
 
 	mutex sync.Mutex
-
-	// requesters maps sever-requesting Pod name to data
-	requesters map[string]*requesterData
 
 	// inferenceServers maps UID of serve-requesting Pod to data
 	inferenceServers map[apitypes.UID]*serverData
@@ -127,116 +134,119 @@ type GpuLocation struct {
 	Index uint
 }
 
-type requesterData struct {
-	PodUID     apitypes.UID
-	GPUIndices *string
-}
-
 // Internal state about an inference server
 type serverData struct {
-	requestingPodName string
+	RequestingPodName string
+	GPUIndices        *string
 	ReadinessRelayed  *bool
+
+	// RequesterDeleteRequested carries this bit forward without waiting for notification
+	// from apiserver. Remember there is no sync between the notification streams for
+	// different objects.
+	RequesterDeleteRequested bool
 }
 
-type typedRef struct {
-	Kind string
+type queueItem interface {
+	// process returns (err error, retry bool).
+	// There will be a retry iff `retry || err != nil`.
+	process(ctx context.Context, ctl *controller) (error, bool)
+}
+
+type cmItem struct {
 	cache.ObjectName
 }
 
-func (ref typedRef) String() string {
-	return ref.Kind + ":" + ref.ObjectName.String()
+type infSvrItem struct {
+	UID apitypes.UID
+	// RequesterName is the name of the Pod that had this UID
+	RequesterName string
 }
 
-const podKind = "Pod"
-const cmKind = "ConfigMap"
-
-func (ctl *controller) careAbout(pod *corev1.Pod) bool {
+// careAbout returns infSvrItem, podIsRequester, have
+func (ctl *controller) careAbout(pod *corev1.Pod) (infSvrItem, bool, bool) {
 	if len(pod.Annotations[api.ServerPatchAnnotationName]) > 0 {
-		return true
+		return infSvrItem{pod.UID, pod.Name}, true, true
 	}
-	_, owned := IsOwnedByRequest(pod)
-	return owned
+	owner, have := GetOwner(pod)
+	return owner, false, have
 }
 
 func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
-	var kind string
-	var objM metav1.Object
 	switch typed := obj.(type) {
 	case *corev1.Pod:
-		if !ctl.careAbout(typed) {
+		if item, isReq, owned := ctl.careAbout(typed); !owned {
 			ctl.enqueueLogger.V(5).Info("Ignoring irrelevant Pod", "name", typed.Name)
 			return
+		} else {
+			ctl.enqueueLogger.V(5).Info("Enqueuing inference server reference due to notification of add", "item", item, "isReq", isReq, "isInInitialList", isInInitialList, "resourceVersion", typed.ResourceVersion)
+			ctl.Queue.Add(item)
 		}
-		objM = typed
-		kind = podKind
 	case *corev1.ConfigMap:
 		if typed.Name != GPUMapName {
 			ctl.enqueueLogger.V(5).Info("Ignoring ConfigMap that is not the GPU map", "ref", cache.MetaObjectToName(typed))
 			return
+		} else {
+			item := cmItem{cache.MetaObjectToName(typed)}
+			ctl.enqueueLogger.V(5).Info("Enqueuing ConfigMap reference due to notification of add", "item", item, "isInInitialList", isInInitialList, "resourceVersion", typed.ResourceVersion)
+			ctl.Queue.Add(item)
 		}
-		objM = typed
-		kind = cmKind
 	default:
 		ctl.enqueueLogger.Error(nil, "Notified of add of unexpected type of object", "type", fmt.Sprintf("%T", obj))
 		return
 	}
-	ref := typedRef{kind, cache.MetaObjectToName(objM)}
-	ctl.enqueueLogger.V(5).Info("Enqueuing reference due to notification of add", "ref", ref, "isInInitialList", isInInitialList, "resourceVersion", objM.GetResourceVersion())
-	ctl.Queue.Add(ref)
-
 }
 
 func (ctl *controller) OnUpdate(prev, obj any) {
-	var kind string
-	var objM metav1.Object
 	switch typed := obj.(type) {
 	case *corev1.Pod:
-		if !ctl.careAbout(typed) {
+		if item, isReq, owned := ctl.careAbout(typed); !owned {
+			ctl.enqueueLogger.V(5).Info("Ignoring irrelevant Pod", "name", typed.Name)
 			return
+		} else {
+			ctl.enqueueLogger.V(5).Info("Enqueuing inference server reference due to notification of update", "item", item, "isReq", isReq, "resourceVersion", typed.ResourceVersion)
+			ctl.Queue.Add(item)
 		}
-		objM = typed
-		kind = podKind
 	case *corev1.ConfigMap:
 		if typed.Name != GPUMapName {
+			ctl.enqueueLogger.V(5).Info("Ignoring ConfigMap that is not the GPU map", "ref", cache.MetaObjectToName(typed))
 			return
+		} else {
+			item := cmItem{cache.MetaObjectToName(typed)}
+			ctl.enqueueLogger.V(5).Info("Enqueuing ConfigMap reference due to notification of update", "item", item, "resourceVersion", typed.ResourceVersion)
+			ctl.Queue.Add(item)
 		}
-		objM = typed
-		kind = cmKind
 	default:
 		ctl.enqueueLogger.Error(nil, "Notified of update of unexpected type of object", "type", fmt.Sprintf("%T", obj))
 		return
 	}
-	ref := typedRef{kind, cache.MetaObjectToName(objM)}
-	ctl.enqueueLogger.V(5).Info("Enqueuing reference due to notification of update", "ref", ref, "resourceVersion", objM.GetResourceVersion())
-	ctl.Queue.Add(ref)
 }
 
 func (ctl *controller) OnDelete(obj any) {
 	if dfsu, ok := obj.(cache.DeletedFinalStateUnknown); ok {
 		obj = dfsu.Obj
 	}
-	var kind string
-	var objM metav1.Object
 	switch typed := obj.(type) {
 	case *corev1.Pod:
-		if !ctl.careAbout(typed) {
+		if item, isReq, owned := ctl.careAbout(typed); !owned {
+			ctl.enqueueLogger.V(5).Info("Ignoring irrelevant Pod", "name", typed.Name)
 			return
+		} else {
+			ctl.enqueueLogger.V(5).Info("Enqueuing inference server reference due to notification of delete", "item", item, "isReq", isReq, "resourceVersion", typed.ResourceVersion)
+			ctl.Queue.Add(item)
 		}
-		objM = typed
-		kind = podKind
 	case *corev1.ConfigMap:
 		if typed.Name != GPUMapName {
+			ctl.enqueueLogger.V(5).Info("Ignoring ConfigMap that is not the GPU map", "ref", cache.MetaObjectToName(typed))
 			return
+		} else {
+			item := cmItem{cache.MetaObjectToName(typed)}
+			ctl.enqueueLogger.V(5).Info("Enqueuing ConfigMap reference due to notification of delete", "item", item, "resourceVersion", typed.ResourceVersion)
+			ctl.Queue.Add(item)
 		}
-		objM = typed
-		kind = cmKind
 	default:
 		ctl.enqueueLogger.Error(nil, "Notified of delete of unexpected type of object", "type", fmt.Sprintf("%T", obj))
 		return
 	}
-	ref := typedRef{kind, cache.MetaObjectToName(objM)}
-	ctl.enqueueLogger.V(5).Info("Enqueuing reference due to notification of delete", "ref", ref, "resourceVersion", objM.GetResourceVersion())
-	ctl.Queue.Add(ref)
 }
 
 func (ctl *controller) Start(ctx context.Context) error {
@@ -252,51 +262,13 @@ func (ctl *controller) Start(ctx context.Context) error {
 
 // process returns (err error, retry bool).
 // There will be a retry iff `retry || err != nil`.
-func (ctl *controller) process(ctx context.Context, ref typedRef) (error, bool) {
-	logger := klog.FromContext(ctx)
-	switch ref.Kind {
-	case podKind:
-		return ctl.processPod(ctx, ref.ObjectName)
-	case cmKind:
-		return ctl.processConfigMap(ctx, ref.ObjectName)
-	default:
-		logger.Error(nil, "Asked to process unexpected Kind of object", "kind", ref.Kind)
-		return nil, false
-	}
+func (ctl *controller) process(ctx context.Context, item queueItem) (error, bool) {
+	return item.process(ctx, ctl)
 }
 
-func (ctl *controller) processPod(ctx context.Context, podRef cache.ObjectName) (error, bool) {
+func (item cmItem) process(ctx context.Context, ctl *controller) (error, bool) {
 	logger := klog.FromContext(ctx)
-	logger.V(5).Info("Processing Pod", "name", podRef.Name)
-
-	got, err := ctl.podLister.Pods(podRef.Namespace).Get(podRef.Name)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			// Two cases are possible.
-			// (1) This is a server-requesting Pod, in which case Kube GC will
-			// delete the server-running Pod (once this controller removes the runner's finalizer).
-			// (2) This is a server-running Pod and this controller has already
-			// removed its finalizer and started deletion of the server-requesting Pod.
-			logger.V(5).Info("Pod not found, nothing to do", "name", podRef.Name)
-			ctl.clearRequesterData(podRef.Name)
-			return nil, false
-		}
-		logger.Error(err, "Failed to get Pod", "name", podRef.Name)
-		return err, true
-	}
-
-	logger.V(5).Info("Pod exists", "labels", got.Labels, "IP", got.Status.PodIP, "resourceVersion", got.ResourceVersion)
-	patch := got.Annotations[api.ServerPatchAnnotationName]
-	if len(patch) > 0 {
-		return ctl.processServerRequestingPod(ctx, got, patch)
-	} else {
-		return ctl.processServerRunningPod(ctx, got)
-	}
-}
-
-func (ctl *controller) processConfigMap(ctx context.Context, cmRef cache.ObjectName) (error, bool) {
-	logger := klog.FromContext(ctx)
-	cm, err := ctl.coreclient.ConfigMaps(cmRef.Namespace).Get(ctx, cmRef.Name, metav1.GetOptions{})
+	cm, err := ctl.coreclient.ConfigMaps(item.Namespace).Get(ctx, item.Name, metav1.GetOptions{})
 	if err != nil {
 		if errors.IsNotFound(err) {
 			ctl.gpuMap.Store(nil)
@@ -336,47 +308,26 @@ func (ctl *controller) enqueueRequesters(ctx context.Context) {
 	ctl.mutex.Lock()
 	defer ctl.mutex.Unlock()
 	logger := klog.FromContext(ctx)
-	for reqPodName := range ctl.requesters {
-		ref := typedRef{Kind: podKind, ObjectName: cache.ObjectName{Namespace: ctl.namespace, Name: reqPodName}}
-		logger.V(5).Info("Enqueuing server-requesting Pod because of change to GPU map", "ref", ref)
-		ctl.Queue.Add(ref)
+	for infSvrUID, serverDat := range ctl.inferenceServers {
+		item := infSvrItem{infSvrUID, serverDat.RequestingPodName}
+		logger.V(5).Info("Enqueuing inference server because of change to GPU map", "item", item)
+		ctl.Queue.Add(item)
 	}
 }
 
-func (ctl *controller) getRequesterData(name string, podUID apitypes.UID, insist bool) *requesterData {
-	ctl.mutex.Lock()
-	defer ctl.mutex.Unlock()
-	ans := ctl.requesters[name]
-	if ans == nil && insist || ans != nil && podUID != ans.PodUID {
-		ans = &requesterData{PodUID: podUID}
-		ctl.requesters[name] = ans
-	}
-	return ans
-}
-
-func (ctl *controller) clearRequesterData(name string) {
-	ctl.mutex.Lock()
-	defer ctl.mutex.Unlock()
-	delete(ctl.requesters, name)
-}
-
-func (ctl *controller) getServerData(reqName string, reqUID apitypes.UID, insist bool) *serverData {
+func (ctl *controller) getServerData(reqName string, reqUID apitypes.UID) *serverData {
 	ctl.mutex.Lock()
 	defer ctl.mutex.Unlock()
 	ans := ctl.inferenceServers[reqUID]
-	if ans == nil && insist {
-		ans = &serverData{requestingPodName: reqName}
+	if ans == nil {
+		ans = &serverData{RequestingPodName: reqName}
 		ctl.inferenceServers[reqUID] = ans
 	}
 	return ans
 }
 
-func (ctl *controller) clearServerData(reqName string) {
+func (ctl *controller) clearServerData(uid apitypes.UID) {
 	ctl.mutex.Lock()
 	defer ctl.mutex.Unlock()
-	for uid, serveDat := range ctl.inferenceServers {
-		if serveDat.requestingPodName == reqName {
-			delete(ctl.inferenceServers, uid)
-		}
-	}
+	delete(ctl.inferenceServers, uid)
 }
