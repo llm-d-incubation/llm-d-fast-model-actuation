@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 
@@ -42,8 +43,13 @@ import (
 // The controller works in the context of one Kubernetes API namespace.
 
 // A Pod is a server-requesting Pod if it has the server patch annotation.
-// A Pod is a server-running Pod if has a controlling OwnerReference to
-// a Pod (the server-requesting Pod).
+// A Pod is a bound (awake) server-running Pod if it has a controlling OwnerReference to a Pod,
+// which is taken to be the server-requesting Pod.
+// A Pod is an unbound (sleeping) server-running Pod if it (1) lacks such an OwnerReference and
+// (2) has an annotation
+// with name "dual-pods.llm-d.ai/nominal", whose value is taken to be the
+// base64 encoding of the SHA-256 hash of the JSON for the nominal server-running Pod.
+// This API object metadata is the authoritative source of truth about the binding state.
 
 // There are two types of item in the controller's work queue.
 // One is a reference to the gpu-map ConfigMap.
@@ -52,6 +58,8 @@ import (
 // This reference carries the inference server's UID and the name
 // of the server-requesting Pod.
 // An inference server's UID is the UID of the server-requesting Pod.
+
+const nominalHashAnnotationKey = "dual-pods.llm-d.ai/nominal"
 
 const ControllerName = "dual-pods-controller"
 
@@ -89,8 +97,12 @@ func NewController(
 		inferenceServers: make(map[apitypes.UID]*serverData),
 	}
 	ctl.gpuMap.Store(&map[string]GpuLocation{})
+	err := ctl.podInformer.AddIndexers(cache.Indexers{requesterIndexName: requesterIndexFunc})
+	if err != nil { //impossible
+		return nil, err
+	}
 	ctl.QueueAndWorkers = genctlr.NewQueueAndWorkers(string(ControllerName), numWorkers, ctl.process)
-	_, err := ctl.podInformer.AddEventHandler(ctl)
+	_, err = ctl.podInformer.AddEventHandler(ctl)
 	if err != nil {
 		panic(err)
 	}
@@ -131,9 +143,11 @@ type GpuLocation struct {
 
 // Internal state about an inference server
 type serverData struct {
-	RequestingPodName string
-	GPUIndices        *string
-	ReadinessRelayed  *bool
+	RequestingPodName     string
+	NominalRunningPod     *corev1.Pod
+	NominalRunningPodHash string
+	GPUIndices            *string
+	ReadinessRelayed      *bool
 
 	// RequesterDeleteRequested carries this bit forward without waiting for notification
 	// from apiserver. Remember there is no sync between the notification streams for
@@ -157,19 +171,39 @@ type infSvrItem struct {
 	RequesterName string
 }
 
-// careAbout returns infSvrItem, podIsRequester, have
-func (ctl *controller) careAbout(pod *corev1.Pod) (infSvrItem, bool, bool) {
+var corev1GroupVersionStr = corev1.SchemeGroupVersion.String()
+
+// careAbout returns infSvrItem, podIsRequester, have.
+// Returns have=true for both requesters and bound runners,
+// have=false for unbound runners and other Pods.
+func careAbout(pod *corev1.Pod) (infSvrItem, bool, bool) {
 	if len(pod.Annotations[api.ServerPatchAnnotationName]) > 0 {
 		return infSvrItem{pod.UID, pod.Name}, true, true
 	}
-	owner, have := GetOwner(pod)
-	return owner, false, have
+	idx := slices.IndexFunc(pod.OwnerReferences, func(owner metav1.OwnerReference) bool {
+		return owner.Controller != nil && *owner.Controller && owner.Kind == "Pod" && owner.APIVersion == corev1GroupVersionStr
+	})
+	if idx >= 0 {
+		return infSvrItem{pod.OwnerReferences[idx].UID, pod.OwnerReferences[idx].Name}, false, true
+	}
+	return infSvrItem{}, false, false
+}
+
+const requesterIndexName = "requester"
+
+func requesterIndexFunc(obj any) ([]string, error) {
+	pod := obj.(*corev1.Pod)
+	item, isReq, have := careAbout(pod)
+	if have && !isReq {
+		return []string{string(item.UID)}, nil
+	}
+	return []string{}, nil
 }
 
 func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 	switch typed := obj.(type) {
 	case *corev1.Pod:
-		if item, isReq, owned := ctl.careAbout(typed); !owned {
+		if item, isReq, owned := careAbout(typed); !owned {
 			ctl.enqueueLogger.V(5).Info("Ignoring irrelevant Pod", "name", typed.Name)
 			return
 		} else {
@@ -194,7 +228,7 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 func (ctl *controller) OnUpdate(prev, obj any) {
 	switch typed := obj.(type) {
 	case *corev1.Pod:
-		if item, isReq, owned := ctl.careAbout(typed); !owned {
+		if item, isReq, owned := careAbout(typed); !owned {
 			ctl.enqueueLogger.V(5).Info("Ignoring irrelevant Pod", "name", typed.Name)
 			return
 		} else {
@@ -222,7 +256,7 @@ func (ctl *controller) OnDelete(obj any) {
 	}
 	switch typed := obj.(type) {
 	case *corev1.Pod:
-		if item, isReq, owned := ctl.careAbout(typed); !owned {
+		if item, isReq, owned := careAbout(typed); !owned {
 			ctl.enqueueLogger.V(5).Info("Ignoring irrelevant Pod", "name", typed.Name)
 			return
 		} else {
