@@ -60,10 +60,6 @@ type ServerRequestingPodStatus struct {
 // This container is expected to run the inference server using vLLM.
 const InferenceServerContainerName = "inference-server"
 
-// ServerRunningPodNameSuffix is the suffix that is appended to the name of the
-// server-requesting Pod to form the name of the server-running Pod.
-const ServerRunningPodNameSuffix = "-server"
-
 // AdminPortAnnotationName is the name of an annotation whose value
 // is the name of the port on the "inference-server" container to be
 // queried to get the set of associated accelerators.
