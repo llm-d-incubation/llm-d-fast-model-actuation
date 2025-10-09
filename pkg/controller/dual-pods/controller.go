@@ -61,8 +61,6 @@ func (cc *CommonConfig) AddToFlagSet(name string, flags *pflag.FlagSet) {
 	flags.IntVar(&cc.Verbosity, name+"-verbosity", cc.Verbosity, "-v setting for "+name)
 }
 
-const requesterUIDIndexName = "requesterUID"
-
 // NewController makes a new dual pods controller.
 // The given namespace is the one to focus on.
 func NewController(
@@ -84,7 +82,6 @@ func NewController(
 		nodeLister:       corev1PreInformers.Nodes().Lister(),
 		inferenceServers: make(map[apitypes.UID]*serverData),
 	}
-	ctl.podInformer.AddIndexers(cache.Indexers{requesterUIDIndexName: requesterUIDIndexFunc})
 	ctl.gpuMap.Store(&map[string]GpuLocation{})
 	ctl.QueueAndWorkers = genctlr.NewQueueAndWorkers(string(ControllerName), numWorkers, ctl.process)
 	_, err := ctl.podInformer.AddEventHandler(ctl)
@@ -96,14 +93,6 @@ func NewController(
 		panic(err)
 	}
 	return ctl, nil
-}
-
-func requesterUIDIndexFunc(obj any) ([]string, error) {
-	pod := obj.(*corev1.Pod)
-	if item, have := GetOwner(pod); have {
-		return []string{string(item.UID)}, nil
-	}
-	return []string{}, nil
 }
 
 type controller struct {
