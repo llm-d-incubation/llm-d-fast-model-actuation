@@ -23,8 +23,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/spf13/pflag"
-
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -67,14 +65,6 @@ const runnerFinalizer = "dual-pods.llm-d.ai/runner"
 
 type Controller interface {
 	Start(context.Context) error
-}
-
-type CommonConfig struct {
-	Verbosity int // `-v`
-}
-
-func (cc *CommonConfig) AddToFlagSet(name string, flags *pflag.FlagSet) {
-	flags.IntVar(&cc.Verbosity, name+"-verbosity", cc.Verbosity, "-v setting for "+name)
 }
 
 // NewController makes a new dual pods controller.

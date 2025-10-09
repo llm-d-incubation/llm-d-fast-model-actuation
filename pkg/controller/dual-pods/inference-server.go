@@ -365,6 +365,42 @@ func (ctl *controller) ensureReqStatus(ctx context.Context, requestingPod *corev
 	return err, false
 }
 
+func GetOwner(pod *corev1.Pod) (infSvrItem, bool) {
+	ownerRef := metav1.GetControllerOfNoCopy(pod)
+	if ownerRef != nil && ownerRef.Kind == "Pod" {
+		return infSvrItem{ownerRef.UID, ownerRef.Name}, true
+	}
+	return infSvrItem{}, false
+}
+
+func postToReadiness(url string) error {
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+	}
+
+	resp, err := client.Post(url, "application/json", nil)
+	if err != nil {
+		return fmt.Errorf("http post %q: %w", url, err)
+	}
+	defer resp.Body.Close() //nolint:errcheck
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
+func isPodReady(pod *corev1.Pod) bool {
+	for _, cond := range pod.Status.Conditions {
+		if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
+}
+
 var coreScheme *k8sruntime.Scheme
 var codecFactory k8sserializer.CodecFactory
 var podDecoder k8sruntime.Decoder
