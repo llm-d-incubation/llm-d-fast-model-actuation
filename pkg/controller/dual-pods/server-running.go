@@ -20,13 +20,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"slices"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
-	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/api"
 )
 
 func GetOwner(pod *corev1.Pod) (infSvrItem, bool) {
@@ -35,20 +32,6 @@ func GetOwner(pod *corev1.Pod) (infSvrItem, bool) {
 		return infSvrItem{ownerRef.UID, ownerRef.Name}, true
 	}
 	return infSvrItem{}, false
-}
-
-func IsOwnedByRequest(runningPod *corev1.Pod) (string, bool) {
-	runningPodName := runningPod.Name
-	if suffStart := len(runningPodName) - len(api.ServerRunningPodNameSuffix); suffStart <= 0 || runningPodName[suffStart:] != api.ServerRunningPodNameSuffix {
-		return "", false
-	} else {
-		requestingPodName := runningPodName[:suffStart]
-		// get the server-requesting pod from the owner reference
-		has := slices.ContainsFunc(runningPod.OwnerReferences, func(r metav1.OwnerReference) bool {
-			return r.Kind == "Pod" && r.Name == requestingPodName
-		})
-		return requestingPodName, has
-	}
 }
 
 func postToReadiness(url string) error {
