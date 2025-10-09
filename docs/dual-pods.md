@@ -64,7 +64,7 @@ three milestones.
 
 (To be redrawn for Milestone 1; currently, this is the picture for Milestone 3).
 
-![Boxes and arrows illustrating the design here](llm-d-fma-arch.drawio.png)
+![Boxes and arrows illustrating the design here](llm-d-fma-arch.drawio.svg)
 
 [//]: # "See the adjacent .drawio file for the source"
 
