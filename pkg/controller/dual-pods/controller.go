@@ -39,6 +39,22 @@ import (
 	genctlr "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/generic"
 )
 
+// This package implements the dual-pods controller.
+
+// The controller works in the context of one Kubernetes API namespace.
+
+// A Pod is a server-requesting Pod if it has the server patch annotation.
+// A Pod is a server-running Pod if has a controlling OwnerReference to
+// a Pod (the server-requesting Pod).
+
+// There are two types of item in the controller's work queue.
+// One is a reference to the gpu-map ConfigMap.
+
+// The other type of queue item is a reference to an inference server.
+// This reference carries the inference server's UID and the name
+// of the server-requesting Pod.
+// An inference server's UID is the UID of the server-requesting Pod.
+
 const ControllerName = "dual-pods-controller"
 
 // GPUMapName is the name of the ConfigMap(s) parsed to discover the mapping from GPU UUID to location.
