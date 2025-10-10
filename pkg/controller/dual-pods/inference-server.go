@@ -354,7 +354,8 @@ func (serverDat *serverData) getNominalServerRunningPod(ctx context.Context, req
 		}
 		hasher := sha256.New()
 		hasher.Write(modifiedJSON)
-		hasher.Write([]byte(fmt.Sprintf(";gpus=%s", *serverDat.GPUIndices)))
+		hasher.Write([]byte(";gpus="))
+		hasher.Write([]byte(*serverDat.GPUIndices))
 		var modifiedHash [sha256.Size]byte
 		modifiedHashSl := hasher.Sum(modifiedHash[:0])
 		nominalHash := base64.RawStdEncoding.EncodeToString(modifiedHashSl)
