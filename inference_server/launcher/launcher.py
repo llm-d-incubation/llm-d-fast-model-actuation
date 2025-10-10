@@ -255,7 +255,7 @@ async def index():
 ######################################################################
 # vLLM MANAGEMENT ENDPOINTS
 ######################################################################
-@app.post("/v2/vllm")
+@app.put("/v2/vllm")
 async def create_vllm_instance(vllm_config: VllmConfig):
     """Create a new vLLM instance with random instance ID"""
 
@@ -267,8 +267,8 @@ async def create_vllm_instance(vllm_config: VllmConfig):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/v2/vllm/{instance_id}")
-async def create_named_vllm_instance(
+@app.put("/v2/vllm/{instance_id}")
+async def create_id_vllm_instance(
     instance_id: str = Path(..., description="Custom instance ID"),
     vllm_config: VllmConfig = None,
 ):
