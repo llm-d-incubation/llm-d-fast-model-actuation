@@ -71,6 +71,9 @@ import (
 const requesterAnnotationKey = "dual-pods.llm-d.ai/requester"
 const nominalHashAnnotationKey = "dual-pods.llm-d.ai/nominal"
 
+const runnerFinalizer = "dual-pods.llm-d.ai/runner"
+const requesterFinalizer = "dual-pods.llm-d.ai/requester"
+
 const ControllerName = "dual-pods-controller"
 
 // GPUMapName is the name of the ConfigMap(s) parsed to discover the mapping from GPU UUID to location.
@@ -78,8 +81,6 @@ const ControllerName = "dual-pods-controller"
 // Every data item in the ConfigMap is expected to have a name that is the name of a Node
 // and a value that is JSON for a map from UUID to index.
 const GPUMapName = "gpu-map"
-
-const runnerFinalizer = "dual-pods.llm-d.ai/runner"
 
 type Controller interface {
 	Start(context.Context) error

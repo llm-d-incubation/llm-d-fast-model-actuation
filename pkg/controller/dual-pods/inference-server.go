@@ -25,7 +25,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"iter"
 	"net/http"
 	"os"
 	"regexp"
@@ -94,12 +93,28 @@ func (item infSvrItem) process(ctx context.Context, ctl *controller) (error, boo
 		return nil, false
 	}
 
+	var shouldAddRequesterFinalizer bool
+	if requestingPod != nil {
+		removed, shouldAdd, err, retry := ctl.removeRequesterFinalizer(ctx, requestingPod, runningPod)
+		if removed || err != nil {
+			return err, retry
+		}
+		shouldAddRequesterFinalizer = shouldAdd
+	}
+
 	if runningPod != nil && runningPod.DeletionTimestamp != nil {
 		if requestingPod != nil && requestingPod.DeletionTimestamp == nil {
-			// Reflect runningPod deletion to requestingPod deletion
+			// Reflect runningPod deletion to requestingPod deletion.
+			gonerRV := requesterRV
+			if shouldAddRequesterFinalizer { // don't let delete complete too quickly
+				gonerRV, err = ctl.addRequesterFinalizer(ctx, serverDat, requestingPod)
+				if err != nil {
+					return err, false
+				}
+			}
 			err := podOps.Delete(ctx, requestingPod.Name, metav1.DeleteOptions{
 				PropagationPolicy: ptr.To(metav1.DeletePropagationBackground),
-				Preconditions:     &metav1.Preconditions{UID: &item.UID, ResourceVersion: &requestingPod.ResourceVersion}})
+				Preconditions:     &metav1.Preconditions{UID: &item.UID, ResourceVersion: &gonerRV}})
 			if err == nil {
 				logger.V(2).Info("Requested deletion of server-requesting Pod because of deletion of server-running Pod")
 			} else if apierrors.IsGone(err) || apierrors.IsNotFound(err) {
@@ -110,7 +125,7 @@ func (item infSvrItem) process(ctx context.Context, ctl *controller) (error, boo
 			serverDat.RequesterDeleteRequested = true
 		}
 		// Ensure finalizer is absent from server-running Pod so that its deletion can complete
-		changed, err := ctl.ensureFinalizerAbsent(ctx, runningPod)
+		changed, err := ctl.removeRunnerFinalizer(ctx, runningPod)
 		if err != nil {
 			return err, false
 		}
@@ -122,7 +137,14 @@ func (item infSvrItem) process(ctx context.Context, ctl *controller) (error, boo
 	// Assert: runningPod == nil || runningPod.DeletionTimestamp == nil
 
 	if (requestingPod == nil || requestingPod.DeletionTimestamp != nil) && runningPod != nil { // time to unbind
-		return ctl.ensureUnbound(ctx, serverDat, runningPod)
+		err := ctl.ensureUnbound(ctx, serverDat, runningPod)
+		if err != nil {
+			return err, false
+		}
+		if requestingPod != nil {
+			return ctl.ensureReqState(ctx, requestingPod, false, true)
+		}
+		return nil, false
 	}
 	// Assert: requestingPod != nil
 
@@ -153,7 +175,7 @@ func (item infSvrItem) process(ctx context.Context, ctl *controller) (error, boo
 
 	requesterIP := requestingPod.Status.PodIP
 	if requesterIP == "" {
-		return ctl.ensureReqStatus(ctx, requestingPod, "no IP assigned yet")
+		return ctl.ensureReqState(ctx, requestingPod, shouldAddRequesterFinalizer, false, "no IP assigned yet")
 	}
 
 	adminPort := requestingPod.Annotations[api.AdminPortAnnotationName]
@@ -162,6 +184,10 @@ func (item infSvrItem) process(ctx context.Context, ctl *controller) (error, boo
 	}
 
 	if runningPod != nil {
+		err, _ := ctl.ensureReqState(ctx, requestingPod, shouldAddRequesterFinalizer, false)
+		if err != nil {
+			return err, false
+		}
 		// Relay readiness if not already done
 		ready := isPodReady(runningPod)
 		if serverDat.ReadinessRelayed == nil || ready != *serverDat.ReadinessRelayed {
@@ -185,9 +211,9 @@ func (item infSvrItem) process(ctx context.Context, ctl *controller) (error, boo
 		}
 		// TODO: sync desired and actual runningPod wrt labels (spec is mostly immutable, possible mutations are allowed)
 		logger.V(5).Info("Nothing more to do")
-		return ctl.ensureReqStatus(ctx, requestingPod)
+		return nil, false
 	}
-	// Assert: runningPod == nil
+	// Assert: runningPod == nil && !shouldAddRequesterFinalizer
 	// What remains to be done is create the server-running Pod if possible
 
 	if node.Spec.Unschedulable {
@@ -247,13 +273,70 @@ func (item infSvrItem) process(ctx context.Context, ctl *controller) (error, boo
 
 var invalidPodRE = regexp.MustCompile(`^Pod "[a-z0-9.-]*" is invalid`)
 
-func (ctl *controller) ensureFinalizerAbsent(ctx context.Context, runningPod *corev1.Pod) (bool, error) {
+// removeRequesterFinalizer removes the requesterFinalizer if necessary,
+// and detemines whether the finalizer needs to be added.
+// requestingPod != nil; runningPod might be nil.
+// Returns (removed, shouldAdd bool, err error, retry bool).
+func (ctl *controller) removeRequesterFinalizer(ctx context.Context, requestingPod, runningPod *corev1.Pod) (bool, bool, error, bool) {
+	// First, determine whether finalizer should be present
+	var wantFinalizer bool
+	if runningPod != nil {
+		isIdx, _, err := getInferenceServerPort(runningPod)
+		if err == nil {
+			isCtr := &runningPod.Spec.Containers[isIdx]
+			statIdx := slices.IndexFunc(runningPod.Status.ContainerStatuses,
+				func(status corev1.ContainerStatus) bool {
+					return status.Name == isCtr.Name
+				})
+			if statIdx >= 0 {
+				isStatus := &runningPod.Status.ContainerStatuses[statIdx]
+				wantFinalizer = isStatus.State.Running != nil
+			}
+		}
+	}
+	// Next, determine whether finalizer is preseent
+	finIdx := slices.Index(requestingPod.Finalizers, requesterFinalizer)
+	haveFinalizer := finIdx >= 0
+	// Finally, deal with it
+	if wantFinalizer == haveFinalizer {
+		return false, false, nil, false
+	}
+	if wantFinalizer {
+		return false, requestingPod.DeletionTimestamp == nil, nil, false
+	}
+	podOps := ctl.coreclient.Pods(ctl.namespace)
+	requestingPod = requestingPod.DeepCopy()
+	requestingPod.Finalizers = slices.Delete(requestingPod.Finalizers, finIdx, finIdx+1)
+	echo, err := podOps.Update(ctx, requestingPod, metav1.UpdateOptions{FieldManager: ControllerName})
+	if err != nil {
+		return false, false, fmt.Errorf("failed to remove finalizer from server-requesting Pod: %w", err), false
+	}
+	logger := klog.FromContext(ctx)
+	logger.V(2).Info("Removed requester finalizer", "newResourceVersion", echo.ResourceVersion)
+	return true, false, nil, false
+}
+
+// addRequesterFinalizer returns (newResourceVersion string, err error)
+func (ctl *controller) addRequesterFinalizer(ctx context.Context, serverDat *serverData, requestingPod *corev1.Pod) (string, error) {
+	podOps := ctl.coreclient.Pods(ctl.namespace)
+	requestingPod = requestingPod.DeepCopy()
+	requestingPod.Finalizers = append(requestingPod.Finalizers, requesterFinalizer)
+	echo, err := podOps.Update(ctx, requestingPod, metav1.UpdateOptions{FieldManager: ControllerName})
+	if err != nil {
+		return "", fmt.Errorf("failed to add finalizer from server-requesting Pod: %w", err)
+	}
+	logger := klog.FromContext(ctx)
+	logger.V(2).Info("Added requester finalizer", "newResourceVersion", echo.ResourceVersion)
+	return echo.ResourceVersion, nil
+}
+
+func (ctl *controller) removeRunnerFinalizer(ctx context.Context, runningPod *corev1.Pod) (bool, error) {
 	logger := klog.FromContext(ctx)
 	podOps := ctl.coreclient.Pods(ctl.namespace)
 	// Ensure finalizer is absent from server-running Pod so that its deletion can complete
-	if index := slices.Index(runningPod.Finalizers, runnerFinalizer); index >= 0 {
-		runningPod.Finalizers = slices.Delete(runningPod.Finalizers, index, index+1)
+	if newFinalizers, changed := SliceRemoveOnce(runningPod.Finalizers, runnerFinalizer); changed {
 		runningPod = runningPod.DeepCopy()
+		runningPod.Finalizers = newFinalizers
 		echo, err := podOps.Update(ctx, runningPod, metav1.UpdateOptions{FieldManager: ctl.ControllerName})
 		if err != nil {
 			return false, fmt.Errorf("failed to remove finalizer from server-running Pod %s (RV %s): %w", runningPod.Name, runningPod.ResourceVersion, err)
@@ -265,7 +348,7 @@ func (ctl *controller) ensureFinalizerAbsent(ctx context.Context, runningPod *co
 }
 
 // Unbinds the given server-running Pod.
-func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData, runningPod *corev1.Pod) (error, bool) {
+func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData, runningPod *corev1.Pod) error {
 	logger := klog.FromContext(ctx)
 	// A runningPod with no IP is not scheduled, so we know that it is not awake.
 	// If runningPod is stale then the update will fail.
@@ -275,43 +358,40 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 			var err error
 			_, serverPort, err = getInferenceServerPort(runningPod)
 			if err != nil { // Impossible, because such a runningPod would never be created by this controller
-				return fmt.Errorf("unable to put server to sleep because port not known: %w", err), false
+				return fmt.Errorf("unable to put server to sleep because port not known: %w", err)
 			}
 		}
 		sleepURL := fmt.Sprintf("http://%s:%d/sleep", runningPod.Status.PodIP, serverPort)
 		resp, err := http.Post(sleepURL, "", nil)
 		if err != nil {
-			return fmt.Errorf("failed to put to sleep, POST %s got error: %w", sleepURL, err), false
+			return fmt.Errorf("failed to put to sleep, POST %s got error: %w", sleepURL, err)
 		}
 		if sc := resp.StatusCode; sc != http.StatusOK {
-			return fmt.Errorf("failed to put to sleep, POST %s returned status %d", sleepURL, sc), false
+			return fmt.Errorf("failed to put to sleep, POST %s returned status %d", sleepURL, sc)
 		}
 		serverDat.Sleeping = ptr.To(true)
 		logger.V(2).Info("Put inference server to sleep")
 	}
 	runningPod = runningPod.DeepCopy()
-	var changed bool
+	var aChange, fChange bool
 	// Ensure requester annotation is absent
 	if _, have := runningPod.Annotations[requesterAnnotationKey]; have {
 		delete(runningPod.Annotations, requesterAnnotationKey)
-		changed = true
+		aChange = true
 	}
 	// Ensure finalizer is absent
-	if index := slices.Index(runningPod.Finalizers, runnerFinalizer); index >= 0 {
-		runningPod.Finalizers = slices.Delete(runningPod.Finalizers, index, index+1)
-		changed = true
-	}
-	if changed {
+	runningPod.Finalizers, fChange = SliceRemoveOnce(runningPod.Finalizers, runnerFinalizer)
+	if aChange || fChange {
 		podOps := ctl.coreclient.Pods(ctl.namespace)
 		echo, err := podOps.Update(ctx, runningPod, metav1.UpdateOptions{FieldManager: ControllerName})
 		if err != nil {
-			return fmt.Errorf("failed to unbind server-running Pod %s: %w", runningPod.Name, err), false
+			return fmt.Errorf("failed to unbind server-running Pod %s: %w", runningPod.Name, err)
 		}
 		logger.V(2).Info("Unbound server-running Pod", "name", runningPod.Name, "newResourceVersion", echo.ResourceVersion)
 	} else {
 		logger.V(3).Info("Server-running Pod remains unbound", "name", runningPod.Name, "resourceVersion", runningPod.ResourceVersion)
 	}
-	return nil, false
+	return nil
 }
 
 func (serverDat *serverData) getNominalServerRunningPod(ctx context.Context, reqPod *corev1.Pod, rawTmpl string, data api.RunnerData) (*corev1.Pod, error) {
@@ -449,16 +529,26 @@ func getInferenceServerPort(pod *corev1.Pod) (int, int16, error) {
 }
 
 func (ctl *controller) ensureReqStatus(ctx context.Context, requestingPod *corev1.Pod, errors ...string) (error, bool) {
+	return ctl.ensureReqState(ctx, requestingPod, false, false, errors...)
+}
+
+func (ctl *controller) ensureReqState(ctx context.Context, requestingPod *corev1.Pod, addFinalizer, removeFinalizer bool, errors ...string) (error, bool) {
 	status := api.ServerRequestingPodStatus{Errors: errors}
 	logger := klog.FromContext(ctx)
 	newStatusBytes, err := json.Marshal(status)
 	if err != nil { // impossible; handle by infinite retry
-		return fmt.Errorf("failed to marshal status (%#v): %w", status, err), true
+		return fmt.Errorf("failed to marshal status (%#v): %w", status, err), false
 	}
 	newStatusStr := string(newStatusBytes)
 	oldStatusStr := requestingPod.Annotations[api.ServerPatchAnnotationErrorsName]
-	if oldStatusStr == string(newStatusStr) {
-		logger.V(5).Info("No need to update status", "serverRequestingPod", requestingPod.Name, "status", status)
+	newFinalizers := requestingPod.Finalizers
+	if removeFinalizer {
+		newFinalizers, _ = SliceRemoveOnce(newFinalizers, requesterFinalizer)
+	} else if addFinalizer {
+		newFinalizers = append(newFinalizers, requesterFinalizer)
+	}
+	if oldStatusStr == newStatusStr && len(newFinalizers) == len(requestingPod.Finalizers) {
+		logger.V(5).Info("No need to update status or finalizers", "serverRequestingPod", requestingPod.Name, "status", status)
 		return nil, false
 	}
 	requestingPod = requestingPod.DeepCopy()
@@ -466,11 +556,12 @@ func (ctl *controller) ensureReqStatus(ctx context.Context, requestingPod *corev
 		requestingPod.Annotations = map[string]string{}
 	}
 	requestingPod.Annotations[api.ServerPatchAnnotationErrorsName] = newStatusStr
+	requestingPod.Finalizers = newFinalizers
 	echo, err := ctl.coreclient.Pods(requestingPod.Namespace).Update(ctx, requestingPod, metav1.UpdateOptions{FieldManager: ctl.ControllerName})
 	if err == nil {
-		logger.V(2).Info("Set status", "serverRequestingPod", requestingPod.Name, "status", status, "newResourceVersion", echo.ResourceVersion)
+		logger.V(2).Info("Set status/finalizers", "serverRequestingPod", requestingPod.Name, "status", status, "finalizers", requestingPod.Finalizers, "newResourceVersion", echo.ResourceVersion)
 	} else {
-		logger.V(3).Info("Failed to set status", "serverRequestingPod", requestingPod.Name, "status", status, "resourceVersion", requestingPod.ResourceVersion)
+		logger.V(3).Info("Failed to set status/finalizers", "serverRequestingPod", requestingPod.Name, "status", status, "finalizers", requestingPod.Finalizers, "resourceVersion", requestingPod.ResourceVersion)
 	}
 	return err, false
 }
@@ -578,14 +669,10 @@ func SliceMap[Domain, Range any](slice []Domain, mapFn func(Domain) (Range, erro
 	return mapped, errors
 }
 
-func IterFilter[Elt any](it iter.Seq[Elt], include func(Elt) bool) iter.Seq[Elt] {
-	return func(yield func(Elt) bool) {
-		for elt := range it {
-			if include(elt) {
-				if !yield(elt) {
-					return
-				}
-			}
-		}
+func SliceRemoveOnce[Elt comparable](slice []Elt, goner Elt) ([]Elt, bool) {
+	idx := slices.Index(slice, goner)
+	if idx < 0 {
+		return slice, false
 	}
+	return slices.Delete(slice, idx, idx+1), true
 }
