@@ -20,7 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -43,13 +43,22 @@ import (
 // The controller works in the context of one Kubernetes API namespace.
 
 // A Pod is a server-requesting Pod if it has the server patch annotation.
-// A Pod is a bound (awake) server-running Pod if it has a controlling OwnerReference to a Pod,
-// which is taken to be the server-requesting Pod.
-// A Pod is an unbound (sleeping) server-running Pod if it (1) lacks such an OwnerReference and
+// A Pod is a bound (awake) server-running Pod if it has an annotation
+// with the name "dual-pods.llm-d.ai/requester"; the annotations's value should
+// be `requestingPod.UID + " " + requestingPod.Name`.
+// A Pod is an unbound (sleeping) server-running Pod if it (1) is not bound and
 // (2) has an annotation
-// with name "dual-pods.llm-d.ai/nominal", whose value is taken to be the
-// base64 encoding of the SHA-256 hash of the JSON for the nominal server-running Pod.
-// This API object metadata is the authoritative source of truth about the binding state.
+// with name "dual-pods.llm-d.ai/nominal", whose value should be the base64 encoding
+// of the SHA-256 hash of bytes that are characteristic of the nominal server-running Pod
+// (excluding its name, this annotation, the identity of the server-requesting Pod, and the Node).
+// This API object metadata is the hard state about binding.
+
+// The controller includes its finalizer when creating a bound server-running Pod,
+// and removes it when unbinding or recognizing the exogenous deletion of a server-running Pod.
+
+// At this interim stage of development, the controller does not request
+// deletion of any server-running Pod. Nor does the controller ever try to bind
+// one that is unbound; they are only created in the bound state.
 
 // There are two types of item in the controller's work queue.
 // One is a reference to the gpu-map ConfigMap.
@@ -59,6 +68,7 @@ import (
 // of the server-requesting Pod.
 // An inference server's UID is the UID of the server-requesting Pod.
 
+const requesterAnnotationKey = "dual-pods.llm-d.ai/requester"
 const nominalHashAnnotationKey = "dual-pods.llm-d.ai/nominal"
 
 const ControllerName = "dual-pods-controller"
@@ -146,8 +156,14 @@ type serverData struct {
 	RequestingPodName     string
 	NominalRunningPod     *corev1.Pod
 	NominalRunningPodHash string
-	GPUIndices            *string
-	ReadinessRelayed      *bool
+
+	// ServerPort is meaningful if NominalRunningPod is not nil
+	ServerPort int16
+
+	GPUIndices       *string
+	ReadinessRelayed *bool
+
+	Sleeping *bool
 
 	// RequesterDeleteRequested carries this bit forward without waiting for notification
 	// from apiserver. Remember there is no sync between the notification streams for
@@ -171,8 +187,6 @@ type infSvrItem struct {
 	RequesterName string
 }
 
-var corev1GroupVersionStr = corev1.SchemeGroupVersion.String()
-
 // careAbout returns infSvrItem, podIsRequester, have.
 // Returns have=true for both requesters and bound runners,
 // have=false for unbound runners and other Pods.
@@ -180,13 +194,12 @@ func careAbout(pod *corev1.Pod) (infSvrItem, bool, bool) {
 	if len(pod.Annotations[api.ServerPatchAnnotationName]) > 0 {
 		return infSvrItem{pod.UID, pod.Name}, true, true
 	}
-	idx := slices.IndexFunc(pod.OwnerReferences, func(owner metav1.OwnerReference) bool {
-		return owner.Controller != nil && *owner.Controller && owner.Kind == "Pod" && owner.APIVersion == corev1GroupVersionStr
-	})
-	if idx >= 0 {
-		return infSvrItem{pod.OwnerReferences[idx].UID, pod.OwnerReferences[idx].Name}, false, true
+	requesterStr := pod.Annotations[requesterAnnotationKey]
+	requesterParts := strings.Split(requesterStr, " ")
+	if len(requesterParts) != 2 {
+		return infSvrItem{}, false, false
 	}
-	return infSvrItem{}, false, false
+	return infSvrItem{apitypes.UID(requesterParts[0]), requesterParts[1]}, false, true
 }
 
 const requesterIndexName = "requester"
