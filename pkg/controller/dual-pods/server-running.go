@@ -68,6 +68,10 @@ func (ctl *controller) processServerRunningPod(ctx context.Context, runningPod *
 		}
 	}
 
+	if requestingPod == nil {
+		ctl.clearServerData(requestingPodName)
+	}
+
 	if requestingPod == nil || requestingPod.DeletionTimestamp != nil || runningPod.DeletionTimestamp != nil {
 		podOps := ctl.coreclient.Pods(runningPod.Namespace)
 		// Deletion requested, so remove finalizer and delete server-requesting Pod
@@ -90,27 +94,34 @@ func (ctl *controller) processServerRunningPod(ctx context.Context, runningPod *
 		return err, false
 	}
 
+	serverDat := ctl.getServerData(requestingPodName, requestingPod.UID, true)
+
 	// relay the readiness
 	port := requestingPod.Annotations[api.AdminPortAnnotationName]
 	if port == "" {
 		port = api.AdminPortDefaultValue
 	}
-	url, readiness := fmt.Sprintf("http://%s:%s", requestingPod.Status.PodIP, port), ""
-	if isPodReady(runningPod) {
-		logger.V(5).Info("Server-running pod is ready", "name", runningPod.Name)
-		url += stubapi.BecomeReadyPath
-		readiness = "ready"
-	} else {
-		logger.V(5).Info("Server-running pod is not ready", "name", runningPod.Name)
-		url += stubapi.BecomeUnreadyPath
-		readiness = "unready"
+	ready := isPodReady(runningPod)
+	if serverDat.ReadinessRelayed == nil || ready != *serverDat.ReadinessRelayed {
+		// TODO: use cache
+		url, readiness := fmt.Sprintf("http://%s:%s", requestingPod.Status.PodIP, port), ""
+		if ready {
+			logger.V(5).Info("Server-running pod is ready", "name", runningPod.Name)
+			url += stubapi.BecomeReadyPath
+			readiness = "ready"
+		} else {
+			logger.V(5).Info("Server-running pod is not ready", "name", runningPod.Name)
+			url += stubapi.BecomeUnreadyPath
+			readiness = "unready"
+		}
+		err = postToReadiness(url)
+		if err != nil {
+			logger.Error(err, "Failed to relay the readiness", "name", runningPod.Name, "readiness", readiness)
+			return err, true
+		}
+		serverDat.ReadinessRelayed = &ready
+		logger.V(5).Info("Successfully relayed the readiness", "name", runningPod.Name, "readiness", readiness)
 	}
-	err = postToReadiness(url)
-	if err != nil {
-		logger.Error(err, "Failed to relay the readiness", "name", runningPod.Name, "readiness", readiness)
-		return err, true
-	}
-	logger.V(5).Info("Successfully relayed the readiness", "name", runningPod.Name, "readiness", readiness)
 
 	logger.V(5).Info("Processed server-running pod", "name", runningPod.Name)
 	return nil, false

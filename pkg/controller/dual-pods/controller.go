@@ -71,16 +71,17 @@ func NewController(
 	numWorkers int,
 ) (*controller, error) {
 	ctl := &controller{
-		enqueueLogger: logger.WithName(ControllerName),
-		coreclient:    coreClient,
-		namespace:     namespace,
-		podInformer:   corev1PreInformers.Pods().Informer(),
-		podLister:     corev1PreInformers.Pods().Lister(),
-		cmInformer:    corev1PreInformers.ConfigMaps().Informer(),
-		cmLister:      corev1PreInformers.ConfigMaps().Lister(),
-		nodeInformer:  corev1PreInformers.Nodes().Informer(),
-		nodeLister:    corev1PreInformers.Nodes().Lister(),
-		requesters:    make(map[string]*requesterData),
+		enqueueLogger:    logger.WithName(ControllerName),
+		coreclient:       coreClient,
+		namespace:        namespace,
+		podInformer:      corev1PreInformers.Pods().Informer(),
+		podLister:        corev1PreInformers.Pods().Lister(),
+		cmInformer:       corev1PreInformers.ConfigMaps().Informer(),
+		cmLister:         corev1PreInformers.ConfigMaps().Lister(),
+		nodeInformer:     corev1PreInformers.Nodes().Informer(),
+		nodeLister:       corev1PreInformers.Nodes().Lister(),
+		requesters:       make(map[string]*requesterData),
+		inferenceServers: make(map[apitypes.UID]*serverData),
 	}
 	ctl.gpuMap.Store(&map[string]GpuLocation{})
 	ctl.QueueAndWorkers = genctlr.NewQueueAndWorkers(string(ControllerName), numWorkers, ctl.process)
@@ -114,7 +115,12 @@ type controller struct {
 
 	// requesters maps sever-requesting Pod name to data
 	requesters map[string]*requesterData
+
+	// inferenceServers maps UID of serve-requesting Pod to data
+	inferenceServers map[apitypes.UID]*serverData
 }
+
+var _ Controller = &controller{}
 
 type GpuLocation struct {
 	Node  string
@@ -126,7 +132,11 @@ type requesterData struct {
 	GPUIndices *string
 }
 
-var _ Controller = &controller{}
+// Internal state about an inference server
+type serverData struct {
+	requestingPodName string
+	ReadinessRelayed  *bool
+}
 
 type typedRef struct {
 	Kind string
@@ -294,23 +304,43 @@ func (ctl *controller) processConfigMap(ctx context.Context, cmRef cache.ObjectN
 		}
 		return err, true
 	}
+	oldMap := ctl.gpuMap.Load()
 	newMap := map[string]GpuLocation{}
 	nodeCount := 0
+	additions := 0
 	for nodeName, mapStr := range cm.Data {
-		var nodesMap map[string]uint
-		err = json.Unmarshal([]byte(mapStr), &nodesMap)
+		var newNodesMap map[string]uint
+		err = json.Unmarshal([]byte(mapStr), &newNodesMap)
 		if err != nil {
 			logger.Error(err, "A GPU map entry failed to parse as JSON", "nodeName", nodeName)
 			continue
 		}
-		for uuid, index := range nodesMap {
-			newMap[uuid] = GpuLocation{Node: nodeName, Index: index}
+		for uuid, index := range newNodesMap {
+			newLoc := GpuLocation{Node: nodeName, Index: index}
+			if oldMap == nil || (*oldMap)[uuid] != newLoc {
+				additions++
+			}
+			newMap[uuid] = newLoc
 		}
 		nodeCount += 1
 	}
-	logger.V(1).Info("Parsed GPU map", "numNodes", nodeCount, "numGPUs", len(newMap))
+	logger.V(1).Info("Parsed GPU map", "numNodes", nodeCount, "numGPUs", len(newMap), "additions", additions)
 	ctl.gpuMap.Store(&newMap)
+	if additions > 0 {
+		ctl.enqueueRequesters(ctx)
+	}
 	return nil, false
+}
+
+func (ctl *controller) enqueueRequesters(ctx context.Context) {
+	ctl.mutex.Lock()
+	defer ctl.mutex.Unlock()
+	logger := klog.FromContext(ctx)
+	for reqPodName := range ctl.requesters {
+		ref := typedRef{Kind: podKind, ObjectName: cache.ObjectName{Namespace: ctl.namespace, Name: reqPodName}}
+		logger.V(5).Info("Enqueuing server-requesting Pod because of change to GPU map", "ref", ref)
+		ctl.Queue.Add(ref)
+	}
 }
 
 func (ctl *controller) getRequesterData(name string, podUID apitypes.UID, insist bool) *requesterData {
@@ -328,4 +358,25 @@ func (ctl *controller) clearRequesterData(name string) {
 	ctl.mutex.Lock()
 	defer ctl.mutex.Unlock()
 	delete(ctl.requesters, name)
+}
+
+func (ctl *controller) getServerData(reqName string, reqUID apitypes.UID, insist bool) *serverData {
+	ctl.mutex.Lock()
+	defer ctl.mutex.Unlock()
+	ans := ctl.inferenceServers[reqUID]
+	if ans == nil && insist {
+		ans = &serverData{requestingPodName: reqName}
+		ctl.inferenceServers[reqUID] = ans
+	}
+	return ans
+}
+
+func (ctl *controller) clearServerData(reqName string) {
+	ctl.mutex.Lock()
+	defer ctl.mutex.Unlock()
+	for uid, serveDat := range ctl.inferenceServers {
+		if serveDat.requestingPodName == reqName {
+			delete(ctl.inferenceServers, uid)
+		}
+	}
 }
