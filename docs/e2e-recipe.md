@@ -25,10 +25,32 @@ make build-requester CONTAINER_IMG_REG=$CONTAINER_IMG_REG TARGETARCH=amd64
 make push-requester  CONTAINER_IMG_REG=$CONTAINER_IMG_REG
 ```
 
-Build the dual-pods controller image. Omit TARGETARCH if not cross-compiling.
+Build the dual-pods controller image. Omit TARGETARCH if not
+cross-compiling. NOTE: you will need a local Go development
+environment, including [ko](https://ko.build/).
 
 ```shell
 make build-controller CONTAINER_IMG_REG=$CONTAINER_IMG_REG TARGETARCH=amd64
+```
+
+For example, it will looks something like the following.
+
+```console
+mspreitz@mjs13 llm-d-fast-model-actuation % make build-controller CONTAINER_IMG_REG=$CONTAINER_IMG_REG TARGETARCH=amd64
+KO_DOCKER_REPO=quay.io/mspreitz/fma ko build -B ./cmd/dual-pods-controller -t b699bc6 --platform linux/amd64,linux/arm64
+2025/10/10 11:51:53 Using base cgr.dev/chainguard/static:latest@sha256:b2e1c3d3627093e54f6805823e73edd17ab93d6c7202e672988080c863e0412b for github.com/llm-d-incubation/llm-d-fast-model-actuation/cmd/dual-pods-controller
+...
+2025/10/10 11:52:18 Published quay.io/mspreitz/fma/dual-pods-controller:b699bc6@sha256:ef3d14e98c6fc8011c9b6706a280beb4daaeb928f848e2df545ca7eafb1a1908
+quay.io/mspreitz/fma/dual-pods-controller:b699bc6@sha256:ef3d14e98c6fc8011c9b6706a280beb4daaeb928f848e2df545ca7eafb1a1908
+```
+
+In preparation for usage of the image that you just built, define a
+shell variable to hold the tag of the image container just built (you
+can see that tag in the last line of the output). Continuing the above
+example, that would go as follows.
+
+```shell
+CONTROLLER_IMG_TAG=b699bc6 # JUST AN EXAMPLE - USE WHAT YOU BUILT
 ```
 
 Run the script to populate the `gpu-map` ConfigMap.
@@ -44,7 +66,7 @@ needed. NOTE: if you have done this before then you will need to
 delete the old Helm chart instance before re-making it.
 
 ```shell
-helm upgrade --install dpctlr charts/dpctlr --set Image="${CONTAINER_IMG_REG}/dual-pods-controller:9010ece" --set NodeViewClusterRole=vcp-node-viewer
+helm upgrade --install dpctlr charts/dpctlr --set Image="${CONTAINER_IMG_REG}/dual-pods-controller:${CONTROLLER_IMG_TAG}" --set NodeViewClusterRole=vcp-node-viewer
 ```
 
 ## Example 1: cycle server-requesting Pod
@@ -280,7 +302,7 @@ Like example 1 but start with the ConfigMap named `gpu-map` not
 existing (delete it if you already have it). After creating the
 ReplicaSet and waiting a while for the controller to do as much as it
 will, expect that there is no server-running Pod. Examine the
-contrdoller's log to see that it has stopped making progress. Then run
+controller's log to see that it has stopped making progress. Then run
 the script to create and populate the `gpu-map` ConfigMap. After it
 finishes, the controller should soon create the server-running Pod.
 
