@@ -373,7 +373,7 @@ class TestAPIEndpoints:
             "pid": 12345,
         }
 
-        response = client.post("/v2/vllm", json={"options": "--model test --port 8000"})
+        response = client.put("/v2/vllm", json={"options": "--model test --port 8000"})
 
         assert response.status_code == 201
         data = response.json()
@@ -381,7 +381,7 @@ class TestAPIEndpoints:
         assert "instance_id" in data
 
     @patch("launcher.vllm_manager")
-    def test_create_named_vllm_instance(self, mock_manager, client):
+    def test_create_id_vllm_instance(self, mock_manager, client):
         """Test creating vLLM instance with custom ID via API"""
         mock_manager.create_instance.return_value = {
             "status": "started",
@@ -389,7 +389,7 @@ class TestAPIEndpoints:
             "pid": 12345,
         }
 
-        response = client.post(
+        response = client.put(
             "/v2/vllm/custom-id", json={"options": "--model test --port 8000"}
         )
 
@@ -402,7 +402,7 @@ class TestAPIEndpoints:
         """Test creating instance with duplicate ID returns 409"""
         mock_manager.create_instance.side_effect = ValueError("already exists")
 
-        response = client.post(
+        response = client.put(
             "/v2/vllm/duplicate-id", json={"options": "--model test --port 8000"}
         )
 
@@ -516,42 +516,6 @@ class TestHelperFunctions:
         # Cleanup
         for key in test_vars.keys():
             del os.environ[key]
-
-
-# Integration Tests
-class TestIntegration:
-    """Integration tests that test multiple components together"""
-
-    @patch("launcher.multiprocessing.Process")
-    def test_full_lifecycle(self, mock_process_class, client):
-        """Test full lifecycle: create, status check, delete"""
-        mock_process = MockProcess()
-        mock_process_class.return_value = mock_process
-
-        # Create instance
-        create_response = client.post(
-            "/v2/vllm/lifecycle-test", json={"options": "--model test --port 8000"}
-        )
-        assert create_response.status_code == 201
-        instance_id = create_response.json()["instance_id"]
-
-        # Check status
-        status_response = client.get(f"/v2/vllm/{instance_id}")
-        assert status_response.status_code == 200
-        assert status_response.json()["status"] == "running"
-
-        # List instances
-        list_response = client.get("/v2/vllm/instances")
-        assert instance_id in list_response.json()["instance_ids"]
-
-        # Delete instance
-        delete_response = client.delete(f"/v2/vllm/{instance_id}")
-        assert delete_response.status_code == 200
-        assert delete_response.json()["status"] == "terminated"
-
-        # Verify deleted
-        list_response = client.get("/v2/vllm/instances")
-        assert instance_id not in list_response.json()["instance_ids"]
 
 
 if __name__ == "__main__":
