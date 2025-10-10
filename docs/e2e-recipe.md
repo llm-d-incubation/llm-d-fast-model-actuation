@@ -89,6 +89,8 @@ spec:
               - --model=ibm-granite/granite-3.3-2b-instruct
               - --max-model-len=32768
               env:
+              - name: VLLM_SERVER_DEV_MODE
+                value: "1"
               - name: VLLM_CACHE_ROOT
                 value: /tmp
               - name: FLASHINFER_WORKSPACE_BASE
