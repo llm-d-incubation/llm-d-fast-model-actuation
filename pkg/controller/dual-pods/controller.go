@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -43,15 +44,19 @@ import (
 // The controller works in the context of one Kubernetes API namespace.
 
 // A Pod is a server-requesting Pod if it has the server patch annotation.
-// A Pod is a bound (awake) server-running Pod if it has an annotation
+// A Pod is a bound server-running Pod if it has an annotation
 // with the name "dual-pods.llm-d.ai/requester"; the annotations's value should
 // be `requestingPod.UID + " " + requestingPod.Name`.
-// A Pod is an unbound (sleeping) server-running Pod if it (1) is not bound and
+// A Pod is an unbound server-running Pod if it (1) is not bound and
 // (2) has an annotation
 // with name "dual-pods.llm-d.ai/nominal", whose value should be the base64 encoding
 // of the SHA-256 hash of bytes that are characteristic of the nominal server-running Pod
-// (excluding its name, this annotation, the identity of the server-requesting Pod, and the Node).
+// (including node, GPUs; excluding its name, this annotation, and the identity of the server-requesting Pod).
 // This API object metadata is the hard state about binding.
+
+// A bound server-running Pod normally has an awake inference server,
+// with possible exceptions during startup, shutdown, binding, and unbinding.
+// An unbound server-running Pod has an inference server that is sleeping.
 
 // The controller includes its finalizer when creating a bound server-running Pod,
 // and removes it when unbinding or recognizing the exogenous deletion of a server-running Pod.
@@ -82,6 +87,42 @@ const ControllerName = "dual-pods-controller"
 // and a value that is JSON for a map from UUID to index.
 const GPUMapName = "gpu-map"
 
+const GPUIndexName = "gpu"
+
+func GPUIndexFunc(obj any) ([]string, error) {
+	pod := obj.(*corev1.Pod)
+	if len(pod.Annotations[nominalHashAnnotationKey]) == 0 || pod.Spec.NodeName == "" {
+		return []string{}, nil
+	}
+	isIdx, _, err := getInferenceServerPort(pod)
+	if err != nil {
+		return []string{}, nil
+	}
+	isCtr := &pod.Spec.Containers[isIdx]
+	eIdx := slices.IndexFunc(isCtr.Env, func(e corev1.EnvVar) bool {
+		return e.Name == "CUDA_VISIBLE_DEVICES"
+	})
+	if eIdx < 0 || len(isCtr.Env[eIdx].Value) == 0 {
+		return []string{}, nil
+	}
+	visibleParts := strings.Split(isCtr.Env[eIdx].Value, ",")
+	keys, _ := SliceMap(visibleParts, func(gpu string) (string, error) {
+		return pod.Spec.NodeName + " " + strings.Trim(gpu, " "), nil
+	})
+	return keys, nil
+}
+
+const nominalHashIndexName = "nominal"
+
+func nominalHashIndexFunc(obj any) ([]string, error) {
+	pod := obj.(*corev1.Pod)
+	nominalHash := pod.Annotations[nominalHashAnnotationKey]
+	if len(nominalHash) == 0 {
+		return []string{}, nil
+	}
+	return []string{nominalHash}, nil
+}
+
 type Controller interface {
 	Start(context.Context) error
 }
@@ -108,7 +149,10 @@ func NewController(
 		inferenceServers: make(map[apitypes.UID]*serverData),
 	}
 	ctl.gpuMap.Store(&map[string]GpuLocation{})
-	err := ctl.podInformer.AddIndexers(cache.Indexers{requesterIndexName: requesterIndexFunc})
+	err := ctl.podInformer.AddIndexers(cache.Indexers{
+		requesterIndexName:   requesterIndexFunc,
+		nominalHashIndexName: nominalHashIndexFunc,
+		GPUIndexName:         GPUIndexFunc})
 	if err != nil { //impossible
 		return nil, err
 	}
