@@ -111,7 +111,7 @@ func (item infSvrItem) process(ctx context.Context, ctl *controller) (error, boo
 			// Reflect runningPod deletion to requestingPod deletion.
 			gonerRV := requesterRV
 			if shouldAddRequesterFinalizer { // don't let delete complete too quickly
-				gonerRV, err = ctl.addRequesterFinalizer(ctx, serverDat, requestingPod)
+				gonerRV, err = ctl.addRequesterFinalizer(ctx, requestingPod)
 				if err != nil {
 					return err, false
 				}
@@ -311,6 +311,7 @@ func (item infSvrItem) process(ctx context.Context, ctl *controller) (error, boo
 }
 
 var invalidPodRE = regexp.MustCompile(`^Pod "[a-z0-9.-]*" is invalid`)
+var apiAccessRE = regexp.MustCompile(`^kube-api-access-[a-z0-9]+$`)
 
 func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requestingPod, runningPod *corev1.Pod) (error, bool) {
 	logger := klog.FromContext(ctx)
@@ -327,7 +328,7 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 	logger.V(2).Info("Bound server-running Pod", "name", runningPod.Name, "node", requestingPod.Spec.NodeName, "gpus", serverDat.GPUIndices, "newResourceVersion", echo.ResourceVersion)
 	_, serverPort, err := getInferenceServerPort(runningPod)
 	if err != nil { // Impossible, because such a runningPod would never be created by this controller
-		return fmt.Errorf("unable to put server to sleep because port not known: %w", err), false
+		return fmt.Errorf("unable to wake up server because port not known: %w", err), false
 	}
 	wakeURL := fmt.Sprintf("http://%s:%d/wake_up", runningPod.Status.PodIP, serverPort)
 	resp, err := http.Post(wakeURL, "", nil)
@@ -338,8 +339,8 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 		return fmt.Errorf("failed to wake up, POST %s returned status %d", wakeURL, sc), false
 	}
 	serverDat.Sleeping = ptr.To(false)
-	logger.V(2).Info("Woke inference server")
-	return ctl.ensureReqStatus(ctx, requestingPod)
+	logger.V(2).Info("Woke inference server", "runningPod", runningPod.Name)
+	return ctl.ensureReqState(ctx, requestingPod, !slices.Contains(requestingPod.Finalizers, requesterFinalizer), false)
 }
 
 // maybeRemoveRequesterFinalizer removes the requesterFinalizer if necessary,
@@ -387,7 +388,7 @@ func (ctl *controller) maybeRemoveRequesterFinalizer(ctx context.Context, reques
 
 // addRequesterFinalizer does the API call to remove the controller's finalizer from the server-requesting Pod.
 // Returns (newResourceVersion string, err error)
-func (ctl *controller) addRequesterFinalizer(ctx context.Context, serverDat *serverData, requestingPod *corev1.Pod) (string, error) {
+func (ctl *controller) addRequesterFinalizer(ctx context.Context, requestingPod *corev1.Pod) (string, error) {
 	podOps := ctl.coreclient.Pods(ctl.namespace)
 	requestingPod = requestingPod.DeepCopy()
 	requestingPod.Finalizers = append(requestingPod.Finalizers, requesterFinalizer)
@@ -496,7 +497,7 @@ func (serverDat *serverData) getNominalServerRunningPod(ctx context.Context, req
 				Labels:    reqPod.Labels,
 				Namespace: reqPod.Namespace,
 			},
-			Spec: reqPod.Spec,
+			Spec: *deIndividualize(reqPod.Spec.DeepCopy()),
 		}
 		// marshal into json
 		baseJSON, err := json.Marshal(basePod)
@@ -518,6 +519,8 @@ func (serverDat *serverData) getNominalServerRunningPod(ctx context.Context, req
 		var modifiedHash [sha256.Size]byte
 		modifiedHashSl := hasher.Sum(modifiedHash[:0])
 		nominalHash := base64.RawStdEncoding.EncodeToString(modifiedHashSl)
+
+		logger.V(5).Info("Computed nominalHash", "nominalHash", nominalHash, "modifiedJSON", modifiedJSON, "gpus", *serverDat.GPUIndices, "node", reqPod.Spec.NodeName)
 
 		var pod = &corev1.Pod{}
 		// Decode back into Pod.
@@ -576,6 +579,36 @@ func (serverDat *serverData) getNominalServerRunningPod(ctx context.Context, req
 		serverDat.NominalRunningPodHash = nominalHash
 	}
 	return serverDat.NominalRunningPod, serverDat.NominalRunningPodHash, nil
+}
+
+// deIndividualize removes the parts of a PodSpec that are specific to an individual.
+// This func side-effects the given `*PodSpec` and returns it.
+func deIndividualize(podSpec *corev1.PodSpec) *corev1.PodSpec {
+	podSpec.EphemeralContainers = nil // these may not be given in Create
+	// The api-access Volume is individualized
+	volIdx := slices.IndexFunc(podSpec.Volumes, func(vol corev1.Volume) bool {
+		return apiAccessRE.MatchString(vol.Name)
+	})
+	if volIdx >= 0 {
+		volName := podSpec.Volumes[volIdx].Name
+		podSpec.Volumes = slices.Delete(podSpec.Volumes, volIdx, volIdx+1)
+		for ctrIdx := range podSpec.Containers {
+			removeVolumeMount(&podSpec.Containers[ctrIdx], volName)
+		}
+		for ctrIdx := range podSpec.InitContainers {
+			removeVolumeMount(&podSpec.Containers[ctrIdx], volName)
+		}
+	}
+	return podSpec
+}
+
+func removeVolumeMount(ctr *corev1.Container, volumeName string) {
+	mntIdx := slices.IndexFunc(ctr.VolumeMounts, func(mnt corev1.VolumeMount) bool {
+		return mnt.Name == volumeName
+	})
+	if mntIdx >= 0 {
+		ctr.VolumeMounts = slices.Delete(ctr.VolumeMounts, mntIdx, mntIdx+1)
+	}
 }
 
 // getInferenceServerPort, given a server-running Pod,
