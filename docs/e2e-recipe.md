@@ -324,3 +324,50 @@ dual-pods controller deletes the server-requesting Pod.
 
 Setup and create the dual pods. Then delete the Node that they are
 running on. Observe that eventually both Pods go away.
+
+## Example 7: Sleep and wake
+
+Testing wake-up is a little challenging when there are many GPUs
+available, because the likelihood of re-use is low. You can
+artificially improve your odds by pinning the server-requesting Pod to
+a node with few GPUs. For example, I did this by adding the following
+to the PodSpec in the ReplicaSet; I was using a cluster that had only
+one un-allocated GPU of that type.
+
+```yaml
+      nodeSelector: { "nvidia.com/gpu.product": "NVIDIA-L40S" }
+```
+
+Follow example 1, up through getting the server-running Pod.
+
+Next, scale the ReplicaSet down to zero replicas.
+
+```shell
+kubectl scale rs/my-request --replicas=0
+```
+
+Expect that the server-requesting Pod goes away and the server-running
+Pod continues to exist, with no finalizer. Expect that if you HTTP GET
+its `/is_sleeping` path, the response says that it is indeed
+sleeping. Examine the dual-pod controller's log.
+
+```shell
+kubectl logs deploy/dpctlr > /tmp/dpctlr.log
+```
+
+Expect to find a message "Unbound server-running Pod", and later a
+message "End of life of inference server".
+
+Next, scale the ReplicaSet back up to 1 replica. Expect to find a new
+server-requesting Pod, with a different name than before. Get the
+latest controller log. Now the question is, did the new
+server-requesting Pod get assigned the same GPU as the original?  Look
+for log message "Found GPUs", and look at the value of "gpuUUIDs". If
+it is NOT the same in the two log messages, the two server-requesting
+Pods did NOT get the same GPU assigned. Try again.
+
+If the two sever-requesting Pods got the same GPU assigned, expect the
+existing server-running Pod to be woken up and used. Look for a log
+message "Bound server-running Pod", and expect that no new
+server-running Pod is created. Expect a new "Successfully relayed the
+readiness" log message in the dual-pods controller log.
