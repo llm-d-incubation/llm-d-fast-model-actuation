@@ -245,7 +245,7 @@ type serverData struct {
 
 type queueItem interface {
 	// process returns (err error, retry bool).
-	// There will be a retry iff `retry || err != nil`.
+	// There will be a retry iff `retry`, error logged if `err != nil`.
 	process(ctx context.Context, ctl *controller) (error, bool)
 }
 
@@ -289,7 +289,7 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 	switch typed := obj.(type) {
 	case *corev1.Pod:
 		if item, isReq, owned := careAbout(typed); !owned {
-			ctl.enqueueLogger.V(5).Info("Ignoring irrelevant Pod", "name", typed.Name)
+			ctl.enqueueLogger.V(5).Info("Ignoring add of irrelevant Pod", "name", typed.Name)
 			return
 		} else {
 			nodeName := typed.Spec.NodeName
@@ -301,7 +301,7 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 					return
 				}
 			} else if nodeName == "" {
-				ctl.enqueueLogger.V(5).Info("Ignoring non-scheduled server-requesting Pod", "name", typed.Name)
+				ctl.enqueueLogger.V(5).Info("Ignoring add of non-scheduled server-requesting Pod", "name", typed.Name)
 				return
 			}
 			nd := ctl.getNodeData(nodeName)
@@ -328,7 +328,7 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 	switch typed := obj.(type) {
 	case *corev1.Pod:
 		if item, isReq, owned := careAbout(typed); !owned {
-			ctl.enqueueLogger.V(5).Info("Ignoring irrelevant Pod", "name", typed.Name)
+			ctl.enqueueLogger.V(5).Info("Ignoring update of irrelevant Pod", "name", typed.Name)
 			return
 		} else {
 			nodeName := typed.Spec.NodeName
@@ -340,7 +340,7 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 					return
 				}
 			} else if nodeName == "" {
-				ctl.enqueueLogger.V(5).Info("Ignoring non-scheduled server-requesting Pod", "name", typed.Name)
+				ctl.enqueueLogger.V(5).Info("Ignoring update of non-scheduled server-requesting Pod", "name", typed.Name)
 				return
 			}
 			nd := ctl.getNodeData(nodeName)
@@ -370,7 +370,7 @@ func (ctl *controller) OnDelete(obj any) {
 	switch typed := obj.(type) {
 	case *corev1.Pod:
 		if item, isReq, owned := careAbout(typed); !owned {
-			ctl.enqueueLogger.V(5).Info("Ignoring irrelevant Pod", "name", typed.Name)
+			ctl.enqueueLogger.V(5).Info("Ignoring delete of irrelevant Pod", "name", typed.Name)
 			return
 		} else {
 			nodeName := typed.Spec.NodeName
@@ -382,7 +382,7 @@ func (ctl *controller) OnDelete(obj any) {
 					return
 				}
 			} else if nodeName == "" {
-				ctl.enqueueLogger.V(5).Info("Ignoring non-scheduled server-requesting Pod", "name", typed.Name)
+				ctl.enqueueLogger.V(5).Info("Ignoring delete of non-scheduled server-requesting Pod", "name", typed.Name)
 				return
 			}
 			nd := ctl.getNodeData(nodeName)
@@ -425,7 +425,7 @@ func (ctl *controller) Start(ctx context.Context) error {
 }
 
 // process returns (err error, retry bool).
-// There will be a retry iff `retry || err != nil`.
+// There will be a retry iff `retry`, error logged if `err != nil`.
 func (ctl *controller) process(ctx context.Context, item queueItem) (error, bool) {
 	return item.process(ctx, ctl)
 }
@@ -436,7 +436,7 @@ func (item cmItem) process(ctx context.Context, ctl *controller) (error, bool) {
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			ctl.gpuMap.Store(nil)
-			logger.V(1).Info("ConfigMap " + GPUMapName + " does not exist")
+			return err, false
 		}
 		return err, true
 	}
@@ -506,14 +506,14 @@ func (nodeDat *nodeData) add(item itemOnNode) {
 	nodeDat.Items.Insert(item)
 }
 
-func (nodeDat *nodeData) pop() itemOnNode {
+// yankItems returns the currently queued items and empties the queue.
+// Caller can access the returned value without synchronization.
+func (nodeDat *nodeData) yankItems() sets.Set[itemOnNode] {
 	nodeDat.ItemsMutex.Lock()
 	defer nodeDat.ItemsMutex.Unlock()
-	for item := range nodeDat.Items {
-		nodeDat.Items.Delete(item)
-		return item
-	}
-	return nil
+	ans := nodeDat.Items
+	nodeDat.Items = sets.New[itemOnNode]()
+	return ans
 }
 
 func (ctl *controller) getServerData(nodeDat *nodeData, reqName string, reqUID apitypes.UID) *serverData {
