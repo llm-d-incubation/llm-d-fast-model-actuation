@@ -6,15 +6,20 @@ that the contributor is authorized to use.
 
 ## Setup
 
-Start by setting the shell variable `CONTAINER_IMG_REG` to the
-registry that you intend to use. For example, the following might work
-for you.
+Configure kubectl to work with the cluster of your choice.
+
+Run the script to populate the `gpu-map` ConfigMap.
+
+```shell
+scripts/ensure-nodes-mapped.sh
+```
+
+Set the shell variable `CONTAINER_IMG_REG` to the registry that you
+intend to use. For example, the following might work for you.
 
 ```shell
 CONTAINER_IMG_REG=quay.io/${LOGNAME}/fma
 ```
-
-Configure kubectl to work with the cluster of your choice.
 
 Build and push the requester container image with a command like the
 following. You can omit the `TARGETARCH` if the runtime ISA matches
@@ -53,36 +58,33 @@ example, that would go as follows.
 CONTROLLER_IMG_TAG=b699bc6 # JUST AN EXAMPLE - USE WHAT YOU BUILT
 ```
 
-Run the script to populate the `gpu-map` ConfigMap.
-
-```shell
-scripts/ensure-nodes-mapped.sh
-```
-
 Instantiate the Helm chart for the dual-pods controller. Specify the
 tag produced by the build above. Specify the name of the ClusterRole
 to use for Node get/list/watch authorization, or omit if not
-needed. NOTE: if you have done this before then you will need to
-delete the old Helm chart instance before re-making it.
+needed. Adjust the SleepLimit setting to your liking (the default is
+2).
+
+NOTE: if you have done this before then you will need to delete the
+old Helm chart instance before re-making it.
 
 ```shell
-helm upgrade --install dpctlr charts/dpctlr --set Image="${CONTAINER_IMG_REG}/dual-pods-controller:${CONTROLLER_IMG_TAG}" --set NodeViewClusterRole=vcp-node-viewer
+helm upgrade --install dpctlr charts/dpctlr --set Image="${CONTAINER_IMG_REG}/dual-pods-controller:${CONTROLLER_IMG_TAG}" --set NodeViewClusterRole=vcp-node-viewer --set SleepLimit=1
 ```
 
-## Example 1: cycle server-requesting Pod
-
-Create a ReplicaSet of 1 server-requesting Pod. Following are two
-examples. The first is rather minimal. The second uses model staging
-and torch.compile caching.
+Finally, define a shell function that creates a new ReplicaSet whose
+members will not match members of other invocations of this same shell
+function. Following are two examples. The first is rather minimal. The
+second uses model staging and torch.compile caching.
 
 ### Simple ReplicaSet
 
 ```shell
+function mkrs() {
 kubectl apply -f - <<EOF
 apiVersion: apps/v1
 kind: ReplicaSet
 metadata:
-  name: my-request
+  name: my-request-$(date +%H-%M-%S)
 spec:
   replicas: 1
   selector:
@@ -92,6 +94,7 @@ spec:
     metadata:
       labels:
         app: dp-example
+        instance: "$(date +%H-%M-%S)"
       annotations:
         dual-pod.llm-d.ai/admin-port: "8081"
         dual-pod.llm-d.ai/server-patch: |
@@ -109,6 +112,7 @@ spec:
               - serve
               - --port=8000
               - --model=ibm-granite/granite-3.3-2b-instruct
+              - --enable-sleep-mode
               - --max-model-len=32768
               env:
               - name: VLLM_SERVER_DEV_MODE
@@ -155,6 +159,7 @@ spec:
               cpu: "1"
               memory: 250Mi
 EOF
+}
 ```
 
 ### ReplicaSet using model staging and torch.compile caching
@@ -168,11 +173,12 @@ Node. This example also supposes that the torch.compile cache is
 shared throughout the cluster in a shared PVC.
 
 ```shell
+function mkrs() {
 kubectl apply -f - <<EOF
 apiVersion: apps/v1
 kind: ReplicaSet
 metadata:
-  name: my-request
+  name: my-request-$(date +%H-%M-%S)
 spec:
   replicas: 1
   selector:
@@ -182,6 +188,7 @@ spec:
     metadata:
       labels:
         app: dp-example
+        instance: "$(date +%H-%M-%S)"
       annotations:
         dual-pod.llm-d.ai/admin-port: "8081"
         dual-pod.llm-d.ai/server-patch: |
@@ -199,6 +206,7 @@ spec:
               - serve
               - --port=8000
               - /pvcs/local/vcp/hf/models--ibm-granite--granite-3.3-2b-instruct/snapshots/707f574c62054322f6b5b04b6d075f0a8f05e0f0
+              - --enable-sleep-mode
               - --max-model-len=32768
               env:
               - name: VLLM_CACHE_ROOT
@@ -256,6 +264,16 @@ spec:
         persistentVolumeClaim:
           claimName: vcp-cephfs-shared
 EOF
+}
+```
+
+
+## Example 1: cycle server-requesting Pod
+
+Create a ReplicaSet of 1 server-requesting Pod. 
+
+```shell
+mkrs
 ```
 
 ### Expect a server-running Pod
@@ -281,19 +299,20 @@ shows that vLLM has completed starting up.
 
 ### Delete server-requesting Pod
 
-Use `kubectl` to delete the ReplicaSet. Expect that the
-server-requesting and server-running Pods get deleted.
+Use `kubectl scale --replicas=0` to scale the ReplicaSet down to 0
+replicas. Expect that the server-requesting and server-running Pods
+get deleted.
 
 ## Example 2: reflect server-running Pod deletion
 
 Start like example 1, but finish by deleting the server-running Pod
-instead of the ReplicaSet. Expect that the server-running and
-server-requesting Pods both go away, and then a replacement
+instead of the server-requesting one. Expect that the server-running
+and server-requesting Pods both go away, and then a replacement
 server-requesting Pod should appear and get satisfied as in example 1.
 
 ## Example 3: deletions while controller is not running
 
-Modify the first two examples by surrounding the `kubectl delete` by
+Modify the first two examples by surrounding the pod deletion by
 first `helm delete dpctlr` to remove the controller and then, after
 the Pod deletion, re-instantiate the controller Helm chart. The right
 stuff should finish happening after the second controller starts up.
@@ -371,3 +390,6 @@ existing server-running Pod to be woken up and used. Look for a log
 message "Bound server-running Pod", and expect that no new
 server-running Pod is created. Expect a new "Successfully relayed the
 readiness" log message in the dual-pods controller log.
+
+## Example 8: Exercise sleeper limit
+

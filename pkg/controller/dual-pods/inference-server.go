@@ -25,7 +25,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"iter"
 	"net/http"
 	"os"
 	"regexp"
@@ -178,6 +177,22 @@ func (item infSvrItem) process(ctx context.Context, ctl *controller, nodeDat *no
 	// If the server-requesting Pod is absent or being deleted,
 	// ensure that the server-running Pod is not bound.
 	if (requestingPod == nil || requestingPod.DeletionTimestamp != nil) && runningPod != nil {
+		// Time to unbind.
+		// As a special favor, delete runningPod if it is in trouble.
+		if podIsInTrouble(runningPod) {
+			err := podOps.Delete(ctx, runningPod.Name, metav1.DeleteOptions{
+				Preconditions:     &metav1.Preconditions{UID: &runningPod.UID, ResourceVersion: &runningPod.ResourceVersion},
+				PropagationPolicy: ptr.To(metav1.DeletePropagationBackground),
+			})
+			if err == nil {
+				logger.V(2).Info("Deleted server-running Pod because it is in trouble", "runnerName", runningPod.Name)
+				return nil, false
+			} else if apierrors.IsNotFound(err) || apierrors.IsGone(err) {
+				logger.V(5).Info("Troubled server-running Pod was concurrently deleted", "runnerName", runningPod.Name)
+			} else {
+				logger.V(2).Info("Failed to delete troubled server-running Pod", "runnerName", runningPod.Name)
+			}
+		}
 		err := ctl.ensureUnbound(ctx, serverDat, runningPod)
 		if err != nil {
 			return err, false
@@ -351,6 +366,26 @@ func (item infSvrItem) process(ctx context.Context, ctl *controller, nodeDat *no
 	logger.V(2).Info("Created server-running pod", "name", echo.Name, "gpus", serverDat.GPUIndicesStr, "annotations", echo.Annotations, "labels", echo.Labels, "resourceVersion", echo.ResourceVersion)
 
 	return ctl.ensureReqStatus(ctx, requestingPod)
+}
+
+// Trouble is both (a) some container restarts and (b) Pod not ready
+func podIsInTrouble(pod *corev1.Pod) bool {
+	var sumRestarts int32
+	for _, ctrStat := range pod.Status.ContainerStatuses {
+		sumRestarts += ctrStat.RestartCount
+	}
+	if sumRestarts == 0 {
+		return false
+	}
+	condIdx := slices.IndexFunc(pod.Status.Conditions, func(cond corev1.PodCondition) bool {
+		return cond.Type == "Ready"
+	})
+	if condIdx >= 0 {
+		if pod.Status.Conditions[condIdx].Status == corev1.ConditionTrue {
+			return false
+		}
+	}
+	return true
 }
 
 var invalidPodRE = regexp.MustCompile(`^Pod "[a-z0-9.-]*" is invalid`)
@@ -873,23 +908,6 @@ func SliceMap[Domain, Range any](slice []Domain, mapFn func(Domain) (Range, erro
 		}
 	}
 	return mapped, errors
-}
-
-func SeqMapSpliced[Dom, Rng any](input iter.Seq[Dom], mapFn func(Dom) iter.Seq[Rng]) iter.Seq[Rng] {
-	return func(yield func(Rng) bool) {
-		input(func(inElt Dom) bool {
-			continyu := true
-			innerSeq := mapFn(inElt)
-			innerSeq(func(e Rng) bool {
-				if !yield(e) {
-					continyu = false
-					return false
-				}
-				return true
-			})
-			return continyu
-		})
-	}
 }
 
 func SliceRemoveOnce[Elt comparable](slice []Elt, goner Elt) ([]Elt, bool) {
