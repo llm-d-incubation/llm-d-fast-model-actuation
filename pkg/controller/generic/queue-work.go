@@ -103,7 +103,7 @@ func (ctl *QueueAndWorkers[Item]) processNextWorkItem(ctx context.Context) bool 
 		return false
 	}
 	defer ctl.Queue.Done(objRef)
-	logger.V(4).Info("Popped workqueue item", "item", objRef)
+	logger.V(4).Info("Popped workqueue item", "item", objRef, "itemType", fmt.Sprintf("%T", objRef))
 	if ans := ctl.earlySync(ctx, objRef); ans != nil {
 		return *ans
 	}
@@ -111,16 +111,22 @@ func (ctl *QueueAndWorkers[Item]) processNextWorkItem(ctx context.Context) bool 
 	var retry bool
 	defer func() {
 		if err == nil {
-			// If no error occurs we Forget this item so it does not
-			// get queued again until another change happens.
-			ctl.Queue.Forget(objRef)
-			logger.V(4).Info("Processed workqueue item successfully.", "item", objRef, "itemType", fmt.Sprintf("%T", objRef))
+			if retry {
+				// Nothing went wrong but this item needs to be requeued for reprocessing.
+				ctl.Queue.AddRateLimited(objRef)
+				logger.V(4).Info("Processed workqueue item successfully, requeued for follow-up.", "item", objRef)
+			} else {
+				// If no error occurs we Forget this item so it does not
+				// get queued again until another change happens.
+				ctl.Queue.Forget(objRef)
+				logger.V(4).Info("Processed workqueue item successfully.", "item", objRef)
+			}
 		} else if retry {
 			ctl.Queue.AddRateLimited(objRef)
-			logger.V(4).Info("Encountered transient error while processing workqueue item; do not be alarmed, this will be retried later", "item", objRef, "itemType", fmt.Sprintf("%T", objRef), "err", err)
+			logger.V(4).Info("Encountered transient error while processing workqueue item; do not be alarmed, this will be retried later", "item", objRef, "err", err)
 		} else {
 			ctl.Queue.Forget(objRef)
-			logger.Error(err, "Failed to process workqueue item", "item", objRef, "itemType", fmt.Sprintf("%T", objRef))
+			logger.Error(err, "Failed to process workqueue item", "item", objRef)
 		}
 	}()
 	err, retry = ctl.Process(ctx, objRef)

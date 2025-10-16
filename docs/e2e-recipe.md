@@ -68,13 +68,39 @@ NOTE: if you have done this before then you will need to delete the
 old Helm chart instance before re-making it.
 
 ```shell
-helm upgrade --install dpctlr charts/dpctlr --set Image="${CONTAINER_IMG_REG}/dual-pods-controller:${CONTROLLER_IMG_TAG}" --set NodeViewClusterRole=vcp-node-viewer --set SleepLimit=1
+helm upgrade --install dpctlr charts/dpctlr --set Image="${CONTAINER_IMG_REG}/dual-pods-controller:${CONTROLLER_IMG_TAG}" --set NodeViewClusterRole=vcp-node-viewer --set SleeperLimit=1
 ```
 
 Finally, define a shell function that creates a new ReplicaSet whose
 members will not match members of other invocations of this same shell
 function. Following are two examples. The first is rather minimal. The
 second uses model staging and torch.compile caching.
+
+Following are some things to keep in mind about these definitions.
+
+- It is critical that the server patch change the label set to not
+  match the selector of the ReplicaSet.
+
+- Make sure that the (main, not GPU) memory limit stated in the
+  resources section is big enough to contain the off-loaded model
+  tensors (for when the inference server is put to sleep).
+
+- Limit the GPU memory utilization to leave enough room for the number
+  of sleeping servers that you configured the dual-pods controller to
+  allow.
+
+- You may need to add a `vllm serve` argument for `--kv-cache-memory`.
+  I do not understand why the default gets into trouble, but I see it
+  doing that. Look in the startup log from vllm for a statement like
+  the following (showing that it is using too much memory for kv
+  cache): "Free memory on device (43.9/44.39 GiB) on startup. Desired
+  GPU memory utilization is (0.8, 35.51 GiB). Actual usage is 4.74 GiB
+  for weight, 0.23 GiB for peak activation, 0.02 GiB for non-torch
+  memory, and 0.62 GiB for CUDAGraph memory. Replace
+  gpu_memory_utilization config with `--kv-cache-memory=31966072012`
+  to fit into requested memory, or `--kv-cache-memory=40974729216` to
+  fully utilize gpu memory. Current kv cache memory in use is
+  32786058444 bytes".
 
 ### Simple ReplicaSet
 
@@ -85,6 +111,8 @@ apiVersion: apps/v1
 kind: ReplicaSet
 metadata:
   name: my-request-$(date +%H-%M-%S)
+  labels:
+    app: dp-example
 spec:
   replicas: 1
   selector:
@@ -114,6 +142,7 @@ spec:
               - --model=ibm-granite/granite-3.3-2b-instruct
               - --enable-sleep-mode
               - --max-model-len=32768
+              - --gpu-memory-utilization=0.8
               env:
               - name: VLLM_SERVER_DEV_MODE
                 value: "1"
@@ -130,7 +159,7 @@ spec:
               resources:
                 limits:
                   cpu: "2"
-                  memory: 6Gi
+                  memory: 9Gi
               readinessProbe:
                 httpGet:
                   path: /health
@@ -179,6 +208,8 @@ apiVersion: apps/v1
 kind: ReplicaSet
 metadata:
   name: my-request-$(date +%H-%M-%S)
+  labels:
+    app: dp-example
 spec:
   replicas: 1
   selector:
@@ -208,6 +239,7 @@ spec:
               - /pvcs/local/vcp/hf/models--ibm-granite--granite-3.3-2b-instruct/snapshots/707f574c62054322f6b5b04b6d075f0a8f05e0f0
               - --enable-sleep-mode
               - --max-model-len=32768
+              - --gpu-memory-utilization=0.8
               env:
               - name: VLLM_CACHE_ROOT
                 value: /pvcs/shared/vcp/vllm
@@ -220,7 +252,7 @@ spec:
               resources:
                 limits:
                   cpu: "2"
-                  memory: 6Gi
+                  memory: 9Gi
               readinessProbe:
                 httpGet:
                   path: /health
@@ -270,7 +302,7 @@ EOF
 
 ## Example 1: cycle server-requesting Pod
 
-Create a ReplicaSet of 1 server-requesting Pod. 
+Create a ReplicaSet of 1 server-requesting Pod.
 
 ```shell
 mkrs

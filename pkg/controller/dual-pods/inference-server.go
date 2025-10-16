@@ -59,28 +59,24 @@ func (ni nodeItem) process(ctx context.Context, ctl *controller) (error, bool) {
 	logger := klog.FromContext(ctx).WithValues("node", ni.NodeName)
 	ctx = klog.NewContext(ctx, logger)
 	nodeDat := ctl.getNodeData(ni.NodeName)
-	retries := sets.New[itemOnNode]()
-	logger.V(4).Info("Processing items for node")
-	for {
-		localItem := nodeDat.pop()
-		if localItem == nil {
-			break
-		}
-		logger.V(4).Info("Popped node-local item", "item", localItem)
+	items := nodeDat.yankItems()
+	var retries int
+	logger.V(4).Info("Processing items for node", "count", len(items))
+	for localItem := range items {
+		logger.V(4).Info("Processing node-local item", "item", localItem)
 		err, retry := localItem.process(ctx, ctl, nodeDat)
 		if err != nil {
-			logger.Error(err, "Processing node local item failed", "item", localItem)
-			retry = true
+			logger.Error(err, "Processing node local item failed", "item", localItem, "willRetry", retry)
+		} else {
+			logger.V(4).Info("Finished processing node-local item", "item", localItem, "willRetry", retry)
 		}
 		if retry {
-			retries.Insert(localItem)
+			nodeDat.add(localItem)
+			retries++
 		}
 	}
-	for localItem := range retries {
-		nodeDat.add(localItem)
-	}
-	logger.V(4).Info("Done processing items for node", "thoseToRetry", retries.UnsortedList())
-	return nil, len(retries) > 0
+	logger.V(4).Info("Done processing items for node", "numToRetry", retries)
+	return nil, retries > 0
 }
 
 func (item infSvrItem) process(ctx context.Context, ctl *controller, nodeDat *nodeData) (error, bool) {
@@ -147,9 +143,11 @@ func (item infSvrItem) process(ctx context.Context, ctl *controller, nodeDat *no
 			if shouldAddRequesterFinalizer { // don't let delete complete too quickly
 				gonerRV, err = ctl.addRequesterFinalizer(ctx, requestingPod)
 				if err != nil {
-					return err, false
+					return err, true
 				}
 			}
+			runnerJSON, marshalErr := json.Marshal(runningPod)
+			logger.V(3).Info("Requesting deletion of server-requesting Pod because of deletion of server-running Pod", "runnerJSON", string(runnerJSON), "marshalErr", marshalErr)
 			err := podOps.Delete(ctx, requestingPod.Name, metav1.DeleteOptions{
 				PropagationPolicy: ptr.To(metav1.DeletePropagationBackground),
 				Preconditions:     &metav1.Preconditions{UID: &item.UID, ResourceVersion: &gonerRV}})
@@ -158,14 +156,14 @@ func (item infSvrItem) process(ctx context.Context, ctl *controller, nodeDat *no
 			} else if apierrors.IsGone(err) || apierrors.IsNotFound(err) {
 				logger.V(5).Info("The server-requesting Pod is already gone")
 			} else {
-				return fmt.Errorf("failed to delete server-requesting Pod: %w", err), false
+				return fmt.Errorf("failed to delete server-requesting Pod: %w", err), true
 			}
 			serverDat.RequesterDeleteRequested = true
 		}
 		// Ensure finalizer is absent from server-running Pod so that its deletion can complete
 		changed, err := ctl.removeRunnerFinalizer(ctx, runningPod)
 		if err != nil {
-			return err, false
+			return err, true
 		}
 		if !changed {
 			logger.V(5).Info("Finalizer is absent from server-running Pod, waiting for deletions to finish")
@@ -180,6 +178,7 @@ func (item infSvrItem) process(ctx context.Context, ctl *controller, nodeDat *no
 		// Time to unbind.
 		// As a special favor, delete runningPod if it is in trouble.
 		if podIsInTrouble(runningPod) {
+			logger.V(3).Info("Deleting server-running Pod because it is in trouble", "runnerName", runningPod.Name)
 			err := podOps.Delete(ctx, runningPod.Name, metav1.DeleteOptions{
 				Preconditions:     &metav1.Preconditions{UID: &runningPod.UID, ResourceVersion: &runningPod.ResourceVersion},
 				PropagationPolicy: ptr.To(metav1.DeletePropagationBackground),
@@ -195,7 +194,7 @@ func (item infSvrItem) process(ctx context.Context, ctl *controller, nodeDat *no
 		}
 		err := ctl.ensureUnbound(ctx, serverDat, runningPod)
 		if err != nil {
-			return err, false
+			return err, true
 		}
 		if requestingPod != nil {
 			return ctl.ensureReqState(ctx, requestingPod, false, true)
@@ -244,21 +243,21 @@ func (item infSvrItem) process(ctx context.Context, ctl *controller, nodeDat *no
 		if serverDat.Sleeping == nil || *(serverDat.Sleeping) {
 			_, serverPort, err := getInferenceServerPort(runningPod)
 			if err != nil { // Impossible, because such a runningPod would never be created by this controller
-				return fmt.Errorf("unable to put server to sleep because port not known: %w", err), false
+				return fmt.Errorf("unable to put server to sleep because port not known: %w", err), true
 			}
 			wakeURL := fmt.Sprintf("http://%s:%d/wake_up", runningPod.Status.PodIP, serverPort)
 			resp, err := http.Post(wakeURL, "", nil)
 			if err != nil {
-				return fmt.Errorf("failed to wake up, POST %s got error: %w", wakeURL, err), false
+				return fmt.Errorf("failed to wake up, POST %s got error: %w", wakeURL, err), true
 			}
 			if sc := resp.StatusCode; sc != http.StatusOK {
-				return fmt.Errorf("failed to wake up, POST %s returned status %d", wakeURL, sc), false
+				return fmt.Errorf("failed to wake up, POST %s returned status %d", wakeURL, sc), true
 			}
 			serverDat.Sleeping = ptr.To(false)
 		}
 		err, _ := ctl.ensureReqState(ctx, requestingPod, shouldAddRequesterFinalizer, false)
 		if err != nil {
-			return err, false
+			return err, true
 		}
 		// Relay readiness if not already done
 		ready := isPodReady(runningPod)
@@ -419,6 +418,7 @@ func (ctl *controller) enforceSleeperBudget(ctx context.Context, serverDat *serv
 		}
 		for _, goner := range sleepingPods[:toGo] {
 			gonerNames.Insert(goner.Name)
+			logger.V(3).Info("Deleting server-running Pod with sleeping server", "name", goner.Name)
 			err := podOps.Delete(ctx, goner.Name, metav1.DeleteOptions{
 				Preconditions:     &metav1.Preconditions{UID: &goner.UID, ResourceVersion: &goner.ResourceVersion},
 				PropagationPolicy: ptr.To(metav1.DeletePropagationBackground),
@@ -428,7 +428,7 @@ func (ctl *controller) enforceSleeperBudget(ctx context.Context, serverDat *serv
 			} else if apierrors.IsNotFound(err) || apierrors.IsGone(err) {
 				logger.V(5).Info("Server-running Pod was concurrently deleted", "name", goner.Name)
 			} else {
-				return fmt.Errorf("unable to delete server-running Pod %s: %w", goner.Name, err), false
+				return fmt.Errorf("unable to delete server-running Pod %s: %w", goner.Name, err), true
 			}
 		}
 	}
@@ -445,20 +445,20 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 	serverDat.Sleeping = nil
 	echo, err := ctl.coreclient.Pods(ctl.namespace).Update(ctx, runningPod, metav1.UpdateOptions{FieldManager: ControllerName})
 	if err != nil {
-		return fmt.Errorf("failed to bind server-running Pod %s: %w", runningPod.Name, err), false
+		return fmt.Errorf("failed to bind server-running Pod %s: %w", runningPod.Name, err), true
 	}
 	logger.V(2).Info("Bound server-running Pod", "name", runningPod.Name, "node", requestingPod.Spec.NodeName, "gpus", serverDat.GPUIndicesStr, "newResourceVersion", echo.ResourceVersion)
 	_, serverPort, err := getInferenceServerPort(runningPod)
 	if err != nil { // Impossible, because such a runningPod would never be created by this controller
-		return fmt.Errorf("unable to wake up server because port not known: %w", err), false
+		return fmt.Errorf("unable to wake up server because port not known: %w", err), true
 	}
 	wakeURL := fmt.Sprintf("http://%s:%d/wake_up", runningPod.Status.PodIP, serverPort)
 	resp, err := http.Post(wakeURL, "", nil)
 	if err != nil {
-		return fmt.Errorf("failed to wake up, POST %s got error: %w", wakeURL, err), false
+		return fmt.Errorf("failed to wake up, POST %s got error: %w", wakeURL, err), true
 	}
 	if sc := resp.StatusCode; sc != http.StatusOK {
-		return fmt.Errorf("failed to wake up, POST %s returned status %d", wakeURL, sc), false
+		return fmt.Errorf("failed to wake up, POST %s returned status %d", wakeURL, sc), true
 	}
 	serverDat.Sleeping = ptr.To(false)
 	logger.V(2).Info("Woke inference server", "runningPod", runningPod.Name)
@@ -778,7 +778,7 @@ func (ctl *controller) ensureReqState(ctx context.Context, requestingPod *corev1
 	logger := klog.FromContext(ctx)
 	newStatusBytes, err := json.Marshal(status)
 	if err != nil { // impossible; handle by infinite retry
-		return fmt.Errorf("failed to marshal status (%#v): %w", status, err), false
+		return fmt.Errorf("failed to marshal status (%#v): %w", status, err), true
 	}
 	newStatusStr := string(newStatusBytes)
 	oldStatusStr := requestingPod.Annotations[api.ServerPatchAnnotationErrorsName]
@@ -804,7 +804,7 @@ func (ctl *controller) ensureReqState(ctx context.Context, requestingPod *corev1
 	} else {
 		logger.V(3).Info("Failed to set status/finalizers", "serverRequestingPod", requestingPod.Name, "status", status, "finalizers", requestingPod.Finalizers, "resourceVersion", requestingPod.ResourceVersion)
 	}
-	return err, false
+	return err, err != nil
 }
 
 // postToReadiness does the HTTP POST request/response to the given URL.
