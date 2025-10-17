@@ -25,6 +25,7 @@ spec:
         - /ko-app/dual-pods-controller
         - "-v=5"
         - "--namespace=$(POD_NAMESPACE)"
+        - "--sleeper-limit={{ .Values.SleeperLimit }}"
         env:
         - name: POD_NAMESPACE
           valueFrom:

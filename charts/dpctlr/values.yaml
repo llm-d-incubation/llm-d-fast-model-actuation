@@ -5,3 +5,7 @@ Image: ghcr.io/llm-d-incubation/llm-d-fast-model-actuation-controller:latest
 # get/list/watch Node objects.
 # Empty string means no new RoleBinding is needed.
 NodeViewClusterRole: ""
+
+# Limit on the number of server-running Pods with a sleeping
+# inference server, per GPU.
+SleeperLimit: 2
