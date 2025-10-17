@@ -392,7 +392,36 @@ var apiAccessRE = regexp.MustCompile(`^kube-api-access-[a-z0-9]+$`)
 func (ctl *controller) enforceSleeperBudget(ctx context.Context, serverDat *serverData, requestingPod *corev1.Pod) (error, bool) {
 	logger := klog.FromContext(ctx)
 	podOps := ctl.coreclient.Pods(ctl.namespace)
-	gonerNames := sets.New[string]()                // names of deleted server-running Pods
+	gonerNames := sets.New[string]() // names of deleted server-running Pods
+	now := time.Now()
+	nameToAge := map[string]time.Duration{}
+	getAge := func(pod *corev1.Pod) time.Duration {
+		age, have := nameToAge[pod.Name]
+		if !have {
+			idx := slices.IndexFunc(pod.ManagedFields, func(mf metav1.ManagedFieldsEntry) bool {
+				return mf.Manager == ControllerName
+			})
+			if idx >= 0 {
+				age = now.Sub(pod.ManagedFields[idx].Time.Time)
+			} else {
+				age = now.Sub(pod.CreationTimestamp.Time)
+			}
+			nameToAge[pod.Name] = age
+		}
+		return age
+	}
+	comparePods := func(left, right *corev1.Pod) int {
+		leftAge := getAge(left)
+		rightAge := getAge(right)
+		switch {
+		case leftAge > rightAge:
+			return -1
+		case rightAge > leftAge:
+			return 1
+		default:
+			return strings.Compare(left.Name, right.Name)
+		}
+	}
 	for _, gpuIndex := range serverDat.GPUIndices { // enforce sleeper budget on this GPU
 		// This is really simple logic. Just pick some without preference.
 		// Recognize deletions done for the sake of other GPUs.
@@ -415,14 +444,15 @@ func (ctl *controller) enforceSleeperBudget(ctx context.Context, serverDat *serv
 		if toGo <= 0 {
 			continue
 		}
-		for _, goner := range sleepingPods[:toGo] {
+		slices.SortFunc(sleepingPods, comparePods)
+		for idx, goner := range sleepingPods[:toGo] {
 			gonerNames.Insert(goner.Name)
 			err := podOps.Delete(ctx, goner.Name, metav1.DeleteOptions{
 				Preconditions:     &metav1.Preconditions{UID: &goner.UID, ResourceVersion: &goner.ResourceVersion},
 				PropagationPolicy: ptr.To(metav1.DeletePropagationBackground),
 			})
 			if err == nil {
-				logger.V(2).Info("Deleted server-running Pod with sleeping server, to respect sleeper-limit", "name", goner.Name, "resourceVersion", goner.ResourceVersion)
+				logger.V(2).Info("Deleted server-running Pod with sleeping server, to respect sleeper-limit", "idx", idx, "total", len(sleepingPods), "limit", ctl.sleeperLimit, "name", goner.Name, "resourceVersion", goner.ResourceVersion)
 			} else if apierrors.IsNotFound(err) || apierrors.IsGone(err) {
 				logger.V(5).Info("Server-running Pod was concurrently deleted", "name", goner.Name)
 			} else {
