@@ -234,6 +234,8 @@ type serverData struct {
 	GPUIndices    []string
 	GPUIndicesStr *string
 
+	RunningPodName string
+
 	ReadinessRelayed *bool
 
 	Sleeping *bool
