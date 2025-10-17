@@ -423,3 +423,17 @@ readiness" log message in the dual-pods controller log.
 
 ## Example 8: Exercise sleeper limit
 
+Repeatedly create a server-requesting Pod, wait for its server-running
+Pod to appear and become ready, then delete the sever-requesting Pod,
+observe that the server-running Pod remains. With the dual-pods
+controller configured with a sleeper limit of N, build up N+1
+server-running Pods (all with sleeping vllm) using some particular
+GPU. Look in the dual-pod controller's log to see which GPU each
+runner uses. Next, create one more server-requesting Pod that gets
+bound to the same GPU. Observe that exactly 1 of the old
+server-running Pods gets delete --- the oldest one.
+
+Or, for more fun, before going past N+1, make a server-requesting Pod
+that causes the oldest runner to be re-used. Then delete that
+requester. Then force a deletion; observe that the deled one is the
+least recently used.
