@@ -33,13 +33,17 @@ import (
 )
 
 func main() {
-	numWorkers := 2
+	config := dpctlr.ControllerConfig{
+		SleeperLimit: 1,
+		NumWorkers:   2,
+	}
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 	overrides := &clientcmd.ConfigOverrides{}
 
 	klog.InitFlags(flag.CommandLine)
 	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
-	pflag.CommandLine.IntVar(&numWorkers, "num-workers", numWorkers, "number of queue worker goroutines")
+	pflag.CommandLine.IntVar(&config.SleeperLimit, "sleeper-limit", config.SleeperLimit, "limit on number of sleeping inference servers per GPU")
+	pflag.CommandLine.IntVar(&config.NumWorkers, "num-workers", config.NumWorkers, "number of queue worker goroutines")
 	AddFlags(*pflag.CommandLine, loadingRules, overrides)
 	pflag.Parse()
 	ctx := context.Background()
@@ -68,12 +72,11 @@ func main() {
 	}
 	kubePreInformers := kubeinformers.NewSharedInformerFactoryWithOptions(kubeClient, 0, kubeinformers.WithNamespace(overrides.Context.Namespace))
 
-	ctlr, err := dpctlr.NewController(
+	ctlr, err := config.NewController(
 		logger,
 		kubeClient.CoreV1(),
 		overrides.Context.Namespace,
 		kubePreInformers.Core().V1(),
-		numWorkers,
 	)
 	if err != nil {
 		klog.Fatal(err)

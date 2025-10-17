@@ -19,15 +19,18 @@ package dualpods
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	apitypes "k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/sets"
 	corev1preinformers "k8s.io/client-go/informers/core/v1"
 	coreclient "k8s.io/client-go/kubernetes/typed/core/v1"
 	corev1listers "k8s.io/client-go/listers/core/v1"
@@ -43,15 +46,19 @@ import (
 // The controller works in the context of one Kubernetes API namespace.
 
 // A Pod is a server-requesting Pod if it has the server patch annotation.
-// A Pod is a bound (awake) server-running Pod if it has an annotation
+// A Pod is a bound server-running Pod if it has an annotation
 // with the name "dual-pods.llm-d.ai/requester"; the annotations's value should
 // be `requestingPod.UID + " " + requestingPod.Name`.
-// A Pod is an unbound (sleeping) server-running Pod if it (1) is not bound and
+// A Pod is an unbound server-running Pod if it (1) is not bound and
 // (2) has an annotation
 // with name "dual-pods.llm-d.ai/nominal", whose value should be the base64 encoding
 // of the SHA-256 hash of bytes that are characteristic of the nominal server-running Pod
-// (excluding its name, this annotation, the identity of the server-requesting Pod, and the Node).
+// (including node, GPUs; excluding its name, this annotation, and the identity of the server-requesting Pod).
 // This API object metadata is the hard state about binding.
+
+// A bound server-running Pod normally has an awake inference server,
+// with possible exceptions during startup, shutdown, binding, and unbinding.
+// An unbound server-running Pod has an inference server that is sleeping.
 
 // The controller includes its finalizer when creating a bound server-running Pod,
 // and removes it when unbinding or recognizing the exogenous deletion of a server-running Pod.
@@ -71,6 +78,9 @@ import (
 const requesterAnnotationKey = "dual-pods.llm-d.ai/requester"
 const nominalHashAnnotationKey = "dual-pods.llm-d.ai/nominal"
 
+const runnerFinalizer = "dual-pods.llm-d.ai/runner"
+const requesterFinalizer = "dual-pods.llm-d.ai/requester"
+
 const ControllerName = "dual-pods-controller"
 
 // GPUMapName is the name of the ConfigMap(s) parsed to discover the mapping from GPU UUID to location.
@@ -79,7 +89,46 @@ const ControllerName = "dual-pods-controller"
 // and a value that is JSON for a map from UUID to index.
 const GPUMapName = "gpu-map"
 
-const runnerFinalizer = "dual-pods.llm-d.ai/runner"
+const GPUIndexName = "gpu"
+
+func GPUIndexFunc(obj any) ([]string, error) {
+	pod := obj.(*corev1.Pod)
+	if len(pod.Annotations[nominalHashAnnotationKey]) == 0 || pod.Spec.NodeName == "" {
+		return []string{}, nil
+	}
+	isIdx, _, err := getInferenceServerPort(pod)
+	if err != nil {
+		return []string{}, nil
+	}
+	isCtr := &pod.Spec.Containers[isIdx]
+	eIdx := slices.IndexFunc(isCtr.Env, func(e corev1.EnvVar) bool {
+		return e.Name == "CUDA_VISIBLE_DEVICES"
+	})
+	if eIdx < 0 || len(isCtr.Env[eIdx].Value) == 0 {
+		return []string{}, nil
+	}
+	visibleParts := strings.Split(isCtr.Env[eIdx].Value, ",")
+	keys, _ := SliceMap(visibleParts, func(gpu string) (string, error) {
+		return pod.Spec.NodeName + " " + strings.Trim(gpu, " "), nil
+	})
+	return keys, nil
+}
+
+const nominalHashIndexName = "nominal"
+
+func nominalHashIndexFunc(obj any) ([]string, error) {
+	pod := obj.(*corev1.Pod)
+	nominalHash := pod.Annotations[nominalHashAnnotationKey]
+	if len(nominalHash) == 0 {
+		return []string{}, nil
+	}
+	return []string{nominalHash}, nil
+}
+
+type ControllerConfig struct {
+	SleeperLimit int
+	NumWorkers   int
+}
 
 type Controller interface {
 	Start(context.Context) error
@@ -87,31 +136,34 @@ type Controller interface {
 
 // NewController makes a new dual pods controller.
 // The given namespace is the one to focus on.
-func NewController(
+func (config ControllerConfig) NewController(
 	logger klog.Logger,
 	coreClient coreclient.CoreV1Interface,
 	namespace string,
 	corev1PreInformers corev1preinformers.Interface,
-	numWorkers int,
 ) (*controller, error) {
 	ctl := &controller{
-		enqueueLogger:    logger.WithName(ControllerName),
-		coreclient:       coreClient,
-		namespace:        namespace,
-		podInformer:      corev1PreInformers.Pods().Informer(),
-		podLister:        corev1PreInformers.Pods().Lister(),
-		cmInformer:       corev1PreInformers.ConfigMaps().Informer(),
-		cmLister:         corev1PreInformers.ConfigMaps().Lister(),
-		nodeInformer:     corev1PreInformers.Nodes().Informer(),
-		nodeLister:       corev1PreInformers.Nodes().Lister(),
-		inferenceServers: make(map[apitypes.UID]*serverData),
+		enqueueLogger:  logger.WithName(ControllerName),
+		coreclient:     coreClient,
+		namespace:      namespace,
+		podInformer:    corev1PreInformers.Pods().Informer(),
+		podLister:      corev1PreInformers.Pods().Lister(),
+		cmInformer:     corev1PreInformers.ConfigMaps().Informer(),
+		cmLister:       corev1PreInformers.ConfigMaps().Lister(),
+		nodeInformer:   corev1PreInformers.Nodes().Informer(),
+		nodeLister:     corev1PreInformers.Nodes().Lister(),
+		sleeperLimit:   config.SleeperLimit,
+		nodeNameToData: map[string]*nodeData{},
 	}
 	ctl.gpuMap.Store(&map[string]GpuLocation{})
-	err := ctl.podInformer.AddIndexers(cache.Indexers{requesterIndexName: requesterIndexFunc})
+	err := ctl.podInformer.AddIndexers(cache.Indexers{
+		requesterIndexName:   requesterIndexFunc,
+		nominalHashIndexName: nominalHashIndexFunc,
+		GPUIndexName:         GPUIndexFunc})
 	if err != nil { //impossible
 		return nil, err
 	}
-	ctl.QueueAndWorkers = genctlr.NewQueueAndWorkers(string(ControllerName), numWorkers, ctl.process)
+	ctl.QueueAndWorkers = genctlr.NewQueueAndWorkers(string(ControllerName), config.NumWorkers, ctl.process)
 	_, err = ctl.podInformer.AddEventHandler(ctl)
 	if err != nil {
 		panic(err)
@@ -135,13 +187,14 @@ type controller struct {
 	nodeLister    corev1listers.NodeLister
 	genctlr.QueueAndWorkers[queueItem]
 
+	sleeperLimit int
+
 	// gpuMaps maps GPU UUID to GpuLocation
 	gpuMap atomic.Pointer[map[string]GpuLocation]
 
 	mutex sync.Mutex
 
-	// inferenceServers maps UID of serve-requesting Pod to data
-	inferenceServers map[apitypes.UID]*serverData
+	nodeNameToData map[string]*nodeData
 }
 
 var _ Controller = &controller{}
@@ -149,6 +202,23 @@ var _ Controller = &controller{}
 type GpuLocation struct {
 	Node  string
 	Index uint
+}
+
+type nodeData struct {
+	// inferenceServers maps UID of serve-requesting Pod to data.
+	// Access only while holding controller mutex.
+	InferenceServers map[apitypes.UID]*serverData
+
+	// ItemsMutex may be acquired while holding controller mutex, not vice-versa.
+	ItemsMutex sync.Mutex
+
+	Items sets.Set[itemOnNode]
+}
+
+type itemOnNode interface {
+	// process returns (err error, retry bool).
+	// There will be a retry iff `retry || err != nil`.
+	process(ctx context.Context, ctl *controller, nodeDat *nodeData) (error, bool)
 }
 
 // Internal state about an inference server
@@ -160,7 +230,12 @@ type serverData struct {
 	// ServerPort is meaningful if NominalRunningPod is not nil
 	ServerPort int16
 
-	GPUIndices       *string
+	GPUIDsStr     *string
+	GPUIndices    []string
+	GPUIndicesStr *string
+
+	RunningPodName string
+
 	ReadinessRelayed *bool
 
 	Sleeping *bool
@@ -173,7 +248,7 @@ type serverData struct {
 
 type queueItem interface {
 	// process returns (err error, retry bool).
-	// There will be a retry iff `retry || err != nil`.
+	// There will be a retry iff `retry`, error logged if `err != nil`.
 	process(ctx context.Context, ctl *controller) (error, bool)
 }
 
@@ -217,11 +292,25 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 	switch typed := obj.(type) {
 	case *corev1.Pod:
 		if item, isReq, owned := careAbout(typed); !owned {
-			ctl.enqueueLogger.V(5).Info("Ignoring irrelevant Pod", "name", typed.Name)
+			ctl.enqueueLogger.V(5).Info("Ignoring add of irrelevant Pod", "name", typed.Name)
 			return
 		} else {
-			ctl.enqueueLogger.V(5).Info("Enqueuing inference server reference due to notification of add", "item", item, "isReq", isReq, "isInInitialList", isInInitialList, "resourceVersion", typed.ResourceVersion)
-			ctl.Queue.Add(item)
+			nodeName := typed.Spec.NodeName
+			if !isReq {
+				var err error
+				nodeName, err = getRunnerNodeName(typed)
+				if err != nil {
+					ctl.enqueueLogger.Error(err, "Failed to determine node of runner")
+					return
+				}
+			} else if nodeName == "" {
+				ctl.enqueueLogger.V(5).Info("Ignoring add of non-scheduled server-requesting Pod", "name", typed.Name)
+				return
+			}
+			nd := ctl.getNodeData(nodeName)
+			ctl.enqueueLogger.V(5).Info("Enqueuing inference server reference due to notification of add", "nodeName", nodeName, "item", item, "isReq", isReq, "isInInitialList", isInInitialList, "resourceVersion", typed.ResourceVersion)
+			nd.add(item)
+			ctl.Queue.Add(nodeItem{nodeName})
 		}
 	case *corev1.ConfigMap:
 		if typed.Name != GPUMapName {
@@ -242,11 +331,25 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 	switch typed := obj.(type) {
 	case *corev1.Pod:
 		if item, isReq, owned := careAbout(typed); !owned {
-			ctl.enqueueLogger.V(5).Info("Ignoring irrelevant Pod", "name", typed.Name)
+			ctl.enqueueLogger.V(5).Info("Ignoring update of irrelevant Pod", "name", typed.Name)
 			return
 		} else {
-			ctl.enqueueLogger.V(5).Info("Enqueuing inference server reference due to notification of update", "item", item, "isReq", isReq, "resourceVersion", typed.ResourceVersion)
-			ctl.Queue.Add(item)
+			nodeName := typed.Spec.NodeName
+			if !isReq {
+				var err error
+				nodeName, err = getRunnerNodeName(typed)
+				if err != nil {
+					ctl.enqueueLogger.Error(err, "Failed to determine node of runner")
+					return
+				}
+			} else if nodeName == "" {
+				ctl.enqueueLogger.V(5).Info("Ignoring update of non-scheduled server-requesting Pod", "name", typed.Name)
+				return
+			}
+			nd := ctl.getNodeData(nodeName)
+			ctl.enqueueLogger.V(5).Info("Enqueuing inference server reference due to notification of update", "nodeName", nodeName, "item", item, "isReq", isReq, "resourceVersion", typed.ResourceVersion)
+			nd.add(item)
+			ctl.Queue.Add(nodeItem{nodeName})
 		}
 	case *corev1.ConfigMap:
 		if typed.Name != GPUMapName {
@@ -270,11 +373,25 @@ func (ctl *controller) OnDelete(obj any) {
 	switch typed := obj.(type) {
 	case *corev1.Pod:
 		if item, isReq, owned := careAbout(typed); !owned {
-			ctl.enqueueLogger.V(5).Info("Ignoring irrelevant Pod", "name", typed.Name)
+			ctl.enqueueLogger.V(5).Info("Ignoring delete of irrelevant Pod", "name", typed.Name)
 			return
 		} else {
-			ctl.enqueueLogger.V(5).Info("Enqueuing inference server reference due to notification of delete", "item", item, "isReq", isReq, "resourceVersion", typed.ResourceVersion)
-			ctl.Queue.Add(item)
+			nodeName := typed.Spec.NodeName
+			if !isReq {
+				var err error
+				nodeName, err = getRunnerNodeName(typed)
+				if err != nil {
+					ctl.enqueueLogger.Error(err, "Failed to determine node of runner")
+					return
+				}
+			} else if nodeName == "" {
+				ctl.enqueueLogger.V(5).Info("Ignoring delete of non-scheduled server-requesting Pod", "name", typed.Name)
+				return
+			}
+			nd := ctl.getNodeData(nodeName)
+			ctl.enqueueLogger.V(5).Info("Enqueuing inference server reference due to notification of delete", "nodeName", nodeName, "item", item, "isReq", isReq, "resourceVersion", typed.ResourceVersion)
+			nd.add(item)
+			ctl.Queue.Add(nodeItem{nodeName})
 		}
 	case *corev1.ConfigMap:
 		if typed.Name != GPUMapName {
@@ -291,6 +408,14 @@ func (ctl *controller) OnDelete(obj any) {
 	}
 }
 
+func getRunnerNodeName(pod *corev1.Pod) (string, error) {
+	nn := pod.Spec.NodeSelector["kubernetes.io/hostname"]
+	if nn != "" {
+		return nn, nil
+	}
+	return "", errors.New("no kubernetes.io/hostname test in nodeSelector")
+}
+
 func (ctl *controller) Start(ctx context.Context) error {
 	if !cache.WaitForNamedCacheSync(ControllerName, ctx.Done(), ctl.cmInformer.HasSynced, ctl.podInformer.HasSynced, ctl.nodeInformer.HasSynced) {
 		return fmt.Errorf("caches not synced before end of Start context")
@@ -303,7 +428,7 @@ func (ctl *controller) Start(ctx context.Context) error {
 }
 
 // process returns (err error, retry bool).
-// There will be a retry iff `retry || err != nil`.
+// There will be a retry iff `retry`, error logged if `err != nil`.
 func (ctl *controller) process(ctx context.Context, item queueItem) (error, bool) {
 	return item.process(ctx, ctl)
 }
@@ -312,9 +437,9 @@ func (item cmItem) process(ctx context.Context, ctl *controller) (error, bool) {
 	logger := klog.FromContext(ctx)
 	cm, err := ctl.coreclient.ConfigMaps(item.Namespace).Get(ctx, item.Name, metav1.GetOptions{})
 	if err != nil {
-		if errors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) {
 			ctl.gpuMap.Store(nil)
-			logger.V(1).Info("ConfigMap " + GPUMapName + " does not exist")
+			return err, false
 		}
 		return err, true
 	}
@@ -350,26 +475,63 @@ func (ctl *controller) enqueueRequesters(ctx context.Context) {
 	ctl.mutex.Lock()
 	defer ctl.mutex.Unlock()
 	logger := klog.FromContext(ctx)
-	for infSvrUID, serverDat := range ctl.inferenceServers {
-		item := infSvrItem{infSvrUID, serverDat.RequestingPodName}
-		logger.V(5).Info("Enqueuing inference server because of change to GPU map", "item", item)
-		ctl.Queue.Add(item)
+	for nodeName, nodeDat := range ctl.nodeNameToData {
+		var some bool
+		for infSvrUID, serverDat := range nodeDat.InferenceServers {
+			item := infSvrItem{infSvrUID, serverDat.RequestingPodName}
+			logger.V(5).Info("Enqueuing inference server because of change to GPU map", "node", nodeName, "item", item)
+			nodeDat.add(item)
+			some = true
+		}
+		if some {
+			ctl.Queue.Add(nodeItem{nodeName})
+		}
 	}
 }
 
-func (ctl *controller) getServerData(reqName string, reqUID apitypes.UID) *serverData {
+func (ctl *controller) getNodeData(nodeName string) *nodeData {
 	ctl.mutex.Lock()
 	defer ctl.mutex.Unlock()
-	ans := ctl.inferenceServers[reqUID]
+	ans := ctl.nodeNameToData[nodeName]
 	if ans == nil {
-		ans = &serverData{RequestingPodName: reqName}
-		ctl.inferenceServers[reqUID] = ans
+		ans = &nodeData{
+			Items:            sets.New[itemOnNode](),
+			InferenceServers: make(map[apitypes.UID]*serverData),
+		}
+		ctl.nodeNameToData[nodeName] = ans
 	}
 	return ans
 }
 
-func (ctl *controller) clearServerData(uid apitypes.UID) {
+func (nodeDat *nodeData) add(item itemOnNode) {
+	nodeDat.ItemsMutex.Lock()
+	defer nodeDat.ItemsMutex.Unlock()
+	nodeDat.Items.Insert(item)
+}
+
+// yankItems returns the currently queued items and empties the queue.
+// Caller can access the returned value without synchronization.
+func (nodeDat *nodeData) yankItems() sets.Set[itemOnNode] {
+	nodeDat.ItemsMutex.Lock()
+	defer nodeDat.ItemsMutex.Unlock()
+	ans := nodeDat.Items
+	nodeDat.Items = sets.New[itemOnNode]()
+	return ans
+}
+
+func (ctl *controller) getServerData(nodeDat *nodeData, reqName string, reqUID apitypes.UID) *serverData {
 	ctl.mutex.Lock()
 	defer ctl.mutex.Unlock()
-	delete(ctl.inferenceServers, uid)
+	ans := nodeDat.InferenceServers[reqUID]
+	if ans == nil {
+		ans = &serverData{RequestingPodName: reqName}
+		nodeDat.InferenceServers[reqUID] = ans
+	}
+	return ans
+}
+
+func (ctl *controller) clearServerData(nodeDat *nodeData, uid apitypes.UID) {
+	ctl.mutex.Lock()
+	defer ctl.mutex.Unlock()
+	delete(nodeDat.InferenceServers, uid)
 }
