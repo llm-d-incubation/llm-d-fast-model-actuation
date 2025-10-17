@@ -79,9 +79,9 @@ func (ni nodeItem) process(ctx context.Context, ctl *controller) (error, bool) {
 	return nil, retries > 0
 }
 
-func (item infSvrItem) process(ctx context.Context, ctl *controller, nodeDat *nodeData) (error, bool) {
-	logger := klog.FromContext(ctx).WithValues("serverUID", item.UID, "requesterName", item.RequesterName)
-	ctx = klog.NewContext(ctx, logger)
+func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *nodeData) (error, bool) {
+	logger := klog.FromContext(urCtx).WithValues("serverUID", item.UID, "requesterName", item.RequesterName)
+	ctx := klog.NewContext(urCtx, logger)
 	requesterRV := "(non existent)"
 	runnerRV := "(non existent)"
 	serverDat := ctl.getServerData(nodeDat, item.RequesterName, item.UID)
@@ -107,6 +107,7 @@ func (item infSvrItem) process(ctx context.Context, ctl *controller, nodeDat *no
 		runningPod = runningPodAnys[0].(*corev1.Pod)
 		runnerRV = runningPod.ResourceVersion
 		logger = logger.WithValues("runnerName", runningPod.Name)
+		ctx = klog.NewContext(urCtx, logger)
 		if len(runningPodAnys) > 1 {
 			other := runningPodAnys[1].(*corev1.Pod)
 			logger.V(2).Info("Found multiple server-running Pods, using one of them", "anIgnoredOne", other.Name)
@@ -146,8 +147,6 @@ func (item infSvrItem) process(ctx context.Context, ctl *controller, nodeDat *no
 					return err, true
 				}
 			}
-			runnerJSON, marshalErr := json.Marshal(runningPod)
-			logger.V(3).Info("Requesting deletion of server-requesting Pod because of deletion of server-running Pod", "runnerJSON", string(runnerJSON), "marshalErr", marshalErr)
 			err := podOps.Delete(ctx, requestingPod.Name, metav1.DeleteOptions{
 				PropagationPolicy: ptr.To(metav1.DeletePropagationBackground),
 				Preconditions:     &metav1.Preconditions{UID: &item.UID, ResourceVersion: &gonerRV}})
@@ -178,13 +177,13 @@ func (item infSvrItem) process(ctx context.Context, ctl *controller, nodeDat *no
 		// Time to unbind.
 		// As a special favor, delete runningPod if it is in trouble.
 		if podIsInTrouble(runningPod) {
-			logger.V(3).Info("Deleting server-running Pod because it is in trouble", "runnerName", runningPod.Name)
 			err := podOps.Delete(ctx, runningPod.Name, metav1.DeleteOptions{
 				Preconditions:     &metav1.Preconditions{UID: &runningPod.UID, ResourceVersion: &runningPod.ResourceVersion},
 				PropagationPolicy: ptr.To(metav1.DeletePropagationBackground),
 			})
 			if err == nil {
-				logger.V(2).Info("Deleted server-running Pod because it is in trouble", "runnerName", runningPod.Name)
+				stJSON, marshalErr := json.Marshal(runningPod.Status)
+				logger.V(2).Info("Deleted server-running Pod because it is in trouble", "runnerName", runningPod.Name, "status", string(stJSON), "marshalErr", marshalErr)
 				return nil, false
 			} else if apierrors.IsNotFound(err) || apierrors.IsGone(err) {
 				logger.V(5).Info("Troubled server-running Pod was concurrently deleted", "runnerName", runningPod.Name)
@@ -418,17 +417,16 @@ func (ctl *controller) enforceSleeperBudget(ctx context.Context, serverDat *serv
 		}
 		for _, goner := range sleepingPods[:toGo] {
 			gonerNames.Insert(goner.Name)
-			logger.V(3).Info("Deleting server-running Pod with sleeping server", "name", goner.Name)
 			err := podOps.Delete(ctx, goner.Name, metav1.DeleteOptions{
 				Preconditions:     &metav1.Preconditions{UID: &goner.UID, ResourceVersion: &goner.ResourceVersion},
 				PropagationPolicy: ptr.To(metav1.DeletePropagationBackground),
 			})
 			if err == nil {
-				logger.V(2).Info("Deleted server-running Pod with sleeping server", "name", goner.Name)
+				logger.V(2).Info("Deleted server-running Pod with sleeping server, to respect sleeper-limit", "name", goner.Name, "resourceVersion", goner.ResourceVersion)
 			} else if apierrors.IsNotFound(err) || apierrors.IsGone(err) {
 				logger.V(5).Info("Server-running Pod was concurrently deleted", "name", goner.Name)
 			} else {
-				return fmt.Errorf("unable to delete server-running Pod %s: %w", goner.Name, err), true
+				return fmt.Errorf("unable to delete server-running Pod %s (RV=%s): %w", goner.Name, goner.ResourceVersion, err), true
 			}
 		}
 	}
