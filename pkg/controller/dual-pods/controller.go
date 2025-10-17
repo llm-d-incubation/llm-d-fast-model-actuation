@@ -230,8 +230,11 @@ type serverData struct {
 	// ServerPort is meaningful if NominalRunningPod is not nil
 	ServerPort int16
 
+	GPUIDsStr     *string
 	GPUIndices    []string
 	GPUIndicesStr *string
+
+	RunningPodName string
 
 	ReadinessRelayed *bool
 
