@@ -309,7 +309,7 @@ func (ctl *controller) removeRequesterFinalizer(ctx context.Context, requestingP
 	requestingPod.Finalizers = slices.Delete(requestingPod.Finalizers, finIdx, finIdx+1)
 	echo, err := podOps.Update(ctx, requestingPod, metav1.UpdateOptions{FieldManager: ControllerName})
 	if err != nil {
-		return false, false, fmt.Errorf("failed to remove finalizer from server-requesting Pod: %w", err), false
+		return false, false, fmt.Errorf("failed to remove finalizer from server-requesting Pod: %w", err), true
 	}
 	logger := klog.FromContext(ctx)
 	logger.V(2).Info("Removed requester finalizer", "newResourceVersion", echo.ResourceVersion)
