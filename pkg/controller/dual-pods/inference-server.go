@@ -95,7 +95,7 @@ func (item infSvrItem) process(ctx context.Context, ctl *controller) (error, boo
 
 	var shouldAddRequesterFinalizer bool
 	if requestingPod != nil {
-		removed, shouldAdd, err, retry := ctl.removeRequesterFinalizer(ctx, requestingPod, runningPod)
+		removed, shouldAdd, err, retry := ctl.maybeRemoveRequesterFinalizer(ctx, requestingPod, runningPod)
 		if removed || err != nil {
 			return err, retry
 		}
@@ -273,11 +273,11 @@ func (item infSvrItem) process(ctx context.Context, ctl *controller) (error, boo
 
 var invalidPodRE = regexp.MustCompile(`^Pod "[a-z0-9.-]*" is invalid`)
 
-// removeRequesterFinalizer removes the requesterFinalizer if necessary,
+// maybeRemoveRequesterFinalizer removes the requesterFinalizer if necessary,
 // and detemines whether the finalizer needs to be added.
 // requestingPod != nil; runningPod might be nil.
 // Returns (removed, shouldAdd bool, err error, retry bool).
-func (ctl *controller) removeRequesterFinalizer(ctx context.Context, requestingPod, runningPod *corev1.Pod) (bool, bool, error, bool) {
+func (ctl *controller) maybeRemoveRequesterFinalizer(ctx context.Context, requestingPod, runningPod *corev1.Pod) (bool, bool, error, bool) {
 	// First, determine whether finalizer should be present
 	var wantFinalizer bool
 	if runningPod != nil {
