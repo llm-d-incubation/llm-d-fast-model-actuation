@@ -316,7 +316,8 @@ func (ctl *controller) removeRequesterFinalizer(ctx context.Context, requestingP
 	return true, false, nil, false
 }
 
-// addRequesterFinalizer returns (newResourceVersion string, err error)
+// addRequesterFinalizer does the API call to remove the controller's finalizer from the server-requesting Pod.
+// Returns (newResourceVersion string, err error)
 func (ctl *controller) addRequesterFinalizer(ctx context.Context, serverDat *serverData, requestingPod *corev1.Pod) (string, error) {
 	podOps := ctl.coreclient.Pods(ctl.namespace)
 	requestingPod = requestingPod.DeepCopy()
@@ -330,6 +331,8 @@ func (ctl *controller) addRequesterFinalizer(ctx context.Context, serverDat *ser
 	return echo.ResourceVersion, nil
 }
 
+// removeRunnerFinalizer does the API call to remove the controller's finalizer from the server-running Pod.
+// Returns (changed bool, err error)
 func (ctl *controller) removeRunnerFinalizer(ctx context.Context, runningPod *corev1.Pod) (bool, error) {
 	logger := klog.FromContext(ctx)
 	podOps := ctl.coreclient.Pods(ctl.namespace)
@@ -394,6 +397,10 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 	return nil
 }
 
+// getNominalServerRunningPod returns the nominal server-running Pod,
+// which is cached in the serverData, computing the Pod if necessary.
+// This also ensures that the serverData fields NominalRunningPod and NominalRunningPodHash
+// have the right values.
 func (serverDat *serverData) getNominalServerRunningPod(ctx context.Context, reqPod *corev1.Pod, rawTmpl string, data api.RunnerData) (*corev1.Pod, error) {
 	logger := klog.FromContext(ctx)
 	if serverDat.NominalRunningPod == nil {
@@ -499,6 +506,8 @@ func (serverDat *serverData) getNominalServerRunningPod(ctx context.Context, req
 	return serverDat.NominalRunningPod, nil
 }
 
+// getInferenceServerPort, given a server-running Pod,
+// returns (containerIndex int, port int16, err error)
 func getInferenceServerPort(pod *corev1.Pod) (int, int16, error) {
 	// identify the inference server container
 	cIdx := slices.IndexFunc(pod.Spec.Containers, func(c corev1.Container) bool {
@@ -528,10 +537,15 @@ func getInferenceServerPort(pod *corev1.Pod) (int, int16, error) {
 	}
 }
 
+// ensureReqStatus makes the API call if necessary set the controller's status
+// on the server-running Pod shows the given user errors.
 func (ctl *controller) ensureReqStatus(ctx context.Context, requestingPod *corev1.Pod, errors ...string) (error, bool) {
 	return ctl.ensureReqState(ctx, requestingPod, false, false, errors...)
 }
 
+// ensureReqState makes the API call if necessary to:
+// 1. set the controller's reported state to consist of the given errors;
+// 2. add or remove the controll'er finalizer if stipulated.
 func (ctl *controller) ensureReqState(ctx context.Context, requestingPod *corev1.Pod, addFinalizer, removeFinalizer bool, errors ...string) (error, bool) {
 	status := api.ServerRequestingPodStatus{Errors: errors}
 	logger := klog.FromContext(ctx)
@@ -566,6 +580,7 @@ func (ctl *controller) ensureReqState(ctx context.Context, requestingPod *corev1
 	return err, false
 }
 
+// postToReadiness does the HTTP POST request/response to the given URL.
 func postToReadiness(url string) error {
 	client := &http.Client{
 		Timeout: 5 * time.Second,
@@ -608,6 +623,7 @@ func init() {
 	podDecoder = codecFactory.UniversalDecoder(corev1.SchemeGroupVersion)
 }
 
+// getGPUUUIDs does the HTTP GET on the given URL to fetch the assigned GPU UUIDs.
 func getGPUUUIDs(url string) ([]string, error) {
 	client := &http.Client{
 		Timeout: 5 * time.Second,
