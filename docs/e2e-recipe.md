@@ -119,6 +119,8 @@ spec:
                 value: /tmp
               - name: XDG_CONFIG_HOME
                 value: /tmp
+              - name: XDG_CACHE_HOME
+                value: /tmp
               - name: TRITON_HOME
                 value: /tmp
               resources:
