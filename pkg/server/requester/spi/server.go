@@ -82,7 +82,7 @@ func Run(ctx context.Context, port string, ready *atomic.Bool) error {
 	} else {
 		logger.Info("Got GPU UUIDs", "uuids", gpuUUIDs)
 	}
-	return runTestable(ctx, port, ready, gpuUUIDs)
+	return RunWithGPUUUIDs(ctx, port, ready, gpuUUIDs)
 }
 
 func newSetReadyHandler(logger klog.Logger, ready *atomic.Bool, newReady bool) func(w http.ResponseWriter, r *http.Request) {
@@ -95,7 +95,7 @@ func newSetReadyHandler(logger klog.Logger, ready *atomic.Bool, newReady bool) f
 	}
 }
 
-func runTestable(ctx context.Context, port string, ready *atomic.Bool, gpuUUIDs []string) error {
+func RunWithGPUUUIDs(ctx context.Context, port string, ready *atomic.Bool, gpuUUIDs []string) error {
 	logger := klog.FromContext(ctx).WithName("spi-server")
 	mux := http.NewServeMux()
 	mux.HandleFunc(strings.Join([]string{"GET", stubapi.AcceleratorQueryPath}, " "), gpuHandler(gpuUUIDs))
