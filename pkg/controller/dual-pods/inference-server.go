@@ -303,7 +303,7 @@ func (ctl *controller) maybeRemoveRequesterFinalizer(ctx context.Context, reques
 			}
 		}
 	}
-	// Next, determine whether finalizer is preseent
+	// Next, determine whether finalizer is present
 	finIdx := slices.Index(requestingPod.Finalizers, requesterFinalizer)
 	haveFinalizer := finIdx >= 0
 	// Finally, deal with it
