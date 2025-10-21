@@ -87,12 +87,15 @@ func (item infSvrItem) process(ctx context.Context, ctl *controller) (error, boo
 
 	podOps := ctl.coreclient.Pods(ctl.namespace)
 
+	// Delete the in-memory data after both Pods are gone.
 	if requestingPod == nil && runningPod == nil {
 		ctl.clearServerData(item.UID)
 		logger.V(2).Info("End of life of inference server")
 		return nil, false
 	}
 
+	// Decide what to do about the finalizer on the server-requesting Pod,
+	// and do it if that is a removal.
 	var shouldAddRequesterFinalizer bool
 	if requestingPod != nil {
 		removed, shouldAdd, err, retry := ctl.maybeRemoveRequesterFinalizer(ctx, requestingPod, runningPod)
@@ -102,6 +105,7 @@ func (item infSvrItem) process(ctx context.Context, ctl *controller) (error, boo
 		shouldAddRequesterFinalizer = shouldAdd
 	}
 
+	// Handle the deletion of a server-running Pod
 	if runningPod != nil && runningPod.DeletionTimestamp != nil {
 		if requestingPod != nil && requestingPod.DeletionTimestamp == nil {
 			// Reflect runningPod deletion to requestingPod deletion.
@@ -136,7 +140,9 @@ func (item infSvrItem) process(ctx context.Context, ctl *controller) (error, boo
 	}
 	// Assert: runningPod == nil || runningPod.DeletionTimestamp == nil
 
-	if (requestingPod == nil || requestingPod.DeletionTimestamp != nil) && runningPod != nil { // time to unbind
+	// If the server-requesting Pod is absent or being deleted,
+	// ensure that the server-running Pod is not bound.
+	if (requestingPod == nil || requestingPod.DeletionTimestamp != nil) && runningPod != nil {
 		err := ctl.ensureUnbound(ctx, serverDat, runningPod)
 		if err != nil {
 			return err, false
@@ -183,6 +189,8 @@ func (item infSvrItem) process(ctx context.Context, ctl *controller) (error, boo
 		adminPort = api.AdminPortDefaultValue
 	}
 
+	// If there is already a server-running Pod then report lack of user errors and
+	// relay readiness if needed.
 	if runningPod != nil {
 		err, _ := ctl.ensureReqState(ctx, requestingPod, shouldAddRequesterFinalizer, false)
 		if err != nil {
@@ -223,6 +231,7 @@ func (item infSvrItem) process(ctx context.Context, ctl *controller) (error, boo
 		return err, false
 	}
 
+	// Fetch the assigned GPUs if that has not already been done.
 	if serverDat.GPUIndices == nil {
 		logger.V(5).Info("Querying accelerators", "ip", requesterIP, "port", adminPort)
 		url := fmt.Sprintf("http://%s:%s%s", requesterIP, adminPort, stubapi.AcceleratorQueryPath)
@@ -245,7 +254,7 @@ func (item infSvrItem) process(ctx context.Context, ctl *controller) (error, boo
 	if serverPatch == "" { // this is bad, somebody has hacked important data
 		return ctl.ensureReqStatus(ctx, requestingPod, "the "+api.ServerPatchAnnotationName+" annotation is missing")
 	}
-	// use the server patch to build the server-running pod
+	// use the server patch to build the server-running pod, if not already done.
 	desiredRunningPod, err := serverDat.getNominalServerRunningPod(ctx, requestingPod, serverPatch, api.RunnerData{
 		NodeName: requestingPod.Spec.NodeName,
 	})
