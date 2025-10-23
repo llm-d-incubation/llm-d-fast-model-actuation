@@ -167,7 +167,7 @@ func allocateGPUs(ctx context.Context, cmClient corev1client.ConfigMapInterface,
 		if err != nil {
 			logger.Error(err, "Failed to allocate")
 		}
-		return done, err
+		return done, nil
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to allocate GPUS: %s\n", err.Error())
