@@ -20,7 +20,7 @@ spec:
       containers:
       - name: controller
         image: {{ .Values.Image }}
-        imagePullPolicy: Always
+        imagePullPolicy: {{if .Values.Local}}Never{{else}}Always{{end}}
         command:
         - /ko-app/dual-pods-controller
         - "-v=5"
