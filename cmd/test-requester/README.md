@@ -7,14 +7,13 @@ this requester maintains GPU assignments in a ConfigMap named "gpu-allocs".
 For details, see the comment at the start of [the source](main.go).
 
 The command line arguments are as follows.
-The Pod ID can be anything (e.g., name, UID); use something that gives good replacement semantics.
 
 ## Requester specific arguments
 
 ```console
       --node string                      name of this Pod's Node
       --num-gpus int                     number of GPUs to allocate (default 1)
-      --pod-id string                    ID of this Pod
+      --pod-uid string                   UID of this Pod
       --probes-port int16                port number for /ready (default 8080)
       --spi-port int16                   port for dual-pods requests (default 8081)
 ```
