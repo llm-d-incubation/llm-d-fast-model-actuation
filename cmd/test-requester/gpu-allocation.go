@@ -28,6 +28,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	apitypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
@@ -49,7 +50,7 @@ type nodeGPUMap map[string]int
 // GPUHolder identifis a test requester that is currently allocated the use of a GPU
 type GPUHolder struct {
 	NodeName string
-	PodID    string
+	PodUID   apitypes.UID
 }
 
 // GPUAllocMap maps GPU UID to GPUHolder
@@ -121,8 +122,10 @@ func getGPUAlloc(ctx context.Context, cmClient corev1client.ConfigMapInterface) 
 	return ans, cm, nil
 }
 
-func allocateGPUs(ctx context.Context, cmClient corev1client.ConfigMapInterface, nodeName, podID string, numGPUs uint) []string {
+func allocateGPUs(ctx context.Context, coreClient corev1client.CoreV1Interface, nodeName, namespace string, podUID apitypes.UID, numGPUs uint) []string {
 	logger := klog.FromContext(ctx)
+	cmClient := coreClient.ConfigMaps(namespace)
+	podClient := coreClient.Pods(namespace)
 	var gpuUIDs []string
 	try := func(ctx context.Context) (done bool, err error) {
 		gpuMap, err := getGPUMap(ctx, cmClient)
@@ -130,13 +133,25 @@ func allocateGPUs(ctx context.Context, cmClient corev1client.ConfigMapInterface,
 			return false, err
 		}
 		avail := gpuMap.onNode(nodeName)
+		podUIDs, err := getPodUIDs(ctx, podClient)
+		if err != nil {
+			return false, err
+		}
+		if !podUIDs.Has(podUID) {
+			return false, fmt.Errorf("pod UID %q not found among current Pods", podUID)
+		}
 		gpuAllocMap, gpuAllocCM, err := getGPUAlloc(ctx, cmClient)
 		if err != nil {
 			return false, err
 		}
 		used := sets.New[string]()
 		for gpuUID, holder := range gpuAllocMap {
-			if holder.NodeName == nodeName && holder.PodID != podID {
+			if holder.NodeName != nodeName {
+				continue
+			}
+			if !podUIDs.Has(holder.PodUID) {
+				delete(gpuAllocCM.Data, gpuUID)
+			} else if holder.PodUID != podUID {
 				used.Insert(gpuUID)
 			}
 		}
@@ -146,7 +161,7 @@ func allocateGPUs(ctx context.Context, cmClient corev1client.ConfigMapInterface,
 		}
 		gpuUIDs = rem[:numGPUs]
 		for _, gpuUID := range gpuUIDs {
-			holder := GPUHolder{NodeName: nodeName, PodID: podID}
+			holder := GPUHolder{NodeName: nodeName, PodUID: podUID}
 			holderBytes, err := json.Marshal(holder)
 			if err != nil {
 				return false, fmt.Errorf("failed to marshal holder for GPU %s (%#v): %w", gpuUID, holder, err)
@@ -159,7 +174,7 @@ func allocateGPUs(ctx context.Context, cmClient corev1client.ConfigMapInterface,
 		if err != nil {
 			return false, fmt.Errorf("failed to update GPU allocation ConfigMap: %w", err)
 		}
-		logger.Info("Successful allocation", "gpus", gpuUIDs, "newResourceVersion", echo.ResourceVersion)
+		logger.Info("Successful allocation", "nodeName", nodeName, "podUID", podUID, "gpus", gpuUIDs, "newResourceVersion", echo.ResourceVersion)
 		return true, nil
 	}
 	err := wait.PollUntilContextCancel(ctx, time.Second, true, func(ctx context.Context) (bool, error) {
@@ -174,6 +189,17 @@ func allocateGPUs(ctx context.Context, cmClient corev1client.ConfigMapInterface,
 		os.Exit(100)
 	}
 	return gpuUIDs
+}
+
+func getPodUIDs(ctx context.Context, podClient corev1client.PodInterface) (sets.Set[apitypes.UID], error) {
+	podList, err := podClient.List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	uids, _ := dpctlr.SliceMap(podList.Items, func(pod corev1.Pod) (apitypes.UID, error) {
+		return pod.UID, nil
+	})
+	return sets.New(uids...), nil
 }
 
 func MapFilter2to1[Key comparable, Val, Result any](input map[Key]Val, filter func(Key, Val) (Result, bool)) iter.Seq[Result] {

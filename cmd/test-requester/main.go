@@ -27,6 +27,7 @@ import (
 
 	"github.com/spf13/pflag"
 
+	apitypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 
@@ -39,12 +40,11 @@ import (
 
 // This variant requester emulates the GPU allocation behavior of
 // the Kubernetes scheduler+kubelet.
-// It takes a Node name and Pod ID on the command line
+// It takes a Node name and Pod IUD on the command line
 // and keeps allocation decisions in a ConfigMap named "gpu-allocs".
 // The `.data` of this ConfigMap maps GPU UID to the JSON seialization
 // of a `GPUHolder`.
-// The Pod ID can be anything.
-// Old allocations for the identified Pod are swept away.
+// Old allocations for the identified Pod, and any Pod that does not currently exist, are swept away.
 // This main will create the allocation decisions ConfigMap if
 // it does not already exist, and will keep trying to make
 // the allocation until it succeeds.
@@ -56,7 +56,7 @@ var agentName string
 func main() {
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 	overrides := &clientcmd.ConfigOverrides{}
-	var nodeName, podID string
+	var nodeName, podUID string
 	numGPUs := uint(1)
 	probesPort := int16(8080)
 	spiPort := int16(8081)
@@ -65,7 +65,7 @@ func main() {
 	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
 	AddKubectlFlags(*pflag.CommandLine, loadingRules, overrides)
 	pflag.CommandLine.StringVar(&nodeName, "node", nodeName, "name of this Pod's Node")
-	pflag.CommandLine.StringVar(&podID, "pod-id", podID, "ID of this Pod")
+	pflag.CommandLine.StringVar(&podUID, "pod-uid", podUID, "UID of this Pod")
 	pflag.CommandLine.UintVar(&numGPUs, "num-gpus", numGPUs, "number of GPUs to allocate")
 	pflag.CommandLine.Int16Var(&probesPort, "probes-port", probesPort, "port number for /ready")
 	pflag.CommandLine.Int16Var(&spiPort, "spi-port", spiPort, "port for dual-pods requests")
@@ -80,7 +80,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "--node must not be the empty string")
 		os.Exit(1)
 	}
-	if len(podID) == 0 {
+	if len(podUID) == 0 {
 		fmt.Fprintln(os.Stderr, "--pod-uid must not be the empty string")
 		os.Exit(1)
 	}
@@ -105,7 +105,7 @@ func main() {
 	}
 
 	kubeClient := kubernetes.NewForConfigOrDie(restConfig)
-	gpuUUIDs := allocateGPUs(ctx, kubeClient.CoreV1().ConfigMaps(overrides.Context.Namespace), nodeName, podID, numGPUs)
+	gpuUUIDs := allocateGPUs(ctx, kubeClient.CoreV1(), nodeName, overrides.Context.Namespace, apitypes.UID(podUID), numGPUs)
 
 	var ready atomic.Bool
 
