@@ -55,7 +55,7 @@ spec:
     spec:
       containers:
         - name: inference-server
-          image: quay.io/aavarghese/fma/requester:v0.0.1
+          image: ${CONTAINER_IMG_REG}/requester:latest
           imagePullPolicy: Always
           ports:
           - name: probes
