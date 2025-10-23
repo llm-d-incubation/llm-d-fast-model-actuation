@@ -189,9 +189,24 @@ func (item infSvrItem) process(ctx context.Context, ctl *controller) (error, boo
 		adminPort = api.AdminPortDefaultValue
 	}
 
-	// If there is already a server-running Pod then report lack of user errors and
-	// relay readiness if needed.
+	// If there is already a server-running Pod then ensure that it is awake,
+	// ensure status reported, and relay readiness if needed.
 	if runningPod != nil {
+		if serverDat.Sleeping == nil || *(serverDat.Sleeping) {
+			_, serverPort, err := getInferenceServerPort(runningPod)
+			if err != nil { // Impossible, because such a runningPod would never be created by this controller
+				return fmt.Errorf("unable to put server to sleep because port not known: %w", err), false
+			}
+			wakeURL := fmt.Sprintf("http://%s:%d/wake_up", runningPod.Status.PodIP, serverPort)
+			resp, err := http.Post(wakeURL, "", nil)
+			if err != nil {
+				return fmt.Errorf("failed to wake up, POST %s got error: %w", wakeURL, err), false
+			}
+			if sc := resp.StatusCode; sc != http.StatusOK {
+				return fmt.Errorf("failed to wake up, POST %s returned status %d", wakeURL, sc), false
+			}
+			serverDat.Sleeping = ptr.To(false)
+		}
 		err, _ := ctl.ensureReqState(ctx, requestingPod, shouldAddRequesterFinalizer, false)
 		if err != nil {
 			return err, false
@@ -222,7 +237,6 @@ func (item infSvrItem) process(ctx context.Context, ctl *controller) (error, boo
 		return nil, false
 	}
 	// Assert: runningPod == nil && !shouldAddRequesterFinalizer
-	// What remains to be done is create the server-running Pod if possible
 
 	if node.Spec.Unschedulable {
 		// Reflect the inability to serve back to the client/user
@@ -230,6 +244,7 @@ func (item infSvrItem) process(ctx context.Context, ctl *controller) (error, boo
 		err := podOps.Delete(ctx, requestingPod.Name, metav1.DeleteOptions{PropagationPolicy: ptr.To(metav1.DeletePropagationBackground)})
 		return err, false
 	}
+	// What remains to be done is to wake or create a server-running Pod
 
 	// Fetch the assigned GPUs if that has not already been done.
 	if serverDat.GPUIndices == nil {
@@ -255,14 +270,28 @@ func (item infSvrItem) process(ctx context.Context, ctl *controller) (error, boo
 		return ctl.ensureReqStatus(ctx, requestingPod, "the "+api.ServerPatchAnnotationName+" annotation is missing")
 	}
 	// use the server patch to build the server-running pod, if not already done.
-	desiredRunningPod, err := serverDat.getNominalServerRunningPod(ctx, requestingPod, serverPatch, api.RunnerData{
+	desiredRunningPod, nominalHash, err := serverDat.getNominalServerRunningPod(ctx, requestingPod, serverPatch, api.RunnerData{
 		NodeName: requestingPod.Spec.NodeName,
 	})
 	if err != nil {
 		return ctl.ensureReqStatus(ctx, requestingPod, fmt.Sprintf("failed to construct the nominal server-running Pod: %s", err.Error()))
 	}
 
-	logger.V(3).Info("Creating server-running pod", "labels", desiredRunningPod.Labels)
+	sleepingAnys, err := ctl.podInformer.GetIndexer().ByIndex(nominalHashIndexName, nominalHash)
+	if err != nil { // impossible
+		return err, false
+	}
+	if len(sleepingAnys) > 0 {
+		// They have to be sleeping, the Kube scheduler and kubelet would not have assigned the same
+		// node/gpus to the requester if there was another one awake.
+		if len(sleepingAnys) > 1 {
+			logger.V(2).Info("Unexpected: multiple sleeping Pods match; using the first", "requesterName", requestingPod.Name)
+		}
+		runningPod = sleepingAnys[0].(*corev1.Pod)
+		return ctl.bind(ctx, serverDat, requestingPod, runningPod)
+	}
+
+	logger.V(3).Info("Creating server-running pod", "node", requestingPod.Spec.NodeName, "gpus", serverDat.GPUIndices, "labels", desiredRunningPod.Labels)
 	echo, err := podOps.Create(ctx, desiredRunningPod, metav1.CreateOptions{})
 	if err != nil {
 		errMsg := err.Error()
@@ -275,12 +304,43 @@ func (item infSvrItem) process(ctx context.Context, ctl *controller) (error, boo
 		}
 		return err, true
 	}
-	logger.V(2).Info("Created server-running pod", "name", echo.Name, "annotations", echo.Annotations, "labels", echo.Labels, "resourceVersion", echo.ResourceVersion)
+	serverDat.Sleeping = ptr.To(false)
+	logger.V(2).Info("Created server-running pod", "name", echo.Name, "gpus", serverDat.GPUIndices, "annotations", echo.Annotations, "labels", echo.Labels, "resourceVersion", echo.ResourceVersion)
 
 	return ctl.ensureReqStatus(ctx, requestingPod)
 }
 
 var invalidPodRE = regexp.MustCompile(`^Pod "[a-z0-9.-]*" is invalid`)
+
+func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requestingPod, runningPod *corev1.Pod) (error, bool) {
+	logger := klog.FromContext(ctx)
+	runningPod = runningPod.DeepCopy()
+	runningPod.Annotations[requesterAnnotationKey] = string(requestingPod.UID) + " " + requestingPod.Name
+	if !slices.Contains(runningPod.Finalizers, runnerFinalizer) {
+		runningPod.Finalizers = append(runningPod.Finalizers, runnerFinalizer)
+	}
+	serverDat.Sleeping = nil
+	echo, err := ctl.coreclient.Pods(ctl.namespace).Update(ctx, runningPod, metav1.UpdateOptions{FieldManager: ControllerName})
+	if err != nil {
+		return fmt.Errorf("failed to bind server-running Pod %s: %w", runningPod.Name, err), false
+	}
+	logger.V(2).Info("Bound server-running Pod", "name", runningPod.Name, "node", requestingPod.Spec.NodeName, "gpus", serverDat.GPUIndices, "newResourceVersion", echo.ResourceVersion)
+	_, serverPort, err := getInferenceServerPort(runningPod)
+	if err != nil { // Impossible, because such a runningPod would never be created by this controller
+		return fmt.Errorf("unable to put server to sleep because port not known: %w", err), false
+	}
+	wakeURL := fmt.Sprintf("http://%s:%d/wake_up", runningPod.Status.PodIP, serverPort)
+	resp, err := http.Post(wakeURL, "", nil)
+	if err != nil {
+		return fmt.Errorf("failed to wake up, POST %s got error: %w", wakeURL, err), false
+	}
+	if sc := resp.StatusCode; sc != http.StatusOK {
+		return fmt.Errorf("failed to wake up, POST %s returned status %d", wakeURL, sc), false
+	}
+	serverDat.Sleeping = ptr.To(false)
+	logger.V(2).Info("Woke inference server")
+	return ctl.ensureReqStatus(ctx, requestingPod)
+}
 
 // maybeRemoveRequesterFinalizer removes the requesterFinalizer if necessary,
 // and detemines whether the finalizer needs to be added.
@@ -399,7 +459,7 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 		if err != nil {
 			return fmt.Errorf("failed to unbind server-running Pod %s: %w", runningPod.Name, err)
 		}
-		logger.V(2).Info("Unbound server-running Pod", "name", runningPod.Name, "newResourceVersion", echo.ResourceVersion)
+		logger.V(2).Info("Unbound server-running Pod", "name", runningPod.Name, "node", runningPod.Spec.NodeName, "gpus", serverDat.GPUIndices, "newResourceVersion", echo.ResourceVersion)
 	} else {
 		logger.V(3).Info("Server-running Pod remains unbound", "name", runningPod.Name, "resourceVersion", runningPod.ResourceVersion)
 	}
@@ -410,23 +470,24 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 // which is cached in the serverData, computing the Pod if necessary.
 // This also ensures that the serverData fields NominalRunningPod and NominalRunningPodHash
 // have the right values.
-func (serverDat *serverData) getNominalServerRunningPod(ctx context.Context, reqPod *corev1.Pod, rawTmpl string, data api.RunnerData) (*corev1.Pod, error) {
+// Returns (NominalRunningPod, NominalRunningPodHash, error)
+func (serverDat *serverData) getNominalServerRunningPod(ctx context.Context, reqPod *corev1.Pod, rawTmpl string, data api.RunnerData) (*corev1.Pod, string, error) {
 	logger := klog.FromContext(ctx)
 	if serverDat.NominalRunningPod == nil {
 		logger.V(5).Info("Building server-running pod from patch", "patch", rawTmpl)
 		tmpl, err := template.New("serverPatch").Option("missingkey=error").Parse(rawTmpl)
 		if err != nil {
-			return nil, fmt.Errorf("parse template: %w", err)
+			return nil, "", fmt.Errorf("parse template: %w", err)
 		}
 		var buf bytes.Buffer
 		if err := tmpl.Execute(&buf, data); err != nil {
-			return nil, fmt.Errorf("failed to execute server patch template: %w", err)
+			return nil, "", fmt.Errorf("failed to execute server patch template: %w", err)
 		}
 		renderedPatch := buf.Bytes()
 
 		patchJSON, err := yaml.YAMLToJSON(renderedPatch)
 		if err != nil {
-			return nil, fmt.Errorf("failed to convert server patch yaml to json: %w", err)
+			return nil, "", fmt.Errorf("failed to convert server patch yaml to json: %w", err)
 		}
 
 		basePod := &corev1.Pod{
@@ -440,18 +501,20 @@ func (serverDat *serverData) getNominalServerRunningPod(ctx context.Context, req
 		// marshal into json
 		baseJSON, err := json.Marshal(basePod)
 		if err != nil {
-			return nil, fmt.Errorf("failed to marshal server-requesting pod: %w", err)
+			return nil, "", fmt.Errorf("failed to marshal server-requesting pod: %w", err)
 		}
 		logger.V(5).Info("Before StrategicMergePatch", "reqPodName", reqPod.Name, "baseJSON", baseJSON)
 		// apply strategic merge patch
 		modifiedJSON, err := strategicpatch.StrategicMergePatch(baseJSON, patchJSON, &corev1.Pod{})
 		if err != nil {
-			return nil, fmt.Errorf("failed to apply server patch: %w", err)
+			return nil, "", fmt.Errorf("failed to apply server patch: %w", err)
 		}
 		hasher := sha256.New()
 		hasher.Write(modifiedJSON)
 		hasher.Write([]byte(";gpus="))
 		hasher.Write([]byte(*serverDat.GPUIndices))
+		hasher.Write([]byte(";node="))
+		hasher.Write([]byte(reqPod.Spec.NodeName))
 		var modifiedHash [sha256.Size]byte
 		modifiedHashSl := hasher.Sum(modifiedHash[:0])
 		nominalHash := base64.RawStdEncoding.EncodeToString(modifiedHashSl)
@@ -462,7 +525,7 @@ func (serverDat *serverData) getNominalServerRunningPod(ctx context.Context, req
 		// to catch common errors here (before sending to apiserver).
 		_, _, err = podDecoder.Decode(modifiedJSON, nil, pod)
 		if err != nil {
-			return nil, fmt.Errorf("failed to unmarshal patched pod: %w", err)
+			return nil, "", fmt.Errorf("failed to unmarshal patched pod: %w", err)
 		}
 
 		nodeSelector := pod.Spec.NodeSelector
@@ -474,7 +537,7 @@ func (serverDat *serverData) getNominalServerRunningPod(ctx context.Context, req
 
 		cIdx, serverPort, err := getInferenceServerPort(pod)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		serverDat.ServerPort = serverPort
 		isCtr := &pod.Spec.Containers[cIdx]
@@ -512,7 +575,7 @@ func (serverDat *serverData) getNominalServerRunningPod(ctx context.Context, req
 		serverDat.NominalRunningPod = pod
 		serverDat.NominalRunningPodHash = nominalHash
 	}
-	return serverDat.NominalRunningPod, nil
+	return serverDat.NominalRunningPod, serverDat.NominalRunningPodHash, nil
 }
 
 // getInferenceServerPort, given a server-running Pod,
@@ -571,7 +634,7 @@ func (ctl *controller) ensureReqState(ctx context.Context, requestingPod *corev1
 		newFinalizers = append(newFinalizers, requesterFinalizer)
 	}
 	if oldStatusStr == newStatusStr && len(newFinalizers) == len(requestingPod.Finalizers) {
-		logger.V(5).Info("No need to update status or finalizers", "serverRequestingPod", requestingPod.Name, "status", status)
+		logger.V(5).Info("No need to update status or finalizers", "serverRequestingPod", requestingPod.Name, "status", status, "finalizers", requestingPod.Finalizers)
 		return nil, false
 	}
 	requestingPod = requestingPod.DeepCopy()
