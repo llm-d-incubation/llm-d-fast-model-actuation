@@ -78,3 +78,18 @@ type RunnerData struct {
 	// to that node.
 	LocalVolume string
 }
+
+// AcceleratorsAnnotationName is the name of an annotation that the dual-pods controller
+// maintains on both server-requesting and server-running Pods.
+// This annotation is purely FYI emitted by the dual-pods controller
+// (it does not rely on this label for anything).
+const AcceleratorsAnnotationName string = "dual-pods.llm-d.ai/accelerators"
+
+// DualLabelName is the name of a label that the dual-pods controller
+// maintains on the server-requesting and server-running Pods.
+// While bound, this label is present and its value is the name of the
+// corresponding other Pod;
+// while unbound, this label is absent.
+// This label is purely FYI emitted by the dual-pods controller
+// (it does not rely on this label for anything).
+const DualLabelName string = "dual-pods.llm-d.ai/dual"

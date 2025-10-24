@@ -6,15 +6,20 @@ that the contributor is authorized to use.
 
 ## Setup
 
-Start by setting the shell variable `CONTAINER_IMG_REG` to the
-registry that you intend to use. For example, the following might work
-for you.
+Configure kubectl to work with the cluster of your choice.
+
+Run the script to populate the `gpu-map` ConfigMap.
+
+```shell
+scripts/ensure-nodes-mapped.sh
+```
+
+Set the shell variable `CONTAINER_IMG_REG` to the registry that you
+intend to use. For example, the following might work for you.
 
 ```shell
 CONTAINER_IMG_REG=quay.io/${LOGNAME}/fma
 ```
-
-Configure kubectl to work with the cluster of your choice.
 
 Build and push the requester container image with a command like the
 following. You can omit the `TARGETARCH` if the runtime ISA matches
@@ -53,36 +58,61 @@ example, that would go as follows.
 CONTROLLER_IMG_TAG=b699bc6 # JUST AN EXAMPLE - USE WHAT YOU BUILT
 ```
 
-Run the script to populate the `gpu-map` ConfigMap.
-
-```shell
-scripts/ensure-nodes-mapped.sh
-```
-
 Instantiate the Helm chart for the dual-pods controller. Specify the
 tag produced by the build above. Specify the name of the ClusterRole
 to use for Node get/list/watch authorization, or omit if not
-needed. NOTE: if you have done this before then you will need to
-delete the old Helm chart instance before re-making it.
+needed. Adjust the SleeperLimit setting to your liking (the default is
+2).
+
+NOTE: if you have done this before then you will need to delete the
+old Helm chart instance before re-making it.
 
 ```shell
-helm upgrade --install dpctlr charts/dpctlr --set Image="${CONTAINER_IMG_REG}/dual-pods-controller:${CONTROLLER_IMG_TAG}" --set NodeViewClusterRole=vcp-node-viewer
+helm upgrade --install dpctlr charts/dpctlr --set Image="${CONTAINER_IMG_REG}/dual-pods-controller:${CONTROLLER_IMG_TAG}" --set NodeViewClusterRole=vcp-node-viewer --set SleeperLimit=1
 ```
 
-## Example 1: cycle server-requesting Pod
+Finally, define a shell function that creates a new ReplicaSet whose
+members will not match members of other invocations of this same shell
+function. Following are two examples. The first is rather minimal. The
+second uses model staging and torch.compile caching.
 
-Create a ReplicaSet of 1 server-requesting Pod. Following are two
-examples. The first is rather minimal. The second uses model staging
-and torch.compile caching.
+Following are some things to keep in mind about these definitions.
+
+- It is critical that the server patch change the label set to not
+  match the selector of the ReplicaSet.
+
+- Make sure that the (main, not GPU) memory limit stated in the
+  resources section is big enough to contain the off-loaded model
+  tensors (for when the inference server is put to sleep).
+
+- Limit the GPU memory utilization to leave enough room for the number
+  of sleeping servers that you configured the dual-pods controller to
+  allow.
+
+- You may need to add a `vllm serve` argument for `--kv-cache-memory`.
+  I do not understand why the default gets into trouble, but I see it
+  doing that. Look in the startup log from vllm for a statement like
+  the following (showing that it is using too much memory for kv
+  cache): "Free memory on device (43.9/44.39 GiB) on startup. Desired
+  GPU memory utilization is (0.8, 35.51 GiB). Actual usage is 4.74 GiB
+  for weight, 0.23 GiB for peak activation, 0.02 GiB for non-torch
+  memory, and 0.62 GiB for CUDAGraph memory. Replace
+  gpu_memory_utilization config with `--kv-cache-memory=31966072012`
+  to fit into requested memory, or `--kv-cache-memory=40974729216` to
+  fully utilize gpu memory. Current kv cache memory in use is
+  32786058444 bytes".
 
 ### Simple ReplicaSet
 
 ```shell
+function mkrs() {
 kubectl apply -f - <<EOF
 apiVersion: apps/v1
 kind: ReplicaSet
 metadata:
-  name: my-request
+  name: my-request-$(date +%H-%M-%S)
+  labels:
+    app: dp-example
 spec:
   replicas: 1
   selector:
@@ -92,6 +122,7 @@ spec:
     metadata:
       labels:
         app: dp-example
+        instance: "$(date +%H-%M-%S)"
       annotations:
         dual-pod.llm-d.ai/admin-port: "8081"
         dual-pod.llm-d.ai/server-patch: |
@@ -109,7 +140,9 @@ spec:
               - serve
               - --port=8000
               - --model=ibm-granite/granite-3.3-2b-instruct
+              - --enable-sleep-mode
               - --max-model-len=32768
+              - --gpu-memory-utilization=0.8
               env:
               - name: VLLM_SERVER_DEV_MODE
                 value: "1"
@@ -126,7 +159,7 @@ spec:
               resources:
                 limits:
                   cpu: "2"
-                  memory: 6Gi
+                  memory: 9Gi
               readinessProbe:
                 httpGet:
                   path: /health
@@ -155,6 +188,7 @@ spec:
               cpu: "1"
               memory: 250Mi
 EOF
+}
 ```
 
 ### ReplicaSet using model staging and torch.compile caching
@@ -168,11 +202,14 @@ Node. This example also supposes that the torch.compile cache is
 shared throughout the cluster in a shared PVC.
 
 ```shell
+function mkrs() {
 kubectl apply -f - <<EOF
 apiVersion: apps/v1
 kind: ReplicaSet
 metadata:
-  name: my-request
+  name: my-request-$(date +%H-%M-%S)
+  labels:
+    app: dp-example
 spec:
   replicas: 1
   selector:
@@ -182,6 +219,7 @@ spec:
     metadata:
       labels:
         app: dp-example
+        instance: "$(date +%H-%M-%S)"
       annotations:
         dual-pod.llm-d.ai/admin-port: "8081"
         dual-pod.llm-d.ai/server-patch: |
@@ -199,7 +237,9 @@ spec:
               - serve
               - --port=8000
               - /pvcs/local/vcp/hf/models--ibm-granite--granite-3.3-2b-instruct/snapshots/707f574c62054322f6b5b04b6d075f0a8f05e0f0
+              - --enable-sleep-mode
               - --max-model-len=32768
+              - --gpu-memory-utilization=0.8
               env:
               - name: VLLM_CACHE_ROOT
                 value: /pvcs/shared/vcp/vllm
@@ -212,7 +252,7 @@ spec:
               resources:
                 limits:
                   cpu: "2"
-                  memory: 6Gi
+                  memory: 9Gi
               readinessProbe:
                 httpGet:
                   path: /health
@@ -256,6 +296,16 @@ spec:
         persistentVolumeClaim:
           claimName: vcp-cephfs-shared
 EOF
+}
+```
+
+
+## Example 1: cycle server-requesting Pod
+
+Create a ReplicaSet of 1 server-requesting Pod.
+
+```shell
+mkrs
 ```
 
 ### Expect a server-running Pod
@@ -281,19 +331,20 @@ shows that vLLM has completed starting up.
 
 ### Delete server-requesting Pod
 
-Use `kubectl` to delete the ReplicaSet. Expect that the
-server-requesting and server-running Pods get deleted.
+Use `kubectl scale --replicas=0` to scale the ReplicaSet down to 0
+replicas. Expect that the server-requesting and server-running Pods
+get deleted.
 
 ## Example 2: reflect server-running Pod deletion
 
 Start like example 1, but finish by deleting the server-running Pod
-instead of the ReplicaSet. Expect that the server-running and
-server-requesting Pods both go away, and then a replacement
+instead of the server-requesting one. Expect that the server-running
+and server-requesting Pods both go away, and then a replacement
 server-requesting Pod should appear and get satisfied as in example 1.
 
 ## Example 3: deletions while controller is not running
 
-Modify the first two examples by surrounding the `kubectl delete` by
+Modify the first two examples by surrounding the pod deletion by
 first `helm delete dpctlr` to remove the controller and then, after
 the Pod deletion, re-instantiate the controller Helm chart. The right
 stuff should finish happening after the second controller starts up.
@@ -324,3 +375,67 @@ dual-pods controller deletes the server-requesting Pod.
 
 Setup and create the dual pods. Then delete the Node that they are
 running on. Observe that eventually both Pods go away.
+
+## Example 7: Sleep and wake
+
+Testing wake-up is a little challenging when there are many GPUs
+available, because the likelihood of re-use is low. You can
+artificially improve your odds by pinning the server-requesting Pod to
+a node with few GPUs. For example, I did this by adding the following
+to the PodSpec in the ReplicaSet; I was using a cluster that had only
+one un-allocated GPU of that type.
+
+```yaml
+      nodeSelector: { "nvidia.com/gpu.product": "NVIDIA-L40S" }
+```
+
+Follow example 1, up through getting the server-running Pod.
+
+Next, scale the ReplicaSet down to zero replicas.
+
+```shell
+kubectl scale rs/my-request --replicas=0
+```
+
+Expect that the server-requesting Pod goes away and the server-running
+Pod continues to exist, with no finalizer. Expect that if you HTTP GET
+its `/is_sleeping` path, the response says that it is indeed
+sleeping. Examine the dual-pod controller's log.
+
+```shell
+kubectl logs deploy/dpctlr > /tmp/dpctlr.log
+```
+
+Expect to find a message "Unbound server-running Pod", and later a
+message "End of life of inference server".
+
+Next, scale the ReplicaSet back up to 1 replica. Expect to find a new
+server-requesting Pod, with a different name than before. Get the
+latest controller log. Now the question is, did the new
+server-requesting Pod get assigned the same GPU as the original?  Look
+for log message "Found GPUs", and look at the value of "gpuUUIDs". If
+it is NOT the same in the two log messages, the two server-requesting
+Pods did NOT get the same GPU assigned. Try again.
+
+If the two sever-requesting Pods got the same GPU assigned, expect the
+existing server-running Pod to be woken up and used. Look for a log
+message "Bound server-running Pod", and expect that no new
+server-running Pod is created. Expect a new "Successfully relayed the
+readiness" log message in the dual-pods controller log.
+
+## Example 8: Exercise sleeper limit
+
+Repeatedly create a server-requesting Pod, wait for its server-running
+Pod to appear and become ready, then delete the sever-requesting Pod,
+observe that the server-running Pod remains. With the dual-pods
+controller configured with a sleeper limit of N, build up N+1
+server-running Pods (all with sleeping vllm) using some particular
+GPU. Look in the dual-pod controller's log to see which GPU each
+runner uses. Next, create one more server-requesting Pod that gets
+bound to the same GPU. Observe that exactly 1 of the old
+server-running Pods gets delete --- the oldest one.
+
+Or, for more fun, before going past N+1, make a server-requesting Pod
+that causes the oldest runner to be re-used. Then delete that
+requester. Then force a deletion; observe that the deled one is the
+least recently used.
