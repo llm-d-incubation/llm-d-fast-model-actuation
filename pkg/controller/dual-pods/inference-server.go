@@ -943,33 +943,3 @@ func (ctl *controller) mapToGPUIndices(nodeName string, gpuUUIDs []string) ([]st
 	})
 	return indices, errors.Join(errs...)
 }
-
-func SliceMap[Domain, Range any](slice []Domain, mapFn func(Domain) (Range, error)) ([]Range, []error) {
-	var mapped []Range
-	var errors []error
-	for _, dom := range slice {
-		rng, err := mapFn(dom)
-		if err == nil {
-			mapped = append(mapped, rng)
-		} else {
-			errors = append(errors, err)
-		}
-	}
-	return mapped, errors
-}
-
-func SliceRemoveOnce[Elt comparable](slice []Elt, goner Elt) ([]Elt, bool) {
-	idx := slices.Index(slice, goner)
-	if idx < 0 {
-		return slice, false
-	}
-	return slices.Delete(slice, idx, idx+1), true
-}
-
-func MapSet[Dom comparable, Rng any](urMap map[Dom]Rng, dom Dom, rng Rng) map[Dom]Rng {
-	if urMap == nil {
-		urMap = map[Dom]Rng{}
-	}
-	urMap[dom] = rng
-	return urMap
-}
