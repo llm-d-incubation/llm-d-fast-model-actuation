@@ -315,7 +315,7 @@ starts running (NOTE: this is BEFORE the Pod is marked as "ready"),
 the dual-pods controller will create the server-running Pod and it
 will get scheduled to the same Node as the server-requesting Pod. Its
 name will equal the server-requesting Pod's name suffixed with
-`-server`.
+`-dual-` and some letters and numbers.
 
 Expect that once the dual-pods controller starts working on a
 server-requesting Pod, the Pod will have an annotation with name
@@ -328,6 +328,16 @@ and soon after that the server-requesting Pod is marked as ready.
 
 Expect that once the server-running Pod is marked as ready, its log
 shows that vLLM has completed starting up.
+
+FYI, the following commands produce Pod listings that show FYI
+information tacked on by the dual-pods controller.
+
+```shell
+kubectl get pods -o 'custom-columns=NAME:.metadata.name,PHASE:.status.phase,COND2:.status.conditions[2].type,VAL2:.status.conditions[2].status,DUAL:.metadata.labels.dual-pods\.llm-d\.ai/dual,GPUS:.metadata.annotations.dual-pods\.llm-d\.ai/accelerators,SLEEPING:.metadata.labels.dual-pods\.llm-d\.ai/sleeping'
+
+
+kubectl get pods -L dual-pods.llm-d.ai/dual
+```
 
 ### Delete server-requesting Pod
 
@@ -344,10 +354,13 @@ server-requesting Pod should appear and get satisfied as in example 1.
 
 ## Example 3: deletions while controller is not running
 
-Modify the first two examples by surrounding the pod deletion by
-first `helm delete dpctlr` to remove the controller and then, after
-the Pod deletion, re-instantiate the controller Helm chart. The right
-stuff should finish happening after the second controller starts up.
+Modify the first two examples by surrounding the pod deletion by first
+`helm delete dpctlr` to remove the controller and then, after the Pod
+deletion, re-instantiate the controller Helm chart. Remember when
+using `kubectl delete` that it will hang until the controller is
+re-instantiated to remove the controller's finalizer on the Pod,
+unless you use `kubectl delete --wait=false`. The right stuff should
+finish happening after the second controller starts up.
 
 ## Example 4: create the gpu-map too late
 
@@ -377,6 +390,17 @@ Setup and create the dual pods. Then delete the Node that they are
 running on. Observe that eventually both Pods go away.
 
 ## Example 7: Sleep and wake
+
+Whenever using sleep and wake, you have responsibility for not
+overloading the GPU memory. Plan a division of GPU memory between
+awake inference servers and sleeping ones. Thus far, we find that a
+sleeping one takes between 1 and 2 GiB of GPU memory. To be safe, plan
+on 2 GiB. When your limit on the number of sleeping instances is `N`
+(this is the value that you supplied for `SleeperLimit` above when
+instantiating the Helm chart), you are thus planning on up to `N * 2
+GiB` of memory being used by them. Consequently, you must configure
+each inference server on a GPU with `M GiB` of memory to use no more
+than `M - N * 2` GiB of memory.
 
 Testing wake-up is a little challenging when there are many GPUs
 available, because the likelihood of re-use is low. You can
