@@ -27,18 +27,14 @@ spec:
               - vllm
               - serve
               - --port=8000
-              - --model=ibm-granite/granite-3.3-2b-instruct
+              - /pvcs/local/vcp/hf/models--ibm-granite--granite-3.3-2b-instruct/snapshots/707f574c62054322f6b5b04b6d075f0a8f05e0f0
               - --max-model-len=32768
               env:
-              - name: VLLM_SERVER_DEV_MODE
-                value: "1"
               - name: VLLM_CACHE_ROOT
-                value: /tmp
+                value: /pvcs/shared/vcp/vllm
               - name: FLASHINFER_WORKSPACE_BASE
-                value: /tmp
+                value: /pvcs/shared/vcp/vllm
               - name: XDG_CONFIG_HOME
-                value: /tmp
-              - name: XDG_CACHE_HOME
                 value: /tmp
               - name: TRITON_HOME
                 value: /tmp
@@ -52,10 +48,21 @@ spec:
                   port: 8000
                 initialDelaySeconds: 60
                 periodSeconds: 5
+              volumeMounts:
+              - name: local
+                readOnly: true
+                mountPath: /pvcs/local
+                subPath: vcp-${LOGNAME}
+              - name: shared
+                mountPath: /pvcs/shared
+            volumes:
+            - name: local
+              persistentVolumeClaim:
+                claimName: vcp-local-{{ .NodeName }}
     spec:
       containers:
         - name: inference-server
-          image: ${CONTAINER_IMG_REG}/requester:latest
+          image: quay.io/aavarghese/fma/requester:v0.0.1
           imagePullPolicy: Always
           ports:
           - name: probes
@@ -73,3 +80,7 @@ spec:
               nvidia.com/gpu: "1"
               cpu: "1"
               memory: 250Mi
+      volumes:
+      - name: shared
+        persistentVolumeClaim:
+          claimName: vcp-cephfs-shared

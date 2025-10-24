@@ -59,6 +59,7 @@ def get_pods_with_label(api, namespace, label_selector):
 def wait_for_dual_pods_ready(v1, namespace, podname, timeout=600):
     start = time.perf_counter()
     elapsed = 0
+    # Server-requesting and server-providing pods
     target_pods = {podname, f"{podname}-server"}
     ready_pods = set()
 
@@ -86,7 +87,7 @@ def wait_for_dual_pods_ready(v1, namespace, podname, timeout=600):
                     if name not in ready_pods:
                         ready_pods.add(name)
                         logger.info(
-                            f"{name} is Ready at {time.perf_counter() - start:.2f}s"
+                            f"{name} is Ready in {time.perf_counter() - start:.2f}s"
                         )
 
                 if len(ready_pods) == len(target_pods):
@@ -143,7 +144,6 @@ def main():
 
     logger.info(f"Namespace: {namespace}")
     logger.info(f"YAML file: {yaml_file}")
-    logger.info("Metric#1: Time from server-requesting pod apply -> dual pods ready\n")
 
     start_time = time.perf_counter()
     apply_yaml(yaml_file)
@@ -168,9 +168,7 @@ def main():
     ready_time = wait_for_dual_pods_ready(v1, namespace, requester_name)
 
     total_time = ready_time - start_time
-    logger.info(
-        f"\n🚀 Benchmark result: {total_time:.2f} seconds from creation → pods ready"
-    )
+    logger.info(f"🚀 Readiness time: {total_time:.2f} seconds\n")
 
     delete_yaml(yaml_file)
 
