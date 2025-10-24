@@ -93,3 +93,11 @@ const AcceleratorsAnnotationName string = "dual-pods.llm-d.ai/accelerators"
 // This label is purely FYI emitted by the dual-pods controller
 // (it does not rely on this label for anything).
 const DualLabelName string = "dual-pods.llm-d.ai/dual"
+
+// SleepingLabelName is the name of a label that the dual-pods controller
+// maintains on server-running Pods.
+// This value of this label is "true" or "false",
+// according to what the controller knows.
+// This label is purely FYI emitted by the dual-pods controller
+// (it does not rely on this label for anything).
+const SleepingLabelName string = "dual-pods.llm-d.ai/sleeping"

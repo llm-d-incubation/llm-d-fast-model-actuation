@@ -247,7 +247,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		if serverDat.Sleeping == nil || *(serverDat.Sleeping) {
 			_, serverPort, err := getInferenceServerPort(runningPod)
 			if err != nil { // Impossible, because such a runningPod would never be created by this controller
-				return fmt.Errorf("unable to put server to sleep because port not known: %w", err), true
+				return fmt.Errorf("unable to wake up server because port not known: %w", err), true
 			}
 			wakeURL := fmt.Sprintf("http://%s:%d/wake_up", runningPod.Status.PodIP, serverPort)
 			resp, err := http.Post(wakeURL, "", nil)
@@ -257,7 +257,11 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 			if sc := resp.StatusCode; sc != http.StatusOK {
 				return fmt.Errorf("failed to wake up, POST %s returned status %d", wakeURL, sc), true
 			}
+			if err := ctl.ensureSleepingLabelFalse(ctx, runningPod); err != nil {
+				return err, true
+			}
 			serverDat.Sleeping = ptr.To(false)
+			logger.V(2).Info("Woke discovered-bound inference server")
 		}
 		err, _ := ctl.ensureReqState(ctx, requestingPod, serverDat, shouldAddRequesterFinalizer, false)
 		if err != nil {
@@ -371,6 +375,21 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	logger.V(2).Info("Created server-running pod", "name", echo.Name, "gpus", serverDat.GPUIndicesStr, "annotations", echo.Annotations, "labels", echo.Labels, "resourceVersion", echo.ResourceVersion)
 
 	return ctl.ensureReqStatus(ctx, requestingPod, serverDat)
+}
+
+func (ctl *controller) ensureSleepingLabelFalse(ctx context.Context, runningPod *corev1.Pod) error {
+	logger := klog.FromContext(ctx)
+	if runningPod.Labels[api.SleepingLabelName] != "false" {
+		runningPod = runningPod.DeepCopy()
+		runningPod.Labels = MapSet(runningPod.Labels, api.SleepingLabelName, "false")
+		echo, err := ctl.coreclient.Pods(ctl.namespace).Update(ctx, runningPod, metav1.UpdateOptions{
+			FieldManager: ControllerName})
+		if err != nil {
+			return fmt.Errorf("failed to revise sleeping label on server-running Pod to reflect wake-up: %w", err)
+		}
+		logger.V(3).Info("Updated sleeping label on sever-running Pod to reflect wake-up", "newResourceVersion", echo.ResourceVersion)
+	}
+	return nil
 }
 
 // Trouble is both (a) some container restarts and (b) Pod not ready
@@ -497,8 +516,11 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 	if sc := resp.StatusCode; sc != http.StatusOK {
 		return fmt.Errorf("failed to wake up, POST %s returned status %d", wakeURL, sc), true
 	}
+	if err := ctl.ensureSleepingLabelFalse(ctx, runningPod); err != nil {
+		return err, true
+	}
 	serverDat.Sleeping = ptr.To(false)
-	logger.V(2).Info("Woke inference server", "runningPod", runningPod.Name)
+	logger.V(2).Info("Woke freshly-bound inference server", "runningPod", runningPod.Name)
 	return ctl.ensureReqState(ctx, requestingPod, serverDat, !slices.Contains(requestingPod.Finalizers, requesterFinalizer), false)
 }
 
@@ -609,6 +631,12 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 	}
 	runningPod = runningPod.DeepCopy()
 	var aChange, fChange bool
+	// Ensure the sleeping label is correct
+	sleepLabelValue := runningPod.Labels[api.SleepingLabelName]
+	lChange := sleepLabelValue != "true"
+	if lChange {
+		runningPod.Labels = MapSet(runningPod.Labels, api.SleepingLabelName, "true")
+	}
 	// Ensure requester annotation is absent
 	if _, have := runningPod.Annotations[requesterAnnotationKey]; have {
 		delete(runningPod.Annotations, requesterAnnotationKey)
@@ -616,7 +644,7 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 	}
 	// Ensure finalizer is absent
 	runningPod.Finalizers, fChange = SliceRemoveOnce(runningPod.Finalizers, runnerFinalizer)
-	if aChange || fChange {
+	if aChange || fChange || lChange {
 		if runningPod.Labels != nil {
 			delete(runningPod.Labels, api.DualLabelName)
 		}
@@ -740,6 +768,7 @@ func (serverDat *serverData) getNominalServerRunningPod(ctx context.Context, req
 		pod.Annotations[requesterAnnotationKey] = string(reqPod.UID) + " " + reqPod.Name
 		pod.Annotations[api.AcceleratorsAnnotationName] = *serverDat.GPUIDsStr
 		pod.Labels = MapSet(pod.Labels, api.DualLabelName, reqPod.Name)
+		pod.Labels[api.SleepingLabelName] = "false"
 		serverDat.NominalRunningPod = pod
 		serverDat.NominalRunningPodHash = nominalHash
 	}
