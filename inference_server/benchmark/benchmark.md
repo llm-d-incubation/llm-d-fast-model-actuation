@@ -1,8 +1,15 @@
 # Dual-Pods Benchmarking Tool
-The **Dual-Pods Benchmarking Tool** measures and reports the startup and readiness latency of model-serving pods within the LLM-D Fast Model Actuation workflow.
+The **Dual-Pods Benchmarking Tool** measures and reports the startup and readiness
+latency of model-serving pods within the LLM-D Fast Model Actuation workflow.
 
 ## Purpose
-The goal is to quantify and compare how quickly a model-serving duo (server-requesting and server-providing pods) becomes available under different actuation conditions such as cold starts, wake-ups from a sleeping state, using prewarmed pods, etc. to guide future optimizations for the **Dual-Pods Controller (DPC)**.
+The goal is to quantify and compare how quickly a model-serving duo (server-requesting
+and server-providing pods) becomes available under different actuation conditions such
+as cold starts, wake-ups from a sleeping state, using prewarmed pods, etc. These metrics
+will guide future optimizations for the **Dual-Pods Controller (DPC)**. Ultimately, the goal
+is *high predictability*, which is defined as achieving close to 100% hit rate of awakening
+available, sleeping pods on cluster GPUs as function of total inference server
+requests for common user scenarios.
 
 ## Baseline Startup Latency
 
@@ -15,6 +22,8 @@ Measure the time from **deployment (server-request submission)** to **dual-pod r
 | ---------------------------------- | -----------------------------------------------------|
 | `--namespace`                      | Kubernetes namespace where benchmarking occurs       |
 | `--yaml`                           | YAML file describing the dual-pod deployment         |
+| `--image`                 | Image repository for the inference server requester container |
+| `--tag`                   | Image tag to use for the inference server requester container |
 | `--num-gpus`           | Number of GPUs to request for the server-providing pod           |
 | `--num-model-variants` | Number of different model variants to deploy during benchmarking |
 
@@ -32,7 +41,7 @@ python3 inference_server/benchmark/dualpods_time_logs.py \
   --yaml deploy/server-request-minimal.yaml
 ```
 
-**Output Example**
+**Output Example (Subject to Change)**
 
 ```
 replicaset.apps/my-request created
@@ -53,13 +62,30 @@ Applying deploy/server-request-minimal.yaml...
 
 | Scenario                      | Description                                                   |
 | ----------------------------- | ------------------------------------------------------------- |
+| **Introducing New Variant**   | As a ModelService Owner, I can deploy a newly released variant from HuggingFace in anticipation of user requests |
+| **Fast Replica Scale Up**     | As a ModelService Owner, I can scale up the number of active replicas for a variant with minimal latency |
+| **Free Up Cluster Resources** | As a Cluster Operator, I can reduce/deactive resource intensive variants to make space for numerous smaller model variants |
+| **Resource Request Justification** | As a Workload Owner, I can stress-test my namespace's resources to justify more resource requests (routes, gateways, GPUs) from cluster owner |
+| **Maintenance Planning**      | As a Cluster Operator, I can stress-test the cluster workloads to guide node maintainance schedules and upgrades |
+
+
+## Benchmarking Matrix (WIP)
+
+| Scenario                      | Cold Start (No Launcher)  | Cold Start (w/ Launcher)  | Caching (No Launcher) | Caching (w/ Launcher) | Scale Up (No Sleep) | Scale Up (Sleep + GPU Hit/Bind) |
+| ----------------------------- | ------------------------- | ------------------------- | --------------------  | --------------------- | ------------------- | ------------------------------- | 
+| **Introducing New Variant**   |                           |                           |                       |                       |                     |                                 | 
+| **Fast Replica Scale Up**     |                           |                           |                       |                       |                     |                                 |
+| **Free Up Cluster Resources** |                           |                           |                       |                       |                     |                                 | 
+| **Resource Request Justification** |                      |                           |                       |                       |                     |                                 |
+| **Maintenance Planning**      |                           |                           |                       |                       |                     |                                 |
+
+| Scenario                      | Description                                                   |
+| ----------------------------- | ------------------------------------------------------------- |
 | **Cold Start vLLM Instance**  | Measures latency for creating a new vLLM server from scratch (no caching with and without launcher).                 |
 | **Wake Up Sleeping Instance** | Measures time to wake-up a sleeping instance (with and without launcher).                                        |
 | **Launcher Activation** | Measure end-to-end time from launcher triggering a new instance to full readiness. |
 | **Scale-Up Requester Replicas**            | Deploys additional requester-provider pairs to handle increased load and measures incremental activation latency. |
 | **Scale-Down Requester Replicas**          | Evaluate teardown and reactivation time when waking-up sleeping instance.                       |
-| Coming soon| |
-| Coming soon| |
 
 ### Next steps
 

@@ -63,17 +63,24 @@ def parse_request_args():
         help="Label selector for server-requesting pod",
     )
 
-    # Check for a container image env variable before adding to the parser.
+    # Check for a container image env variables before adding to the parser.
     requester_img = getenv("CONTAINER_IMG_REG")
-    if requester_img:
-        logger.info("Requester Image Loaded from ENV: {requester_img}")
-    else:  # Force user to pass it as an argument.
+    img_tag = getenv("CONTAINER_IMG_VERSION")
+    if requester_img and img_tag:
+        logger.info("Requester Image Loaded from ENV: {requester_img}:{img_tag}")
+    else:  # Force user to pass both the image and tage as arguments.
         logger.info("CONTAINER_IMG_REG is not set locally")
         parser.add_argument(
             "--image",
             type=str,
             required=True,
             help="Repository for the requester image",
+        )
+        parser.add_argument(
+            "--tag",
+            type=str,
+            required=True,
+            help="Version tag for the requester image",
         )
 
     args = parser.parse_args()
@@ -82,18 +89,20 @@ def parse_request_args():
     label = args.label
     if requester_img is None:
         requester_img = args.image
+        img_tag = args.tag
 
-    # Transform the template into a usable request file with container image.
-    request_yaml_file = replace_repo_variable(requester_img, yaml_file_template)
+    # Transform the template into a usable request file with container image version.
+    request_yaml_file = replace_repo_variable(requester_img, img_tag, yaml_file_template)
 
     return namespace, request_yaml_file, label, requester_img
 
 
-def replace_repo_variable(requester_image_repo: str, request_yaml_template: str):
+def replace_repo_variable(requester_image_repo: str, image_tag: str, request_yaml_template: str):
     """
     Replace the variable for the inference server container image.
     :param requester_image_repo: The repository for the inference server
                                  container images.
+    :param image_tag: The particular tag to use for the container image.
     :param request_yaml_template: The local path for the inference server request
                                   template YAML file.
     """
@@ -103,7 +112,9 @@ def replace_repo_variable(requester_image_repo: str, request_yaml_template: str)
         raise FileNotFoundError(f"{request_yaml_template} path does not exist!")
 
     # Invoke the replacement in the template for redirection.
-    sed_script = "s#${CONTAINER_IMG_REG}#" + requester_image_repo + "#"
+    sed_script = "s#${CONTAINER_IMG_REG}#" + requester_image_repo + "\n"
+    sed_script += "s#${CONTAINER_IMG_VERSION}#" + image_tag + "#"
+    logger.info(f"Sed Script: {sed_script}")
     updated_request_file = "inf-server-request-" + str(uuid4()) + ".yaml"
     updated_request_file_path = Path(updated_request_file)
     with Path(updated_request_file_path).open(mode="wb") as yaml_fd:
