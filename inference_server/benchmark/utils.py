@@ -36,10 +36,11 @@ console_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 
+
 def parse_request_args():
     """
-       Retrieve the arguments for launching the inference server
-       request.
+    Retrieve the arguments for launching the inference server
+    request.
     """
     parser = argparse.ArgumentParser(
         description="Benchmarking the Dual-pods readiness time"
@@ -67,13 +68,13 @@ def parse_request_args():
     requester_img = getenv("CONTAINER_IMG_REG")
     if requester_img:
         logger.info("Requester Image Loaded from ENV: {requester_img}")
-    else: # Force user to pass it as an argument.
-         logger.info("CONTAINER_IMG_REG is not set locally")
-         parser.add_argument(
-             "--image",
-             type=str,
-             required=True,
-             help="Repository for the requester image",
+    else:  # Force user to pass it as an argument.
+        logger.info("CONTAINER_IMG_REG is not set locally")
+        parser.add_argument(
+            "--image",
+            type=str,
+            required=True,
+            help="Repository for the requester image",
         )
 
     args = parser.parse_args()
@@ -89,29 +90,28 @@ def parse_request_args():
     return namespace, request_yaml_file, label, requester_img
 
 
-def replace_repo_variable(requester_image_repo: str,
-                          request_yaml_template: str):
+def replace_repo_variable(requester_image_repo: str, request_yaml_template: str):
     """
-       Replace the variable for the inference server container image.
-       :param requester_image_repo: The repository for the inference server
-                                    container images.
-       :param request_yaml_template: The local path for the inference server request
-                                     template YAML file.
+    Replace the variable for the inference server container image.
+    :param requester_image_repo: The repository for the inference server
+                                 container images.
+    :param request_yaml_template: The local path for the inference server request
+                                  template YAML file.
     """
     # Check that yaml path exists before invoking sed.
     request_yaml_path = Path(request_yaml_template)
-    if not(request_yaml_path).exists():
-        raise FileNotFoundError (f"{request_yaml_template} path does not exist!")
+    if not (request_yaml_path).exists():
+        raise FileNotFoundError(f"{request_yaml_template} path does not exist!")
 
     # Invoke the replacement in the template for redirection.
     sed_script = "s#${CONTAINER_IMG_REG}#" + requester_image_repo + "#"
     updated_request_file = "inf-server-request-" + str(uuid4()) + ".yaml"
     updated_request_file_path = Path(updated_request_file)
-    with Path(updated_request_file_path).open(mode='wb') as yaml_fd:
+    with Path(updated_request_file_path).open(mode="wb") as yaml_fd:
         subprocess.run(
             ["sed", "-e", sed_script, request_yaml_template],
             stdout=yaml_fd,
-            check=False
+            check=False,
         )
 
     return updated_request_file
