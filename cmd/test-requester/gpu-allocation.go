@@ -20,7 +20,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"iter"
 	"os"
 	"strings"
 	"time"
@@ -209,15 +208,4 @@ func getPodUIDs(ctx context.Context, podClient corev1client.PodInterface) (sets.
 		return pod.UID, nil
 	})
 	return sets.New(uids...), nil
-}
-
-func MapFilter2to1[Key comparable, Val, Result any](input map[Key]Val, filter func(Key, Val) (Result, bool)) iter.Seq[Result] {
-	return func(yield func(Result) bool) {
-		for key, val := range input {
-			result, include := filter(key, val)
-			if include && !yield(result) {
-				return
-			}
-		}
-	}
 }
