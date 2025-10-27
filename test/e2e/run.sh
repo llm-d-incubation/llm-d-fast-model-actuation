@@ -37,9 +37,6 @@ kubectl wait --for=create sa default
 
 kubectl create clusterrole node-viewer --verb=get,list,watch --resource=nodes
 
-# The following is needed because the Helm chart is buggy (creates a RoleBinding)
-kubectl create clusterrolebinding dpctlr-node-viewer --clusterrole=node-viewer --serviceaccount=$(kubectl get sa default -o jsonpath={.metadata.namespace}):dual-pods-controller
-
 kubectl apply -f - <<EOF
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -92,7 +89,7 @@ make load-controller-local
 : Deploy the dual-pods controller in the cluster
 
 ctlr_img=$(make echo-var VAR=CONTROLLER_IMG)
-helm upgrade --install dpctlr charts/dpctlr --set Image="$ctlr_img" --set SleeperLimit=1 --set Local=true
+helm upgrade --install dpctlr charts/dpctlr --set Image="$ctlr_img" --set NodeViewClusterRole=node-viewer --set SleeperLimit=1 --set Local=true
 
 : Test Pod creation
 

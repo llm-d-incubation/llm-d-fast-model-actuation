@@ -5,7 +5,6 @@ kind delete cluster --name fmatest
 kind create cluster --name fmatest
 
 kubectl create clusterrole node-viewer --verb=get,list,watch --resource=nodes
-kubectl create clusterrolebinding dpctlr-node-viewer --clusterrole=node-viewer --serviceaccount=$(kubectl get sa default -o jsonpath={.metadata.namespace}):dual-pods-controller
 
 kubectl apply -f - <<EOF
 apiVersion: rbac.authorization.k8s.io/v1
@@ -61,7 +60,7 @@ kind load docker-image $regy/test-requester:$tag          --name fmatest
 kind load docker-image $regy/test-server:$tag             --name fmatest
 kind load docker-image $regy/dual-pods-controller:$tag    --name fmatest
 
-helm upgrade --install dpctlr charts/dpctlr --set Image="$regy/dual-pods-controller:$tag" --set SleeperLimit=1 --set Local=true
+helm upgrade --install dpctlr charts/dpctlr --set Image="$regy/dual-pods-controller:$tag" --set NodeViewClusterRole=node-viewer --set SleeperLimit=1 --set Local=true
 
 function mkrs() {
 inst=$(date +%H-%M-%S)
