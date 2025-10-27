@@ -39,7 +39,7 @@ import (
 )
 
 // This code maintains a ConfigMap named "gpu-allocs" that holds the current test allocations
-// of GPUs. The data of this ConfigMap is a map from GPU UID to the JSON marshaling of a GPUHOlder.
+// of GPUs. The data of this ConfigMap is a map from GPU UID to the JSON marshaling of a GPUHolder.
 
 // gpuMap maps node name to nodeGPUMap
 type gpuMap map[string]nodeGPUMap
@@ -47,7 +47,7 @@ type gpuMap map[string]nodeGPUMap
 // nodeGPUMap maps GPU UID to index
 type nodeGPUMap map[string]int
 
-// GPUHolder identifis a test requester that is currently allocated the use of a GPU
+// GPUHolder identifies a test requester that is currently allocated the use of a GPU
 type GPUHolder struct {
 	NodeName string
 	PodUID   apitypes.UID
@@ -127,23 +127,29 @@ func allocateGPUs(ctx context.Context, coreClient corev1client.CoreV1Interface, 
 	cmClient := coreClient.ConfigMaps(namespace)
 	podClient := coreClient.Pods(namespace)
 	var gpuUIDs []string
-	try := func(ctx context.Context) (done bool, err error) {
+	// try once to allocate the requested number of GPUs;
+	// on failure return explanatory error;
+	// on success return nil.
+	try := func(ctx context.Context) (err error) {
 		gpuMap, err := getGPUMap(ctx, cmClient)
 		if err != nil {
-			return false, err
+			return err
 		}
 		avail := gpuMap.onNode(nodeName)
 		podUIDs, err := getPodUIDs(ctx, podClient)
 		if err != nil {
-			return false, err
+			return err
 		}
 		if !podUIDs.Has(podUID) {
-			return false, fmt.Errorf("pod UID %q not found among current Pods", podUID)
+			return fmt.Errorf("pod UID %q not found among current Pods", podUID)
 		}
+		// Get the current allocations, as a data structure and as a ConfigMap object.
 		gpuAllocMap, gpuAllocCM, err := getGPUAlloc(ctx, cmClient)
 		if err != nil {
-			return false, err
+			return err
 		}
+		// Collect the ones used by other Pods on the same Node,
+		// and remove obsolete entries from the ConfigMap.
 		used := sets.New[string]()
 		for gpuUID, holder := range gpuAllocMap {
 			if holder.NodeName != nodeName {
@@ -155,16 +161,19 @@ func allocateGPUs(ctx context.Context, coreClient corev1client.CoreV1Interface, 
 				used.Insert(gpuUID)
 			}
 		}
+		// Compute the sorted list of unused GPUs on the right Node.
 		rem := sets.List(avail.Difference(used))
 		if uint(len(rem)) < numGPUs {
-			return false, fmt.Errorf("fewer than %d GPUs available (%v) for node %q", numGPUs, rem, nodeName)
+			return fmt.Errorf("fewer than %d GPUs available (%v) for node %q", numGPUs, rem, nodeName)
 		}
+		// Take the requested number
+		// FROM THE HEAD OF THE LIST --- this is a choice to aid making repeatable tests.
 		gpuUIDs = rem[:numGPUs]
 		for _, gpuUID := range gpuUIDs {
 			holder := GPUHolder{NodeName: nodeName, PodUID: podUID}
 			holderBytes, err := json.Marshal(holder)
 			if err != nil {
-				return false, fmt.Errorf("failed to marshal holder for GPU %s (%#v): %w", gpuUID, holder, err)
+				return fmt.Errorf("failed to marshal holder for GPU %s (%#v): %w", gpuUID, holder, err)
 			}
 			gpuAllocCM.Data[gpuUID] = string(holderBytes)
 		}
@@ -172,17 +181,17 @@ func allocateGPUs(ctx context.Context, coreClient corev1client.CoreV1Interface, 
 			FieldManager: agentName,
 		})
 		if err != nil {
-			return false, fmt.Errorf("failed to update GPU allocation ConfigMap: %w", err)
+			return fmt.Errorf("failed to update GPU allocation ConfigMap: %w", err)
 		}
 		logger.Info("Successful allocation", "nodeName", nodeName, "podUID", podUID, "gpus", gpuUIDs, "newResourceVersion", echo.ResourceVersion)
-		return true, nil
+		return nil
 	}
 	err := wait.PollUntilContextCancel(ctx, time.Second, true, func(ctx context.Context) (bool, error) {
-		done, err := try(ctx)
+		err := try(ctx)
 		if err != nil {
 			logger.Error(err, "Failed to allocate")
 		}
-		return done, nil
+		return err == nil, nil
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to allocate GPUS: %s\n", err.Error())

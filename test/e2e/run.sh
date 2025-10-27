@@ -160,7 +160,6 @@ echo Successful re-use
 
 kubectl delete pod $prv
 
-# expect "kubectl get pods -o name | grep -c '^pod/$nrq' | grep -w 0"
 expect "! kubectl get pods -o name | grep '^pod/$nrq'"
 
 expect "kubectl get pods -o name | grep -c '^pod/$rs' | grep -w 2"

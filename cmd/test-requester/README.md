@@ -1,8 +1,9 @@
 # Test requester
 
-This is a variant of the normal requester that does not not actually involve GPUs.
-Instead of running `nvidia-smi` to discover what GPUs were assigned by the kubelet,
-this requester maintains GPU assignments in a ConfigMap named "gpu-allocs".
+This is a variant of the normal requester that does not actually
+involve GPUs.  Instead of running `nvidia-smi` to discover what GPUs
+were assigned by the kubelet, this requester maintains GPU assignments
+in a ConfigMap named "gpu-allocs".
 
 For details, see the comment at the start of [the source](main.go).
 
