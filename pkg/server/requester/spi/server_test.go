@@ -36,7 +36,7 @@ func FuzzServer(f *testing.F) {
 	ctx, cancel := context.WithCancel(f.Context())
 	port := "28083"
 	go func() {
-		err := runTestable(ctx, port, &ready, gpuIDs)
+		err := RunWithGPUUUIDs(ctx, port, &ready, gpuIDs)
 		if err != nil {
 			f.Logf("Run failed: %s", err.Error())
 		}

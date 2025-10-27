@@ -65,7 +65,7 @@ func main() {
 
 	kubeClient := kubernetes.NewForConfigOrDie(restConfig)
 	if len(overrides.Context.Namespace) == 0 {
-		fmt.Fprint(os.Stderr, "Namespace must not be the empty string")
+		fmt.Fprintln(os.Stderr, "Namespace must not be the empty string")
 		os.Exit(1)
 	} else {
 		logger.Info("Focusing on one namespace", "name", overrides.Context.Namespace)
