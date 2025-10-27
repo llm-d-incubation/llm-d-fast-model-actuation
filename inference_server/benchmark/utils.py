@@ -112,7 +112,7 @@ def replace_repo_variable(requester_image_repo: str, image_tag: str, request_yam
         raise FileNotFoundError(f"{request_yaml_template} path does not exist!")
 
     # Invoke the replacement in the template for redirection.
-    sed_script = "s#${CONTAINER_IMG_REG}#" + requester_image_repo + "\n"
+    sed_script = "s#${CONTAINER_IMG_REG}#" + requester_image_repo + "#\n"
     sed_script += "s#${CONTAINER_IMG_VERSION}#" + image_tag + "#"
     logger.info(f"Sed Script: {sed_script}")
     updated_request_file = "inf-server-request-" + str(uuid4()) + ".yaml"
