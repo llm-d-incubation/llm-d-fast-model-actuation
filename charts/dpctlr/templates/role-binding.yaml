@@ -27,5 +27,6 @@ roleRef:
   name: "{{ .Values.NodeViewClusterRole }}"
 subjects:
 - kind: ServiceAccount
+  namespace: "{{ .Release.Namespace }}"
   name: dual-pods-controller
 {{end}}
