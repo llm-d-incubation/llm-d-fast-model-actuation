@@ -60,32 +60,25 @@ Applying deploy/server-request-minimal.yaml...
 
 ## Benchmarking Scenarios (WIP)
 
-| Scenario                      | Description                                                   |
-| ----------------------------- | ------------------------------------------------------------- |
+| Scenario                      | Description                                                                                                                                           |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Introducing New Variant**   | As a ModelService Owner, I can deploy a newly released variant from HuggingFace in anticipation of user requests |
 | **Fast Replica Scale Up**     | As a ModelService Owner, I can scale up the number of active replicas for a variant with minimal latency |
-| **Free Up Cluster Resources** | As a Cluster Operator, I can reduce/deactive resource intensive variants to make space for numerous smaller model variants |
-| **Resource Request Justification** | As a Workload Owner, I can stress-test my namespace's resources to justify more resource requests (routes, gateways, GPUs) from cluster owner |
-| **Maintenance Planning**      | As a Cluster Operator, I can stress-test the cluster workloads to guide node maintainance schedules and upgrades |
+| **Free Up Cluster Resources** | As a Cluster Operator, I can reduce/deactivate resource intensive variants to make space for numerous smaller model variants |
+| **Resource Request Justification** | As a Workload Owner, I can stress-test my namespace's resources to justify more resource requests (routes, gateways, GPUs) from cluster operator |
+| **Maintenance Planning**      | As a Cluster Operator, I can validate the cluster performance is similar or better after node maintenance schedules and upgrades |
 
 
 ## Benchmarking Matrix (WIP)
 
 | Scenario                      | Cold Start (No Launcher)  | Cold Start (w/ Launcher)  | Caching (No Launcher) | Caching (w/ Launcher) | Scale Up (No Sleep) | Scale Up (Sleep + GPU Hit/Bind) |
-| ----------------------------- | ------------------------- | ------------------------- | --------------------  | --------------------- | ------------------- | ------------------------------- | 
-| **Introducing New Variant**   |                           |                           |                       |                       |                     |                                 | 
+| ----------------------------- | ------------------------- | ------------------------- | --------------------  | --------------------- | ------------------- | ------------------------------- |
+| **Introducing New Variant**   |                           |                           |                       |                       |                     |                                 |
 | **Fast Replica Scale Up**     |                           |                           |                       |                       |                     |                                 |
-| **Free Up Cluster Resources** |                           |                           |                       |                       |                     |                                 | 
+| **Free Up Cluster Resources** |                           |                           |                       |                       |                     |                                 |
 | **Resource Request Justification** |                      |                           |                       |                       |                     |                                 |
 | **Maintenance Planning**      |                           |                           |                       |                       |                     |                                 |
 
-| Scenario                      | Description                                                   |
-| ----------------------------- | ------------------------------------------------------------- |
-| **Cold Start vLLM Instance**  | Measures latency for creating a new vLLM server from scratch (no caching with and without launcher).                 |
-| **Wake Up Sleeping Instance** | Measures time to wake-up a sleeping instance (with and without launcher).                                        |
-| **Launcher Activation** | Measure end-to-end time from launcher triggering a new instance to full readiness. |
-| **Scale-Up Requester Replicas**            | Deploys additional requester-provider pairs to handle increased load and measures incremental activation latency. |
-| **Scale-Down Requester Replicas**          | Evaluate teardown and reactivation time when waking-up sleeping instance.                       |
 
 ### Next steps
 

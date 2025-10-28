@@ -92,12 +92,16 @@ def parse_request_args():
         img_tag = args.tag
 
     # Transform the template into a usable request file with container image version.
-    request_yaml_file = replace_repo_variable(requester_img, img_tag, yaml_file_template)
+    request_yaml_file = replace_repo_variable(
+        requester_img, img_tag, yaml_file_template
+    )
 
     return namespace, request_yaml_file, label, requester_img
 
 
-def replace_repo_variable(requester_image_repo: str, image_tag: str, request_yaml_template: str):
+def replace_repo_variable(
+    requester_image_repo: str, image_tag: str, request_yaml_template: str
+):
     """
     Replace the variable for the inference server container image.
     :param requester_image_repo: The repository for the inference server
