@@ -1,0 +1,48 @@
+# Tests a PR in a `kind` cluster
+name: PR Test in kind
+
+on:
+  push:
+    paths:
+      - ".github/workflows/pr-test-in-kind.yml"
+      - Makefile
+      - cmd/dual-pods-controller/**
+      - cmd/test-requester/**
+      - cmd/test-server/**
+      - pkg/**
+      - test/e2e/**
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  debug:
+    name: print relevant info
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "github.actor=${{ github.actor }}"
+          echo "github.action_ref=${{ github.action_ref }}"
+          echo "github.event_name=${{ github.event_name }}"
+          echo "github.head_ref=$GITHUB_HEAD_REF"
+          echo "github.ref=${{ github.ref }}"
+          echo "github.ref_name=${{ github.ref_name }}"
+          echo "github.repository=${{ github.repository }}"
+          echo "github.repository_owner=${{ github.repository_owner }}"
+          echo "github.triggering_actor=${{ github.triggering_actor }}"
+          echo "GITHUB_ACTION_REF=$GITHUB_ACTION_REF"
+
+  run-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install ko
+        uses: ko-build/setup-ko@d006021bd0c28d1ce33a07e7943d48b079944c8d
+
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
+      - name: Doit
+        run: test/e2e/run.sh
