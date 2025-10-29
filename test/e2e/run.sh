@@ -76,13 +76,9 @@ kubectl create clusterrolebinding testreq-view --clusterrole=view --serviceaccou
 kubectl create sa testreq
 kubectl create cm gpu-map
 nl=$'\n'
-gi=0
 kubectl get nodes -o name | sed 's%^node/%%' | while read node; do
     kubectl label node $node nvidia.com/gpu.present=true nvidia.com/gpu.product=NVIDIA-L40S nvidia.com/gpu.count=2 --overwrite=true
     kubectl patch node $node --subresource status -p '{"status": {"capacity": {"nvidia.com/gpu": 2}, "allocatable": {"nvidia.com/gpu": 2} }}'
-    let gi1=gi+1
-    kubectl patch cm gpu-map -p "data:${nl} ${node}: '{\"GPU-$gi\": 0, \"GPU-$gi1\": 1 }'"
-    let gi=gi1+1
 done
 
 : Load the container images into the kind cluster
@@ -100,6 +96,19 @@ helm upgrade --install dpctlr charts/dpctlr --set Image="$ctlr_img" --set NodeVi
 
 rs=$(test/e2e/mkrs.sh)
 inst=${rs#my-request-}
+
+# Expect only one Pod because controller can not create dual yet
+expect "kubectl get pods -o name | grep -c '^pod/$rs' | grep -w 1"
+
+sleep 5
+kubectl get pods -o name | grep -c "^pod/$rs" | grep -w 1
+
+gi=0
+kubectl get nodes -o name | sed 's%^node/%%' | while read node; do
+    let gi1=gi+1
+    kubectl patch cm gpu-map -p "data:${nl} ${node}: '{\"GPU-$gi\": 0, \"GPU-$gi1\": 1 }'"
+    let gi=gi1+1
+done
 
 expect "kubectl get pods -o name | grep -c '^pod/$rs' | grep -w 2"
 
