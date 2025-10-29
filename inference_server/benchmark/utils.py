@@ -15,6 +15,7 @@
 import argparse
 import logging
 import subprocess
+from logging import DEBUG, INFO, FileHandler, Formatter, StreamHandler, getLogger
 from os import getenv
 from pathlib import Path
 from uuid import uuid4
@@ -129,3 +130,29 @@ def replace_repo_variable(
         )
 
     return updated_request_file
+
+
+class BaseLogger:
+    """Base class for a single logger that all the classes inherit from."""
+
+    def __init__(self, owner: str = "", log_output_file: str = "metrics.log"):
+        """
+        Initialize the base logger class.
+
+        :param owner: The class or invoker of the logger for easy tracing.
+        :param log_output_file: The path where to write logs if not the default.
+        """
+        self.logger = getLogger(owner + "Logger")
+        # Set default level and formatting.
+        self.logger.setLevel(INFO)
+        formatter = Formatter("%(asctime)s - %(levelname)s - %(message)s")
+
+        # Create the console and stream handler.
+        self.file_handler = FileHandler(log_output_file)
+        self.file_handler.setLevel(DEBUG)
+        self.file_handler.setFormatter(formatter)
+        self.console_handler = StreamHandler()
+        self.console_handler.setLevel(INFO)
+        self.console_handler.setFormatter(formatter)
+        self.logger.addHandler(self.file_handler)
+        self.logger.addHandler(self.console_handler)
