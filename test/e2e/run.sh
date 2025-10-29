@@ -17,7 +17,7 @@ function expect() {
     local tries=1
     local start=$(date)
     while true; do
-	kubectl get pods -L dual-pods.llm-d.ai/dual
+	kubectl get pods -L dual-pods.llm-d.ai/dual,dual-pods.llm-d.ai/sleeping
 	if eval "$1"; then return; fi
 	if (( tries > 8 )); then
 	    echo "Did not become true (from $start to $(date)): $1" >&2
@@ -90,7 +90,7 @@ make load-controller-local
 : Deploy the dual-pods controller in the cluster
 
 ctlr_img=$(make echo-var VAR=CONTROLLER_IMG)
-helm upgrade --install dpctlr charts/dpctlr --set Image="$ctlr_img" --set NodeViewClusterRole=node-viewer --set SleeperLimit=1 --set Local=true
+helm upgrade --install dpctlr charts/dpctlr --set Image="$ctlr_img" --set NodeViewClusterRole=node-viewer --set SleeperLimit=2 --set Local=true
 
 : Test Pod creation
 
@@ -191,3 +191,105 @@ kubectl wait --for condition=Ready pod/$rq2 --timeout=35s
 kubectl wait --for condition=Ready pod/$pv2 --timeout=1s
 
 echo "$GOOD Successful test of provider deletion $NL"
+
+: Test limit on sleeping inference servers
+
+# Leave the existing one occupying one of the cluster's two GPUs;
+# cycle through some additional ReplicaSets exercising the other GPU.
+
+# Make ReplicaSet 2, expect its fulfillment, delete the requester, expect the provider to remain
+
+rs2=$(test/e2e/mkrs.sh)
+
+expect "kubectl get pods -o name | grep -c '^pod/$rs2' | grep -w 2"
+
+pods=($(kubectl get pods -o name | grep "^pod/$rs2" | sed s%pod/%%))
+req2=${pods[0]}
+prv2=${pods[1]}
+
+expect '[ "$(kubectl get pod $req2 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$prv2" ]'
+
+expect '[ "$(kubectl get pod $prv2 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$req2" ]'
+
+kubectl scale rs $rs2 --replicas=0
+
+expect "kubectl get pods -o name | grep -c '^pod/$rs2' | grep -w 1"
+! kubectl get pod $req2
+kubectl get pod $prv2
+
+
+# Make ReplicaSet 3, expect its fulfillment, delete the requester, expect the provider to remain
+
+rs3=$(test/e2e/mkrs.sh)
+
+expect "kubectl get pods -o name | grep -c '^pod/$rs3' | grep -w 2"
+
+pods=($(kubectl get pods -o name | grep "^pod/$rs3" | sed s%pod/%%))
+req3=${pods[0]}
+prv3=${pods[1]}
+
+expect '[ "$(kubectl get pod $req3 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$prv3" ]'
+
+expect '[ "$(kubectl get pod $prv3 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$req3" ]'
+
+kubectl scale rs $rs3 --replicas=0
+
+expect "kubectl get pods -o name | grep -c '^pod/$rs3' | grep -w 1"
+! kubectl get pod $req3
+kubectl get pod $prv3
+
+# Expect provider for ReplicaSet 2 to remain
+kubectl get pod $prv2
+
+# Make ReplicaSet 4, expect its fulfillment, delete the requester, expect the provider to remain
+
+rs4=$(test/e2e/mkrs.sh)
+
+expect "kubectl get pods -o name | grep -c '^pod/$rs4' | grep -w 2"
+
+pods=($(kubectl get pods -o name | grep "^pod/$rs4" | sed s%pod/%%))
+req4=${pods[0]}
+prv4=${pods[1]}
+
+expect '[ "$(kubectl get pod $req4 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$prv4" ]'
+
+expect '[ "$(kubectl get pod $prv4 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$req4" ]'
+
+kubectl scale rs $rs4 --replicas=0
+
+expect "kubectl get pods -o name | grep -c '^pod/$rs4' | grep -w 1"
+! kubectl get pod $req4
+kubectl get pod $prv4
+
+# Expect providers for ReplicaSets 2 and 3 to remain
+kubectl get pod $prv2
+kubectl get pod $prv3
+
+# Make ReplicaSet 5, expect its fulfillment, delete the requester, expect the providers for 3 and 4 to remain, provider for 2 to be gone
+
+rs5=$(test/e2e/mkrs.sh)
+
+expect "kubectl get pods -o name | grep -c '^pod/$rs5' | grep -w 2"
+
+pods=($(kubectl get pods -o name | grep "^pod/$rs5" | sed s%pod/%%))
+req5=${pods[0]}
+prv5=${pods[1]}
+
+expect '[ "$(kubectl get pod $req5 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$prv5" ]'
+
+expect '[ "$(kubectl get pod $prv5 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$req5" ]'
+
+# Expect provider for ReplicaSet 2 to have been deleted
+expect '! kubectl get pod $prv2'
+
+kubectl scale rs $rs5 --replicas=0
+
+expect "kubectl get pods -o name | grep -c '^pod/$rs5' | grep -w 1"
+! kubectl get pod $req5
+kubectl get pod $prv5
+
+# Expect providers for ReplicaSets 3 and 4 to remain
+kubectl get pod $prv3
+kubectl get pod $prv4
+
+echo "$GOOD Successful test of limit on sleepers $NL"
