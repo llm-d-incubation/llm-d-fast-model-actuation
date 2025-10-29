@@ -8,23 +8,29 @@ set -euo pipefail
 
 set -x
 
-GREEN=$'\033[0;32m'
-NOCOLOR=$'\033[0m'
-NL=$'\n'
-GOOD="${NL}${GREEN}✔${NOCOLOR}"
+green=$'\033[0;32m'
+nocolor=$'\033[0m'
+nl=$'\n'
+
+function cheer() {
+    echo
+    echo "${nl}${green}✔${nocolor} $*"
+    echo
+}
 
 function expect() {
-    local tries=1
+    local elapsed=0
     local start=$(date)
+    local limit=${LIMIT:-35}
     while true; do
 	kubectl get pods -L dual-pods.llm-d.ai/dual,dual-pods.llm-d.ai/sleeping
 	if eval "$1"; then return; fi
-	if (( tries > 8 )); then
+	if (( elapsed > limit )); then
 	    echo "Did not become true (from $start to $(date)): $1" >&2
             exit 99
 	fi
 	sleep 5
-	tries=$(( tries+1 ))
+	elapsed=$(( elapsed+5 ))
     done
 }
 
@@ -37,8 +43,14 @@ make build-controller-local
 : Set up the kind cluster
 
 kind delete cluster --name fmatest
-kind create cluster --name fmatest
+kind create cluster --name fmatest --config test/e2e/kind-config.yaml
 kubectl wait --for=create sa default
+kubectl wait --for condition=Ready node fmatest-control-plane
+kubectl wait --for condition=Ready node fmatest-worker
+kubectl wait --for condition=Ready node fmatest-worker2
+
+# Display health, prove we don't have https://kind.sigs.k8s.io/docs/user/known-issues/#pod-errors-due-to-too-many-open-files
+kubectl get pods -A -o wide
 
 kubectl create clusterrole node-viewer --verb=get,list,watch --resource=nodes
 
@@ -75,7 +87,6 @@ kubectl create clusterrolebinding testreq-view --clusterrole=view --serviceaccou
 
 kubectl create sa testreq
 kubectl create cm gpu-map
-nl=$'\n'
 kubectl get nodes -o name | sed 's%^node/%%' | while read node; do
     kubectl label node $node nvidia.com/gpu.present=true nvidia.com/gpu.product=NVIDIA-L40S nvidia.com/gpu.count=2 --overwrite=true
     kubectl patch node $node --subresource status -p '{"status": {"capacity": {"nvidia.com/gpu": 2}, "allocatable": {"nvidia.com/gpu": 2} }}'
@@ -124,7 +135,37 @@ date
 kubectl wait --for condition=Ready pod/$req --timeout=35s
 kubectl wait --for condition=Ready pod/$prv --timeout=1s
 
-echo "$GOOD Successful upside $NL"
+cheer Successful upside
+
+: Test node deletion
+: expect nothing to remain on the deleted node, replacement pair to appear on other node
+
+doomed=$(kubectl get pods $req -o jsonpath={.spec.nodeName})
+keeper=$(kubectl get nodes -o name | sed s%node/%% | grep -vw $doomed | grep -v control-plane)
+
+kubectl delete node $doomed
+LIMIT=100 expect '[ $(kubectl get ds -n kube-system kube-proxy -o jsonpath={.status.currentNumberScheduled}) == "2" ]'
+expect '! kubectl get pod $req'
+expect '! kubectl get pod $prv'
+
+expect "kubectl get pods -o name | grep -c '^pod/$rs' | grep -w 2"
+
+pods=($(kubectl get pods -o name | grep "^pod/$rs" | sed s%pod/%%))
+req=${pods[0]}
+prv=${pods[1]}
+
+expect '[ "$(kubectl get pod $req -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$prv" ]'
+
+expect '[ "$(kubectl get pod $prv -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$req" ]'
+
+date
+kubectl wait --for condition=Ready pod/$req --timeout=35s
+kubectl wait --for condition=Ready pod/$prv --timeout=1s
+
+used=$(kubectl get pod $req -o jsonpath={.spec.nodeName})
+[ "$used" == "$keeper" ]
+
+cheer Successful test of node deletion
 
 : Test requester deletion
 : expect provider to remain
@@ -139,7 +180,7 @@ kubectl get pods -o name | grep -c "^pod/$rs" | grep -w 1
 
 kubectl get pod $prv -L dual-pods.llm-d.ai/dual
 
-echo "$GOOD Successful requester deletion $NL"
+cheer Successful requester deletion
 
 : Scale back up and check for re-use of existing provider
 
@@ -164,7 +205,7 @@ date
 kubectl wait --for condition=Ready pod/$nrq --timeout=10s
 kubectl wait --for condition=Ready pod/$prv --timeout=1s
 
-echo "$GOOD Successful re-use $NL"
+cheer Successful re-use
 
 : Test provider deletion
 : expect requester to be deleted and a new pair to appear
@@ -190,7 +231,7 @@ date
 kubectl wait --for condition=Ready pod/$rq2 --timeout=35s
 kubectl wait --for condition=Ready pod/$pv2 --timeout=1s
 
-echo "$GOOD Successful test of provider deletion $NL"
+cheer Successful test of provider deletion
 
 : Test limit on sleeping inference servers
 
@@ -292,4 +333,4 @@ kubectl get pod $prv5
 kubectl get pod $prv3
 kubectl get pod $prv4
 
-echo "$GOOD Successful test of limit on sleepers $NL"
+cheer Successful test of limit on sleepers
