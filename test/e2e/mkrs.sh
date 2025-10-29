@@ -32,7 +32,9 @@ spec:
             containers:
             - name: inference-server
               image: $server_img
-              command: [ /ko-app/test-server ]
+              command:
+              - /ko-app/test-server
+              - --startup-delay=22
               resources:
                 limits:
                   cpu: "2"

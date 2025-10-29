@@ -4,7 +4,14 @@
 # Current working directory must be the root of the Git repository.
 # The only reason for this is the `make` commands.
 
+set -euo pipefail
+
 set -x
+
+GREEN=$'\033[0;32m'
+NOCOLOR=$'\033[0m'
+NL=$'\n'
+GOOD="${NL}${GREEN}✔${NOCOLOR}"
 
 function expect() {
     local tries=1
@@ -12,7 +19,7 @@ function expect() {
     while true; do
 	kubectl get pods -L dual-pods.llm-d.ai/dual
 	if eval "$1"; then return; fi
-	if (( tries > 15 )); then
+	if (( tries > 8 )); then
 	    echo "Did not become true (from $start to $(date)): $1" >&2
             exit 99
 	fi
@@ -20,8 +27,6 @@ function expect() {
 	tries=$(( tries+1 ))
     done
 }
-
-set -euo pipefail
 
 : Build the container images, no push
 
@@ -107,10 +112,10 @@ expect '[ "$(kubectl get pod $req -o jsonpath={.metadata.labels.dual-pods\\.llm-
 expect '[ "$(kubectl get pod $prv -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$req" ]'
 
 date
-kubectl wait --for condition=Ready pod/$req --timeout=60s
+kubectl wait --for condition=Ready pod/$req --timeout=35s
 kubectl wait --for condition=Ready pod/$prv --timeout=1s
 
-echo Successful upside
+echo "$GOOD Successful upside $NL"
 
 : Test requester deletion
 : expect provider to remain
@@ -125,7 +130,7 @@ kubectl get pods -o name | grep -c "^pod/$rs" | grep -w 1
 
 kubectl get pod $prv -L dual-pods.llm-d.ai/dual
 
-echo Successful requester deletion
+echo "$GOOD Successful requester deletion $NL"
 
 : Scale back up and check for re-use of existing provider
 
@@ -147,10 +152,10 @@ expect '[ "$(kubectl get pod $nrq -o jsonpath={.metadata.labels.dual-pods\\.llm-
 expect '[ "$(kubectl get pod $prv -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$nrq" ]'
 
 date
-kubectl wait --for condition=Ready pod/$nrq --timeout=60s
+kubectl wait --for condition=Ready pod/$nrq --timeout=10s
 kubectl wait --for condition=Ready pod/$prv --timeout=1s
 
-echo Successful re-use
+echo "$GOOD Successful re-use $NL"
 
 : Test provider deletion
 : expect requester to be deleted and a new pair to appear
@@ -173,7 +178,7 @@ expect '[ "$(kubectl get pod $rq2 -o jsonpath={.metadata.labels.dual-pods\\.llm-
 expect '[ "$(kubectl get pod $pv2 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$rq2" ]'
 
 date
-kubectl wait --for condition=Ready pod/$rq2 --timeout=60s
+kubectl wait --for condition=Ready pod/$rq2 --timeout=35s
 kubectl wait --for condition=Ready pod/$pv2 --timeout=1s
 
-echo Successful test of provider deletion
+echo "$GOOD Successful test of provider deletion $NL"
