@@ -41,11 +41,11 @@ make build-controller CONTAINER_IMG_REG=$CONTAINER_IMG_REG
 For example, it will looks something like the following.
 
 ```console
-mspreitz@mjs13 llm-d-fast-model-actuation % make build-controller CONTAINER_IMG_REG=$CONTAINER_IMG_REG
-KO_DOCKER_REPO=quay.io/mspreitz/fma ko build -B ./cmd/dual-pods-controller -t 88ce25e --platform all
+user@machine llm-d-fast-model-actuation % make build-controller CONTAINER_IMG_REG=$CONTAINER_IMG_REG
+KO_DOCKER_REPO=quay.io/user/fma ko build -B ./cmd/dual-pods-controller -t 88ce25e --platform all
 ...
-2025/10/30 15:58:05 Published quay.io/mspreitz/fma/dual-pods-controller:88ce25e@sha256:0fdc3415247e47e742305738b50777ad78a8b8ceb502977b1e6ab3e8bee3c52a
-quay.io/mspreitz/fma/dual-pods-controller:88ce25e@sha256:0fdc3415247e47e742305738b50777ad78a8b8ceb502977b1e6ab3e8bee3c52a
+2025/10/30 15:58:05 Published quay.io/user/fma/dual-pods-controller:88ce25e@sha256:0fdc3415247e47e742305738b50777ad78a8b8ceb502977b1e6ab3e8bee3c52a
+quay.io/user/fma/dual-pods-controller:88ce25e@sha256:0fdc3415247e47e742305738b50777ad78a8b8ceb502977b1e6ab3e8bee3c52a
 
 ```
 

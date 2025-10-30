@@ -22,6 +22,10 @@ build-requester:
 push-requester:
 	docker push $(REQUESTER_IMAGE)
 
+.PHONY: build--and-push-requester ## multi-platform
+build-and-push-requester:
+	docker buildx build --push -t $(REQUESTER_IMAGE) -f dockerfiles/Dockerfile.requester . --progress=plain --platform linux/amd64,linux/arm64
+
 .PHONY: build-controller-local
 build-controller-local:
 	KO_DOCKER_REPO=ko.local ko build -B ./cmd/dual-pods-controller -t ${CONTROLLER_IMG_TAG} --platform linux/$(shell go env GOARCH)
