@@ -33,7 +33,7 @@ load-controller-local:
 
 .PHONY: build-controller
 build-controller:
-	KO_DOCKER_REPO=$(CONTAINER_IMG_REG) ko build -B ./cmd/dual-pods-controller -t ${CONTROLLER_IMG_TAG} --platform linux/amd64,linux/arm64
+	KO_DOCKER_REPO=$(CONTAINER_IMG_REG) ko build -B ./cmd/dual-pods-controller -t ${CONTROLLER_IMG_TAG} --platform all
 
 .PHONY: build-test-requester-local
 build-test-requester-local:
