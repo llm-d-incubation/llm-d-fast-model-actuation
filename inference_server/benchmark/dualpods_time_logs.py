@@ -56,11 +56,11 @@ def get_pods_with_label(api, namespace, label_selector):
     return pods
 
 
-def wait_for_dual_pods_ready(v1, namespace, podname, timeout=600):
+def wait_for_dual_pods_ready(v1, namespace, podname, timeout=600, suffix="server"):
     start = time.perf_counter()
     elapsed = 0
     # Server-requesting and server-providing pods
-    target_pods = {podname, f"{podname}-server"}
+    target_pods = {podname, f"{podname}-{suffix}"}
     ready_pods = set()
 
     logger.info(f"Waiting for both pods: {', '.join(target_pods)}")
@@ -71,6 +71,13 @@ def wait_for_dual_pods_ready(v1, namespace, podname, timeout=600):
                 if cond.type == "Ready" and cond.status == "True":
                     return True
         return False
+
+    # Initialize the variables to be returned
+    rq_ready = None
+    prv_ready = None
+    # TODO: Check the availability of the provider pod.
+    # Defaulting to cold for now.
+    prv_mode = "Cold"
 
     while elapsed < timeout:
         try:
@@ -83,18 +90,22 @@ def wait_for_dual_pods_ready(v1, namespace, podname, timeout=600):
                 pod = event["object"]
                 name = pod.metadata.name
 
-                if name in target_pods and check_ready(pod):
-                    if name not in ready_pods:
+                if any([t in name for t in target_pods]) or (suffix in name):
+                    logger.info(f"Checking Readiness of Pod {name}")
+                    if check_ready(pod) and name not in ready_pods:
                         ready_pods.add(name)
-                        logger.info(
-                            f"{name} is Ready in {time.perf_counter() - start:.2f}s"
-                        )
+                        if suffix in name:  # Providing pod
+                            prv_ready = int(time.perf_counter() - start)
+                            logger.info(f"Provider Pod {name} is Ready in {prv_ready}s")
+                        else:  # Requesting pod
+                            rq_ready = int(time.perf_counter() - start)
+                            logger.info(f"Requester Pod {name} is Ready in {rq_ready}s")
 
                 if len(ready_pods) == len(target_pods):
                     w.stop()
                     end = time.perf_counter()
                     logger.info(f"✅ Both pods Ready after {end - start:.2f}s")
-                    return end
+                    return rq_ready, prv_ready, prv_mode
 
             elapsed = time.perf_counter() - start
 

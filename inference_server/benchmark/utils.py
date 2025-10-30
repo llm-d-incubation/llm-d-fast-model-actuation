@@ -14,10 +14,10 @@
 
 import argparse
 import logging
-import subprocess
 from logging import DEBUG, INFO, FileHandler, Formatter, StreamHandler, getLogger
 from os import getenv
 from pathlib import Path
+from subprocess import run as invoke_shell
 from uuid import uuid4
 
 # ---------------- Logging setup ----------------
@@ -85,19 +85,14 @@ def parse_request_args():
         )
 
     args = parser.parse_args()
-    namespace = args.namespace
-    yaml_file_template = args.yaml
-    label = args.label
-    if requester_img is None:
-        requester_img = args.image
-        img_tag = args.tag
+    # namespace = args.namespace
+    # yaml_file_template = args.yaml
+    # label = args.label
+    # if requester_img is None:
+    #    requester_img = args.image
+    #    img_tag = args.tag
 
-    # Transform the template into a usable request file with container image version.
-    request_yaml_file = replace_repo_variable(
-        requester_img, img_tag, yaml_file_template
-    )
-
-    return namespace, request_yaml_file, label, requester_img
+    return args
 
 
 def replace_repo_variable(
@@ -119,11 +114,10 @@ def replace_repo_variable(
     # Invoke the replacement in the template for redirection.
     sed_script = "s#${CONTAINER_IMG_REG}#" + requester_image_repo + "#\n"
     sed_script += "s#${CONTAINER_IMG_VERSION}#" + image_tag + "#"
-    logger.info(f"Sed Script: {sed_script}")
     updated_request_file = "inf-server-request-" + str(uuid4()) + ".yaml"
     updated_request_file_path = Path(updated_request_file)
     with Path(updated_request_file_path).open(mode="wb") as yaml_fd:
-        subprocess.run(
+        invoke_shell(
             ["sed", "-e", sed_script, request_yaml_template],
             stdout=yaml_fd,
             check=False,
@@ -135,7 +129,7 @@ def replace_repo_variable(
 class BaseLogger:
     """Base class for a single logger that all the classes inherit from."""
 
-    def __init__(self, owner: str = "", log_output_file: str = "metrics.log"):
+    def __init__(self, log_output_file: str, owner: str = ""):
         """
         Initialize the base logger class.
 
@@ -156,3 +150,18 @@ class BaseLogger:
         self.console_handler.setFormatter(formatter)
         self.logger.addHandler(self.file_handler)
         self.logger.addHandler(self.console_handler)
+
+    def get_custom_logger(self):
+        """
+        Get the custom logger created by the class.
+        """
+        return self.logger
+
+
+def delete_yaml_resources(yaml_file):
+    """Delete the resources created with the YAML and delete from file system."""
+    logger.info(f"Cleaning up resources from {yaml_file}...")
+    invoke_shell(
+        ["kubectl", "delete", "-f", yaml_file, "--ignore-not-found=true"], check=False
+    )
+    invoke_shell(["rm", yaml_file], check=False)
