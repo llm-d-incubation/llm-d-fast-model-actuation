@@ -308,7 +308,12 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		url := fmt.Sprintf("http://%s:%s%s", requesterIP, adminPort, stubapi.AcceleratorQueryPath)
 		gpuUUIDs, err := getGPUUUIDs(url)
 		if err != nil {
-			return ctl.ensureReqStatus(ctx, requestingPod, serverDat, fmt.Sprintf("GET %q fails: %s", url, err.Error()))
+			queryErr := fmt.Errorf("GET %q fails: %s", url, err.Error())
+			updateErr, _ := ctl.ensureReqStatus(ctx, requestingPod, serverDat, queryErr.Error())
+			if updateErr == nil {
+				return queryErr, true
+			}
+			return errors.Join(queryErr, updateErr), true
 		}
 		if len(gpuUUIDs) == 0 {
 			return ctl.ensureReqStatus(ctx, requestingPod, serverDat, "the assigned set of GPUs is empty")
@@ -838,6 +843,8 @@ func getInferenceServerPort(pod *corev1.Pod) (int, int16, error) {
 
 // ensureReqStatus makes the API call if necessary set the controller's status
 // on the server-running Pod shows the given user errors.
+// The returned (err error, retry bool) is a convenient match for the signature of
+// a sync function; always `retry == (err != nil)`.
 func (ctl *controller) ensureReqStatus(ctx context.Context, requestingPod *corev1.Pod, serverDat *serverData, errors ...string) (error, bool) {
 	return ctl.ensureReqState(ctx, requestingPod, serverDat, false, false, errors...)
 }
@@ -845,6 +852,8 @@ func (ctl *controller) ensureReqStatus(ctx context.Context, requestingPod *corev
 // ensureReqState makes the API call if necessary to:
 // 1. set the controller's reported state to consist of the given errors;
 // 2. add or remove the controll'er finalizer if stipulated.
+// The returned (err error, retry bool) is a convenient match for the signature of
+// a sync function; always `retry == (err != nil)`.
 func (ctl *controller) ensureReqState(ctx context.Context, requestingPod *corev1.Pod, serverDat *serverData, addFinalizer, removeFinalizer bool, errors ...string) (error, bool) {
 	status := api.ServerRequestingPodStatus{Errors: errors}
 	logger := klog.FromContext(ctx)
