@@ -46,3 +46,27 @@ jobs:
 
       - name: Doit
         run: test/e2e/run.sh
+
+      - name: show all pods
+        if: always()
+        run: kubectl get pods -A -o wide
+
+      - name: show test pods
+        if: always()
+        run: kubectl get pods -L dual-pods.llm-d.ai/dual,dual-pods.llm-d.ai/sleeping
+
+      - name: show ReplicaSets
+        if: always()
+        run: kubectl get rs -A
+
+      - name: show dual-pods controller log
+        if: always()
+        run: kubectl logs deploy/dpctlr
+
+      - name: show GPU allocations
+        if: always()
+        run: kubectl get cm gpu-allocs -o yaml
+
+      - name: show YAML of test pods
+        if: always()
+        run: kubectl get pods -o yaml
