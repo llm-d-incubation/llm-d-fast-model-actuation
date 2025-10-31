@@ -114,7 +114,7 @@ def replace_repo_variable(
     # Invoke the replacement in the template for redirection.
     sed_script = "s#${CONTAINER_IMG_REG}#" + requester_image_repo + "#\n"
     sed_script += "s#${CONTAINER_IMG_VERSION}#" + image_tag + "#"
-    updated_request_file = "inf-server-request-" + str(uuid4()) + ".yaml"
+    updated_request_file = "inf-server-request-template" + str(uuid4()) + ".yaml"
     updated_request_file_path = Path(updated_request_file)
     with Path(updated_request_file_path).open(mode="wb") as yaml_fd:
         invoke_shell(

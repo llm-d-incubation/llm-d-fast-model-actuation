@@ -13,7 +13,9 @@
 # limitations under the License.
 
 # Standard imports
+from pathlib import Path
 from subprocess import run as invoke_shell
+from time import time
 from typing import Any, Dict, List, Optional
 
 from kube_ops import KindKubernetesOps, RemoteKubernetesOps, SimKubernetesOps
@@ -105,6 +107,27 @@ class DualPodsBenchmark:
 
         return ns, request_yaml_file, requester_pod_label, requester_img_tag
 
+    def create_request_yaml(self, rs_name: str, yaml_template_file: str) -> str:
+        """
+        Generate a request YAML file from the replicaset name.
+
+        :param rs_name: A unique name for the replicaset.
+        :param yaml_template_file: A "template" file with the container image registry
+                                   and tag already filled in.
+        :return: A string representing the path to the YAML file.
+        """
+        # Invoke the replacement with the unique replicaset name.
+        sed_cmd = "s#{REQUEST_NAME}#" + rs_name + "#"
+        rs_name_yaml = rs_name + ".yaml"
+        with Path(rs_name_yaml).open(mode="wb") as rs_yaml_fd:
+            invoke_shell(
+                ["sed", "-e", sed_cmd, yaml_template_file],
+                stdout=rs_yaml_fd,
+                check=False,
+            )
+
+        return rs_name_yaml
+
     def run_benchmark(
         self, iterations: int = 1, timeout: int = 600
     ) -> List[Dict[str, Any]]:
@@ -119,18 +142,22 @@ class DualPodsBenchmark:
 
         self.results = []
         for i in range(iterations):
-            self.logger.info(f"Running iteration {i+1}")
+            iter_num = str(i + 1)
+            self.logger.info(f"Running iteration {iter_num}")
+
+            # Generate a unique replicaset YAML for the iteration.
+            rs_name = "my-request-" + f"{iter_num}-" + str(int(time()))
+            self.logger.info(f"ReplicaSet Name: {rs_name}")
+            request_yaml = self.create_request_yaml(rs_name, yaml_file)
 
             try:
-                self.logger.info(f"Applying YAML: {yaml_file}.")
-                self.k8_ops.apply_yaml(yaml_file)
+                self.logger.info(f"Applying YAML: {request_yaml}.")
+                self.k8_ops.apply_yaml(request_yaml)
 
                 # Check for pod readiness.
-                podname = "my-request"
                 rq_ready, prv_ready, prv_mode = self.k8_ops.wait_for_dual_pods_ready(
-                    ns, podname, timeout
+                    ns, rs_name, timeout
                 )
-                # TODO: Handle readiness check for M1 vs M2 vs M3 pods.
 
                 # Compile the result.
                 result = {
@@ -153,8 +180,8 @@ class DualPodsBenchmark:
                     "error": e.__str__(),
                 }
             finally:
-                self.logger.info(f"Finally deleting YAML file: {yaml_file}")
-                self.k8_ops.delete_yaml(yaml_file)
+                self.logger.info(f"Finally deleting YAML file: {request_yaml}")
+                self.k8_ops.delete_yaml(request_yaml)
 
             self.results.append(result)
 
@@ -210,15 +237,19 @@ if __name__ == "__main__":
     # kind_benchmark = DualPodsBenchmark(
     #    "kind", cluster_name="fmatest", log_output_file=kind_log_path
     # )
-    sim_log_path = "sim_logger.log"
-    sim_benchmark = DualPodsBenchmark("simulated", log_output_file=sim_log_path)
+    # sim_log_path = "sim_logger.log"
+    # sim_benchmark = DualPodsBenchmark("simulated", log_output_file=sim_log_path)
     remote_log_path = "remote_logger.log"
     remote_benchmark = DualPodsBenchmark("remote", log_output_file=remote_log_path)
     # all_benchmarks = [sim_benchmark, kind_benchmark]
-    all_benchmarks = [sim_benchmark, remote_benchmark]
+    all_benchmarks = [remote_benchmark]
 
     # Run example benchmarks
     for benchmark in all_benchmarks:
-        results = benchmark.run_benchmark()
-        benchmark.logger.info(results)
+        results = benchmark.run_benchmark(4)
+        for result in results:
+            print(f"\nIteration: {result['iteration']}")
+            print(f"Requester Ready: {result['rq_time']}")
+            print(f"Provider: {result['prv_time']}")
+            print(f"Availability Mode: {result['availability_mode']}\n")
         # benchmark.run_benchmark("Introducing New Variant", 3, **kwargs)

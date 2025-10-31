@@ -14,7 +14,7 @@
 
 import logging
 import subprocess
-import time
+from time import perf_counter, sleep
 
 from kubernetes import client, config, watch
 from utils import parse_request_args
@@ -34,6 +34,8 @@ console_handler.setFormatter(formatter)
 
 logger.addHandler(file_handler)
 logger.addHandler(console_handler)
+
+DUAL_POD_TOTAL = 2
 
 
 # ---------------- Helper functions ----------------
@@ -57,13 +59,13 @@ def get_pods_with_label(api, namespace, label_selector):
 
 
 def wait_for_dual_pods_ready(v1, namespace, podname, timeout=600, suffix="server"):
-    start = time.perf_counter()
+    start = perf_counter()
     elapsed = 0
     # Server-requesting and server-providing pods
-    target_pods = {podname, f"{podname}-{suffix}"}
+    # target_pods = {podname, f"{podname}-{suffix}"}
     ready_pods = set()
 
-    logger.info(f"Waiting for both pods: {', '.join(target_pods)}")
+    logger.info(f"Waiting for pods of ReplicaSet: {podname}")
 
     def check_ready(pod):
         if pod.status.phase == "Running":
@@ -89,32 +91,50 @@ def wait_for_dual_pods_ready(v1, namespace, podname, timeout=600, suffix="server
             ):
                 pod = event["object"]
                 name = pod.metadata.name
+                labels = pod.metadata.labels
 
-                if any([t in name for t in target_pods]) or (suffix in name):
-                    logger.info(f"Checking Readiness of Pod {name}")
-                    if check_ready(pod) and name not in ready_pods:
+                # Filter the pods.
+                if (podname in name) and (suffix not in name):
+                    logger.info(f"Checking Readiness of Requester Pod: {name}")
+                    if check_ready(pod):
+                        rq_ready = int(perf_counter() - start)
                         ready_pods.add(name)
-                        if suffix in name:  # Providing pod
-                            prv_ready = int(time.perf_counter() - start)
-                            logger.info(f"Provider Pod {name} is Ready in {prv_ready}s")
-                        else:  # Requesting pod
-                            rq_ready = int(time.perf_counter() - start)
-                            logger.info(f"Requester Pod {name} is Ready in {rq_ready}s")
+                elif suffix in name:  # Any provider pods that can be bound.
+                    logger.info(f"Checking Readiness of Provider Pod: {name}")
 
-                if len(ready_pods) == len(target_pods):
+                    # Get the server-requesting it is bound to, if any.
+                    if "dual-pods.llm-d.ai/dual" in labels:
+                        dual_pod = labels["dual-pods.llm-d.ai/dual"]
+                        logger.info(
+                            f"Checking Ready of Provider for Pair <{dual_pod}>:<{name}>"
+                        )
+
+                        # Set the return variables for the ready pod.
+                        if check_ready(pod):
+                            binding_match = podname in dual_pod
+                            if (name not in ready_pods) and binding_match:
+                                prv_ready = int(perf_counter() - start)
+                                ready_pods.add(name)
+                                prv_mode = "Cold"
+                            elif (name not in ready_pods) and not binding_match:
+                                prv_ready = int(perf_counter() - start)
+                                ready_pods.add(name)
+                                prv_mode = "Hit"
+
+                if len(ready_pods) == DUAL_POD_TOTAL:
                     w.stop()
-                    end = time.perf_counter()
+                    end = perf_counter()
                     logger.info(f"✅ Both pods Ready after {end - start:.2f}s")
                     return rq_ready, prv_ready, prv_mode
 
-            elapsed = time.perf_counter() - start
+            elapsed = perf_counter() - start
 
         except Exception as e:
             logger.warning(
                 f"⚠️ Watch interrupted ({type(e).__name__}: {e}), retrying..."
             )
-            time.sleep(2)
-            elapsed = time.perf_counter() - start
+            sleep(2)
+            elapsed = perf_counter() - start
 
     raise TimeoutError(f"Timed out after {timeout}s waiting for both pods to be Ready.")
 
@@ -131,7 +151,7 @@ def main():
     logger.info(f"Namespace: {namespace}")
     logger.info(f"YAML file: {yaml_file}")
 
-    start_time = time.perf_counter()
+    start_time = perf_counter()
     apply_yaml(yaml_file)
 
     logger.info("Waiting for server-requesting pod to appear...")
@@ -141,7 +161,7 @@ def main():
         if pods:
             requester_pod = pods[0]
             break
-        time.sleep(2)
+        sleep(2)
 
     if not requester_pod:
         logger.info("❌ No requester pod appeared within 120s.")
