@@ -11,11 +11,23 @@ make build-requester CONTAINER_IMG_REG=$CONTAINER_IMG_REG TARGETARCH=amd64
 make push-requester  CONTAINER_IMG_REG=$CONTAINER_IMG_REG
 ```
 
-Build the dual-pods controller image. Omit TARGETARCH if not cross-compiling.
+Build the dual-pods controller image.
 
 ```shell
-make build-controller CONTAINER_IMG_REG=$CONTAINER_IMG_REG TARGETARCH=amd64
+make build-controller CONTAINER_IMG_REG=$CONTAINER_IMG_REG
 ```
+
+**NOTE**: The instructions here are about local testing. To build and
+  publish images for others to use the following commands, with
+  judicious choices for the shell variables therein.
+
+```shell
+make build-and-push-requester CONTAINER_IMG_REG=$CONTAINER_IMG_REG REQUESTER_IMG_TAG=$YOUR_DESIRED_TAG
+
+make build-controller CONTAINER_IMG_REG=$CONTAINER_IMG_REG CONTROLLER_IMG_TAG=$YOUR_DESIRED_TAG
+```
+
+**END OF NOTE**
 
 Instantiate the Helm chart for the dual-pods controller. Specify the tag produced by the build above. Specify the name of the ClusterRole to use for Node get/list/watch authorization, or omit if not needed.
 

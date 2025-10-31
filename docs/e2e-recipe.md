@@ -35,18 +35,18 @@ cross-compiling. NOTE: you will need a local Go development
 environment, including [ko](https://ko.build/).
 
 ```shell
-make build-controller CONTAINER_IMG_REG=$CONTAINER_IMG_REG TARGETARCH=amd64
+make build-controller CONTAINER_IMG_REG=$CONTAINER_IMG_REG
 ```
 
 For example, it will looks something like the following.
 
 ```console
-mspreitz@mjs13 llm-d-fast-model-actuation % make build-controller CONTAINER_IMG_REG=$CONTAINER_IMG_REG TARGETARCH=amd64
-KO_DOCKER_REPO=quay.io/mspreitz/fma ko build -B ./cmd/dual-pods-controller -t b699bc6 --platform linux/amd64,linux/arm64
-2025/10/10 11:51:53 Using base cgr.dev/chainguard/static:latest@sha256:b2e1c3d3627093e54f6805823e73edd17ab93d6c7202e672988080c863e0412b for github.com/llm-d-incubation/llm-d-fast-model-actuation/cmd/dual-pods-controller
+user@machine llm-d-fast-model-actuation % make build-controller CONTAINER_IMG_REG=$CONTAINER_IMG_REG
+KO_DOCKER_REPO=quay.io/user/fma ko build -B ./cmd/dual-pods-controller -t 88ce25e --platform all
 ...
-2025/10/10 11:52:18 Published quay.io/mspreitz/fma/dual-pods-controller:b699bc6@sha256:ef3d14e98c6fc8011c9b6706a280beb4daaeb928f848e2df545ca7eafb1a1908
-quay.io/mspreitz/fma/dual-pods-controller:b699bc6@sha256:ef3d14e98c6fc8011c9b6706a280beb4daaeb928f848e2df545ca7eafb1a1908
+2025/10/30 15:58:05 Published quay.io/user/fma/dual-pods-controller:88ce25e@sha256:0fdc3415247e47e742305738b50777ad78a8b8ceb502977b1e6ab3e8bee3c52a
+quay.io/user/fma/dual-pods-controller:88ce25e@sha256:0fdc3415247e47e742305738b50777ad78a8b8ceb502977b1e6ab3e8bee3c52a
+
 ```
 
 In preparation for usage of the image that you just built, define a

@@ -37,7 +37,7 @@ spec:
               - --startup-delay=22
               resources:
                 limits:
-                  cpu: "2"
+                  cpu: "1"
                   memory: 9Gi
               readinessProbe:
                 httpGet:

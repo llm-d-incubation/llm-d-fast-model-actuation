@@ -21,7 +21,7 @@ function cheer() {
 function expect() {
     local elapsed=0
     local start=$(date)
-    local limit=${LIMIT:-35}
+    local limit=${LIMIT:-45}
     while true; do
 	kubectl get pods -L dual-pods.llm-d.ai/dual,dual-pods.llm-d.ai/sleeping
 	if eval "$1"; then return; fi
