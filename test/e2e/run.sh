@@ -252,6 +252,10 @@ expect '[ "$(kubectl get pod $req2 -o jsonpath={.metadata.labels.dual-pods\\.llm
 
 expect '[ "$(kubectl get pod $prv2 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$req2" ]'
 
+date
+kubectl wait --for condition=Ready pod/$req2 --timeout=35s
+kubectl wait --for condition=Ready pod/$prv2 --timeout=1s
+
 kubectl scale rs $rs2 --replicas=0
 
 expect "kubectl get pods -o name | grep -c '^pod/$rs2' | grep -w 1"
@@ -272,6 +276,10 @@ prv3=${pods[1]}
 expect '[ "$(kubectl get pod $req3 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$prv3" ]'
 
 expect '[ "$(kubectl get pod $prv3 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$req3" ]'
+
+date
+kubectl wait --for condition=Ready pod/$req3 --timeout=35s
+kubectl wait --for condition=Ready pod/$prv3 --timeout=1s
 
 kubectl scale rs $rs3 --replicas=0
 
@@ -296,6 +304,10 @@ expect '[ "$(kubectl get pod $req4 -o jsonpath={.metadata.labels.dual-pods\\.llm
 
 expect '[ "$(kubectl get pod $prv4 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$req4" ]'
 
+date
+kubectl wait --for condition=Ready pod/$req4 --timeout=35s
+kubectl wait --for condition=Ready pod/$prv4 --timeout=1s
+
 kubectl scale rs $rs4 --replicas=0
 
 expect "kubectl get pods -o name | grep -c '^pod/$rs4' | grep -w 1"
@@ -312,6 +324,9 @@ rs5=$(test/e2e/mkrs.sh)
 
 expect "kubectl get pods -o name | grep -c '^pod/$rs5' | grep -w 2"
 
+# Controller should have requested deletion of provider for RS 2
+[ -n "$(kubectl get pod $prv2 -o jsonpath={.metadata.deletionTimestamp})" ]
+
 pods=($(kubectl get pods -o name | grep "^pod/$rs5" | sed s%pod/%%))
 req5=${pods[0]}
 prv5=${pods[1]}
@@ -320,7 +335,11 @@ expect '[ "$(kubectl get pod $req5 -o jsonpath={.metadata.labels.dual-pods\\.llm
 
 expect '[ "$(kubectl get pod $prv5 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$req5" ]'
 
-# Expect provider for ReplicaSet 2 to have been deleted
+date
+kubectl wait --for condition=Ready pod/$req5 --timeout=35s
+kubectl wait --for condition=Ready pod/$prv5 --timeout=1s
+
+# Provider for ReplicaSet 2 should actually disappear
 expect '! kubectl get pod $prv2'
 
 kubectl scale rs $rs5 --replicas=0
