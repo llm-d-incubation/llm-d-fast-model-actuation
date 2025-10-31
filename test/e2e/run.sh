@@ -324,8 +324,10 @@ rs5=$(test/e2e/mkrs.sh)
 
 expect "kubectl get pods -o name | grep -c '^pod/$rs5' | grep -w 2"
 
-# Controller should have requested deletion of provider for RS 2
-[ -n "$(kubectl get pod $prv2 -o jsonpath={.metadata.deletionTimestamp})" ]
+# Provider for RS 2 should be gone or going
+if dsts="$(kubectl get pod $prv2 -o jsonpath={.metadata.deletionTimestamp})"
+then [ -n "$dsts" ]
+fi
 
 pods=($(kubectl get pods -o name | grep "^pod/$rs5" | sed s%pod/%%))
 req5=${pods[0]}

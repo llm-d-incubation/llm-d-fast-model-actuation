@@ -37,7 +37,7 @@ spec:
               - --startup-delay=22
               resources:
                 limits:
-                  cpu: "1"
+                  cpu: "200m"
                   memory: 9Gi
               readinessProbe:
                 httpGet:
@@ -79,7 +79,7 @@ spec:
           resources:
             limits:
               nvidia.com/gpu: "1"
-              cpu: "1"
+              cpu: "200m"
               memory: 250Mi
       serviceAccount: testreq
 EOF
