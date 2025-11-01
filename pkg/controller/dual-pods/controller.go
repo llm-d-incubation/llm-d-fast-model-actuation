@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"sync"
@@ -126,8 +127,9 @@ func nominalHashIndexFunc(obj any) ([]string, error) {
 }
 
 type ControllerConfig struct {
-	SleeperLimit int
-	NumWorkers   int
+	SleeperLimit                      int
+	NumWorkers                        int
+	AcceleratorSleepingMemoryLimitMiB int64
 }
 
 type Controller interface {
@@ -143,17 +145,19 @@ func (config ControllerConfig) NewController(
 	corev1PreInformers corev1preinformers.Interface,
 ) (*controller, error) {
 	ctl := &controller{
-		enqueueLogger:  logger.WithName(ControllerName),
-		coreclient:     coreClient,
-		namespace:      namespace,
-		podInformer:    corev1PreInformers.Pods().Informer(),
-		podLister:      corev1PreInformers.Pods().Lister(),
-		cmInformer:     corev1PreInformers.ConfigMaps().Informer(),
-		cmLister:       corev1PreInformers.ConfigMaps().Lister(),
-		nodeInformer:   corev1PreInformers.Nodes().Informer(),
-		nodeLister:     corev1PreInformers.Nodes().Lister(),
-		sleeperLimit:   config.SleeperLimit,
-		nodeNameToData: map[string]*nodeData{},
+		enqueueLogger:       logger.WithName(ControllerName),
+		coreclient:          coreClient,
+		namespace:           namespace,
+		podInformer:         corev1PreInformers.Pods().Informer(),
+		podLister:           corev1PreInformers.Pods().Lister(),
+		cmInformer:          corev1PreInformers.ConfigMaps().Informer(),
+		cmLister:            corev1PreInformers.ConfigMaps().Lister(),
+		nodeInformer:        corev1PreInformers.Nodes().Informer(),
+		nodeLister:          corev1PreInformers.Nodes().Lister(),
+		sleeperLimit:        config.SleeperLimit,
+		debugAccelMemory:    config.AcceleratorSleepingMemoryLimitMiB < math.MaxInt32,
+		accelMemoryLimitMiB: config.AcceleratorSleepingMemoryLimitMiB,
+		nodeNameToData:      map[string]*nodeData{},
 	}
 	ctl.gpuMap.Store(&map[string]GpuLocation{})
 	err := ctl.podInformer.AddIndexers(cache.Indexers{
@@ -187,7 +191,9 @@ type controller struct {
 	nodeLister    corev1listers.NodeLister
 	genctlr.QueueAndWorkers[queueItem]
 
-	sleeperLimit int
+	sleeperLimit        int
+	debugAccelMemory    bool
+	accelMemoryLimitMiB int64
 
 	// gpuMaps maps GPU UUID to GpuLocation
 	gpuMap atomic.Pointer[map[string]GpuLocation]
@@ -230,7 +236,12 @@ type serverData struct {
 	// ServerPort is meaningful if NominalRunningPod is not nil
 	ServerPort int16
 
-	GPUIDsStr     *string
+	// UUIDs of the server's GPUs
+	GPUIDs []string
+
+	// Comma-separated list of GPU UUIDs
+	GPUIDsStr *string
+
 	GPUIndices    []string
 	GPUIndicesStr *string
 

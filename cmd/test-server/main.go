@@ -26,14 +26,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/api"
 	"github.com/spf13/pflag"
 
 	"k8s.io/klog/v2"
 )
-
-type sleepState struct {
-	IsSleeping bool `json:"is_sleeping"`
-}
 
 func main() {
 	port := int16(8000)
@@ -70,7 +67,7 @@ func main() {
 		}
 	})
 	mux.HandleFunc("GET /is_sleeping", func(w http.ResponseWriter, r *http.Request) {
-		ss := sleepState{IsSleeping: sleeping.Load()}
+		ss := api.SleepState{IsSleeping: sleeping.Load()}
 		ssBytes, err := json.Marshal(&ss)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)

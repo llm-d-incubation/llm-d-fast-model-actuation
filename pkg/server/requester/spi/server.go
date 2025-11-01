@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -85,6 +86,53 @@ func Run(ctx context.Context, port string, ready *atomic.Bool) error {
 	return RunWithGPUUUIDs(ctx, port, ready, gpuUUIDs)
 }
 
+func gpuMemoryHandler(logger klog.Logger) func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close() //nolint:errcheck
+		usageMap := map[string]int64{}
+		errs := []string{}
+		cmd := exec.Command("nvidia-smi", "--query-gpu=uuid,memory.used", "--format=csv,noheader,nounits")
+		output, err := cmd.Output()
+		if err != nil {
+			errs = []string{err.Error()}
+		} else {
+			lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+			for _, line := range lines {
+				if line == "" {
+					continue
+				}
+				parts := strings.Split(line, ",")
+				if len(parts) != 2 {
+					errs = append(errs, fmt.Sprintf("got line %q with wrong number of data", line))
+				} else {
+					usedStr := strings.TrimSpace(parts[1])
+					memUsed, err := strconv.ParseInt(usedStr, 10, 64)
+					if err != nil {
+						errs = append(errs, fmt.Sprintf("failed to parse int %q on line %q: %s", usedStr, line, err.Error()))
+					} else {
+						usageMap[parts[0]] = memUsed
+					}
+				}
+			}
+		}
+		usageJSON, err := json.Marshal(usageMap)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("failed to marshal usage map %#v: %s", usageMap, err.Error()))
+		}
+		if len(errs) > 0 {
+			logger.Error(nil, "Returning errors to memory query", "errs", errs)
+			w.WriteHeader(http.StatusInternalServerError)
+			for _, err := range errs {
+				_, _ = fmt.Fprintln(w, err)
+			}
+		} else {
+			logger.Info("Returning memory usage", "usageMap", usageMap)
+			w.WriteHeader(http.StatusOK) // not strictly necessary, but explicit
+			_, _ = w.Write(usageJSON)
+		}
+	}
+}
+
 func newSetReadyHandler(logger klog.Logger, ready *atomic.Bool, newReady bool) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close() //nolint:errcheck
@@ -99,6 +147,7 @@ func RunWithGPUUUIDs(ctx context.Context, port string, ready *atomic.Bool, gpuUU
 	logger := klog.FromContext(ctx).WithName("spi-server")
 	mux := http.NewServeMux()
 	mux.HandleFunc(strings.Join([]string{"GET", stubapi.AcceleratorQueryPath}, " "), gpuHandler(gpuUUIDs))
+	mux.HandleFunc(strings.Join([]string{"GET", stubapi.AcceleratorMemoryQueryPath}, " "), gpuMemoryHandler(logger))
 	mux.HandleFunc("POST "+stubapi.BecomeReadyPath, newSetReadyHandler(logger, ready, true))
 	mux.HandleFunc("POST "+stubapi.BecomeUnreadyPath, newSetReadyHandler(logger, ready, false))
 

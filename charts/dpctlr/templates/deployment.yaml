@@ -26,6 +26,7 @@ spec:
         - "-v=5"
         - "--namespace=$(POD_NAMESPACE)"
         - "--sleeper-limit={{ .Values.SleeperLimit }}"
+        - "--debug-accelerator-memory={{ .Values.DebugAcceleratorMemory }}"
         env:
         - name: POD_NAMESPACE
           valueFrom:
