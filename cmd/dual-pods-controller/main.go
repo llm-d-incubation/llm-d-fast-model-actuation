@@ -20,6 +20,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 
 	"github.com/spf13/pflag"
@@ -34,9 +35,11 @@ import (
 
 func main() {
 	config := dpctlr.ControllerConfig{
-		SleeperLimit: 1,
-		NumWorkers:   2,
+		SleeperLimit:                      1,
+		NumWorkers:                        2,
+		AcceleratorSleepingMemoryLimitMiB: math.MaxInt64,
 	}
+	debugAccelMemory := true
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 	overrides := &clientcmd.ConfigOverrides{}
 
@@ -44,6 +47,7 @@ func main() {
 	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
 	pflag.CommandLine.IntVar(&config.SleeperLimit, "sleeper-limit", config.SleeperLimit, "limit on number of sleeping inference servers per GPU")
 	pflag.CommandLine.IntVar(&config.NumWorkers, "num-workers", config.NumWorkers, "number of queue worker goroutines")
+	pflag.CommandLine.BoolVar(&debugAccelMemory, "debug-accelerator-memory", debugAccelMemory, "whether to check accelerator memory usage before wake-up")
 	AddFlags(*pflag.CommandLine, loadingRules, overrides)
 	pflag.Parse()
 	ctx := context.Background()
@@ -52,6 +56,10 @@ func main() {
 	pflag.CommandLine.VisitAll(func(f *pflag.Flag) {
 		logger.V(1).Info("Flag", "name", f.Name, "value", f.Value.String())
 	})
+
+	if debugAccelMemory {
+		config.AcceleratorSleepingMemoryLimitMiB = int64(config.SleeperLimit) * 4096
+	}
 
 	restConfig, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, overrides).ClientConfig()
 	if err != nil {
