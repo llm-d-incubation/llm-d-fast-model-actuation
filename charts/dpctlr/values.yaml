@@ -13,3 +13,8 @@ NodeViewClusterRole: ""
 # Limit on the number of server-running Pods with a sleeping
 # inference server, per GPU.
 SleeperLimit: 2
+
+# Whether to debug the accelerator memory usage.
+# This involves querying the requester;
+# the test-requester does not support the query.
+DebugAcceleratorMemory: true

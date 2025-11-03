@@ -101,3 +101,9 @@ const DualLabelName string = "dual-pods.llm-d.ai/dual"
 // This label is purely FYI emitted by the dual-pods controller
 // (it does not rely on this label for anything).
 const SleepingLabelName string = "dual-pods.llm-d.ai/sleeping"
+
+// SleepState is what HTTP GET /is_sleeping on an inference server
+// returns (as JSON).
+type SleepState struct {
+	IsSleeping bool `json:"is_sleeping"`
+}

@@ -241,67 +241,6 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		adminPort = api.AdminPortDefaultValue
 	}
 
-	// If there is already a server-running Pod then ensure that it is awake,
-	// ensure status reported, and relay readiness if needed.
-	if runningPod != nil {
-		if serverDat.Sleeping == nil || *(serverDat.Sleeping) {
-			_, serverPort, err := getInferenceServerPort(runningPod)
-			if err != nil { // Impossible, because such a runningPod would never be created by this controller
-				return fmt.Errorf("unable to wake up server because port not known: %w", err), true
-			}
-			wakeURL := fmt.Sprintf("http://%s:%d/wake_up", runningPod.Status.PodIP, serverPort)
-			resp, err := http.Post(wakeURL, "", nil)
-			if err != nil {
-				return fmt.Errorf("failed to wake up, POST %s got error: %w", wakeURL, err), true
-			}
-			if sc := resp.StatusCode; sc != http.StatusOK {
-				return fmt.Errorf("failed to wake up, POST %s returned status %d", wakeURL, sc), true
-			}
-			if err := ctl.ensureSleepingLabelFalse(ctx, runningPod); err != nil {
-				return err, true
-			}
-			serverDat.Sleeping = ptr.To(false)
-			logger.V(2).Info("Woke discovered-bound inference server")
-		}
-		err, _ := ctl.ensureReqState(ctx, requestingPod, serverDat, shouldAddRequesterFinalizer, false)
-		if err != nil {
-			return err, true
-		}
-		// Relay readiness if not already done
-		ready := isPodReady(runningPod)
-		if serverDat.ReadinessRelayed == nil || ready != *serverDat.ReadinessRelayed {
-			url, readiness := fmt.Sprintf("http://%s:%s", requestingPod.Status.PodIP, adminPort), ""
-			if ready {
-				logger.V(5).Info("Server-running pod is ready", "name", runningPod.Name)
-				url += stubapi.BecomeReadyPath
-				readiness = "ready"
-			} else {
-				logger.V(5).Info("Server-running pod is not ready", "name", runningPod.Name)
-				url += stubapi.BecomeUnreadyPath
-				readiness = "unready"
-			}
-			err = postToReadiness(url)
-			if err != nil {
-				logger.Error(err, "Failed to relay the readiness", "name", runningPod.Name, "readiness", readiness)
-				return err, true
-			}
-			serverDat.ReadinessRelayed = &ready
-			logger.V(5).Info("Successfully relayed the readiness", "name", runningPod.Name, "readiness", readiness)
-		}
-		// TODO: sync desired and actual runningPod wrt labels (spec is mostly immutable, possible mutations are allowed)
-		logger.V(5).Info("Nothing more to do")
-		return nil, false
-	}
-	// Assert: runningPod == nil && !shouldAddRequesterFinalizer
-
-	if node.Spec.Unschedulable {
-		// Reflect the inability to serve back to the client/user
-		logger.V(2).Info("Deleting server-requesting Pod because it is bound to an unschedulable Node and has no server-running Pod")
-		err := podOps.Delete(ctx, requestingPod.Name, metav1.DeleteOptions{PropagationPolicy: ptr.To(metav1.DeletePropagationBackground)})
-		return err, false
-	}
-	// What remains to be done is to wake or create a server-running Pod
-
 	// Fetch the assigned GPUs if that has not already been done.
 	if serverDat.GPUIndicesStr == nil {
 		logger.V(5).Info("Querying accelerators", "ip", requesterIP, "port", adminPort)
@@ -325,10 +264,75 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		}
 		gpuIDsStr := strings.Join(gpuUUIDs, ",")
 		gpuIndicesStr := strings.Join(gpuIndices, ",")
+		serverDat.GPUIDs = gpuUUIDs
 		serverDat.GPUIDsStr = &gpuIDsStr
 		serverDat.GPUIndices = gpuIndices
 		serverDat.GPUIndicesStr = &gpuIndicesStr
 	}
+
+	// If there is already a server-running Pod then ensure that it is awake,
+	// ensure status reported, and relay readiness if needed.
+	if runningPod != nil {
+		_, serverPort, err := getInferenceServerPort(runningPod)
+		if err != nil { // Impossible, because such a runningPod would never be created by this controller
+			return fmt.Errorf("unable to wake up server because port not known: %w", err), true
+		}
+		if serverDat.Sleeping == nil {
+			sleeping, err := ctl.querySleeping(ctx, runningPod, serverPort)
+			if err != nil {
+				return err, true
+			}
+			logger.V(2).Info("Determined whether provider is sleeping", "isSleeping", sleeping)
+			serverDat.Sleeping = &sleeping
+		}
+		if *(serverDat.Sleeping) {
+			err = ctl.wakeSleeper(ctx, serverDat, requestingPod, runningPod, serverPort)
+			if err != nil {
+				return err, true
+			}
+			logger.V(2).Info("Woke discovered-bound inference server")
+		}
+		if err := ctl.ensureSleepingLabel(ctx, runningPod, *(serverDat.Sleeping)); err != nil {
+			return err, true
+		}
+		err, _ = ctl.ensureReqState(ctx, requestingPod, serverDat, shouldAddRequesterFinalizer, false)
+		if err != nil {
+			return err, true
+		}
+		// Relay readiness if not already done
+		ready := isPodReady(runningPod)
+		if serverDat.ReadinessRelayed == nil || ready != *serverDat.ReadinessRelayed {
+			url, readiness := fmt.Sprintf("http://%s:%s", requestingPod.Status.PodIP, adminPort), ""
+			if ready {
+				logger.V(5).Info("Server-running pod is ready", "name", runningPod.Name)
+				url += stubapi.BecomeReadyPath
+				readiness = "ready"
+			} else {
+				logger.V(5).Info("Server-running pod is not ready", "name", runningPod.Name)
+				url += stubapi.BecomeUnreadyPath
+				readiness = "unready"
+			}
+			err = doPost(url)
+			if err != nil {
+				logger.Error(err, "Failed to relay the readiness", "name", runningPod.Name, "readiness", readiness)
+				return err, true
+			}
+			serverDat.ReadinessRelayed = &ready
+			logger.V(5).Info("Successfully relayed the readiness", "name", runningPod.Name, "readiness", readiness)
+		}
+		// TODO: sync desired and actual runningPod wrt labels (spec is mostly immutable, possible mutations are allowed)
+		logger.V(5).Info("Nothing more to do")
+		return nil, false
+	}
+	// Assert: runningPod == nil && !shouldAddRequesterFinalizer
+
+	if node.Spec.Unschedulable {
+		// Reflect the inability to serve back to the client/user
+		logger.V(2).Info("Deleting server-requesting Pod because it is bound to an unschedulable Node and has no server-running Pod")
+		err := podOps.Delete(ctx, requestingPod.Name, metav1.DeleteOptions{PropagationPolicy: ptr.To(metav1.DeletePropagationBackground)})
+		return err, false
+	}
+	// What remains to be done is to wake or create a server-running Pod
 
 	serverPatch := requestingPod.Annotations[api.ServerPatchAnnotationName]
 	if serverPatch == "" { // this is bad, somebody has hacked important data
@@ -382,17 +386,18 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	return ctl.ensureReqStatus(ctx, requestingPod, serverDat)
 }
 
-func (ctl *controller) ensureSleepingLabelFalse(ctx context.Context, runningPod *corev1.Pod) error {
+func (ctl *controller) ensureSleepingLabel(ctx context.Context, runningPod *corev1.Pod, desired bool) error {
 	logger := klog.FromContext(ctx)
-	if runningPod.Labels[api.SleepingLabelName] != "false" {
+	desiredStr := strconv.FormatBool(desired)
+	if runningPod.Labels[api.SleepingLabelName] != desiredStr {
 		runningPod = runningPod.DeepCopy()
-		runningPod.Labels = MapSet(runningPod.Labels, api.SleepingLabelName, "false")
+		runningPod.Labels = MapSet(runningPod.Labels, api.SleepingLabelName, desiredStr)
 		echo, err := ctl.coreclient.Pods(ctl.namespace).Update(ctx, runningPod, metav1.UpdateOptions{
 			FieldManager: ControllerName})
 		if err != nil {
-			return fmt.Errorf("failed to revise sleeping label on server-running Pod to reflect wake-up: %w", err)
+			return fmt.Errorf("failed to revise sleeping label on server-running Pod to %s: %w", desiredStr, err)
 		}
-		logger.V(3).Info("Updated sleeping label on sever-running Pod to reflect wake-up", "newResourceVersion", echo.ResourceVersion)
+		logger.V(3).Info("Updated sleeping label on sever-running Pod", "sleeping", desiredStr, "newResourceVersion", echo.ResourceVersion)
 	}
 	return nil
 }
@@ -513,20 +518,30 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 	if err != nil { // Impossible, because such a runningPod would never be created by this controller
 		return fmt.Errorf("unable to wake up server because port not known: %w", err), true
 	}
-	wakeURL := fmt.Sprintf("http://%s:%d/wake_up", runningPod.Status.PodIP, serverPort)
-	resp, err := http.Post(wakeURL, "", nil)
+	err = ctl.wakeSleeper(ctx, serverDat, requestingPod, runningPod, serverPort)
 	if err != nil {
-		return fmt.Errorf("failed to wake up, POST %s got error: %w", wakeURL, err), true
-	}
-	if sc := resp.StatusCode; sc != http.StatusOK {
-		return fmt.Errorf("failed to wake up, POST %s returned status %d", wakeURL, sc), true
-	}
-	if err := ctl.ensureSleepingLabelFalse(ctx, runningPod); err != nil {
 		return err, true
 	}
-	serverDat.Sleeping = ptr.To(false)
 	logger.V(2).Info("Woke freshly-bound inference server", "runningPod", runningPod.Name)
 	return ctl.ensureReqState(ctx, requestingPod, serverDat, !slices.Contains(requestingPod.Finalizers, requesterFinalizer), false)
+}
+
+func (ctl *controller) wakeSleeper(ctx context.Context, serverDat *serverData, requestingPod, runningPod *corev1.Pod, serverPort int16) error {
+	if ctl.debugAccelMemory {
+		if err := ctl.accelMemoryIsLowEnough(ctx, requestingPod, serverDat); err != nil {
+			return err
+		}
+	}
+	wakeURL := fmt.Sprintf("http://%s:%d/wake_up", runningPod.Status.PodIP, serverPort)
+	err := doPost(wakeURL)
+	if err != nil {
+		return err
+	}
+	if err := ctl.ensureSleepingLabel(ctx, runningPod, false); err != nil {
+		return err
+	}
+	serverDat.Sleeping = ptr.To(false)
+	return nil
 }
 
 // maybeRemoveRequesterFinalizer removes the requesterFinalizer if necessary,
@@ -841,6 +856,49 @@ func getInferenceServerPort(pod *corev1.Pod) (int, int16, error) {
 	}
 }
 
+func (ctl *controller) querySleeping(ctx context.Context, runningPod *corev1.Pod, serverPort int16) (bool, error) {
+	queryURL := fmt.Sprintf("http://%s:%d/is_sleeping", runningPod.Status.PodIP, serverPort)
+	body, err := doGet(queryURL)
+	if err != nil {
+		return false, err
+	}
+	sleepState := api.SleepState{}
+	err = json.Unmarshal(body, &sleepState)
+	if err != nil {
+		return false, fmt.Errorf("failed to parse response body to is_sleeping query: %w", err)
+	}
+	return sleepState.IsSleeping, nil
+}
+
+func (ctl *controller) accelMemoryIsLowEnough(ctx context.Context, requestingPod *corev1.Pod, serverDat *serverData) error {
+	adminPort := requestingPod.Annotations[api.AdminPortAnnotationName]
+	if adminPort == "" {
+		adminPort = api.AdminPortDefaultValue
+	}
+	url := fmt.Sprintf("http://%s:%s%s", requestingPod.Status.PodIP, adminPort, stubapi.AcceleratorMemoryQueryPath)
+	body, err := doGet(url)
+	if err != nil {
+		return err
+	}
+	usageMap := map[string]int64{}
+	err = json.Unmarshal(body, &usageMap)
+	if err != nil {
+		return fmt.Errorf("failed to parse memory usage map: %w", err)
+	}
+	logger := klog.FromContext(ctx)
+	for _, gpuID := range serverDat.GPUIDs {
+		if used, have := usageMap[gpuID]; !have {
+			return fmt.Errorf("no GPU usage information for GPU %s", gpuID)
+		} else if used > ctl.accelMemoryLimitMiB {
+			return fmt.Errorf("accelerator %s is currently using %d MiB of memory, limit for sleeping total is %d MiB", gpuID, used, ctl.accelMemoryLimitMiB)
+		} else {
+			logger.V(4).Info("OK accelerator memory usage", "node", requestingPod.Spec.NodeName, "accelerator", gpuID, "usageMiB", used, "limitMiB", ctl.accelMemoryLimitMiB)
+		}
+	}
+	logger.V(4).Info("AOK accelerator memory usage", "node", requestingPod.Spec.NodeName, "gpuIDs", serverDat.GPUIDs)
+	return nil
+}
+
 // ensureReqStatus makes the API call if necessary set the controller's status
 // on the server-running Pod shows the given user errors.
 // The returned (err error, retry bool) is a convenient match for the signature of
@@ -893,8 +951,8 @@ func (ctl *controller) ensureReqState(ctx context.Context, requestingPod *corev1
 	return err, err != nil
 }
 
-// postToReadiness does the HTTP POST request/response to the given URL.
-func postToReadiness(url string) error {
+// doPost does the HTTP POST request/response to the given URL.
+func doPost(url string) error {
 	client := &http.Client{
 		Timeout: 5 * time.Second,
 	}
@@ -907,7 +965,7 @@ func postToReadiness(url string) error {
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
+		return fmt.Errorf("http POST %q returned unexpected status %d; response body=%s", url, resp.StatusCode, string(body))
 	}
 
 	return nil
@@ -936,8 +994,7 @@ func init() {
 	podDecoder = codecFactory.UniversalDecoder(corev1.SchemeGroupVersion)
 }
 
-// getGPUUUIDs does the HTTP GET on the given URL to fetch the assigned GPU UUIDs.
-func getGPUUUIDs(url string) ([]string, error) {
+func doGet(url string) ([]byte, error) {
 	client := &http.Client{
 		Timeout: 5 * time.Second,
 	}
@@ -948,15 +1005,23 @@ func getGPUUUIDs(url string) ([]string, error) {
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
+	body, bodyReadErr := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status %d", resp.StatusCode)
+		return nil, fmt.Errorf("http GET %q returned unexpected status %d; bodyReadErr=%v; responseBody=%s", url, resp.StatusCode, bodyReadErr, string(body))
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	if bodyReadErr != nil {
+		return nil, fmt.Errorf("failed to read body: %w", bodyReadErr)
+	}
+	return body, nil
+}
+
+// getGPUUUIDs does the HTTP GET on the given URL to fetch the assigned GPU UUIDs.
+func getGPUUUIDs(url string) ([]string, error) {
+	body, err := doGet(url)
 	if err != nil {
-		return nil, fmt.Errorf("read body: %w", err)
+		return nil, err
 	}
-
 	var uuids []string
 	if err := json.Unmarshal(body, &uuids); err != nil {
 		return nil, fmt.Errorf("unmarshal uuids: %w", err)

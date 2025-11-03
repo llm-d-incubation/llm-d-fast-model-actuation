@@ -101,7 +101,7 @@ make load-controller-local
 : Deploy the dual-pods controller in the cluster
 
 ctlr_img=$(make echo-var VAR=CONTROLLER_IMG)
-helm upgrade --install dpctlr charts/dpctlr --set Image="$ctlr_img" --set NodeViewClusterRole=node-viewer --set SleeperLimit=2 --set Local=true
+helm upgrade --install dpctlr charts/dpctlr --set Image="$ctlr_img" --set NodeViewClusterRole=node-viewer --set SleeperLimit=2 --set Local=true --set DebugAcceleratorMemory=false
 
 : Test Pod creation
 
