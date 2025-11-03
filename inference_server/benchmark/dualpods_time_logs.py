@@ -12,11 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Standard imports
 import logging
-import subprocess
+from subprocess import run
 from time import perf_counter, sleep
 
+# Third party imports
 from kubernetes import client, config, watch
+
+# Local imports
 from utils import parse_request_args
 
 # ---------------- Logging setup ----------------
@@ -41,14 +45,16 @@ DUAL_POD_TOTAL = 2
 # ---------------- Helper functions ----------------
 def apply_yaml(yaml_file):
     logger.info(f"Applying {yaml_file}...")
-    subprocess.run(["kubectl", "apply", "-f", yaml_file], check=True)
+    run(["kubectl", "apply", "-f", yaml_file], check=True)
 
 
 def delete_yaml(yaml_file):
     logger.info(f"Cleaning up resources from {yaml_file}...")
-    subprocess.run(
-        ["kubectl", "delete", "-f", yaml_file, "--ignore-not-found=true"], check=False
+    run(
+        ["kubectl", "delete", "-f", yaml_file, "--ignore-not-found=true"],
+        check=False,
     )
+    run(["rm", yaml_file], check=False)
 
 
 def get_pods_with_label(api, namespace, label_selector):
@@ -95,7 +101,7 @@ def wait_for_dual_pods_ready(v1, namespace, podname, timeout=600, suffix="server
                 # Filter the pods.
                 if (podname in name) and (suffix not in name):
                     logger.info(f"Checking Readiness of Requester Pod: {name}")
-                    if check_ready(pod):
+                    if check_ready(pod) and (name not in ready_pods):
                         rq_ready = int(perf_counter() - start)
                         ready_pods.add(name)
                 elif suffix in name:  # Any provider pods that can be bound.
@@ -112,10 +118,11 @@ def wait_for_dual_pods_ready(v1, namespace, podname, timeout=600, suffix="server
                         if check_ready(pod):
                             binding_match = podname in dual_pod
                             if (name not in ready_pods) and binding_match:
+                                logger.info("Duo {dual_pod}{name} match: Cold start")
                                 prv_ready = int(perf_counter() - start)
                                 ready_pods.add(name)
-                                prv_mode = "Cold"
                             elif (name not in ready_pods) and not binding_match:
+                                logger.info("Duo {dual_pod}{name} do not match: Hit")
                                 prv_ready = int(perf_counter() - start)
                                 ready_pods.add(name)
                                 prv_mode = "Hit"
