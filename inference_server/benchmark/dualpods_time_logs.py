@@ -77,7 +77,6 @@ def wait_for_dual_pods_ready(v1, namespace, podname, timeout=600, suffix="server
     # Initialize the variables to be returned
     rq_ready = None
     prv_ready = None
-    # TODO: Check the availability of the provider pod.
     # Defaulting to cold for now.
     prv_mode = "Cold"
 
