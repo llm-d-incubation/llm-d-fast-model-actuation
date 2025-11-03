@@ -32,7 +32,7 @@ class DualPodsBenchmark:
         op_mode: str = "kind",
         simulation_delays: Optional[Dict[str, float]] = None,
         log_output_file: str = "metrics.log",
-        cluster_name: str = None,
+        cluster_name: str = "fmabenchmark",
     ):
         """
         Initialize the benchmark class.
@@ -47,29 +47,15 @@ class DualPodsBenchmark:
         self.op_mode = op_mode
         if op_mode == "kind":  # Default
 
-            # Check that the cluster name is specified.
-            if cluster_name is None:
-                raise ValueError("You must specify a kind cluster name")
-
-            # Check that the kind cluster exists locally.
-            all_clusters = invoke_shell(
-                ["kind", "get", "clusters"],
-                capture_output=True,
-                text=True,
-            ).stdout
-
-            if not (cluster_name in all_clusters.strip("\n")):
-                raise ValueError(f"Kind cluster {cluster_name} does not exist")
-
             self.logger.info(f"Operating with kind cluster: {cluster_name}")
 
             # Set context with a kind cluster.
-            self.k8_ops = KindKubernetesOps(cluster_name)
+            self.k8_ops = KindKubernetesOps(self.logger, cluster_name)
 
         elif op_mode == "remote":
             self.logger.info("Operating with remote cluster.")
             # Load config for the remote cluster.
-            self.k8_ops = RemoteKubernetesOps()
+            self.k8_ops = RemoteKubernetesOps(self.logger)
 
         elif op_mode == "simulated":
             self.logger.info("Operating in simulated mode.")
@@ -185,6 +171,10 @@ class DualPodsBenchmark:
 
             self.results.append(result)
 
+        # Delete the associated cluster for a kind benchmark.
+        if self.op_mode == "kind":
+            self.k8_ops.clean_up_cluster()
+
         return self.results
 
     def get_results(self) -> Dict[str, Any]:
@@ -265,19 +255,15 @@ class DualPodsBenchmark:
 
 
 if __name__ == "__main__":
-    # kind_log_path = "kind_logger.log"
-    # kind_benchmark = DualPodsBenchmark(
-    #    "kind", cluster_name="fmatest", log_output_file=kind_log_path
-    # )
-    sim_log_path = "sim_logger.log"
-    sim_benchmark = DualPodsBenchmark("simulated", log_output_file=sim_log_path)
+    kind_log_path = "kind_logger.log"
+    kind_benchmark = DualPodsBenchmark("kind", log_output_file=kind_log_path)
+    # sim_log_path = "sim_logger.log"
+    # sim_benchmark = DualPodsBenchmark("simulated", log_output_file=sim_log_path)
     # remote_log_path = "remote_logger.log"
     # remote_benchmark = DualPodsBenchmark("remote", log_output_file=remote_log_path)
-    # all_benchmarks = [sim_benchmark, kind_benchmark]
-    all_benchmarks = [sim_benchmark]
+    all_benchmarks = [kind_benchmark]
 
     # Run example benchmarks
     for benchmark in all_benchmarks:
         results = benchmark.run_benchmark(4)
         benchmark.pretty_print_results()
-        # benchmark.run_benchmark("Introducing New Variant", 3, **kwargs)

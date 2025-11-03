@@ -85,12 +85,18 @@ def parse_request_args():
         )
 
     args = parser.parse_args()
-    # namespace = args.namespace
-    # yaml_file_template = args.yaml
-    # label = args.label
-    # if requester_img is None:
-    #    requester_img = args.image
-    #    img_tag = args.tag
+
+    # Validate the path for the YAML template.
+    yaml_template = args.yaml
+    yaml_template_path = Path(yaml_template)
+    if not (yaml_template_path).exists():
+        raise FileNotFoundError(f"{yaml_template} path does not exist!")
+
+    # Override the provided template path with the absolute version.
+    if not (yaml_template_path.is_absolute()):
+        args.yaml = yaml_template_path.absolute()
+    else:
+        args.yaml = yaml_template_path
 
     return args
 
@@ -159,7 +165,8 @@ class BaseLogger:
 
 
 def delete_yaml_resources(yaml_file):
-    """Delete the resources created with the YAML and delete from file system."""
+    """Delete the resources created with the YAML and delete the file itself."""
+    # TODO: Check whether the path to the YAML file is valid.
     logger.info(f"Cleaning up resources from {yaml_file}...")
     invoke_shell(
         ["kubectl", "delete", "-f", yaml_file, "--ignore-not-found=true"], check=False

@@ -1,7 +1,7 @@
 apiVersion: apps/v1
 kind: ReplicaSet
 metadata:
-  name: my-request
+  name: ${REPLICASET_NAME}
 spec:
   replicas: 1
   selector:

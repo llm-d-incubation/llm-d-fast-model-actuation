@@ -41,6 +41,10 @@ logger.addHandler(console_handler)
 
 DUAL_POD_TOTAL = 2
 
+# Constants for provider modes
+COLD_START_MODE = "Cold"
+HIT_MODE = "Hit"
+
 
 # ---------------- Helper functions ----------------
 def apply_yaml(yaml_file):
@@ -64,7 +68,7 @@ def get_pods_with_label(api, namespace, label_selector):
     return pods
 
 
-def wait_for_dual_pods_ready(v1, namespace, podname, timeout=600, suffix="server"):
+def wait_for_dual_pods_ready(v1, namespace, podname, timeout=600, suffix="dual"):
     start = perf_counter()
     elapsed = 0
     # Server-requesting and server-providing pods
@@ -84,7 +88,7 @@ def wait_for_dual_pods_ready(v1, namespace, podname, timeout=600, suffix="server
     rq_ready = None
     prv_ready = None
     # Defaulting to cold for now.
-    prv_mode = "Cold"
+    prv_mode = COLD_START_MODE
 
     while elapsed < timeout:
         try:
@@ -92,7 +96,7 @@ def wait_for_dual_pods_ready(v1, namespace, podname, timeout=600, suffix="server
             for event in w.stream(
                 v1.list_namespaced_pod,
                 namespace=namespace,
-                timeout_seconds=min(300, timeout - int(elapsed)),
+                timeout_seconds=30,  # Frequent checks to reduce interruption impact
             ):
                 pod = event["object"]
                 name = pod.metadata.name
@@ -118,14 +122,14 @@ def wait_for_dual_pods_ready(v1, namespace, podname, timeout=600, suffix="server
                         if check_ready(pod):
                             binding_match = podname in dual_pod
                             if (name not in ready_pods) and binding_match:
-                                logger.info("Duo {dual_pod}{name} match: Cold start")
+                                logger.info(f"Duo {dual_pod}:{name} match: Cold start")
                                 prv_ready = int(perf_counter() - start)
                                 ready_pods.add(name)
                             elif (name not in ready_pods) and not binding_match:
-                                logger.info("Duo {dual_pod}{name} do not match: Hit")
+                                logger.info(f"Duo {dual_pod}:{name} do not match: Hit")
                                 prv_ready = int(perf_counter() - start)
                                 ready_pods.add(name)
-                                prv_mode = "Hit"
+                                prv_mode = HIT_MODE
 
                 if len(ready_pods) == DUAL_POD_TOTAL:
                     w.stop()
@@ -139,7 +143,7 @@ def wait_for_dual_pods_ready(v1, namespace, podname, timeout=600, suffix="server
             logger.warning(
                 f"⚠️ Watch interrupted ({type(e).__name__}: {e}), retrying..."
             )
-            sleep(2)
+            sleep(1)  # Quick retry
             elapsed = perf_counter() - start
 
     raise TimeoutError(f"Timed out after {timeout}s waiting for both pods to be Ready.")
@@ -177,9 +181,9 @@ def main():
     logger.info(f"Requester pod detected: {requester_name}")
 
     logger.info("Waiting for server-providing pod to relay readiness to requester...")
-    ready_time = wait_for_dual_pods_ready(v1, namespace, requester_name)
+    rq_ready, prv_ready, prv_mode = wait_for_dual_pods_ready(v1, namespace, requester_name)
 
-    total_time = ready_time - start_time
+    total_time = rq_ready - start_time
     logger.info(f"🚀 Readiness time: {total_time:.2f} seconds\n")
 
     delete_yaml(yaml_file)
