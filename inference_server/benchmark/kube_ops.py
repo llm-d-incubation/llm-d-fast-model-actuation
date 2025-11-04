@@ -16,17 +16,134 @@
 from abc import ABC, abstractmethod
 from logging import Logger
 from random import randint
-from subprocess import CalledProcessError
-from subprocess import run as invoke_shell
-from time import sleep
+from subprocess import run as invoke_shell, CalledProcessError
+from time import perf_counter, sleep
 from typing import Any, Dict, Optional
 
-# Local imports
-from dualpods_time_logs import apply_yaml, delete_yaml, wait_for_dual_pods_ready
-
 # Third party imports.
-from kubernetes import client, config
+from kubernetes import client, config, watch
+
+# Local imports
 from utils import delete_yaml_resources
+
+# ---------------- Logging setup ----------------
+import logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+
+file_handler = logging.FileHandler("metrics.log")
+file_handler.setLevel(logging.DEBUG)
+file_handler.setFormatter(formatter)
+
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(formatter)
+
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
+
+
+# Constants for provider modes
+COLD_START_MODE = "Cold"
+HIT_MODE = "Hit"
+
+# Constants for pod counts
+DUAL_POD_TOTAL = 2
+
+
+# ---------------- Helper functions ----------------
+def apply_yaml(yaml_file):
+    """Apply a YAML file to the cluster."""
+    invoke_shell(["kubectl", "apply", "-f", yaml_file], check=True)
+
+
+def delete_yaml(yaml_file):
+    """Delete resources from a YAML file."""
+    invoke_shell(
+        ["kubectl", "delete", "-f", yaml_file, "--ignore-not-found=true"],
+        check=False,
+    )
+
+
+def wait_for_dual_pods_ready(v1, namespace, rs_name, timeout=600, suffix="dual"):
+    """Wait for both dual pods to be ready and return timing information."""
+    start = perf_counter()
+    elapsed = 0
+    ready_pods = set()
+
+    logger.info(f"Waiting for pods of ReplicaSet: {rs_name}")
+
+    def check_ready(pod):
+        if pod.status.phase == "Running":
+            for cond in pod.status.conditions or []:
+                if cond.type == "Ready" and cond.status == "True":
+                    return True
+        return False
+
+    # Initialize the variables to be returned
+    rq_ready = None
+    prv_ready = None
+    prv_mode = COLD_START_MODE
+
+    while elapsed < timeout:
+        try:
+            w = watch.Watch()
+            for event in w.stream(
+                v1.list_namespaced_pod,
+                namespace=namespace,
+                timeout_seconds=30,  # Frequent checks to reduce interruption impact
+            ):
+                pod = event["object"]
+                podname = pod.metadata.name
+                labels = pod.metadata.labels
+
+                # Filter the pods.
+                if (rs_name in podname) and (suffix not in podname):
+                    logger.info(f"Checking Readiness of Requester Pod: {podname}")
+                    if check_ready(pod) and (podname not in ready_pods):
+                        rq_ready = int(perf_counter() - start)
+                        ready_pods.add(podname)
+                elif suffix in podname:  # Any provider pods that can be bound.
+                    logger.info(f"Checking Readiness of Provider Pod: {podname}")
+
+                    # Get the server-requesting it is bound to, if any.
+                    if "dual-pods.llm-d.ai/dual" in labels:
+                        dual_pod = labels["dual-pods.llm-d.ai/dual"]
+                        logger.info(
+                            f"Checking Ready of Provider for Pair <{dual_pod}>:<{podname}>"
+                        )
+
+                        # Set the return variables for the ready pod.
+                        if check_ready(pod) and podname not in ready_pods:
+                            provider_prefix = podname.split('-dual-')[0]
+                            requester_prefix = rs_name
+                            is_hit = requester_prefix not in provider_prefix
+
+                            prv_ready = int(perf_counter() - start)
+                            ready_pods.add(podname)
+                            if is_hit:
+                                logger.info(f"Duo {dual_pod}:{podname} do not match: Hit")
+                                prv_mode = HIT_MODE
+                            else:
+                                logger.info(f"Duo {dual_pod}:{podname} match: Cold start")
+
+                if len(ready_pods) == DUAL_POD_TOTAL:
+                    end = perf_counter()
+                    w.stop()
+                    logger.info(f"✅ Both pods Ready after {end - start:.2f}s")
+                    return rq_ready, prv_ready, prv_mode
+
+            elapsed = perf_counter() - start
+
+        except Exception as e:
+            logger.warning(
+                f"⚠️ Watch interrupted ({type(e).__name__}: {e}), retrying..."
+            )
+            sleep(1)  # Quick retry
+            elapsed = perf_counter() - start
+
+    raise TimeoutError(f"Timed out after {timeout}s waiting for both pods to be Ready.")
 
 
 class KubernetesOps(ABC):

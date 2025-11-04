@@ -166,7 +166,11 @@ class BaseLogger:
 
 def delete_yaml_resources(yaml_file):
     """Delete the resources created with the YAML and delete the file itself."""
-    # TODO: Check whether the path to the YAML file is valid.
+    yaml_path = Path(yaml_file)
+    if not yaml_path.exists():
+        logger.warning(f"YAML file {yaml_file} does not exist, skipping cleanup")
+        return
+
     logger.info(f"Cleaning up resources from {yaml_file}...")
     invoke_shell(
         ["kubectl", "delete", "-f", yaml_file, "--ignore-not-found=true"], check=False

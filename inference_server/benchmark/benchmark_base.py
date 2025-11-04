@@ -148,7 +148,6 @@ class DualPodsBenchmark:
                 # Compile the result.
                 result = {
                     "iteration": i + 1,
-                    # "scenario": scenario,
                     "rq_time": rq_ready,
                     "prv_time": prv_ready,
                     "availability_mode": prv_mode,
@@ -158,7 +157,6 @@ class DualPodsBenchmark:
                 self.logger.error(f"Iteration {i+1} failed with error: {e}")
                 result = {
                     "iteration": i + 1,
-                    # "scenario": scenario,
                     "rq_time": None,
                     "prv_time": None,
                     "availability_mode": "No Server Providing Pod Available",
@@ -196,12 +194,16 @@ class DualPodsBenchmark:
 
         # Compute the number of pods awoken.
         hits = len([run for run in success_runs if run["availability_mode"] == "Hit"])
+        hit_runs = [run for run in success_runs if run["availability_mode"] == "Hit"]
+        hit_prv_times = [
+            run["prv_time"] for run in hit_runs if run["prv_time"] is not None
+        ]
 
         summary = {
             "total_runs": len(self.results),
             "successful_runs": len(success_runs),
             "hits": hits,
-            "hit_percent": int((hits / len(success_runs)) * 100),
+            "hit_percent": int((hits / len(success_runs)) * 100) if success_runs else 0,
             "failed_runs": len(self.results) - len(success_runs),
             "rq_min": min(rq_times) if rq_times else None,
             "rq_max": max(rq_times) if rq_times else None,
@@ -209,6 +211,9 @@ class DualPodsBenchmark:
             "prv_min": min(prv_times) if prv_times else None,
             "prv_max": max(prv_times) if prv_times else None,
             "prv_avg": (sum(prv_times) / len(prv_times) if prv_times else None),
+            "hit_prv_min": min(hit_prv_times) if hit_prv_times else None,
+            "hit_prv_max": max(hit_prv_times) if hit_prv_times else None,
+            "hit_prv_avg": (sum(hit_prv_times) / len(hit_prv_times) if hit_prv_times else None),
             "all_results": self.results,
         }
 
@@ -228,6 +233,9 @@ class DualPodsBenchmark:
         prv_min = summary["prv_min"]
         prv_max = summary["prv_max"]
         prv_avg = summary["prv_avg"]
+        hit_prv_min = summary["hit_prv_min"]
+        hit_prv_max = summary["hit_prv_max"]
+        hit_prv_avg = summary["hit_prv_avg"]
 
         run_str = (
             "---------------------------------------------------------------------"
@@ -242,6 +250,11 @@ class DualPodsBenchmark:
         prv_stats += f"\n\tAverage: {prv_avg}s\n"
         avail_stats = f"Hits: {hits}/{success_runs} ({hit_percent}%)\n"
 
+        if hits > 0:
+            hit_stats = f"Hit Wake-up Times \n\tMin: {hit_prv_min}s, \n\tMax: {hit_prv_max}s"
+            hit_stats += f"\n\tAverage: {hit_prv_avg}s\n"
+            avail_stats += hit_stats
+
         summary_str = "".join([run_str, rq_stats, prv_stats, avail_stats])
         self.logger.info(summary_str)
 
@@ -255,13 +268,13 @@ class DualPodsBenchmark:
 
 
 if __name__ == "__main__":
-    kind_log_path = "kind_logger.log"
-    kind_benchmark = DualPodsBenchmark("kind", log_output_file=kind_log_path)
+    # kind_log_path = "kind_logger.log"
+    # kind_benchmark = DualPodsBenchmark("kind", log_output_file=kind_log_path)
     # sim_log_path = "sim_logger.log"
     # sim_benchmark = DualPodsBenchmark("simulated", log_output_file=sim_log_path)
-    # remote_log_path = "remote_logger.log"
-    # remote_benchmark = DualPodsBenchmark("remote", log_output_file=remote_log_path)
-    all_benchmarks = [kind_benchmark]
+    remote_log_path = "remote_logger.log"
+    remote_benchmark = DualPodsBenchmark("remote", log_output_file=remote_log_path)
+    all_benchmarks = [remote_benchmark]
 
     # Run example benchmarks
     for benchmark in all_benchmarks:
