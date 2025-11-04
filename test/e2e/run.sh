@@ -34,8 +34,21 @@ function expect() {
     done
 }
 
+function clear_img_repo() (
+    set +o pipefail
+    docker images $1 | fgrep -v '<none>' | grep -vw REPOSITORY | while read name tag rest; do
+	docker rmi $name:$tag
+    done
+)
+
 : Build the container images, no push
 
+clear_img_repo ko.local/test-requester
+clear_img_repo my-registry/my-namespace/test-requester
+clear_img_repo ko.local/test-server
+clear_img_repo my-registry/my-namespace/test-server
+clear_img_repo ko.local/dual-pods-controller
+clear_img_repo my-registry/my-namespace/dual-pods-controller
 make build-test-requester-local
 make build-test-server-local
 make build-controller-local
