@@ -255,18 +255,6 @@ class DualPodsBenchmark:
             self.logger.info("=== Scaling from 2 to 1 replica ===")
             self.k8_ops.scale_replicaset(request_yaml, 1)
 
-            # For scale down, we don't wait for new pods, just record the operation
-            result = {
-                "iteration": 3,
-                "scenario": "scaling",
-                "phase": "2_to_1",
-                "rq_time": None,  # No new pod timing for scale down
-                "prv_time": None,
-                "availability_mode": "scale_down",
-                "success": True
-            }
-            self.results.append(result)
-
             # Slow down to ensure any goner requester pods do not taint number of initial
             # ready pods for the scale up from 1-2 again.
             slowdown = 10

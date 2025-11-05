@@ -132,7 +132,7 @@ def wait_for_dual_pods_ready(
 
                 # Skip any pods that were in the intial set of ready pods.
                 if podname in initial_ready_pods:
-                    logger.info("Skipping initially ready pod: {podname}")
+                    logger.info(f"Skipping initially ready pod: {podname}")
                     continue
 
                 # Get the labels to filter out provider pods.
@@ -154,23 +154,19 @@ def wait_for_dual_pods_ready(
                         f"Checking Ready of Provider for Pair <{dual_pod}>:<{podname}>"
                     )
 
-                    #if "dual-pods.llm-d.ai/dual" in labels:
-                    #    dual_pod = labels["dual-pods.llm-d.ai/dual"]
-                    #    logger.info(
-                    #        f"Checking Ready of Provider for Pair <{dual_pod}>:<{podname}>"
-                    #    )
-
                     # Set the return variables for the ready pod.
                     if check_ready(pod) and (podname not in ready_pods) and (podname not in initial_ready_pods):
-                        binding_match = rs_name in dual_pod
+                        binding_match = rs_name in dual_pod and rs_name in podname
                         if binding_match:
                             prv_ready = int(perf_counter() - start)
                             ready_pods.add(podname)
                             prv_mode = COLD_START_MODE
+                            logger.info(f"{dual_pod}:{podname} bound through a Cold start")
                         elif not binding_match:
                             prv_ready = int(perf_counter() - start)
                             ready_pods.add(podname)
                             prv_mode = HIT_MODE
+                            logger.info(f"{dual_pod}:{podname} bound through a Hit")
 
                 if len(ready_pods) == DUAL_POD_TOTAL * expected_replicas:
                     end = perf_counter()
