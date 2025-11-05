@@ -74,8 +74,19 @@ def scale_replicaset(yaml_file: str, replicas: int):
     )
 
 
-def wait_for_dual_pods_ready(v1, namespace, rs_name, timeout=600, suffix="dual"):
-    """Wait for both dual pods to be ready and return timing information."""
+def wait_for_dual_pods_ready(
+    v1: client.CoreV1Api, namespace: str, rs_name, timeout=600, expected_replicas=1,
+    suffix="dual",
+):
+    """
+    Wait for both dual pods to be ready and return timing information.
+    :param v1: A reference to a CoreV1Api object for the REST calls.
+    :param namespace: The namespace where the replicaset is deployed.
+    :param rs_name: The name of the replicaset whose pods are to be waited.
+    :param timeout: The max time to wait for all the pods to be ready.
+    :param expected_replicas: The number of replicas expected for scaling.
+    :param suffix: The suffix added to distinguish requester pods from provider pods.
+    """
     start = perf_counter()
     elapsed = 0
     ready_pods = set()
@@ -102,6 +113,8 @@ def wait_for_dual_pods_ready(v1, namespace, rs_name, timeout=600, suffix="dual")
         for pod in pods:
             if rs_name in pod.metadata.name and check_ready(pod):
                 initial_ready_pods.add(pod.metadata.name)
+                # Add them to ready pods for total cardinality of expected pods.
+                ready_pods.add(pod.metadata.name)
         logger.info(f"Pods already ready at start: {initial_ready_pods}")
     except Exception as e:
         logger.warning(f"Could not get initial pod state: {e}")
@@ -116,37 +129,50 @@ def wait_for_dual_pods_ready(v1, namespace, rs_name, timeout=600, suffix="dual")
             ):
                 pod = event["object"]
                 podname = pod.metadata.name
+
+                # Skip any pods that were in the intial set of ready pods.
+                if podname in initial_ready_pods:
+                    logger.info("Skipping initially ready pod: {podname}")
+                    continue
+
+                # Get the labels to filter out provider pods.
                 labels = pod.metadata.labels
 
-                # Filter the pods.
+                # Filter the requester pods.
                 if (rs_name in podname) and (suffix not in podname):
                     logger.info(f"Checking Readiness of Requester Pod: {podname}")
                     if check_ready(pod) and (podname not in ready_pods) and (podname not in initial_ready_pods):
                         rq_ready = int(perf_counter() - start)
                         ready_pods.add(podname)
-                elif suffix in podname:  # Any provider pods that can be bound.
-                    logger.info(f"Checking Readiness of Provider Pod: {podname}")
+
+                # Filter any provider pods that are bound to a requester pod.
+                elif suffix in podname and "dual-pods.llm-d.ai/dual" in labels:
 
                     # Get the server-requesting it is bound to, if any.
-                    if "dual-pods.llm-d.ai/dual" in labels:
-                        dual_pod = labels["dual-pods.llm-d.ai/dual"]
-                        logger.info(
-                            f"Checking Ready of Provider for Pair <{dual_pod}>:<{podname}>"
-                        )
+                    dual_pod = labels["dual-pods.llm-d.ai/dual"]
+                    logger.info(
+                        f"Checking Ready of Provider for Pair <{dual_pod}>:<{podname}>"
+                    )
 
-                        # Set the return variables for the ready pod.
-                        if check_ready(pod) and (podname not in ready_pods) and (podname not in initial_ready_pods):
-                            binding_match = rs_name in dual_pod
-                            if binding_match:
-                                prv_ready = int(perf_counter() - start)
-                                ready_pods.add(podname)
-                                prv_mode = COLD_START_MODE
-                            elif not binding_match:
-                                prv_ready = int(perf_counter() - start)
-                                ready_pods.add(podname)
-                                prv_mode = HIT_MODE
+                    #if "dual-pods.llm-d.ai/dual" in labels:
+                    #    dual_pod = labels["dual-pods.llm-d.ai/dual"]
+                    #    logger.info(
+                    #        f"Checking Ready of Provider for Pair <{dual_pod}>:<{podname}>"
+                    #    )
 
-                if len(ready_pods) == DUAL_POD_TOTAL:
+                    # Set the return variables for the ready pod.
+                    if check_ready(pod) and (podname not in ready_pods) and (podname not in initial_ready_pods):
+                        binding_match = rs_name in dual_pod
+                        if binding_match:
+                            prv_ready = int(perf_counter() - start)
+                            ready_pods.add(podname)
+                            prv_mode = COLD_START_MODE
+                        elif not binding_match:
+                            prv_ready = int(perf_counter() - start)
+                            ready_pods.add(podname)
+                            prv_mode = HIT_MODE
+
+                if len(ready_pods) == DUAL_POD_TOTAL * expected_replicas:
                     end = perf_counter()
                     w.stop()
                     logger.info(f"✅ Both pods Ready after {end - start:.2f}s")
@@ -280,9 +306,11 @@ class RemoteKubernetesOps(KubernetesOps):
     def scale_replicaset(self, yaml_file: str, replicas: int) -> None:
         scale_replicaset(yaml_file, replicas)
 
-    def wait_for_dual_pods_ready(self, ns: str, podname: str, timeout: int) -> float:
+    def wait_for_dual_pods_ready(
+        self, ns: str, podname: str, timeout: int, replicas=1
+    ) -> float:
         return wait_for_dual_pods_ready(
-            self.v1_api, ns, podname, timeout, suffix="dual"
+            self.v1_api, ns, podname, timeout, expected_replicas=replicas, suffix="dual"
         )
 
 

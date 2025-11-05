@@ -15,7 +15,7 @@
 # Standard imports
 from pathlib import Path
 from subprocess import run as invoke_shell
-from time import time
+from time import sleep, time
 from typing import Any, Dict, List, Optional
 
 from kube_ops import KindKubernetesOps, RemoteKubernetesOps, SimKubernetesOps
@@ -236,7 +236,7 @@ class DualPodsBenchmark:
             self.k8_ops.scale_replicaset(request_yaml, 2)
 
             rq_ready, prv_ready, prv_mode = self.k8_ops.wait_for_dual_pods_ready(
-                ns, rs_name, timeout
+                ns, rs_name, timeout, 2
             )
 
             result = {
@@ -265,12 +265,18 @@ class DualPodsBenchmark:
             }
             self.results.append(result)
 
+            # Slow down to ensure any goner requester pods do not taint number of initial
+            # ready pods for the scale up from 1-2 again.
+            slowdown = 10
+            self.logger.info(f"Slowing down by {slowdown} secs for stale pods to go away")
+            sleep(slowdown)
+
             self.logger.info("=== Scaling from 1 to 2 replicas (again) ===")
             self.k8_ops.scale_replicaset(request_yaml, 2)
 
             try:
                 rq_ready, prv_ready, prv_mode = self.k8_ops.wait_for_dual_pods_ready(
-                    ns, rs_name, timeout
+                    ns, rs_name, timeout, 2
                 )
                 success = rq_ready is not None and prv_ready is not None
             except TimeoutError:
