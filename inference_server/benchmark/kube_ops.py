@@ -12,11 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# ---------------- Logging setup ----------------
+import logging
+
 # Standard imports.
 from abc import ABC, abstractmethod
 from logging import Logger
 from random import randint
-from subprocess import run as invoke_shell, CalledProcessError
+from subprocess import CalledProcessError
+from subprocess import run as invoke_shell
 from time import perf_counter, sleep
 from typing import Any, Dict, Optional
 
@@ -26,8 +30,6 @@ from kubernetes import client, config, watch
 # Local imports
 from utils import delete_yaml_resources
 
-# ---------------- Logging setup ----------------
-import logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
@@ -75,7 +77,11 @@ def scale_replicaset(yaml_file: str, replicas: int):
 
 
 def wait_for_dual_pods_ready(
-    v1: client.CoreV1Api, namespace: str, rs_name, timeout=600, expected_replicas=1,
+    v1: client.CoreV1Api,
+    namespace: str,
+    rs_name,
+    timeout=600,
+    expected_replicas=1,
     suffix="dual",
 ):
     """
@@ -130,9 +136,13 @@ def wait_for_dual_pods_ready(
                 pod = event["object"]
                 podname = pod.metadata.name
 
-                # Skip any pods that were in the intial set of ready pods.
+                # Skip any pods that were in the initial set of ready pods or new pods
+                # that have already been accounted for as ready.
                 if podname in initial_ready_pods:
-                    logger.info(f"Skipping initially ready pod: {podname}")
+                    logger.info(f"Skipping INITIALLY ready pod: {podname}")
+                    continue
+                elif podname in ready_pods:
+                    logger.info(f"Skipping NEWLY ready pod: {podname}")
                     continue
 
                 # Get the labels to filter out provider pods.
@@ -141,9 +151,15 @@ def wait_for_dual_pods_ready(
                 # Filter the requester pods.
                 if (rs_name in podname) and (suffix not in podname):
                     logger.info(f"Checking Readiness of Requester Pod: {podname}")
-                    if check_ready(pod) and (podname not in ready_pods) and (podname not in initial_ready_pods):
+                    if (
+                        check_ready(pod)
+                        and (podname not in ready_pods)
+                        and (podname not in initial_ready_pods)
+                    ):
                         rq_ready = int(perf_counter() - start)
                         ready_pods.add(podname)
+                        logger.info(f"Requester Pod {podname} ready after {rq_ready}s")
+                        logger.info(f"\nUpdated ready pods {ready_pods}\n")
 
                 # Filter any provider pods that are bound to a requester pod.
                 elif suffix in podname and "dual-pods.llm-d.ai/dual" in labels:
@@ -155,13 +171,19 @@ def wait_for_dual_pods_ready(
                     )
 
                     # Set the return variables for the ready pod.
-                    if check_ready(pod) and (podname not in ready_pods) and (podname not in initial_ready_pods):
+                    if (
+                        check_ready(pod)
+                        and (podname not in ready_pods)
+                        and (podname not in initial_ready_pods)
+                    ):
                         binding_match = rs_name in dual_pod and rs_name in podname
                         if binding_match:
                             prv_ready = int(perf_counter() - start)
                             ready_pods.add(podname)
                             prv_mode = COLD_START_MODE
-                            logger.info(f"{dual_pod}:{podname} bound through a Cold start")
+                            logger.info(
+                                f"{dual_pod}:{podname} bound through a Cold start"
+                            )
                         elif not binding_match:
                             prv_ready = int(perf_counter() - start)
                             ready_pods.add(podname)
@@ -171,7 +193,9 @@ def wait_for_dual_pods_ready(
                 if len(ready_pods) == DUAL_POD_TOTAL * expected_replicas:
                     end = perf_counter()
                     w.stop()
-                    logger.info(f"✅ Both pods Ready after {end - start:.2f}s")
+                    logger.info(
+                        f"✅ All pods {ready_pods} Ready after {end - start:.2f}s"
+                    )
                     return rq_ready, prv_ready, prv_mode
 
             elapsed = perf_counter() - start
