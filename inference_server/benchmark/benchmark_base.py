@@ -64,10 +64,13 @@ class DualPodsBenchmark:
         else:
             raise ValueError("Mode must be one of [kind, remote, simulated]")
 
+        self.results: List[Dict[str, Any]] = []
+        self.intermediate_files: List[str] = []
+        self.template_files: List[str] = []
+
         self.parsed_inputs = self.parse_inputs()
         input_str = self.describe_inputs()
         self.logger.info(input_str)
-        self.results: List[Dict[str, Any]] = []
 
     def describe_inputs(self):
         """Get pretty print version of the user inputs"""
@@ -90,6 +93,9 @@ class DualPodsBenchmark:
         request_yaml_file = replace_repo_variable(
             requester_img, requester_img_tag, yaml_template
         )
+
+        # Track the template file for cleanup
+        self.template_files.append(str(request_yaml_file))
 
         return ns, request_yaml_file, requester_pod_label, requester_img_tag
 
@@ -114,64 +120,186 @@ class DualPodsBenchmark:
 
         return rs_name_yaml
 
+
     def run_benchmark(
-        self, iterations: int = 1, timeout: int = 600
+        self, iterations: int = 1, timeout: int = 1000, scenario: str = "baseline"
     ) -> List[Dict[str, Any]]:
         """
         Run the benchmark.
 
         :param iterations: Number of iterations for run.
         :param timeout: Timeout for each run in seconds.
+        :param scenario: Benchmark scenario ("baseline" or "scaling")
         :return: List of result dictionaries.
         """
         ns, yaml_file, pod_label, image = self.parsed_inputs
 
-        self.results = []
-        for i in range(iterations):
-            iter_num = str(i + 1)
-            self.logger.info(f"Running iteration {iter_num}")
+        if scenario == "scaling":
+            return self._run_scaling_scenario(ns, yaml_file, timeout)
 
-            # Generate a unique replicaset YAML for the iteration.
-            rs_name = "my-request-" + f"{iter_num}-" + str(int(time()))
-            self.logger.info(f"ReplicaSet Name: {rs_name}")
+        return self._run_standard_scenario(iterations, timeout, scenario, ns, yaml_file)
+
+    def _run_standard_scenario(
+        self, iterations: int, timeout: int, scenario: str, ns: str, yaml_file: str
+    ) -> List[Dict[str, Any]]:
+        """Run the standard benchmark scenario with multiple iterations."""
+        self.results = []
+        try:
+            for i in range(iterations):
+                iter_num = str(i + 1)
+                self.logger.info(f"Running iteration {iter_num}")
+
+                # Generate a unique replicaset YAML for the iteration.
+                rs_name = "my-request-" + f"{iter_num}-" + str(int(time()))
+                self.logger.info(f"ReplicaSet Name: {rs_name}")
+                request_yaml = self.create_request_yaml(rs_name, yaml_file)
+                self.intermediate_files.append(request_yaml)
+
+                try:
+                    self.logger.info(f"Applying YAML: {request_yaml}.")
+                    self.k8_ops.apply_yaml(request_yaml)
+
+                    # Check for pod readiness.
+                    rq_ready, prv_ready, prv_mode = self.k8_ops.wait_for_dual_pods_ready(
+                        ns, rs_name, timeout
+                    )
+
+                    # Compile the result.
+                    result = {
+                        "iteration": i + 1,
+                        "scenario": scenario,
+                        "rq_time": rq_ready,
+                        "prv_time": prv_ready,
+                        "availability_mode": prv_mode,
+                        "success": True,
+                    }
+                except Exception as e:
+                    self.logger.error(f"Iteration {i+1} failed with error: {e}")
+                    result = {
+                        "iteration": i + 1,
+                        "scenario": scenario,
+                        "rq_time": None,
+                        "prv_time": None,
+                        "availability_mode": "No Server Providing Pod Available",
+                        "success": False,
+                        "error": e.__str__(),
+                    }
+                finally:
+                    self.logger.info(f"Finally deleting YAML file: {request_yaml}")
+                    self.k8_ops.delete_yaml(request_yaml)
+
+                self.results.append(result)
+        finally:
+            # Clean up intermediate YAML files created during benchmark
+            self._cleanup_intermediate_files()
+
+            # Delete the associated cluster for a kind benchmark.
+            if self.op_mode == "kind":
+                self.k8_ops.clean_up_cluster()
+
+        return self.results
+
+    def _run_scaling_scenario(self, ns: str, yaml_file: str, timeout: int) -> List[Dict[str, Any]]:
+        """Run the scaling scenario: 0→1, 1→2, 2→1, 1→2 replica scaling."""
+        self.results = []
+
+        try:
+            # Generate a unique replicaset YAML for the scaling scenario
+            rs_name = "scale-request-" + str(int(time()))
+            self.logger.info(f"ReplicaSet Name for scaling: {rs_name}")
             request_yaml = self.create_request_yaml(rs_name, yaml_file)
+            self.intermediate_files.append(request_yaml)
+
+            # Apply the initial deployment at 0 replicas
+            self.logger.info(f"Applying initial YAML: {request_yaml}")
+            self.k8_ops.apply_yaml(request_yaml)
+
+            self.logger.info("=== Scaling from 0 to 1 replica ===")
+            self.k8_ops.scale_replicaset(request_yaml, 1)
+
+            rq_ready, prv_ready, prv_mode = self.k8_ops.wait_for_dual_pods_ready(
+                ns, rs_name, timeout
+            )
+
+            result = {
+                "iteration": 1,
+                "scenario": "scaling",
+                "phase": "0_to_1",
+                "rq_time": rq_ready,
+                "prv_time": prv_ready,
+                "availability_mode": prv_mode,
+                "success": rq_ready is not None and prv_ready is not None
+            }
+            self.results.append(result)
+
+            self.logger.info("=== Scaling from 1 to 2 replicas ===")
+            self.k8_ops.scale_replicaset(request_yaml, 2)
+
+            rq_ready, prv_ready, prv_mode = self.k8_ops.wait_for_dual_pods_ready(
+                ns, rs_name, timeout
+            )
+
+            result = {
+                "iteration": 2,
+                "scenario": "scaling",
+                "phase": "1_to_2",
+                "rq_time": rq_ready,
+                "prv_time": prv_ready,
+                "availability_mode": prv_mode,
+                "success": rq_ready is not None and prv_ready is not None
+            }
+            self.results.append(result)
+
+            self.logger.info("=== Scaling from 2 to 1 replica ===")
+            self.k8_ops.scale_replicaset(request_yaml, 1)
+
+            # For scale down, we don't wait for new pods, just record the operation
+            result = {
+                "iteration": 3,
+                "scenario": "scaling",
+                "phase": "2_to_1",
+                "rq_time": None,  # No new pod timing for scale down
+                "prv_time": None,
+                "availability_mode": "scale_down",
+                "success": True
+            }
+            self.results.append(result)
+
+            self.logger.info("=== Scaling from 1 to 2 replicas (again) ===")
+            self.k8_ops.scale_replicaset(request_yaml, 2)
 
             try:
-                self.logger.info(f"Applying YAML: {request_yaml}.")
-                self.k8_ops.apply_yaml(request_yaml)
-
-                # Check for pod readiness.
                 rq_ready, prv_ready, prv_mode = self.k8_ops.wait_for_dual_pods_ready(
                     ns, rs_name, timeout
                 )
+                success = rq_ready is not None and prv_ready is not None
+            except TimeoutError:
+                self.logger.warning("Scale up timed out")
+                rq_ready, prv_ready, prv_mode = None, None, "timeout"
+                success = False
 
-                # Compile the result.
-                result = {
-                    "iteration": i + 1,
-                    "rq_time": rq_ready,
-                    "prv_time": prv_ready,
-                    "availability_mode": prv_mode,
-                    "success": True,
-                }
-            except Exception as e:
-                self.logger.error(f"Iteration {i+1} failed with error: {e}")
-                result = {
-                    "iteration": i + 1,
-                    "rq_time": None,
-                    "prv_time": None,
-                    "availability_mode": "No Server Providing Pod Available",
-                    "success": False,
-                    "error": e.__str__(),
-                }
-            finally:
-                self.logger.info(f"Finally deleting YAML file: {request_yaml}")
-                self.k8_ops.delete_yaml(request_yaml)
-
+            result = {
+                "iteration": 4,
+                "scenario": "scaling",
+                "phase": "1_to_2_again",
+                "rq_time": rq_ready,
+                "prv_time": prv_ready,
+                "availability_mode": prv_mode,
+                "success": success
+            }
             self.results.append(result)
 
-        # Delete the associated cluster for a kind benchmark.
-        if self.op_mode == "kind":
-            self.k8_ops.clean_up_cluster()
+        finally:
+            # Delete the YAML resources from the cluster
+            self.logger.info(f"Finally deleting YAML file: {request_yaml}")
+            self.k8_ops.delete_yaml(request_yaml)
+
+            # Clean up intermediate YAML files created during scaling scenario
+            self._cleanup_intermediate_files()
+
+            # Delete the associated cluster for a kind benchmark.
+            if self.op_mode == "kind":
+                self.k8_ops.clean_up_cluster()
 
         return self.results
 
@@ -219,6 +347,7 @@ class DualPodsBenchmark:
 
         return summary
 
+
     def pretty_print_results(self):
         """Log the results in a human readable format."""
         summary = self.get_results()
@@ -258,6 +387,23 @@ class DualPodsBenchmark:
         summary_str = "".join([run_str, rq_stats, prv_stats, avail_stats])
         self.logger.info(summary_str)
 
+    def _cleanup_intermediate_files(self):
+        """Clean up intermediate YAML files created during benchmark iterations."""
+        for yaml_file in self.intermediate_files:
+            try:
+                Path(yaml_file).unlink(missing_ok=True)
+                self.logger.debug(f"Cleaned up intermediate file: {yaml_file}")
+            except Exception as e:
+                self.logger.warning(f"Failed to clean up {yaml_file}: {e}")
+
+        # Also clean up template files created during input parsing
+        for template_file in self.template_files:
+            try:
+                Path(template_file).unlink(missing_ok=True)
+                self.logger.debug(f"Cleaned up template file: {template_file}")
+            except Exception as e:
+                self.logger.warning(f"Failed to clean up template file {template_file}: {e}")
+
     def cleanup_resources(self):
         """Clean up any remaining resources in kind or remote cluster."""
         if self.parsed_inputs:
@@ -278,5 +424,10 @@ if __name__ == "__main__":
 
     # Run example benchmarks
     for benchmark in all_benchmarks:
-        results = benchmark.run_benchmark(4)
+        # Run baseline scenario
+        #results = benchmark.run_benchmark(4, scenario="baseline")
+        #benchmark.pretty_print_results()
+
+        # Run scaling scenario
+        results = benchmark.run_benchmark(1, scenario="scaling")
         benchmark.pretty_print_results()

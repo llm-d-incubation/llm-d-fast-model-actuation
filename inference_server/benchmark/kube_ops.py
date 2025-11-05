@@ -66,6 +66,14 @@ def delete_yaml(yaml_file):
     )
 
 
+def scale_replicaset(yaml_file: str, replicas: int):
+    """Scale the ReplicaSet in the YAML file to the specified number of replicas."""
+    invoke_shell(
+        ["kubectl", "scale", "--replicas", str(replicas), "-f", yaml_file],
+        check=True,
+    )
+
+
 def wait_for_dual_pods_ready(v1, namespace, rs_name, timeout=600, suffix="dual"):
     """Wait for both dual pods to be ready and return timing information."""
     start = perf_counter()
@@ -86,6 +94,18 @@ def wait_for_dual_pods_ready(v1, namespace, rs_name, timeout=600, suffix="dual")
     prv_ready = None
     prv_mode = COLD_START_MODE
 
+    # Track pods that were already ready when we started watching
+    initial_ready_pods = set()
+    try:
+        # Get initial state of pods
+        pods = v1.list_namespaced_pod(namespace=namespace).items
+        for pod in pods:
+            if rs_name in pod.metadata.name and check_ready(pod):
+                initial_ready_pods.add(pod.metadata.name)
+        logger.info(f"Pods already ready at start: {initial_ready_pods}")
+    except Exception as e:
+        logger.warning(f"Could not get initial pod state: {e}")
+
     while elapsed < timeout:
         try:
             w = watch.Watch()
@@ -101,7 +121,7 @@ def wait_for_dual_pods_ready(v1, namespace, rs_name, timeout=600, suffix="dual")
                 # Filter the pods.
                 if (rs_name in podname) and (suffix not in podname):
                     logger.info(f"Checking Readiness of Requester Pod: {podname}")
-                    if check_ready(pod) and (podname not in ready_pods):
+                    if check_ready(pod) and (podname not in ready_pods) and (podname not in initial_ready_pods):
                         rq_ready = int(perf_counter() - start)
                         ready_pods.add(podname)
                 elif suffix in podname:  # Any provider pods that can be bound.
@@ -115,18 +135,16 @@ def wait_for_dual_pods_ready(v1, namespace, rs_name, timeout=600, suffix="dual")
                         )
 
                         # Set the return variables for the ready pod.
-                        if check_ready(pod) and podname not in ready_pods:
-                            provider_prefix = podname.split('-dual-')[0]
-                            requester_prefix = rs_name
-                            is_hit = requester_prefix not in provider_prefix
-
-                            prv_ready = int(perf_counter() - start)
-                            ready_pods.add(podname)
-                            if is_hit:
-                                logger.info(f"Duo {dual_pod}:{podname} do not match: Hit")
+                        if check_ready(pod) and (podname not in ready_pods) and (podname not in initial_ready_pods):
+                            binding_match = rs_name in dual_pod
+                            if binding_match:
+                                prv_ready = int(perf_counter() - start)
+                                ready_pods.add(podname)
+                                prv_mode = COLD_START_MODE
+                            elif not binding_match:
+                                prv_ready = int(perf_counter() - start)
+                                ready_pods.add(podname)
                                 prv_mode = HIT_MODE
-                            else:
-                                logger.info(f"Duo {dual_pod}:{podname} match: Cold start")
 
                 if len(ready_pods) == DUAL_POD_TOTAL:
                     end = perf_counter()
@@ -258,6 +276,9 @@ class RemoteKubernetesOps(KubernetesOps):
 
     def delete_yaml(self, yaml_file: str) -> None:
         delete_yaml(yaml_file)
+
+    def scale_replicaset(self, yaml_file: str, replicas: int) -> None:
+        scale_replicaset(yaml_file, replicas)
 
     def wait_for_dual_pods_ready(self, ns: str, podname: str, timeout: int) -> float:
         return wait_for_dual_pods_ready(
