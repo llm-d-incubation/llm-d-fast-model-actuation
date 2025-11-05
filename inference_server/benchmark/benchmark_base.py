@@ -231,6 +231,7 @@ class DualPodsBenchmark:
                 "success": rq_ready is not None and prv_ready is not None
             }
             self.results.append(result)
+            self.logger.info(f"Scaling 0->1 Status: {result['success']}")
 
             self.logger.info("=== Scaling from 1 to 2 replicas ===")
             self.k8_ops.scale_replicaset(request_yaml, 2)
@@ -249,6 +250,7 @@ class DualPodsBenchmark:
                 "success": rq_ready is not None and prv_ready is not None
             }
             self.results.append(result)
+            self.logger.info(f"Scaling 1->2 Status: {result['success']}")
 
             self.logger.info("=== Scaling from 2 to 1 replica ===")
             self.k8_ops.scale_replicaset(request_yaml, 1)
@@ -294,6 +296,7 @@ class DualPodsBenchmark:
                 "success": success
             }
             self.results.append(result)
+            self.logger.info(f"Scaling 1->2 (Again) Status: {result['success']}")
 
         finally:
             # Delete the YAML resources from the cluster
