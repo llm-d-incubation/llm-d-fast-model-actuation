@@ -120,7 +120,6 @@ class DualPodsBenchmark:
 
         return rs_name_yaml
 
-
     def run_benchmark(
         self, iterations: int = 1, timeout: int = 1000, scenario: str = "baseline"
     ) -> List[Dict[str, Any]]:
@@ -160,7 +159,7 @@ class DualPodsBenchmark:
                     self.k8_ops.apply_yaml(request_yaml)
 
                     # Check for pod readiness.
-                    rq_ready, prv_ready, prv_mode = self.k8_ops.wait_for_dual_pods_ready(
+                    rq_ready, prv_mode = self.k8_ops.wait_for_dual_pods_ready(
                         ns, rs_name, timeout
                     )
 
@@ -169,7 +168,6 @@ class DualPodsBenchmark:
                         "iteration": i + 1,
                         "scenario": scenario,
                         "rq_time": rq_ready,
-                        "prv_time": prv_ready,
                         "availability_mode": prv_mode,
                         "success": True,
                     }
@@ -179,7 +177,6 @@ class DualPodsBenchmark:
                         "iteration": i + 1,
                         "scenario": scenario,
                         "rq_time": None,
-                        "prv_time": None,
                         "availability_mode": "No Server Providing Pod Available",
                         "success": False,
                         "error": e.__str__(),
@@ -199,7 +196,9 @@ class DualPodsBenchmark:
 
         return self.results
 
-    def _run_scaling_scenario(self, ns: str, yaml_file: str, timeout: int) -> List[Dict[str, Any]]:
+    def _run_scaling_scenario(
+        self, ns: str, yaml_file: str, timeout: int
+    ) -> List[Dict[str, Any]]:
         """Run the scaling scenario: 0→1, 1→2, 2→1, 1→2 replica scaling."""
         self.results = []
 
@@ -217,7 +216,7 @@ class DualPodsBenchmark:
             self.logger.info("=== Scaling from 0 to 1 replica ===")
             self.k8_ops.scale_replicaset(request_yaml, 1)
 
-            rq_ready, prv_ready, prv_mode = self.k8_ops.wait_for_dual_pods_ready(
+            rq_ready, prv_mode = self.k8_ops.wait_for_dual_pods_ready(
                 ns, rs_name, timeout
             )
 
@@ -226,9 +225,8 @@ class DualPodsBenchmark:
                 "scenario": "scaling",
                 "phase": "0_to_1",
                 "rq_time": rq_ready,
-                "prv_time": prv_ready,
                 "availability_mode": prv_mode,
-                "success": rq_ready is not None and prv_ready is not None
+                "success": rq_ready is not None,
             }
             self.results.append(result)
             self.logger.info(f"Scaling 0->1 Status: {result['success']}")
@@ -236,7 +234,7 @@ class DualPodsBenchmark:
             self.logger.info("=== Scaling from 1 to 2 replicas ===")
             self.k8_ops.scale_replicaset(request_yaml, 2)
 
-            rq_ready, prv_ready, prv_mode = self.k8_ops.wait_for_dual_pods_ready(
+            rq_ready, prv_mode = self.k8_ops.wait_for_dual_pods_ready(
                 ns, rs_name, timeout, 2
             )
 
@@ -245,9 +243,8 @@ class DualPodsBenchmark:
                 "scenario": "scaling",
                 "phase": "1_to_2",
                 "rq_time": rq_ready,
-                "prv_time": prv_ready,
                 "availability_mode": prv_mode,
-                "success": rq_ready is not None and prv_ready is not None
+                "success": rq_ready is not None,
             }
             self.results.append(result)
             self.logger.info(f"Scaling 1->2 Status: {result['success']}")
@@ -255,23 +252,25 @@ class DualPodsBenchmark:
             self.logger.info("=== Scaling from 2 to 1 replica ===")
             self.k8_ops.scale_replicaset(request_yaml, 1)
 
-            # Slow down to ensure any goner requester pods do not taint number of initial
-            # ready pods for the scale up from 1-2 again.
+            # Slow down to ensure any goner requester pods do not taint number of
+            # initial ready pods for the scale up from 1-2 again.
             slowdown = 10
-            self.logger.info(f"Slowing down by {slowdown} secs for stale pods to go away")
+            self.logger.info(
+                f"Slowing down by {slowdown} secs for stale pods to go away"
+            )
             sleep(slowdown)
 
             self.logger.info("=== Scaling from 1 to 2 replicas (again) ===")
             self.k8_ops.scale_replicaset(request_yaml, 2)
 
             try:
-                rq_ready, prv_ready, prv_mode = self.k8_ops.wait_for_dual_pods_ready(
+                rq_ready, prv_mode = self.k8_ops.wait_for_dual_pods_ready(
                     ns, rs_name, timeout, 2
                 )
-                success = rq_ready is not None and prv_ready is not None
+                success = rq_ready is not None
             except TimeoutError:
                 self.logger.warning("Scale up timed out")
-                rq_ready, prv_ready, prv_mode = None, None, "timeout"
+                rq_ready, prv_mode = None, "timeout"
                 success = False
 
             result = {
@@ -279,9 +278,8 @@ class DualPodsBenchmark:
                 "scenario": "scaling",
                 "phase": "1_to_2_again",
                 "rq_time": rq_ready,
-                "prv_time": prv_ready,
                 "availability_mode": prv_mode,
-                "success": success
+                "success": success,
             }
             self.results.append(result)
             self.logger.info(f"Scaling 1->2 (Again) Status: {result['success']}")
@@ -313,15 +311,11 @@ class DualPodsBenchmark:
         rq_times = [
             run["rq_time"] for run in success_runs if run["rq_time"] is not None
         ]
-        prv_times = [
-            run["prv_time"] for run in success_runs if run["prv_time"] is not None
-        ]
-
         # Compute the number of pods awoken.
         hits = len([run for run in success_runs if run["availability_mode"] == "Hit"])
         hit_runs = [run for run in success_runs if run["availability_mode"] == "Hit"]
-        hit_prv_times = [
-            run["prv_time"] for run in hit_runs if run["prv_time"] is not None
+        hit_rq_times = [
+            run["rq_time"] for run in hit_runs if run["rq_time"] is not None
         ]
 
         summary = {
@@ -333,17 +327,15 @@ class DualPodsBenchmark:
             "rq_min": min(rq_times) if rq_times else None,
             "rq_max": max(rq_times) if rq_times else None,
             "rq_avg": (sum(rq_times) / len(rq_times) if rq_times else None),
-            "prv_min": min(prv_times) if prv_times else None,
-            "prv_max": max(prv_times) if prv_times else None,
-            "prv_avg": (sum(prv_times) / len(prv_times) if prv_times else None),
-            "hit_prv_min": min(hit_prv_times) if hit_prv_times else None,
-            "hit_prv_max": max(hit_prv_times) if hit_prv_times else None,
-            "hit_prv_avg": (sum(hit_prv_times) / len(hit_prv_times) if hit_prv_times else None),
+            "hit_prv_min": min(hit_rq_times) if hit_rq_times else None,
+            "hit_prv_max": max(hit_rq_times) if hit_rq_times else None,
+            "hit_prv_avg": (
+                sum(hit_rq_times) / len(hit_rq_times) if hit_rq_times else None
+            ),
             "all_results": self.results,
         }
 
         return summary
-
 
     def pretty_print_results(self):
         """Log the results in a human readable format."""
@@ -356,9 +348,6 @@ class DualPodsBenchmark:
         rq_min = summary["rq_min"]
         rq_max = summary["rq_max"]
         rq_avg = summary["rq_avg"]
-        prv_min = summary["prv_min"]
-        prv_max = summary["prv_max"]
-        prv_avg = summary["prv_avg"]
         hit_prv_min = summary["hit_prv_min"]
         hit_prv_max = summary["hit_prv_max"]
         hit_prv_avg = summary["hit_prv_avg"]
@@ -372,16 +361,16 @@ class DualPodsBenchmark:
         run_str += f"Failed Runs: {failed_runs}\n"
         rq_stats = f"Requester Pods \n\tMin: {rq_min}s, \n\tMax: {rq_max}s"
         rq_stats += f"\n\tAverage: {rq_avg}s\n"
-        prv_stats = f"Provider Pods \n\tMin: {prv_min}s, \n\tMax: {prv_max}s"
-        prv_stats += f"\n\tAverage: {prv_avg}s\n"
         avail_stats = f"Hits: {hits}/{success_runs} ({hit_percent}%)\n"
 
         if hits > 0:
-            hit_stats = f"Hit Wake-up Times \n\tMin: {hit_prv_min}s, \n\tMax: {hit_prv_max}s"
+            hit_stats = (
+                f"Hit Wake-up Times \n\tMin: {hit_prv_min}s, \n\tMax: {hit_prv_max}s"
+            )
             hit_stats += f"\n\tAverage: {hit_prv_avg}s\n"
             avail_stats += hit_stats
 
-        summary_str = "".join([run_str, rq_stats, prv_stats, avail_stats])
+        summary_str = "".join([run_str, rq_stats, avail_stats])
         self.logger.info(summary_str)
 
     def _cleanup_intermediate_files(self):
@@ -399,7 +388,9 @@ class DualPodsBenchmark:
                 Path(template_file).unlink(missing_ok=True)
                 self.logger.debug(f"Cleaned up template file: {template_file}")
             except Exception as e:
-                self.logger.warning(f"Failed to clean up template file {template_file}: {e}")
+                self.logger.warning(
+                    f"Failed to clean up template file {template_file}: {e}"
+                )
 
     def cleanup_resources(self):
         """Clean up any remaining resources in kind or remote cluster."""
@@ -422,8 +413,8 @@ if __name__ == "__main__":
     # Run example benchmarks
     for benchmark in all_benchmarks:
         # Run baseline scenario
-        #results = benchmark.run_benchmark(4, scenario="baseline")
-        #benchmark.pretty_print_results()
+        # results = benchmark.run_benchmark(4, scenario="baseline")
+        # benchmark.pretty_print_results()
 
         # Run scaling scenario
         results = benchmark.run_benchmark(1, scenario="scaling")

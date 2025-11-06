@@ -52,6 +52,8 @@ HIT_MODE = "Hit"
 
 # Constants for pod counts
 DUAL_POD_TOTAL = 2
+DUAL_LABEL_KEY = "dual-pods.llm-d.ai/dual"
+REQUESTER_PATCH_ANNOTATION = "dual-pod.llm-d.ai/server-patch"
 
 
 # ---------------- Helper functions ----------------
@@ -108,7 +110,7 @@ def wait_for_dual_pods_ready(
 
     # Initialize the variables to be returned
     rq_ready = None
-    prv_ready = None
+    # prv_ready = None
     prv_mode = COLD_START_MODE
 
     # Track pods that were already ready when we started watching
@@ -117,10 +119,15 @@ def wait_for_dual_pods_ready(
         # Get initial state of pods
         pods = v1.list_namespaced_pod(namespace=namespace).items
         for pod in pods:
-            if rs_name in pod.metadata.name and check_ready(pod):
-                initial_ready_pods.add(pod.metadata.name)
-                # Add them to ready pods for total cardinality of expected pods.
-                ready_pods.add(pod.metadata.name)
+            ex_podname = pod.metadata.name
+            pod_annotations = pod.metadata.annotations
+            is_requester = REQUESTER_PATCH_ANNOTATION in pod_annotations
+            if rs_name in ex_podname and check_ready(pod) and is_requester:
+                initial_ready_pods.add(ex_podname)
+
+                # Add them to ready pods for total cardinality of expected replicas.
+                ready_pods.add(ex_podname)
+                logger.info(f"Initially ready pod {ex_podname}")
         logger.info(f"Pods already ready at start: {initial_ready_pods}")
     except Exception as e:
         logger.warning(f"Could not get initial pod state: {e}")
@@ -149,54 +156,38 @@ def wait_for_dual_pods_ready(
                 labels = pod.metadata.labels
 
                 # Filter the requester pods.
-                if (rs_name in podname) and (suffix not in podname):
+                is_requester = REQUESTER_PATCH_ANNOTATION in pod.metadata.annotations
+                if (rs_name in podname) and is_requester:
                     logger.info(f"Checking Readiness of Requester Pod: {podname}")
-                    if (
-                        check_ready(pod)
-                        and (podname not in ready_pods)
-                        and (podname not in initial_ready_pods)
-                    ):
+                    if check_ready(pod):
                         rq_ready = int(perf_counter() - start)
                         ready_pods.add(podname)
                         logger.info(f"Requester Pod {podname} ready after {rq_ready}s")
                         logger.info(f"\nUpdated ready pods {ready_pods}\n")
 
-                # Filter any provider pods that are bound to a requester pod.
-                elif suffix in podname and "dual-pods.llm-d.ai/dual" in labels:
-
-                    # Get the server-requesting it is bound to, if any.
-                    dual_pod = labels["dual-pods.llm-d.ai/dual"]
-                    logger.info(
-                        f"Checking Ready of Provider for Pair <{dual_pod}>:<{podname}>"
-                    )
-
-                    # Set the return variables for the ready pod.
-                    if (
-                        check_ready(pod)
-                        and (podname not in ready_pods)
-                        and (podname not in initial_ready_pods)
-                    ):
-                        binding_match = rs_name in dual_pod and rs_name in podname
+                        # Checking availability mode.
+                        dual_pod = labels[DUAL_LABEL_KEY]
+                        binding_match = podname in dual_pod
                         if binding_match:
-                            prv_ready = int(perf_counter() - start)
+                            # prv_ready = int(perf_counter() - start)
                             ready_pods.add(podname)
                             prv_mode = COLD_START_MODE
                             logger.info(
                                 f"{dual_pod}:{podname} bound through a Cold start"
                             )
-                        elif not binding_match:
-                            prv_ready = int(perf_counter() - start)
+                        else:
+                            # prv_ready = int(perf_counter() - start)
                             ready_pods.add(podname)
                             prv_mode = HIT_MODE
                             logger.info(f"{dual_pod}:{podname} bound through a Hit")
 
-                if len(ready_pods) == DUAL_POD_TOTAL * expected_replicas:
+                if len(ready_pods) == expected_replicas:
                     end = perf_counter()
                     w.stop()
                     logger.info(
                         f"✅ All pods {ready_pods} Ready after {end - start:.2f}s"
                     )
-                    return rq_ready, prv_ready, prv_mode
+                    return rq_ready, prv_mode
 
             elapsed = perf_counter() - start
 
