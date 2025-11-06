@@ -101,8 +101,12 @@ def parse_request_args():
     return args
 
 
-def replace_repo_variable(
-    requester_image_repo: str, image_tag: str, request_yaml_template: str
+def replace_repo_variables(
+    requester_image_repo: str,
+    image_tag: str,
+    request_yaml_template: str,
+    model_registry: str = "ibm-granite",
+    model_repo: str = "granite-3.3-2b-instruct",
 ):
     """
     Replace the variable for the inference server container image.
@@ -111,6 +115,8 @@ def replace_repo_variable(
     :param image_tag: The particular tag to use for the container image.
     :param request_yaml_template: The local path for the inference server request
                                   template YAML file.
+    :param model_registry: The name of the model registry to insert.
+    :param model_repo: The name of the model repository to insert.
     """
     # Check that yaml path exists before invoking sed.
     request_yaml_path = Path(request_yaml_template)
@@ -118,9 +124,12 @@ def replace_repo_variable(
         raise FileNotFoundError(f"{request_yaml_template} path does not exist!")
 
     # Invoke the replacement in the template for redirection.
-    sed_script = "s#${CONTAINER_IMG_REG}#" + requester_image_repo + "#\n"
+    sed_script = "s#${MODEL_REGISTRY}#" + model_registry + "#\n"
+    sed_script += "s#${MODEL_REPO}#" + model_repo + "#\n"
+    sed_script += "s#${CONTAINER_IMG_REG}#" + requester_image_repo + "#\n"
+    sed_script += "s#${CONTAINER_IMG_REG}#" + requester_image_repo + "#\n"
     sed_script += "s#${CONTAINER_IMG_VERSION}#" + image_tag + "#"
-    updated_request_file = "inf-server-request-template" + str(uuid4()) + ".yaml"
+    updated_request_file = "inf-server-request-template-" + str(uuid4()) + ".yaml"
     updated_request_file_path = Path(updated_request_file)
     with Path(updated_request_file_path).open(mode="wb") as yaml_fd:
         invoke_shell(

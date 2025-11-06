@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional
 from kube_ops import KindKubernetesOps, RemoteKubernetesOps, SimKubernetesOps
 
 # Local imports
-from utils import BaseLogger, parse_request_args, replace_repo_variable
+from utils import BaseLogger, parse_request_args, replace_repo_variables
 
 
 class DualPodsBenchmark:
@@ -90,7 +90,7 @@ class DualPodsBenchmark:
         requester_img_tag = all_args.tag
 
         # Generate the request YAML from template and image details.
-        request_yaml_file = replace_repo_variable(
+        request_yaml_file = replace_repo_variables(
             requester_img, requester_img_tag, yaml_template
         )
 
@@ -139,9 +139,26 @@ class DualPodsBenchmark:
         return self._run_standard_scenario(iterations, timeout, scenario, ns, yaml_file)
 
     def _run_standard_scenario(
-        self, iterations: int, timeout: int, scenario: str, ns: str, yaml_file: str
+        self,
+        iterations: int,
+        timeout: int,
+        scenario: str,
+        ns: str,
+        yaml_file: str,
+        rs_name_prefix: str = "my-request",
     ) -> List[Dict[str, Any]]:
-        """Run the standard benchmark scenario with multiple iterations."""
+        """
+        Run the standard benchmark scenario with multiple iterations.
+        :param iterations: The number of iterations to execute for the scenario.
+        :param timeout: The max time to allocate for all pods to be checked.
+        :param scenario: Externally defined details on the scenario.
+        :param ns: The namespace in which to execute the scenario.
+        :param yaml_file: The YAML template to use for the scenario.
+        :param rs_name_prefix: The externally defined prefix to attach to each
+        replicaset name
+
+        :return: A list of the results for each iteration of the scenario.
+        """
         self.results = []
         try:
             for i in range(iterations):
@@ -149,7 +166,7 @@ class DualPodsBenchmark:
                 self.logger.info(f"Running iteration {iter_num}")
 
                 # Generate a unique replicaset YAML for the iteration.
-                rs_name = "my-request-" + f"{iter_num}-" + str(int(time()))
+                rs_name = rs_name_prefix + f"{iter_num}-" + str(int(time()))
                 self.logger.info(f"ReplicaSet Name: {rs_name}")
                 request_yaml = self.create_request_yaml(rs_name, yaml_file)
                 self.intermediate_files.append(request_yaml)
