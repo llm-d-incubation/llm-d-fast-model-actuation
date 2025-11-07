@@ -77,8 +77,7 @@ def run_new_variant_scenario(
         )
 
         # Generate a unique replicaset YAML for a particular model.
-        rs_prefix = "model-variant-request-"
-        rs_prefix += f"{model_registry}-" + "".join(model_repo.split("-")[2:]) + "-"
+        rs_prefix = "model-request"
         model_scenario = "variant-" + model_registry + "-" + model_repo
         results = benchmark._run_standard_scenario(
             1,
