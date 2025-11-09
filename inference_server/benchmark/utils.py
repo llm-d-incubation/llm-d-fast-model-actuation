@@ -18,6 +18,7 @@ from logging import DEBUG, INFO, FileHandler, Formatter, StreamHandler, getLogge
 from os import getenv
 from pathlib import Path
 from subprocess import run as invoke_shell
+from time import time
 from uuid import uuid4
 
 # ---------------- Logging setup ----------------
@@ -25,7 +26,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 
-file_handler = logging.FileHandler("metrics.log")
+file_handler = logging.FileHandler(f"metrics{int(time())}.log")
 file_handler.setLevel(logging.DEBUG)
 file_handler.setFormatter(formatter)
 
@@ -62,6 +63,12 @@ def parse_request_args():
         type=str,
         default="app=dp-example",
         help="Label selector for server-requesting pod",
+    )
+    parser.add_argument(
+        "--cleanup",
+        type=bool,
+        default=True,
+        help="Whether to clean up provider pods after benchmark completion",
     )
 
     # Check for a container image env variables before adding to the parser.
