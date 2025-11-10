@@ -336,7 +336,24 @@ information tacked on by the dual-pods controller.
 kubectl get pods -o 'custom-columns=NAME:.metadata.name,PHASE:.status.phase,COND2:.status.conditions[2].type,VAL2:.status.conditions[2].status,DUAL:.metadata.labels.dual-pods\.llm-d\.ai/dual,GPUS:.metadata.annotations.dual-pods\.llm-d\.ai/accelerators,SLEEPING:.metadata.labels.dual-pods\.llm-d\.ai/sleeping'
 
 
-kubectl get pods -L dual-pods.llm-d.ai/dual
+kubectl get pods -L dual-pods.llm-d.ai/dual,dual-pods.llm-d.ai/sleeping
+```
+
+The following command will query Prometheus metrics from the nvidia
+infrastructure in an OpenShift cluster to produce a listing that shows
+a little information about each GPU. But beware, experience shows that
+the "Assoc" field is flaky, even without the subterfuge of the
+dual-pods controller in action. This requires you to set a shell
+variable named `cluster_domain` to the domain used for external access
+to applications in your cluster (i.e., where the Ingress/Route
+listener is listening).
+
+```shell
+curl -sSkG \
+  -H "Authorization: Bearer $(oc whoami -t)" \
+  --data-urlencode query=DCGM_FI_DEV_FB_USED \
+  https://prometheus-k8s-openshift-monitoring.apps.$cluster_domain/api/v1/query \
+  | jq -c '.data.result[] | {Hostname: .metric.Hostname, GPU: .metric.gpu, ID: .metric.UUID, Assoc: .metric.exported_namespace!=null, Mem: .value[1]}' | sort
 ```
 
 ### Delete server-requesting Pod
