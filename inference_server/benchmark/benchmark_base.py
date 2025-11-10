@@ -250,7 +250,7 @@ class DualPodsBenchmark:
                 self.k8_ops.scale_replicaset(request_yaml, 1)
 
                 rq_ready, prv_mode, provider_pod_name = self.k8_ops.wait_for_dual_pods_ready(
-                    ns, rs_name, timeout
+                    ns, rs_name, timeout, 1
                 )
                 # Track provider pods created in cold start mode for cleanup
                 if prv_mode == "Cold" and provider_pod_name:
@@ -463,5 +463,5 @@ if __name__ == "__main__":
         # benchmark.pretty_print_results()
 
         # Run scaling scenario
-        results = benchmark.run_benchmark(1, scenario="scaling")
+        results = benchmark.run_benchmark(2, scenario="scaling")
         benchmark.pretty_print_results()
