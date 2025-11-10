@@ -14,6 +14,8 @@
 
 """
 Unit tests for Multi-Instance vLLM Launcher
+Run as:
+python -m pytest tests/test_launcher.py -v
 """
 
 from unittest.mock import patch
@@ -520,6 +522,3 @@ class TestHelperFunctions:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
-
-# Run as:
-# python -m pytest tests/test_launcher.py -v
