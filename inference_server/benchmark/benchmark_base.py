@@ -79,7 +79,7 @@ class DualPodsBenchmark:
         pretty_print_str = "Namespace: {} \n".format(self.parsed_inputs[0])
         pretty_print_str += "Request YAML File: {}\n".format(self.parsed_inputs[1])
         pretty_print_str += "Requester Pod Label: {} \n".format(self.parsed_inputs[2])
-        pretty_print_str += "Requester Pod Image: {}".format(self.parsed_inputs[3])
+        pretty_print_str += "Requester Pod Image: {} \n".format(self.parsed_inputs[3])
         pretty_print_str += "Cleanup all pods at end of run: {}".format(self.parsed_inputs[4])
         return pretty_print_str
 
@@ -149,6 +149,7 @@ class DualPodsBenchmark:
         scenario: str,
         ns: str,
         yaml_file: str,
+        cleanup: bool = True,
         rs_name_prefix: str = "my-request",
     ) -> List[Dict[str, Any]]:
         """
@@ -180,8 +181,8 @@ class DualPodsBenchmark:
                     self.k8_ops.apply_yaml(request_yaml)
 
                     # Check for pod readiness.
-                    rq_ready, prv_mode, provider_pod_name = self.k8_ops.wait_for_dual_pods_ready(
-                        ns, rs_name, timeout
+                    rq_ready, prv_mode, provider_pod_name, node_name, accelerator_info = self.k8_ops.wait_for_dual_pods_ready(
+                        ns, rs_name, timeout, 1
                     )
                     # Track provider pods created in cold start mode for cleanup
                     if prv_mode == "Cold" and provider_pod_name:
@@ -249,48 +250,74 @@ class DualPodsBenchmark:
                 self.logger.debug("=== Scaling from 0 to 1 replica ===")
                 self.k8_ops.scale_replicaset(request_yaml, 1)
 
-                rq_ready, prv_mode, provider_pod_name = self.k8_ops.wait_for_dual_pods_ready(
-                    ns, rs_name, timeout, 1
-                )
-                # Track provider pods created in cold start mode for cleanup
-                if prv_mode == "Cold" and provider_pod_name:
-                    if not hasattr(self, 'provider_pods'):
-                        self.provider_pods = []
-                    self.provider_pods.append(provider_pod_name)
-                    self.logger.debug(f"Added provider pod {provider_pod_name} to cleanup list")
+                try:
+                    rq_ready, prv_mode, provider_pod_name, node_name, accelerator_info = self.k8_ops.wait_for_dual_pods_ready(
+                        ns, rs_name, timeout, 1
+                    )
+                    # Track provider pods created in cold start mode for cleanup
+                    if prv_mode == "Cold" and provider_pod_name:
+                        if not hasattr(self, 'provider_pods'):
+                            self.provider_pods = []
+                        self.provider_pods.append(provider_pod_name)
+                        self.logger.debug(f"Added provider pod {provider_pod_name} to cleanup list")
 
-                result = {
-                    "iteration": i + 1,
-                    "scenario": "scaling",
-                    "phase": "0_to_1",
-                    "rq_time": rq_ready,
-                    "availability_mode": prv_mode,
-                    "success": rq_ready is not None,
-                }
+                    result = {
+                        "iteration": i + 1,
+                        "scenario": "scaling",
+                        "phase": "0_to_1",
+                        "rq_time": rq_ready,
+                        "availability_mode": prv_mode,
+                        "success": rq_ready is not None,
+                    }
+                except TimeoutError as e:
+                    self.logger.warning(f"Scaling 0->1 timed out for iteration {iter_num}: {e}")
+                    result = {
+                        "iteration": i + 1,
+                        "scenario": "scaling",
+                        "phase": "0_to_1",
+                        "rq_time": None,
+                        "availability_mode": "timeout",
+                        "success": False,
+                        "error": str(e),
+                    }
+
                 self.results.append(result)
                 self.logger.info(f"Scaling 0->1 Status: {result['success']}")
 
                 self.logger.debug("=== Scaling from 1 to 2 replicas ===")
                 self.k8_ops.scale_replicaset(request_yaml, 2)
 
-                rq_ready, prv_mode, provider_pod_name = self.k8_ops.wait_for_dual_pods_ready(
-                    ns, rs_name, timeout, 2
-                )
-                # Track provider pods created in cold start mode for cleanup
-                if prv_mode == "Cold" and provider_pod_name:
-                    if not hasattr(self, 'provider_pods'):
-                        self.provider_pods = []
-                    self.provider_pods.append(provider_pod_name)
-                    self.logger.debug(f"Added provider pod {provider_pod_name} to cleanup list")
+                try:
+                    rq_ready, prv_mode, provider_pod_name, node_name, accelerator_info = self.k8_ops.wait_for_dual_pods_ready(
+                        ns, rs_name, timeout, 2
+                    )
+                    # Track provider pods created in cold start mode for cleanup
+                    if prv_mode == "Cold" and provider_pod_name:
+                        if not hasattr(self, 'provider_pods'):
+                            self.provider_pods = []
+                        self.provider_pods.append(provider_pod_name)
+                        self.logger.debug(f"Added provider pod {provider_pod_name} to cleanup list")
 
-                result = {
-                    "iteration": i + 1,
-                    "scenario": "scaling",
-                    "phase": "1_to_2",
-                    "rq_time": rq_ready,
-                    "availability_mode": prv_mode,
-                    "success": rq_ready is not None,
-                }
+                    result = {
+                        "iteration": i + 1,
+                        "scenario": "scaling",
+                        "phase": "1_to_2",
+                        "rq_time": rq_ready,
+                        "availability_mode": prv_mode,
+                        "success": rq_ready is not None,
+                    }
+                except TimeoutError as e:
+                    self.logger.warning(f"Scaling 1->2 timed out for iteration {iter_num}: {e}")
+                    result = {
+                        "iteration": i + 1,
+                        "scenario": "scaling",
+                        "phase": "1_to_2",
+                        "rq_time": None,
+                        "availability_mode": "timeout",
+                        "success": False,
+                        "error": str(e),
+                    }
+
                 self.results.append(result)
                 self.logger.info(f"Scaling 1->2 Status: {result['success']}")
 
@@ -305,24 +332,37 @@ class DualPodsBenchmark:
                 self.logger.debug("=== Scaling from 1 to 2 replicas (again) ===")
                 self.k8_ops.scale_replicaset(request_yaml, 2)
 
-                rq_ready, prv_mode, provider_pod_name = self.k8_ops.wait_for_dual_pods_ready(
-                    ns, rs_name, timeout, 2
-                )
-                # Track provider pods created in cold start mode for cleanup
-                if prv_mode == "Cold" and provider_pod_name:
-                    if not hasattr(self, 'provider_pods'):
-                        self.provider_pods = []
-                    self.provider_pods.append(provider_pod_name)
-                    self.logger.debug(f"Added provider pod {provider_pod_name} to cleanup list")
+                try:
+                    rq_ready, prv_mode, provider_pod_name, node_name, accelerator_info = self.k8_ops.wait_for_dual_pods_ready(
+                        ns, rs_name, timeout, 2
+                    )
+                    # Track provider pods created in cold start mode for cleanup
+                    if prv_mode == "Cold" and provider_pod_name:
+                        if not hasattr(self, 'provider_pods'):
+                            self.provider_pods = []
+                        self.provider_pods.append(provider_pod_name)
+                        self.logger.debug(f"Added provider pod {provider_pod_name} to cleanup list")
 
-                result = {
-                    "iteration": iter_num,
-                    "scenario": "scaling",
-                    "phase": "1_to_2_again",
-                    "rq_time": rq_ready,
-                    "availability_mode": prv_mode,
-                    "success":  rq_ready is not None,
-                }
+                    result = {
+                        "iteration": iter_num,
+                        "scenario": "scaling",
+                        "phase": "1_to_2_again",
+                        "rq_time": rq_ready,
+                        "availability_mode": prv_mode,
+                        "success":  rq_ready is not None,
+                    }
+                except TimeoutError as e:
+                    self.logger.warning(f"Scaling 1->2 (again) timed out for iteration {iter_num}: {e}")
+                    result = {
+                        "iteration": iter_num,
+                        "scenario": "scaling",
+                        "phase": "1_to_2_again",
+                        "rq_time": None,
+                        "availability_mode": "timeout",
+                        "success": False,
+                        "error": str(e),
+                    }
+
                 self.results.append(result)
                 self.logger.info(f"Scaling 1->2 (Again) Status: {result['success']}")
 
@@ -459,9 +499,9 @@ if __name__ == "__main__":
     # Run example benchmarks
     for benchmark in all_benchmarks:
         # Run baseline scenario
-        # results = benchmark.run_benchmark(4, scenario="baseline")
+        # results = benchmark.run_benchmark(1, scenario="baseline", cleanup=False)
         # benchmark.pretty_print_results()
 
         # Run scaling scenario
-        results = benchmark.run_benchmark(2, scenario="scaling")
+        results = benchmark.run_benchmark(10, scenario="scaling", cleanup=True, timeout=400)
         benchmark.pretty_print_results()

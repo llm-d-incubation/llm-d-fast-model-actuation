@@ -121,6 +121,8 @@ def wait_for_dual_pods_ready(
     rq_ready = None
     # prv_ready = None
     prv_mode = COLD_START_MODE
+    node_name = None
+    accelerator_info = None
 
     # Track pods that were already ready when we started watching
     initial_ready_pods = set()
@@ -174,6 +176,10 @@ def wait_for_dual_pods_ready(
                         logger.info(f"Requester Pod {podname} ready after {rq_ready}s")
                         logger.info(f"\nUpdated ready pods {ready_pods}\n")
 
+                        # Capture node and accelerator info
+                        node_name = pod.spec.node_name if pod.spec else None
+                        accelerator_info = pod.metadata.annotations.get("dual-pods.llm-d.ai/accelerators") if pod.metadata.annotations else None
+
                         # Checking availability mode.
                         dual_pod = labels[DUAL_LABEL_KEY]
                         binding_match = podname in dual_pod
@@ -182,12 +188,12 @@ def wait_for_dual_pods_ready(
                             prv_mode = COLD_START_MODE
                             provider_pod_name = dual_pod
                             logger.info(
-                                f"{dual_pod}:{podname} bound through a Cold start"
+                                f"{dual_pod}:{podname} bound through a Cold start on node {node_name} with accelerator {accelerator_info}"
                             )
                         else:
                             ready_pods.add(podname)
                             prv_mode = HIT_MODE
-                            logger.info(f"{dual_pod}:{podname} bound through a Hit")
+                            logger.info(f"{dual_pod}:{podname} bound through a Hit on node {node_name} with accelerator {accelerator_info}")
 
                 if len(ready_pods) == expected_replicas:
                     end = perf_counter()
@@ -195,7 +201,7 @@ def wait_for_dual_pods_ready(
                     logger.info(
                         f"✅ All pods {ready_pods} Ready after {end - start:.2f}s"
                     )
-                    return rq_ready, prv_mode, provider_pod_name
+                    return rq_ready, prv_mode, provider_pod_name, node_name, accelerator_info
 
             elapsed = perf_counter() - start
 
@@ -385,7 +391,7 @@ class SimKubernetesOps(KubernetesOps):
         # Sleep a tiny amount to simulate async behavior.
         sleep(0.01)
 
-        return rq_delay, prv_delay, mode, None
+        return rq_delay, prv_delay, mode, None, None
 
     def delete_pod(self, namespace: str, pod_name: str) -> None:
         self.logger.info(f"[SIMULATED] Deleting pod {pod_name} in namespace {namespace}")
