@@ -440,7 +440,6 @@ class TestAPIEndpoints:
         mock_manager.stop_all_instances.return_value = {
             "status": "all_stopped",
             "stopped_instances": [],
-            "total_stopped": 2,
         }
 
         response = client.delete("/v2/vllm")
