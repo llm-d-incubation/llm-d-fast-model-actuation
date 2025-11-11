@@ -70,6 +70,12 @@ def parse_request_args():
         default=True,
         help="Whether to clean up provider pods after benchmark completion",
     )
+    parser.add_argument(
+        "--cluster-domain",
+        type=str,
+        default="fmaas-platform-eval.fmaas.res.ibm.com",
+        help="Cluster domain for Prometheus GPU metrics query",
+    )
 
     # Check for a container image env variables before adding to the parser.
     requester_img = getenv("CONTAINER_IMG_REG")

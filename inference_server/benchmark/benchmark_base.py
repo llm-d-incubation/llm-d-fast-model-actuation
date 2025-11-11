@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
+
 # Standard imports
 from pathlib import Path
 from subprocess import run as invoke_shell
@@ -73,6 +75,7 @@ class DualPodsBenchmark:
         input_str = self.describe_inputs()
         self.logger.info(input_str)
         self.cleanup_enabled = self.parsed_inputs[4]
+        self.cluster_domain = self.parsed_inputs[5]
 
     def describe_inputs(self):
         """Get pretty print version of the user inputs"""
@@ -80,7 +83,9 @@ class DualPodsBenchmark:
         pretty_print_str += "Request YAML File: {}\n".format(self.parsed_inputs[1])
         pretty_print_str += "Requester Pod Label: {} \n".format(self.parsed_inputs[2])
         pretty_print_str += "Requester Pod Image: {} \n".format(self.parsed_inputs[3])
-        pretty_print_str += "Cleanup all pods at end of run: {}".format(self.parsed_inputs[4])
+        pretty_print_str += "Cleanup all pods at end of run: {}".format(
+            self.parsed_inputs[4]
+        )
         return pretty_print_str
 
     def parse_inputs(self) -> tuple:
@@ -101,7 +106,18 @@ class DualPodsBenchmark:
         # Track the template file for cleanup
         self.template_files.append(str(request_yaml_file))
 
-        return ns, request_yaml_file, requester_pod_label, requester_img_tag, cleanup
+        cluster_domain = (
+            all_args.cluster_domain if hasattr(all_args, "cluster_domain") else None
+        )
+
+        return (
+            ns,
+            request_yaml_file,
+            requester_pod_label,
+            requester_img_tag,
+            cleanup,
+            cluster_domain,
+        )
 
     def create_request_yaml(self, rs_name: str, yaml_template_file: str) -> str:
         """
@@ -125,7 +141,11 @@ class DualPodsBenchmark:
         return rs_name_yaml
 
     def run_benchmark(
-        self, iterations: int = 1, timeout: int = 1000, scenario: str = "baseline", cleanup: bool = True
+        self,
+        iterations: int = 1,
+        timeout: int = 1000,
+        scenario: str = "baseline",
+        cleanup: bool = True,
     ) -> List[Dict[str, Any]]:
         """
         Run the benchmark.
@@ -135,12 +155,16 @@ class DualPodsBenchmark:
         :param scenario: Benchmark scenario ("baseline" or "scaling")
         :return: List of result dictionaries.
         """
-        ns, yaml_file, pod_label, image, cleanup = self.parsed_inputs
+        ns, yaml_file, pod_label, image, cleanup, cluster_domain = self.parsed_inputs
 
         if scenario == "scaling":
-            return self._run_scaling_scenario(ns, yaml_file, timeout, iterations, cleanup)
+            return self._run_scaling_scenario(
+                ns, yaml_file, timeout, iterations, cleanup
+            )
 
-        return self._run_standard_scenario(iterations, timeout, scenario, ns, yaml_file, cleanup)
+        return self._run_standard_scenario(
+            iterations, timeout, scenario, ns, yaml_file, cleanup
+        )
 
     def _run_standard_scenario(
         self,
@@ -177,19 +201,29 @@ class DualPodsBenchmark:
                 self.intermediate_files.append(request_yaml)
 
                 try:
+                    # Query GPU usage before iteration
+                    self.logger.info(f"=== GPU Usage Before Iteration {iter_num} ===")
+                    self.query_gpu_usage()
+
                     self.logger.debug(f"Applying YAML: {request_yaml}")
                     self.k8_ops.apply_yaml(request_yaml)
 
                     # Check for pod readiness.
-                    rq_ready, prv_mode, provider_pod_name, node_name, accelerator_info = self.k8_ops.wait_for_dual_pods_ready(
-                        ns, rs_name, timeout, 1
-                    )
+                    (
+                        rq_ready,
+                        prv_mode,
+                        provider_pod_name,
+                        node_name,
+                        accelerator_info,
+                    ) = self.k8_ops.wait_for_dual_pods_ready(ns, rs_name, timeout, 1)
                     # Track provider pods created in cold start mode for cleanup
                     if prv_mode == "Cold" and provider_pod_name:
-                        if not hasattr(self, 'provider_pods'):
+                        if not hasattr(self, "provider_pods"):
                             self.provider_pods = []
                         self.provider_pods.append(provider_pod_name)
-                        self.logger.debug(f"Added provider pod {provider_pod_name} to cleanup list")
+                        self.logger.debug(
+                            f"Added provider pod {provider_pod_name} to cleanup list"
+                        )
 
                     # Compile the result.
                     result = {
@@ -216,6 +250,7 @@ class DualPodsBenchmark:
                         self.cleanup_resources()
 
                 self.results.append(result)
+
         finally:
             # Clean up intermediate YAML files created during benchmark
             self._cleanup_intermediate_files()
@@ -227,7 +262,12 @@ class DualPodsBenchmark:
         return self.results
 
     def _run_scaling_scenario(
-        self, ns: str, yaml_file: str, timeout: int, iterations: int = 1, cleanup: bool = True
+        self,
+        ns: str,
+        yaml_file: str,
+        timeout: int,
+        iterations: int = 1,
+        cleanup: bool = True,
     ) -> List[Dict[str, Any]]:
         """Run the scaling scenario: 0→1, 1→2, 2→1, 1→2 replica scaling."""
         self.results = []
@@ -243,6 +283,12 @@ class DualPodsBenchmark:
                 request_yaml = self.create_request_yaml(rs_name, yaml_file)
                 self.intermediate_files.append(request_yaml)
 
+                # Query GPU usage before iteration
+                self.logger.info(
+                    f"=== GPU Usage Before Scaling Iteration {iter_num} ==="
+                )
+                self.query_gpu_usage()
+
                 # Apply the initial deployment at 0 replicas
                 self.logger.debug(f"Applying initial YAML: {request_yaml}")
                 self.k8_ops.apply_yaml(request_yaml)
@@ -251,18 +297,24 @@ class DualPodsBenchmark:
                 self.k8_ops.scale_replicaset(request_yaml, 1)
 
                 try:
-                    rq_ready, prv_mode, provider_pod_name, node_name, accelerator_info = self.k8_ops.wait_for_dual_pods_ready(
-                        ns, rs_name, timeout, 1
-                    )
+                    (
+                        rq_ready,
+                        prv_mode,
+                        provider_pod_name,
+                        node_name,
+                        accelerator_info,
+                    ) = self.k8_ops.wait_for_dual_pods_ready(ns, rs_name, timeout, 1)
                     # Track provider pods created in cold start mode for cleanup
                     if prv_mode == "Cold" and provider_pod_name:
-                        if not hasattr(self, 'provider_pods'):
+                        if not hasattr(self, "provider_pods"):
                             self.provider_pods = []
                         self.provider_pods.append(provider_pod_name)
-                        self.logger.debug(f"Added provider pod {provider_pod_name} to cleanup list")
+                        self.logger.debug(
+                            f"Added provider pod {provider_pod_name} to cleanup list"
+                        )
 
                     result = {
-                        "iteration": i + 1,
+                        "iteration": iter_num,
                         "scenario": "scaling",
                         "phase": "0_to_1",
                         "rq_time": rq_ready,
@@ -270,9 +322,11 @@ class DualPodsBenchmark:
                         "success": rq_ready is not None,
                     }
                 except TimeoutError as e:
-                    self.logger.warning(f"Scaling 0->1 timed out for iteration {iter_num}: {e}")
+                    self.logger.warning(
+                        f"Scaling 0->1 timed out for iteration {iter_num}: {e}"
+                    )
                     result = {
-                        "iteration": i + 1,
+                        "iteration": iter_num,
                         "scenario": "scaling",
                         "phase": "0_to_1",
                         "rq_time": None,
@@ -288,18 +342,24 @@ class DualPodsBenchmark:
                 self.k8_ops.scale_replicaset(request_yaml, 2)
 
                 try:
-                    rq_ready, prv_mode, provider_pod_name, node_name, accelerator_info = self.k8_ops.wait_for_dual_pods_ready(
-                        ns, rs_name, timeout, 2
-                    )
+                    (
+                        rq_ready,
+                        prv_mode,
+                        provider_pod_name,
+                        node_name,
+                        accelerator_info,
+                    ) = self.k8_ops.wait_for_dual_pods_ready(ns, rs_name, timeout, 2)
                     # Track provider pods created in cold start mode for cleanup
                     if prv_mode == "Cold" and provider_pod_name:
-                        if not hasattr(self, 'provider_pods'):
+                        if not hasattr(self, "provider_pods"):
                             self.provider_pods = []
                         self.provider_pods.append(provider_pod_name)
-                        self.logger.debug(f"Added provider pod {provider_pod_name} to cleanup list")
+                        self.logger.debug(
+                            f"Added provider pod {provider_pod_name} to cleanup list"
+                        )
 
                     result = {
-                        "iteration": i + 1,
+                        "iteration": iter_num,
                         "scenario": "scaling",
                         "phase": "1_to_2",
                         "rq_time": rq_ready,
@@ -307,9 +367,11 @@ class DualPodsBenchmark:
                         "success": rq_ready is not None,
                     }
                 except TimeoutError as e:
-                    self.logger.warning(f"Scaling 1->2 timed out for iteration {iter_num}: {e}")
+                    self.logger.warning(
+                        f"Scaling 1->2 timed out for iteration {iter_num}: {e}"
+                    )
                     result = {
-                        "iteration": i + 1,
+                        "iteration": iter_num,
                         "scenario": "scaling",
                         "phase": "1_to_2",
                         "rq_time": None,
@@ -333,15 +395,21 @@ class DualPodsBenchmark:
                 self.k8_ops.scale_replicaset(request_yaml, 2)
 
                 try:
-                    rq_ready, prv_mode, provider_pod_name, node_name, accelerator_info = self.k8_ops.wait_for_dual_pods_ready(
-                        ns, rs_name, timeout, 2
-                    )
+                    (
+                        rq_ready,
+                        prv_mode,
+                        provider_pod_name,
+                        node_name,
+                        accelerator_info,
+                    ) = self.k8_ops.wait_for_dual_pods_ready(ns, rs_name, timeout, 2)
                     # Track provider pods created in cold start mode for cleanup
                     if prv_mode == "Cold" and provider_pod_name:
-                        if not hasattr(self, 'provider_pods'):
+                        if not hasattr(self, "provider_pods"):
                             self.provider_pods = []
                         self.provider_pods.append(provider_pod_name)
-                        self.logger.debug(f"Added provider pod {provider_pod_name} to cleanup list")
+                        self.logger.debug(
+                            f"Added provider pod {provider_pod_name} to cleanup list"
+                        )
 
                     result = {
                         "iteration": iter_num,
@@ -349,10 +417,12 @@ class DualPodsBenchmark:
                         "phase": "1_to_2_again",
                         "rq_time": rq_ready,
                         "availability_mode": prv_mode,
-                        "success":  rq_ready is not None,
+                        "success": rq_ready is not None,
                     }
                 except TimeoutError as e:
-                    self.logger.warning(f"Scaling 1->2 (again) timed out for iteration {iter_num}: {e}")
+                    self.logger.warning(
+                        f"Scaling 1->2 (again) timed out for iteration {iter_num}: {e}"
+                    )
                     result = {
                         "iteration": iter_num,
                         "scenario": "scaling",
@@ -395,18 +465,48 @@ class DualPodsBenchmark:
         rq_times = [
             run["rq_time"] for run in success_runs if run["rq_time"] is not None
         ]
-        # Compute the number of pods awoken.
-        hits = len([run for run in success_runs if run["availability_mode"] == "Hit"])
-        hit_runs = [run for run in success_runs if run["availability_mode"] == "Hit"]
-        hit_rq_times = [
-            run["rq_time"] for run in hit_runs if run["rq_time"] is not None
-        ]
+
+        # For scaling scenarios, only count hits from the "1_to_2_again" phase
+        # as this is the only phase that can wake up sleeping provider pods
+        if any(run.get("scenario") == "scaling" for run in self.results):
+            scale_up_again_runs = [
+                run for run in success_runs if run.get("phase") == "1_to_2_again"
+            ]
+            hits = len(
+                [
+                    run
+                    for run in scale_up_again_runs
+                    if run["availability_mode"] == "Hit"
+                ]
+            )
+            hit_runs = [
+                run for run in scale_up_again_runs if run["availability_mode"] == "Hit"
+            ]
+            hit_rq_times = [
+                run["rq_time"] for run in hit_runs if run["rq_time"] is not None
+            ]
+            # Hit percentage is based on successful 1_to_2_again runs
+            hit_percent_base = len(scale_up_again_runs)
+        else:
+            # For non-scaling scenarios, use all successful runs
+            hits = len(
+                [run for run in success_runs if run["availability_mode"] == "Hit"]
+            )
+            hit_runs = [
+                run for run in success_runs if run["availability_mode"] == "Hit"
+            ]
+            hit_rq_times = [
+                run["rq_time"] for run in hit_runs if run["rq_time"] is not None
+            ]
+            hit_percent_base = len(success_runs)
 
         summary = {
             "total_runs": len(self.results),
             "successful_runs": len(success_runs),
             "hits": hits,
-            "hit_percent": int((hits / len(success_runs)) * 100) if success_runs else 0,
+            "hit_percent": (
+                int((hits / hit_percent_base) * 100) if hit_percent_base > 0 else 0
+            ),
             "failed_runs": len(self.results) - len(success_runs),
             "rq_min": min(rq_times) if rq_times else None,
             "rq_max": max(rq_times) if rq_times else None,
@@ -478,13 +578,64 @@ class DualPodsBenchmark:
 
     def cleanup_resources(self):
         """Clean up any remaining resources in kind or remote cluster."""
-        if hasattr(self, 'provider_pods'):
+        if hasattr(self, "provider_pods"):
             for provider_pod in self.provider_pods:
                 self.logger.debug(f"Cleaning up provider pod: {provider_pod}")
                 if self.parsed_inputs:
                     ns = self.parsed_inputs[0]
                     self.k8_ops.delete_pod(ns, provider_pod)
             self.provider_pods.clear()
+
+    def query_gpu_usage(self):
+        """Query GPU usage from Prometheus metrics in OpenShift cluster."""
+        cluster_domain = self.cluster_domain
+        if not cluster_domain:
+            self.logger.warning("cluster_domain not set, skipping GPU usage query")
+            return
+
+        try:
+            token_result = invoke_shell(
+                ["oc", "whoami", "-t"], capture_output=True, text=True, check=True
+            )
+            token = token_result.stdout.strip()
+
+            prometheus_url = (
+                f"https://prometheus-k8s-openshift-monitoring.apps."
+                f"{cluster_domain}/api/v1/query"
+            )
+            query_result = invoke_shell(
+                [
+                    "curl",
+                    "-sSkG",
+                    "-H",
+                    f"Authorization: Bearer {token}",
+                    "--data-urlencode",
+                    "query=DCGM_FI_DEV_FB_USED",
+                    prometheus_url,
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+            gpu_data = json.loads(query_result.stdout)
+            gpu_list = []
+            for result in gpu_data.get("data", {}).get("result", []):
+                gpu_info = {
+                    "Hostname": result["metric"].get("Hostname"),
+                    "GPU": result["metric"].get("gpu"),
+                    "ID": result["metric"].get("UUID"),
+                    "Assoc": result["metric"].get("exported_namespace") is not None,
+                    "Mem": result["value"][1] if len(result["value"]) > 1 else None,
+                }
+                gpu_list.append(gpu_info)
+
+            gpu_list.sort(key=lambda x: (x["Hostname"] or "", x["GPU"] or ""))
+            for gpu in gpu_list:
+                self.logger.info(f"GPU: {gpu}")
+
+        except Exception as e:
+            self.logger.warning(f"Failed to query GPU usage: {e}")
 
 
 if __name__ == "__main__":
@@ -503,5 +654,7 @@ if __name__ == "__main__":
         # benchmark.pretty_print_results()
 
         # Run scaling scenario
-        results = benchmark.run_benchmark(10, scenario="scaling", cleanup=True, timeout=400)
+        results = benchmark.run_benchmark(
+            10, scenario="scaling", cleanup=True, timeout=400
+        )
         benchmark.pretty_print_results()

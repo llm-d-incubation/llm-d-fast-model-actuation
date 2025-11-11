@@ -1,5 +1,6 @@
 # Standard imports.
 import logging
+from datetime import datetime
 from json import loads
 from pathlib import Path
 from time import time
@@ -15,7 +16,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 
-file_handler = logging.FileHandler("metrics.log")
+file_handler = logging.FileHandler(f"metrics-{datetime.now()}.log")
 file_handler.setLevel(logging.DEBUG)
 file_handler.setFormatter(formatter)
 

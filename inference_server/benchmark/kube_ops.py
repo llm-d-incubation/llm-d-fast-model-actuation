@@ -17,11 +17,12 @@ import logging
 
 # Standard imports.
 from abc import ABC, abstractmethod
+from datetime import datetime
 from logging import Logger
 from random import randint
 from subprocess import CalledProcessError
 from subprocess import run as invoke_shell
-from time import perf_counter, sleep, time
+from time import perf_counter, sleep
 from typing import Any, Dict, Optional
 
 # Third party imports.
@@ -34,7 +35,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 
-file_handler = logging.FileHandler(f"metrics{int(time())}.log")
+file_handler = logging.FileHandler(f"metrics-{datetime.now()}.log")
 file_handler.setLevel(logging.DEBUG)
 file_handler.setFormatter(formatter)
 
@@ -81,7 +82,15 @@ def scale_replicaset(yaml_file: str, replicas: int):
 def delete_pod(namespace: str, pod_name: str):
     """Delete a pod by name in the specified namespace."""
     invoke_shell(
-        ["kubectl", "delete", "pod", pod_name, "-n", namespace, "--ignore-not-found=true"],
+        [
+            "kubectl",
+            "delete",
+            "pod",
+            pod_name,
+            "-n",
+            namespace,
+            "--ignore-not-found=true",
+        ],
         check=False,
     )
 
@@ -178,7 +187,13 @@ def wait_for_dual_pods_ready(
 
                         # Capture node and accelerator info
                         node_name = pod.spec.node_name if pod.spec else None
-                        accelerator_info = pod.metadata.annotations.get("dual-pods.llm-d.ai/accelerators") if pod.metadata.annotations else None
+                        accelerator_info = (
+                            pod.metadata.annotations.get(
+                                "dual-pods.llm-d.ai/accelerators"
+                            )
+                            if pod.metadata.annotations
+                            else None
+                        )
 
                         # Checking availability mode.
                         dual_pod = labels[DUAL_LABEL_KEY]
@@ -188,12 +203,16 @@ def wait_for_dual_pods_ready(
                             prv_mode = COLD_START_MODE
                             provider_pod_name = dual_pod
                             logger.info(
-                                f"{dual_pod}:{podname} bound through a Cold start on node {node_name} with accelerator {accelerator_info}"
+                                f"{dual_pod}:{podname} bound through a Cold start on "
+                                f"node {node_name} with accelerator {accelerator_info}"
                             )
                         else:
                             ready_pods.add(podname)
                             prv_mode = HIT_MODE
-                            logger.info(f"{dual_pod}:{podname} bound through a Hit on node {node_name} with accelerator {accelerator_info}")
+                            logger.info(
+                                f"{dual_pod}:{podname} bound through a Hit on "
+                                f"node {node_name} with accelerator {accelerator_info}"
+                            )
 
                 if len(ready_pods) == expected_replicas:
                     end = perf_counter()
@@ -201,7 +220,13 @@ def wait_for_dual_pods_ready(
                     logger.info(
                         f"✅ All pods {ready_pods} Ready after {end - start:.2f}s"
                     )
-                    return rq_ready, prv_mode, provider_pod_name, node_name, accelerator_info
+                    return (
+                        rq_ready,
+                        prv_mode,
+                        provider_pod_name,
+                        node_name,
+                        accelerator_info,
+                    )
 
             elapsed = perf_counter() - start
 
@@ -231,7 +256,9 @@ class KubernetesOps(ABC):
         pass
 
     @abstractmethod
-    def wait_for_dual_pods_ready(self, ns: str, podname: str, timeout: int, expected_replicas: int = 1) -> tuple:
+    def wait_for_dual_pods_ready(
+        self, ns: str, podname: str, timeout: int, expected_replicas: int = 1
+    ) -> tuple:
         pass
 
     @abstractmethod
@@ -256,8 +283,12 @@ class KindKubernetesOps(KubernetesOps):
     def delete_yaml(self, yaml_file: str) -> None:
         delete_yaml_resources(yaml_file)
 
-    def wait_for_dual_pods_ready(self, ns: str, podname: str, timeout: int, expected_replicas: int) -> tuple:
-        return wait_for_dual_pods_ready(self.v1_api, ns, podname, timeout, expected_replicas)
+    def wait_for_dual_pods_ready(
+        self, ns: str, podname: str, timeout: int, expected_replicas: int
+    ) -> tuple:
+        return wait_for_dual_pods_ready(
+            self.v1_api, ns, podname, timeout, expected_replicas
+        )
 
     def delete_pod(self, namespace: str, pod_name: str) -> None:
         delete_pod(namespace, pod_name)
@@ -342,7 +373,12 @@ class RemoteKubernetesOps(KubernetesOps):
         self, ns: str, podname: str, timeout: int, expected_replicas: int
     ) -> tuple:
         return wait_for_dual_pods_ready(
-            self.v1_api, ns, podname, timeout, expected_replicas=expected_replicas, suffix="dual"
+            self.v1_api,
+            ns,
+            podname,
+            timeout,
+            expected_replicas=expected_replicas,
+            suffix="dual",
         )
 
     def delete_pod(self, namespace: str, pod_name: str) -> None:
@@ -370,7 +406,12 @@ class SimKubernetesOps(KubernetesOps):
         self.logger.info(f"[SIMULATED] Deleting resources from {yaml_file}")
 
     def wait_for_dual_pods_ready(
-        self, ns: str, podname: str, timeout: int, expected_replicas: int, context: Dict[str, Any] = None
+        self,
+        ns: str,
+        podname: str,
+        timeout: int,
+        expected_replicas: int,
+        context: Dict[str, Any] = None,
     ) -> tuple:
         # Simulate readiness time based on contextual delay or defaults.
         if context is not None and context["Delay"]:
@@ -394,4 +435,6 @@ class SimKubernetesOps(KubernetesOps):
         return rq_delay, prv_delay, mode, None, None
 
     def delete_pod(self, namespace: str, pod_name: str) -> None:
-        self.logger.info(f"[SIMULATED] Deleting pod {pod_name} in namespace {namespace}")
+        self.logger.info(
+            f"[SIMULATED] Deleting pod {pod_name} in namespace {namespace}"
+        )
