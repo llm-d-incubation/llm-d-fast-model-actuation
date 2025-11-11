@@ -85,6 +85,8 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	requesterRV := "(non existent)"
 	runnerRV := "(non existent)"
 	serverDat := ctl.getServerData(nodeDat, item.RequesterName, item.UID)
+	var requesterDeletionTimestamp, runnerDeletionTimestamp *metav1.Time
+	var requesterRCS, runnerRCS *reducedContainerState
 
 	requestingPod, err := ctl.podLister.Pods(ctl.namespace).Get(item.RequesterName)
 	if err != nil {
@@ -96,6 +98,8 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		}
 	} else {
 		requesterRV = requestingPod.ResourceVersion
+		requesterDeletionTimestamp = requestingPod.DeletionTimestamp
+		requesterRCS = getReducedInferenceContainerState(requestingPod)
 	}
 
 	var runningPod *corev1.Pod
@@ -108,6 +112,8 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	case 1:
 		runningPod = runningPodAnys[0].(*corev1.Pod)
 		runnerRV = runningPod.ResourceVersion
+		runnerDeletionTimestamp = runningPod.DeletionTimestamp
+		runnerRCS = getReducedInferenceContainerState(runningPod)
 		logger = logger.WithValues("runnerName", runningPod.Name)
 		ctx = klog.NewContext(urCtx, logger)
 		serverDat.RunningPodName = runningPod.Name
@@ -119,7 +125,12 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		return fmt.Errorf("found multiple bound server-runninng Pods: %v", runnerNames), false
 	}
 
-	logger.V(5).Info("Processing inference server", "requesterResourceVersion", requesterRV, "runnerResourceVersion", runnerRV)
+	logger.V(5).Info("Processing inference server",
+		"requesterResourceVersion", requesterRV, "requesterDeletionTimestamp", requesterDeletionTimestamp,
+		"requesterRCS", requesterRCS,
+		"runnerResourceVersion", runnerRV, "runnerDeletionTimestamp", runnerDeletionTimestamp,
+		"runnerRCS", runnerRCS,
+		"GPUIDs", serverDat.GPUIDs)
 
 	podOps := ctl.coreclient.Pods(ctl.namespace)
 
@@ -641,10 +652,10 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 		sleepURL := fmt.Sprintf("http://%s:%d/sleep", runningPod.Status.PodIP, serverPort)
 		resp, err := http.Post(sleepURL, "", nil)
 		if err != nil {
-			return fmt.Errorf("failed to put to sleep, POST %s got error: %w", sleepURL, err)
+			return fmt.Errorf("failed to put runner %q to sleep, POST %s got error: %w", serverDat.RunningPodName, sleepURL, err)
 		}
 		if sc := resp.StatusCode; sc != http.StatusOK {
-			return fmt.Errorf("failed to put to sleep, POST %s returned status %d", sleepURL, sc)
+			return fmt.Errorf("failed to put runner %q to sleep, POST %s returned status %d", serverDat.RunningPodName, sleepURL, sc)
 		}
 		serverDat.Sleeping = ptr.To(true)
 		logger.V(2).Info("Put inference server to sleep")
@@ -810,7 +821,7 @@ func deIndividualize(podSpec *corev1.PodSpec) *corev1.PodSpec {
 			removeVolumeMount(&podSpec.Containers[ctrIdx], volName)
 		}
 		for ctrIdx := range podSpec.InitContainers {
-			removeVolumeMount(&podSpec.Containers[ctrIdx], volName)
+			removeVolumeMount(&podSpec.InitContainers[ctrIdx], volName)
 		}
 	}
 	return podSpec
@@ -823,6 +834,38 @@ func removeVolumeMount(ctr *corev1.Container, volumeName string) {
 	if mntIdx >= 0 {
 		ctr.VolumeMounts = slices.Delete(ctr.VolumeMounts, mntIdx, mntIdx+1)
 	}
+}
+
+// reducedContainerState is the subset of `corev1.ContainerState` that we want to log
+type reducedContainerState struct {
+	State                corev1.ContainerState
+	LastTerminationState corev1.ContainerState
+	Ready                bool
+	RestartCount         int32
+	Started              *bool
+}
+
+func (rcs *reducedContainerState) set(from corev1.ContainerStatus) *reducedContainerState {
+	*rcs = reducedContainerState{
+		State:                from.State,
+		LastTerminationState: from.LastTerminationState,
+		Ready:                from.Ready,
+		RestartCount:         from.RestartCount,
+		Started:              from.Started,
+	}
+	return rcs
+}
+
+func getReducedInferenceContainerState(from *corev1.Pod) *reducedContainerState {
+	idx := slices.IndexFunc(from.Status.ContainerStatuses, func(elt corev1.ContainerStatus) bool {
+		return elt.Name == api.InferenceServerContainerName
+	})
+	if idx < 0 {
+		return nil
+	}
+	var ans reducedContainerState
+	ans.set(from.Status.ContainerStatuses[idx])
+	return &ans
 }
 
 // getInferenceServerPort, given a server-running Pod,

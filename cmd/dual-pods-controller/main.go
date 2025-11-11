@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"time"
 
 	"github.com/spf13/pflag"
 
@@ -53,9 +54,18 @@ func main() {
 	ctx := context.Background()
 	logger := klog.FromContext(ctx)
 
+	logger.V(1).Info("Start", "time", time.Now())
+
 	pflag.CommandLine.VisitAll(func(f *pflag.Flag) {
 		logger.V(1).Info("Flag", "name", f.Name, "value", f.Value.String())
 	})
+
+	if len(overrides.Context.Namespace) == 0 {
+		fmt.Fprintln(os.Stderr, "Namespace must not be the empty string")
+		os.Exit(1)
+	} else {
+		logger.Info("Focusing on one namespace", "name", overrides.Context.Namespace)
+	}
 
 	if debugAccelMemory {
 		config.AcceleratorSleepingMemoryLimitMiB = int64(config.SleeperLimit) * 4096
@@ -72,12 +82,6 @@ func main() {
 	}
 
 	kubeClient := kubernetes.NewForConfigOrDie(restConfig)
-	if len(overrides.Context.Namespace) == 0 {
-		fmt.Fprintln(os.Stderr, "Namespace must not be the empty string")
-		os.Exit(1)
-	} else {
-		logger.Info("Focusing on one namespace", "name", overrides.Context.Namespace)
-	}
 	kubePreInformers := kubeinformers.NewSharedInformerFactoryWithOptions(kubeClient, 0, kubeinformers.WithNamespace(overrides.Context.Namespace))
 
 	ctlr, err := config.NewController(
