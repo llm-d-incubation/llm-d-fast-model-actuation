@@ -19,17 +19,17 @@ spec:
     spec:
       containers:
       - name: controller
-        image: {{ .Values.Image }}
-        imagePullPolicy: {{if .Values.Local}}Never{{else}}Always{{end}}
+        image: {{ .Values.image }}
+        imagePullPolicy: {{if .Values.local}}Never{{else}}Always{{end}}
         command:
         - /ko-app/dual-pods-controller
         - "-v=5"
         - "--namespace=$(POD_NAMESPACE)"
-        - "--sleeper-limit={{ .Values.SleeperLimit }}"
-        - "--debug-accelerator-memory={{ .Values.DebugAcceleratorMemory }}"
+        - "--sleeper-limit={{ .Values.sleeperLimit }}"
+        - "--debug-accelerator-memory={{ .Values.debugAcceleratorMemory }}"
         env:
         - name: POD_NAMESPACE
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
-      serviceAccount: dual-pods-controller
+        serviceAccountName: dual-pods-controller
