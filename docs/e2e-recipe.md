@@ -241,6 +241,8 @@ spec:
               - --max-model-len=32768
               - --gpu-memory-utilization=0.8
               env:
+              - name: VLLM_SERVER_DEV_MODE
+                value: "1"
               - name: VLLM_CACHE_ROOT
                 value: /pvcs/shared/vcp/vllm
               - name: FLASHINFER_WORKSPACE_BASE
