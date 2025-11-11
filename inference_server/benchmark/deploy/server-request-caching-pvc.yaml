@@ -2,6 +2,8 @@ apiVersion: apps/v1
 kind: ReplicaSet
 metadata:
   name: ${REPLICASET_NAME}
+  labels:
+    app: dp-example
 spec:
   replicas: 0
   selector:
@@ -28,8 +30,12 @@ spec:
               - serve
               - --port=8000
               - /pvcs/local/vcp/hf/models--ibm-granite--granite-3.3-2b-instruct/snapshots/707f574c62054322f6b5b04b6d075f0a8f05e0f0
+              - --enable-sleep-mode
               - --max-model-len=32768
+              - --gpu-memory-utilization=0.8
               env:
+              - name: VLLM_SERVER_DEV_MODE
+                value: "1"
               - name: VLLM_CACHE_ROOT
                 value: /pvcs/shared/vcp/vllm
               - name: FLASHINFER_WORKSPACE_BASE

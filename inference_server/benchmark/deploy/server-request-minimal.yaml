@@ -2,6 +2,8 @@ apiVersion: apps/v1
 kind: ReplicaSet
 metadata:
   name: ${REPLICASET_NAME}
+  labels:
+    app: dp-example
 spec:
   replicas: 0
   selector:
@@ -28,7 +30,9 @@ spec:
               - serve
               - --port=8000
               - --model=ibm-granite/granite-3.3-2b-instruct
+              - --enable-sleep-mode
               - --max-model-len=32768
+              - --gpu-memory-utilization=0.8
               env:
               - name: VLLM_SERVER_DEV_MODE
                 value: "1"
@@ -45,7 +49,7 @@ spec:
               resources:
                 limits:
                   cpu: "2"
-                  memory: 6Gi
+                  memory: 9Gi
               readinessProbe:
                 httpGet:
                   path: /health
