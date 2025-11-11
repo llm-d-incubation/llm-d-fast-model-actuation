@@ -66,7 +66,11 @@ func (ni nodeItem) process(ctx context.Context, ctl *controller) (error, bool) {
 		logger.V(4).Info("Processing node-local item", "item", localItem)
 		err, retry := localItem.process(ctx, ctl, nodeDat)
 		if err != nil {
-			logger.Error(err, "Processing node local item failed", "item", localItem, "willRetry", retry)
+			if retry {
+				logger.Info("Processing node local item suffered transient error, will retry", "item", localItem, "err", err)
+			} else {
+				logger.Error(err, "Processing node local item failed", "item", localItem)
+			}
 		} else {
 			logger.V(4).Info("Finished processing node-local item", "item", localItem, "willRetry", retry)
 		}
