@@ -14,11 +14,11 @@
 
 import argparse
 import logging
+from datetime import datetime
 from logging import DEBUG, INFO, FileHandler, Formatter, StreamHandler, getLogger
 from os import getenv
 from pathlib import Path
 from subprocess import run as invoke_shell
-from time import time
 from uuid import uuid4
 
 # ---------------- Logging setup ----------------
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 
-file_handler = logging.FileHandler(f"metrics{int(time())}.log")
+file_handler = logging.FileHandler(f"metrics-{datetime.now()}.log")
 file_handler.setLevel(logging.DEBUG)
 file_handler.setFormatter(formatter)
 
