@@ -85,7 +85,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	requesterRV := "(non existent)"
 	runnerRV := "(non existent)"
 	serverDat := ctl.getServerData(nodeDat, item.RequesterName, item.UID)
-	var requesterDeletionTimestamp, runnerDeletionTimestamp *metav1.Time
+	var requesterDeletionTimestamp, runnerDeletionTimestamp *string
 	var requesterRCS, runnerRCS *reducedContainerState
 
 	requestingPod, err := ctl.podLister.Pods(ctl.namespace).Get(item.RequesterName)
@@ -98,7 +98,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		}
 	} else {
 		requesterRV = requestingPod.ResourceVersion
-		requesterDeletionTimestamp = requestingPod.DeletionTimestamp
+		requesterDeletionTimestamp = TimePtrToStringPtr(requestingPod.DeletionTimestamp)
 		requesterRCS = getReducedInferenceContainerState(requestingPod)
 	}
 
@@ -112,7 +112,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	case 1:
 		runningPod = runningPodAnys[0].(*corev1.Pod)
 		runnerRV = runningPod.ResourceVersion
-		runnerDeletionTimestamp = runningPod.DeletionTimestamp
+		runnerDeletionTimestamp = TimePtrToStringPtr(runningPod.DeletionTimestamp)
 		runnerRCS = getReducedInferenceContainerState(runningPod)
 		logger = logger.WithValues("runnerName", runningPod.Name)
 		ctx = klog.NewContext(urCtx, logger)
@@ -1088,4 +1088,12 @@ func (ctl *controller) mapToGPUIndices(nodeName string, gpuUUIDs []string) ([]st
 		}
 	})
 	return indices, errors.Join(errs...)
+}
+
+func TimePtrToStringPtr(tp *metav1.Time) *string {
+	if tp == nil {
+		return nil
+	}
+	str := tp.String()
+	return &str
 }
