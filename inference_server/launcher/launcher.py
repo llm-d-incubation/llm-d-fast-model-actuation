@@ -240,12 +240,11 @@ async def index():
             "version": "2.0",
             "endpoints": {
                 "create_instance": "POST /v2/vllm",
-                "create_named_instance": "POST /v2/vllm/{instance_id}",
+                "create_named_instance": "PUT /v2/vllm/{instance_id}",
                 "delete_instance": "DELETE /v2/vllm/{instance_id}",
                 "delete_all_instances": "DELETE /v2/vllm",
                 "get_instance_status": "GET /v2/vllm/{instance_id}",
                 "get_all_instances": "GET /v2/vllm",
-                "list_instances": "GET /v2/vllm/instances",
             },
         },
         status_code=HTTPStatus.OK,
@@ -255,7 +254,7 @@ async def index():
 ######################################################################
 # vLLM MANAGEMENT ENDPOINTS
 ######################################################################
-@app.put("/v2/vllm")
+@app.post("/v2/vllm")
 async def create_vllm_instance(vllm_config: VllmConfig):
     """Create a new vLLM instance with random instance ID"""
 
@@ -269,8 +268,8 @@ async def create_vllm_instance(vllm_config: VllmConfig):
 
 @app.put("/v2/vllm/{instance_id}")
 async def create_id_vllm_instance(
+    vllm_config: VllmConfig,
     instance_id: str = Path(..., description="Custom instance ID"),
-    vllm_config: VllmConfig = None,
 ):
     """Create a new vLLM instance with instance ID"""
     try:
@@ -309,20 +308,21 @@ async def delete_all_vllm_instances():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/v2/vllm/instances")
-async def list_vllm_instances():
-    """List all vLLM instance IDs"""
-    instances = vllm_manager.list_instances()
-    return JSONResponse(
-        content={"instance_ids": instances, "count": len(instances)},
-        status_code=HTTPStatus.OK,
-    )
-
-
 @app.get("/v2/vllm")
-async def get_all_vllm_instances():
-    """Get status of all vLLM instances"""
-    result = vllm_manager.get_all_instances_status()
+async def get_all_vllm_instances(detail: bool = True):
+    """
+    Get information about all vLLM instances
+
+    Query Parameters:
+    - detail: If True (default), returns full status of all instances.
+              If False, returns only instance IDs.
+    """
+    if detail:
+        result = vllm_manager.get_all_instances_status()
+    else:
+        instances = vllm_manager.list_instances()
+        result = {"instance_ids": instances, "count": len(instances)}
+
     return JSONResponse(content=result, status_code=HTTPStatus.OK)
 
 
