@@ -82,6 +82,18 @@ def parse_request_args():
         default="fmaas-platform-eval.fmaas.res.ibm.com",
         help="Cluster domain for Prometheus GPU metrics query",
     )
+    parser.add_argument(
+        "--model-path",
+        type=str,
+        help="Path to JSON file containing models for new_variant scenario",
+    )
+    parser.add_argument(
+        "--scenario",
+        type=str,
+        default="scaling",
+        choices=["baseline", "scaling", "new_variant"],
+        help="Benchmark scenario to run (default: scaling)",
+    )
 
     # Check for a container image env variables before adding to the parser.
     requester_img = getenv("CONTAINER_IMG_REG")
