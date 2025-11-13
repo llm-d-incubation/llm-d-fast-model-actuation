@@ -75,7 +75,7 @@ class DualPodsBenchmark:
         input_str = self.describe_inputs()
         self.logger.info(input_str)
         self.cleanup_enabled = self.parsed_inputs[4]
-        self.cluster_domain = self.parsed_inputs[5]
+        self.cluster_domain = self.parsed_inputs[6]
 
     def describe_inputs(self):
         """Get pretty print version of the user inputs"""
@@ -86,6 +86,12 @@ class DualPodsBenchmark:
         pretty_print_str += "Cleanup all pods at end of run: {}".format(
             self.parsed_inputs[4]
         )
+        if self.parsed_inputs[5] > 1:
+            pretty_print_str += "Requested Iterations: {}".format(self.parsed_inputs[5])
+        else:
+            pretty_print_str += "Default Iterations: {}".format(self.parsed_inputs[5])
+        pretty_print_str += "Cluster domain: {} \n".format(self.parsed_inputs[6])
+
         return pretty_print_str
 
     def parse_inputs(self) -> tuple:
@@ -97,25 +103,26 @@ class DualPodsBenchmark:
         requester_img = all_args.image
         requester_img_tag = all_args.tag
         cleanup = all_args.cleanup
-
-        # Generate the request YAML from template and image details.
-        request_yaml_file = replace_repo_variables(
-            requester_img, requester_img_tag, yaml_template
-        )
-
-        # Track the template file for cleanup
-        self.template_files.append(str(request_yaml_file))
-
+        iterations = all_args.iterations
         cluster_domain = (
             all_args.cluster_domain if hasattr(all_args, "cluster_domain") else None
         )
 
+        # Generate the request YAML from template and image details.
+        request_yaml_template_file = replace_repo_variables(
+            requester_img, requester_img_tag, yaml_template
+        )
+
+        # Track the template file for cleanup
+        self.template_files.append(str(request_yaml_template_file))
+
         return (
             ns,
-            request_yaml_file,
+            request_yaml_template_file,
             requester_pod_label,
             requester_img_tag,
             cleanup,
+            iterations,
             cluster_domain,
         )
 
@@ -142,7 +149,6 @@ class DualPodsBenchmark:
 
     def run_benchmark(
         self,
-        iterations: int = 1,
         timeout: int = 1000,
         scenario: str = "baseline",
         cleanup: bool = True,
@@ -150,35 +156,27 @@ class DualPodsBenchmark:
         """
         Run the benchmark.
 
-        :param iterations: Number of iterations for run.
         :param timeout: Timeout for each run in seconds.
         :param scenario: Benchmark scenario ("baseline" or "scaling")
         :return: List of result dictionaries.
         """
-        ns, yaml_file, pod_label, image, cleanup, cluster_domain = self.parsed_inputs
+        ns, yaml_file, _, _, _, _, _ = self.parsed_inputs
 
         if scenario == "scaling":
-            return self._run_scaling_scenario(
-                ns, yaml_file, timeout, iterations, cleanup
-            )
+            return self._run_scaling_scenario(ns, yaml_file, timeout)
 
-        return self._run_standard_scenario(
-            iterations, timeout, scenario, ns, yaml_file, cleanup
-        )
+        return self._run_standard_scenario(timeout, scenario, ns, yaml_file)
 
     def _run_standard_scenario(
         self,
-        iterations: int,
         timeout: int,
         scenario: str,
         ns: str,
         yaml_file: str,
-        cleanup: bool = True,
         rs_name_prefix: str = "my-request",
     ) -> List[Dict[str, Any]]:
         """
         Run the standard benchmark scenario with multiple iterations.
-        :param iterations: The number of iterations to execute for the scenario.
         :param timeout: The max time to allocate for all pods to be checked.
         :param scenario: Externally defined details on the scenario.
         :param ns: The namespace in which to execute the scenario.
@@ -189,6 +187,8 @@ class DualPodsBenchmark:
         :return: A list of the results for each iteration of the scenario.
         """
         self.results = []
+        cleanup = self.parsed_inputs[4]
+        iterations = self.parsed_inputs[5]
         try:
             for i in range(iterations):
                 iter_num = str(i + 1)
@@ -266,11 +266,11 @@ class DualPodsBenchmark:
         ns: str,
         yaml_file: str,
         timeout: int,
-        iterations: int = 1,
-        cleanup: bool = True,
     ) -> List[Dict[str, Any]]:
         """Run the scaling scenario: 0→1, 1→2, 2→1, 1→2 replica scaling."""
         self.results = []
+        cleanup = self.parsed_inputs[4]
+        iterations = self.parsed_inputs[5]
 
         for i in range(iterations):
             iter_num = str(i + 1)

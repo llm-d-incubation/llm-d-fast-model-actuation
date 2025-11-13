@@ -55,8 +55,8 @@ def parse_request_args():
     parser.add_argument(
         "--yaml",
         type=str,
-        default="deploy/server-request.yaml",
-        help="Path to the server-requesting YAML file",
+        required=True,
+        help="Path to the server-requesting YAML template file",
     )
     parser.add_argument(
         "--label",
@@ -69,6 +69,12 @@ def parse_request_args():
         type=bool,
         default=True,
         help="Whether to clean up provider pods after benchmark completion",
+    )
+    parser.add_argument(
+        "--iterations",
+        type=int,
+        default=1,
+        help="The number of iterations to run for benchmark scenarios",
     )
     parser.add_argument(
         "--cluster-domain",
