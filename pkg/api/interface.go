@@ -19,7 +19,7 @@ package api
 // In the "dual Pod" technique, clients/users create a server-requesting Pod
 // that describes one desired inference server Pod but when it runs is actually
 // just a stub. A dual-pod controller manages
-// server-running Pods that actually run the inference servers.
+// server-providing Pods that actually run the inference servers.
 
 // The server-requesting Pod
 // can be queried to discover the set of accelerators (e.g., GPUs)
@@ -30,7 +30,7 @@ package api
 
 // ServerPatchAnnotationName is the name of the annotation on the
 // server-requesting Pod that defines how to transform it into the
-// corresponding server-running Pod. The value of the annotation is a
+// corresponding server-providing Pod. The value of the annotation is a
 // [Golang template](https://pkg.go.dev/text/template) that expands to a patch
 // in Kubernetes YAML (which subsumes JSON). In particular, it is a
 // strategic merge patch, as described in
@@ -38,7 +38,7 @@ package api
 // The server-requesting Pod's spec and label and annotation metadata are transformed
 // --- by the following procedure ---
 // into the spec and label and annotation metadata given to the kube-apiserver
-// to define the server-running Pod.
+// to define the server-providing Pod.
 // 1. Remove all annotations;
 // 2. Apply the patch
 
@@ -69,8 +69,8 @@ const AdminPortAnnotationName = "dual-pod.llm-d.ai/admin-port"
 // to be queried to get the set of associated accelerators.
 const AdminPortDefaultValue = "8081"
 
-// RunnerData is the data made available to the server patch.
-type RunnerData struct {
+// ProviderData is the data made available to the server patch.
+type ProviderData struct {
 	// NodeName is the name of the Node to which the Pod is bound
 	NodeName string
 
@@ -80,13 +80,13 @@ type RunnerData struct {
 }
 
 // AcceleratorsAnnotationName is the name of an annotation that the dual-pods controller
-// maintains on both server-requesting and server-running Pods.
+// maintains on both server-requesting and server-providing Pods.
 // This annotation is purely FYI emitted by the dual-pods controller
 // (it does not rely on this label for anything).
 const AcceleratorsAnnotationName string = "dual-pods.llm-d.ai/accelerators"
 
 // DualLabelName is the name of a label that the dual-pods controller
-// maintains on the server-requesting and server-running Pods.
+// maintains on the server-requesting and server-providing Pods.
 // While bound, this label is present and its value is the name of the
 // corresponding other Pod;
 // while unbound, this label is absent.
@@ -95,7 +95,7 @@ const AcceleratorsAnnotationName string = "dual-pods.llm-d.ai/accelerators"
 const DualLabelName string = "dual-pods.llm-d.ai/dual"
 
 // SleepingLabelName is the name of a label that the dual-pods controller
-// maintains on server-running Pods.
+// maintains on server-providing Pods.
 // This value of this label is "true" or "false",
 // according to what the controller knows.
 // This label is purely FYI emitted by the dual-pods controller
