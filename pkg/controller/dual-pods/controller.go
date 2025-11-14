@@ -79,7 +79,7 @@ import (
 const requesterAnnotationKey = "dual-pods.llm-d.ai/requester"
 const nominalHashAnnotationKey = "dual-pods.llm-d.ai/nominal"
 
-const runnerFinalizer = "dual-pods.llm-d.ai/runner"
+const providerFinalizer = "dual-pods.llm-d.ai/provider"
 const requesterFinalizer = "dual-pods.llm-d.ai/requester"
 
 const ControllerName = "dual-pods-controller"
@@ -229,9 +229,9 @@ type itemOnNode interface {
 
 // Internal state about an inference server
 type serverData struct {
-	RequestingPodName     string
-	NominalRunningPod     *corev1.Pod
-	NominalRunningPodHash string
+	RequestingPodName       string
+	NominalProvidingPod     *corev1.Pod
+	NominalProvidingPodHash string
 
 	// ServerPort is meaningful if NominalRunningPod is not nil
 	ServerPort int16
@@ -245,7 +245,7 @@ type serverData struct {
 	GPUIndices    []string
 	GPUIndicesStr *string
 
-	RunningPodName string
+	ProvidingPodName string
 
 	ReadinessRelayed *bool
 
@@ -274,8 +274,8 @@ type infSvrItem struct {
 }
 
 // careAbout returns infSvrItem, podIsRequester, have.
-// Returns have=true for both requesters and bound runners,
-// have=false for unbound runners and other Pods.
+// Returns have=true for both requesters and bound providers,
+// have=false for unbound providers and other Pods.
 func careAbout(pod *corev1.Pod) (infSvrItem, bool, bool) {
 	if len(pod.Annotations[api.ServerPatchAnnotationName]) > 0 {
 		return infSvrItem{pod.UID, pod.Name}, true, true
@@ -309,9 +309,9 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 			nodeName := typed.Spec.NodeName
 			if !isReq {
 				var err error
-				nodeName, err = getRunnerNodeName(typed)
+				nodeName, err = getProviderNodeName(typed)
 				if err != nil {
-					ctl.enqueueLogger.Error(err, "Failed to determine node of runner")
+					ctl.enqueueLogger.Error(err, "Failed to determine node of provider")
 					return
 				}
 			} else if nodeName == "" {
@@ -348,9 +348,9 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 			nodeName := typed.Spec.NodeName
 			if !isReq {
 				var err error
-				nodeName, err = getRunnerNodeName(typed)
+				nodeName, err = getProviderNodeName(typed)
 				if err != nil {
-					ctl.enqueueLogger.Error(err, "Failed to determine node of runner")
+					ctl.enqueueLogger.Error(err, "Failed to determine node of provider")
 					return
 				}
 			} else if nodeName == "" {
@@ -390,9 +390,9 @@ func (ctl *controller) OnDelete(obj any) {
 			nodeName := typed.Spec.NodeName
 			if !isReq {
 				var err error
-				nodeName, err = getRunnerNodeName(typed)
+				nodeName, err = getProviderNodeName(typed)
 				if err != nil {
-					ctl.enqueueLogger.Error(err, "Failed to determine node of runner")
+					ctl.enqueueLogger.Error(err, "Failed to determine node of provider")
 					return
 				}
 			} else if nodeName == "" {
@@ -419,7 +419,7 @@ func (ctl *controller) OnDelete(obj any) {
 	}
 }
 
-func getRunnerNodeName(pod *corev1.Pod) (string, error) {
+func getProviderNodeName(pod *corev1.Pod) (string, error) {
 	nn := pod.Spec.NodeSelector["kubernetes.io/hostname"]
 	if nn != "" {
 		return nn, nil
