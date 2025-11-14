@@ -22,7 +22,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	stubapi "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/stub/api"
+	stubapi "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/spi"
 )
 
 func FuzzServer(f *testing.F) {
