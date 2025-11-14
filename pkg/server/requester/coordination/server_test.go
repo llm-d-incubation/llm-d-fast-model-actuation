@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package spi
+package coordination
 
 import (
 	"context"
@@ -25,7 +25,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	stubapi "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/stub/api"
+	stubapi "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/spi"
 )
 
 func FuzzServer(f *testing.F) {

@@ -22,8 +22,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/coordination"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/probes"
-	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/spi"
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 
 	"k8s.io/klog/v2"
@@ -56,7 +56,7 @@ func main() {
 	go func() {
 		defer wg.Done()
 
-		err := spi.Run(ctx, spiPort, &ready)
+		err := coordination.Run(ctx, spiPort, &ready)
 		if err != nil {
 			logger.Error(err, "failed to start requester SPI server")
 		}

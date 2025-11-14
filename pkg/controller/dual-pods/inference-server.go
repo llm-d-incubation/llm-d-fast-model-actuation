@@ -48,7 +48,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/api"
-	stubapi "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/stub/api"
+	stubapi "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/spi"
 )
 
 type nodeItem struct {

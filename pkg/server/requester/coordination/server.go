@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package spi
+package coordination
 
 import (
 	"context"
@@ -29,7 +29,7 @@ import (
 
 	"k8s.io/klog/v2"
 
-	stubapi "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/stub/api"
+	stubapi "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/spi"
 )
 
 // gpuHandler responds with the list of allocated GPU UUIDs

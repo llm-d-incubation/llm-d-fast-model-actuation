@@ -25,7 +25,7 @@ import (
 
 	"k8s.io/klog/v2"
 
-	stubapi "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/stub/api"
+	stubapi "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/spi"
 )
 
 // Run runs an HTTP server managing the /ready endpoint.

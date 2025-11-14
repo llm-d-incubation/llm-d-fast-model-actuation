@@ -31,8 +31,8 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/coordination"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/probes"
-	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/spi"
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 
 	"k8s.io/klog/v2"
@@ -115,7 +115,7 @@ func main() {
 	go func() {
 		defer wg.Done()
 
-		err := spi.RunWithGPUUUIDs(ctx, strconv.FormatInt(int64(spiPort), 10), &ready, gpuUUIDs)
+		err := coordination.RunWithGPUUUIDs(ctx, strconv.FormatInt(int64(spiPort), 10), &ready, gpuUUIDs)
 		if err != nil {
 			logger.Error(err, "failed to start requester SPI server")
 		}
