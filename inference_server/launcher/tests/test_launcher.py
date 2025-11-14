@@ -375,7 +375,9 @@ class TestAPIEndpoints:
             "pid": 12345,
         }
 
-        response = client.put("/v2/vllm", json={"options": "--model test --port 8000"})
+        response = client.post(
+            "/v2/vllm/instances", json={"options": "--model test --port 8000"}
+        )
 
         assert response.status_code == 201
         data = response.json()
@@ -392,7 +394,7 @@ class TestAPIEndpoints:
         }
 
         response = client.put(
-            "/v2/vllm/custom-id", json={"options": "--model test --port 8000"}
+            "/v2/vllm/instances/custom-id", json={"options": "--model test --port 8000"}
         )
 
         assert response.status_code == 201
@@ -405,7 +407,8 @@ class TestAPIEndpoints:
         mock_manager.create_instance.side_effect = ValueError("already exists")
 
         response = client.put(
-            "/v2/vllm/duplicate-id", json={"options": "--model test --port 8000"}
+            "/v2/vllm/instances/duplicate-id",
+            json={"options": "--model test --port 8000"},
         )
 
         assert response.status_code == 409
@@ -419,7 +422,7 @@ class TestAPIEndpoints:
             "pid": 12345,
         }
 
-        response = client.delete("/v2/vllm/test-id")
+        response = client.delete("/v2/vllm/instances/test-id")
 
         assert response.status_code == 200
         data = response.json()
@@ -430,7 +433,7 @@ class TestAPIEndpoints:
         """Test deleting nonexistent instance returns 404"""
         mock_manager.stop_instance.side_effect = KeyError("not found")
 
-        response = client.delete("/v2/vllm/nonexistent-id")
+        response = client.delete("/v2/vllm/instances/nonexistent-id")
 
         assert response.status_code == 404
 
@@ -442,7 +445,7 @@ class TestAPIEndpoints:
             "stopped_instances": [],
         }
 
-        response = client.delete("/v2/vllm")
+        response = client.delete("/v2/vllm/instances")
 
         assert response.status_code == 200
         data = response.json()
@@ -453,27 +456,29 @@ class TestAPIEndpoints:
         """Test listing instances via API"""
         mock_manager.list_instances.return_value = ["id-1", "id-2"]
 
-        response = client.get("/v2/vllm/instances")
+        response = client.get("/v2/vllm/instances?detail=False")
 
         assert response.status_code == 200
         data = response.json()
         assert data["count"] == 2
         assert "id-1" in data["instance_ids"]
 
-    @patch("launcher.vllm_manager")
-    def test_get_all_instances_status(self, mock_manager, client):
-        """Test getting all instances status via API"""
         mock_manager.get_all_instances_status.return_value = {
-            "total_instances": 2,
+            "total_instances": 1,
             "running_instances": 1,
-            "instances": [],
+            "instances": {
+                "status": "running",
+                "instance_id": "test-id",
+                "pid": 12345,
+            },
         }
 
-        response = client.get("/v2/vllm")
+        response = client.get("/v2/vllm/instances?detail=True")
 
         assert response.status_code == 200
         data = response.json()
-        assert data["total_instances"] == 2
+        assert data["total_instances"] == 1
+        assert data["running_instances"] == 1
 
     @patch("launcher.vllm_manager")
     def test_get_instance_status(self, mock_manager, client):
@@ -484,7 +489,7 @@ class TestAPIEndpoints:
             "pid": 12345,
         }
 
-        response = client.get("/v2/vllm/test-id")
+        response = client.get("/v2/vllm/instances/test-id")
 
         assert response.status_code == 200
         data = response.json()
@@ -495,7 +500,7 @@ class TestAPIEndpoints:
         """Test getting status of nonexistent instance returns 404"""
         mock_manager.get_instance_status.side_effect = KeyError("not found")
 
-        response = client.get("/v2/vllm/nonexistent-id")
+        response = client.get("/v2/vllm/instances/nonexistent-id")
 
         assert response.status_code == 404
 

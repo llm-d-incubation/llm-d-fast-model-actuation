@@ -239,13 +239,12 @@ async def index():
             "name": "Multi-Instance vLLM Management API",
             "version": "2.0",
             "endpoints": {
-                "create_instance": "POST /v2/vllm",
-                "create_named_instance": "POST /v2/vllm/{instance_id}",
-                "delete_instance": "DELETE /v2/vllm/{instance_id}",
-                "delete_all_instances": "DELETE /v2/vllm",
-                "get_instance_status": "GET /v2/vllm/{instance_id}",
-                "get_all_instances": "GET /v2/vllm",
-                "list_instances": "GET /v2/vllm/instances",
+                "create_instance": "POST /v2/vllm/instances",
+                "create_named_instance": "PUT /v2/vllm/instances/{instance_id}",
+                "delete_instance": "DELETE /v2/vllm/instances/{instance_id}",
+                "delete_all_instances": "DELETE /v2/vllm/instances",
+                "get_instance_status": "GET /v2/vllm/instances/{instance_id}",
+                "get_all_instances": "GET /v2/vllm/instances",
             },
         },
         status_code=HTTPStatus.OK,
@@ -255,7 +254,7 @@ async def index():
 ######################################################################
 # vLLM MANAGEMENT ENDPOINTS
 ######################################################################
-@app.put("/v2/vllm")
+@app.post("/v2/vllm/instances")
 async def create_vllm_instance(vllm_config: VllmConfig):
     """Create a new vLLM instance with random instance ID"""
 
@@ -267,10 +266,10 @@ async def create_vllm_instance(vllm_config: VllmConfig):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.put("/v2/vllm/{instance_id}")
+@app.put("/v2/vllm/instances/{instance_id}")
 async def create_id_vllm_instance(
+    vllm_config: VllmConfig,
     instance_id: str = Path(..., description="Custom instance ID"),
-    vllm_config: VllmConfig = None,
 ):
     """Create a new vLLM instance with instance ID"""
     try:
@@ -283,7 +282,7 @@ async def create_id_vllm_instance(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/v2/vllm/{instance_id}")
+@app.delete("/v2/vllm/instances/{instance_id}")
 async def delete_vllm_instance(
     instance_id: str = Path(..., description="Instance ID to delete")
 ):
@@ -298,7 +297,7 @@ async def delete_vllm_instance(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/v2/vllm")
+@app.delete("/v2/vllm/instances")
 async def delete_all_vllm_instances():
     """Delete all vLLM instances"""
     try:
@@ -310,23 +309,24 @@ async def delete_all_vllm_instances():
 
 
 @app.get("/v2/vllm/instances")
-async def list_vllm_instances():
-    """List all vLLM instance IDs"""
-    instances = vllm_manager.list_instances()
-    return JSONResponse(
-        content={"instance_ids": instances, "count": len(instances)},
-        status_code=HTTPStatus.OK,
-    )
+async def get_all_vllm_instances(detail: bool = True):
+    """
+    Get information about all vLLM instances
 
+    Query Parameters:
+    - detail: If True (default), returns full status of all instances.
+              If False, returns only instance IDs.
+    """
+    if detail:
+        result = vllm_manager.get_all_instances_status()
+    else:
+        instances = vllm_manager.list_instances()
+        result = {"instance_ids": instances, "count": len(instances)}
 
-@app.get("/v2/vllm")
-async def get_all_vllm_instances():
-    """Get status of all vLLM instances"""
-    result = vllm_manager.get_all_instances_status()
     return JSONResponse(content=result, status_code=HTTPStatus.OK)
 
 
-@app.get("/v2/vllm/{instance_id}")
+@app.get("/v2/vllm/instances/{instance_id}")
 async def get_vllm_instance_status(
     instance_id: str = Path(..., description="Instance ID")
 ):
