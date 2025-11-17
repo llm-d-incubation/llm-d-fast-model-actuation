@@ -54,7 +54,7 @@ Clients/users of the dual pods technique create and delete
 server-requesting Pods roughly as they would if those Pods ran the
 inference servers. There is a dual pods controller that manages the
 server-providing Pods in reaction to the server-requesting Pods, and
-relays some state from the server-provding Pods back to the
+relays some state from the server-providing Pods back to the
 server-requesting Pods.
 
 The dual pods technique involves allocating some amount of each GPU's
@@ -242,7 +242,8 @@ Following are some features to note.
 
 - The container that runs the requester must be named
   "inference-server", and this will also be the name of the container
-  that runs vLLM.
+  that runs vLLM. This simple way of identifying the relevant
+  container could be changed if we found a need.
 
 - The server patch is in strategic merge patch format.
 
@@ -372,7 +373,7 @@ It is only when the server-requesting Pod does not exist and there is
 no bound server-providing Pod that the controller can forget about a
 given inference server.
 
-The controller maintains finalizer on the server-requesting Pod, so
+The controller maintains a finalizer on the server-requesting Pod, so
 that its deletion can be delayed until the server-providing Pod is
 asleep or gone. This is to stop higher level processes that monitor
 only the server-requesting Pod from assuming that the inference server
@@ -380,7 +381,7 @@ is gone before it actually is (gone or asleep).
 
 An _exogenous_ deletion of the server-providing Pod is one initiated
 by something other than the dual-pods controller. This is unusual but
-can happen, typically because some resource contenttion has led to the
+can happen, typically because some resource contention has led to the
 Pod's eviction. In this case the dual-pods controller relays that to
 become deletion of the server-requesting Pod (removing the
 controller's own finalizer there, of course). The controller remembers
@@ -402,8 +403,8 @@ Pod in state (1).
 When the server-requesting Pod is absent or in the process of being
 deleted, and there is a bound server-providing pod, the controller
 unbinds the server-providing Pod. The controller first considers
-whether it the server-providing Pod appears to be broken; if so then
-the controller initiates deletion of the server-providing Pod.
+whether the server-providing Pod appears to be broken; if so then the
+controller initiates deletion of the server-providing Pod.
 
 Unbinding the server-providing Pod consists of the following. If the
 controller knows an IP address for that Pod and does not know that it
