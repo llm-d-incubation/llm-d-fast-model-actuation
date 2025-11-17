@@ -120,9 +120,10 @@ labels, and annotations directly. A dual-pods controller that works
 with the launcher-based model swapping will create a server-providing
 Pod that runs the launcher. To swap a model in, the controller issues
 a request (to the launcher) that includes the command line arguments,
-environment variable settings, and assigned accelerator set for
-running `vllm serve`. To swap a model out, the controller issues a
-request that does not include those details.
+environment variable settings, and assigned accelerator set (the ones
+assigned to the server-requesting Pod) for running `vllm serve`. To
+swap a model out, the controller issues a request that does not
+include those details.
 
 ### Scenarios
 
@@ -244,7 +245,7 @@ Following are some features to note.
 
 - The server patch is in strategic merge patch format.
 
-- The Pod labels that match the right InferencePool go on the
+- The Pod labels that match the right InferencePool go on the nominal
   server-providing Pod and not on the server-requesting Pod.
 
 - When the server-requesting Pod is part of a set (e.g.: ReplicaSet,
