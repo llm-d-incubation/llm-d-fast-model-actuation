@@ -34,15 +34,16 @@ define a `Pod` is such that it serves one fixed model and server
 options, with no resource-freeing hiatus. This repository contains a
 way of fitting the process flexibility into the Kubernetes milieu. We
 call this technique "dual pods". It makes a distinction between (a) a
-_sever-requesting Pod_, which describes a desired inference server
+_server-requesting Pod_, which describes a desired inference server
 but does not actually run it, and (b) a _server-providing Pod_, which
 actually runs the inference server(s).
 
 The topics above are realized by two software components, as follows.
 
 - A vLLM instance launcher, the persistent management process
-  mentioned above. The source code for this is in the
-  [inference_server/launcher](inference_server/launcher) directory.
+  mentioned above. This is written in Python and the source code is in
+  the [inference_server/launcher](inference_server/launcher)
+  directory.
 
 - A "dual-pods" controller, which manages the server-providing Pods
   in reaction to the server-requesting Pods that other manager(s)

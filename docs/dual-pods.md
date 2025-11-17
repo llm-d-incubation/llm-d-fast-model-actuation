@@ -1,9 +1,9 @@
 # Fast Model Actuation with Process Flexibility and Dual Pods
 
-Model flexibility refers to using vLLM sleep/wake and model swapping
-(e.g., [launcher based model-swapping](launcher.md)).  Dual pods is a
-technique for making model flexibility usable in the Kubernetes
-milieu.
+Model flexibility refers to using vLLM sleep/wake and/or model
+swapping (e.g., [launcher based model-swapping](launcher.md)).  Dual
+pods is a technique for making model flexibility usable in the
+Kubernetes milieu.
 
 ## Introduction to dual pods
 
@@ -40,9 +40,9 @@ kubelet for the server-requesting Pod.
 The server-requesting Pod (a) has a container --- described as the
 _requester_ container --- that is part of the implementation of the
 dual-pods technique, (b) does _not_ have a container that runs vLLM,
-and (c) has an annotation that contains a patch that, rougly speaking
-(there is a precise statement below), changes the server-requesting
-Pod into the server-providing Pod.
+and (c) has an annotation that contains a patch that, roughly
+speaking (there is a precise statement below), changes the
+server-requesting Pod into the server-providing Pod.
 
 Kubernetes (in its scheduler and kubelets) allocates and assigns
 accelerators to the server-requesting Pods as normal, but the
@@ -76,7 +76,8 @@ is not yet supported.
   server-requesting Pods for each model variant that shall be on the
   cluster. Also creates an
   [InferencePool](https://github.com/kubernetes-sigs/gateway-api-inference-extension/blob/main/api/v1/inferencepool_types.go)
-  object for each of those model variants.
+  object and associated llm-d objects for each of those model
+  variants.
 
 - **llm-d administrator**. Deploys and configures llm-d on the cluster.
 
