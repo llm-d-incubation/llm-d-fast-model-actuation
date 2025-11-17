@@ -34,7 +34,7 @@ define a `Pod` is such that it serves one fixed model and server
 options, with no resource-freeing hiatus. This repository contains a
 way of fitting the process flexibility into the Kubernetes milieu. We
 call this technique "dual pods". It makes a distinction between (a) a
-_sever-requesting Pods_, which describes a desired inference server
+_sever-requesting Pod_, which describes a desired inference server
 but does not actually run it, and (b) a _server-providing Pod_, which
 actually runs the inference server(s).
 

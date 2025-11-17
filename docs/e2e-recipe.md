@@ -185,7 +185,7 @@ spec:
           resources:
             limits:
               nvidia.com/gpu: "1"
-              cpu: "1"
+              cpu: "200m"
               memory: 250Mi
 EOF
 }

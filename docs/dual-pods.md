@@ -19,25 +19,27 @@ server-requesting Pods that clients/users create to describe the
 desired inference servers and (2) the server-providing Pods that
 actually run the inference servers.
 
-The server-requesting Pod has a container --- described as the
-_requester_ container --- that is actually a bit of dual-pods
-technology, and an annotation that contains a patch that changes the
-Pod's labels and spec to those for actually running vLLM.
+The server-requesting Pod (a) has a container --- described as the
+_requester_ container --- that is part of the implementation of the
+dual-pods technique, (b) does _not_ have a container that runs vLLM,
+and (c) has an annotation that contains a patch that changes the Pod's
+labels and spec to those for actually running vLLM and not running the
+requester container.
 
 Kubernetes (in its scheduler and kubelets) allocates and assigns
-accelerators to the server-requesting Pods as normal, but the code in
-those Pods only reports on those assignments. The server-providing
-Pods adopt those assignments to actually use the accelerators to run
-the inference servers.
+accelerators to the server-requesting Pods as normal, but the
+requester container in those Pods only reports on those
+assignments. The server-providing Pods adopt those assignments to
+actually use the accelerators to run the inference servers.
 
 We defined an API that is hoped to work for both milestone 2 and
-milestone 3. That API is in [pkg/api](../pkg/api) and here. The patch
-defined in the server-providing Pod converts the server-requesting
-Pod's `.metadata.labels` and `.spec` into those of a _nominal_
-server-providing Pod and defines the annotations of that Pod. This
-nominal server-providing Pod could satisfactorily run the inference
-server. However, the dual-pods controller is allowed to create
-different sorts of server-providing Pods that, ultimately, run
+milestone 3. That API is in [pkg/api](../pkg/api) and in this
+section. The patch defined in the server-providing Pod converts the
+server-requesting Pod's `.metadata.labels` and `.spec` into those of a
+_nominal_ server-providing Pod and defines the annotations of that
+Pod. This nominal server-providing Pod could satisfactorily run the
+inference server. However, the dual-pods controller is allowed to
+create different sorts of server-providing Pods that, ultimately, run
 inference servers according to the nominal server-providing Pod.
 
 The dual-pods controller that works with just the existing sleep/wake
@@ -58,9 +60,9 @@ request that does not include those details.
 
 - **Model variant deployer**. Deploys a horizontally scalable set of
   server-requesting Pods for each model variant that shall be on the
-  cluster. Creates corresponding
+  cluster. Also creates an
   [InferencePool](https://github.com/kubernetes-sigs/gateway-api-inference-extension/blob/main/api/v1/inferencepool_types.go)
-  objects.
+  object for each of those model variants.
 
 - **llm-d administrator**. Deploys and configures llm-d on the cluster.
 
@@ -320,6 +322,8 @@ accelerators is not known and (b) the stub container is running
 dual-pods controller tries until successful to query for the set of
 assigned accelerators.
 
+TODO: Update the following from milestone 1 to milestone 2
+
 When there is a server-requesting Pod that has a known set of
 accelerators but is not bound (in the controller's internal state) to
 an existing vLLM instance in a server-providing Pod that exists, it is
@@ -343,10 +347,11 @@ to the server-requesting Pod's inference-server container, as
 mentioned below.
 
 When there is a vLLM instance and its server-requesting Pod is
-non-existent or being deleted, the dual-pods controller deletes that
+non-existent or being deleted, the dual-pod controller deletes that
 instance. This is done by (1) ensuring that the controller's finalizer
 is not on the server-providing Pod and (2) ensuring that Pod is being
 deleted. In this situation, the readiness relay is moot.
+
 
 #### Readiness Relay
 
@@ -371,7 +376,7 @@ The relay of readiness goes as follows.
 The GPU assignment query from the dual-pods controller to the
 serve-requesting Pod returns a list of GPU UUIDs. The controller
 translates this to a list of GPU indices to put in the
-CUDA_VISIBLE_DEVICES envar or the server-providing Pod. To support that
+CUDA_VISIBLE_DEVICES envar of the server-providing Pod. To support that
 translation, we use a ConfigMap named "gpu-map". There is [a
 script](../scripts/ensure-nodes-mapped.sh) that ensures that the
 ConfigMap is populated with the needed information. The dual-pods
