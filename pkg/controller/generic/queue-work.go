@@ -40,6 +40,8 @@ type QueueAndWorkers[Item comparable] struct {
 }
 
 // NewQueueAndWorkers makes a new QueueAndWorkers.
+// Iff `process` returns `retry==true` then the item will be
+// requeued for retry.
 func NewQueueAndWorkers[Item comparable](
 	controllerName string,
 	numWorkers int,

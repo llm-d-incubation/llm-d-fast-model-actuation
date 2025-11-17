@@ -218,12 +218,14 @@ type nodeData struct {
 	// ItemsMutex may be acquired while holding controller mutex, not vice-versa.
 	ItemsMutex sync.Mutex
 
+	// Items is the object references of this node that need to be synced.
+	// Hold ItemsMutex while accessing this.
 	Items sets.Set[itemOnNode]
 }
 
 type itemOnNode interface {
 	// process returns (err error, retry bool).
-	// There will be a retry iff `retry || err != nil`.
+	// There will be a retry iff `retry`.
 	process(ctx context.Context, ctl *controller, nodeDat *nodeData) (error, bool)
 }
 
