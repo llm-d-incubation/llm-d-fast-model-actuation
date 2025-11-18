@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Multi-Instance vLLM Launcher (a.k.a. the launcher) is a Python program that implements a REST API service that allows you to dynamically create, manage, and terminate multiple vLLM inference server instances to achieve model swapping functionality without changes to vLLM. This enables flexible model serving where you can spin up different models on demand, and support multiple concurrent inference workloads.
+The Multi-Instance vLLM Launcher (a.k.a. the launcher) is a Python program that implements a REST API service that allows you to dynamically create, manage, and terminate multiple vLLM inference server instances to achieve model swapping functionality without changes to vLLM. This enables flexible model serving where clients can spin up different models on demand, and support multiple concurrent inference workloads.
 
 The launcher preloads vLLM’s Python modules to accelerate the initialization of multiple instances. Each vLLM process launched is therefore a subprocess of the launcher.
 
@@ -266,7 +266,7 @@ Create a new vLLM instance with a custom instance ID.
 
 **Error Responses:**
 
-- `409 Conflict`: Instance with this ID already exists
+- `409 Conflict`: Instance with this ID already exists.
 - `500 Internal Server Error`: Failed to create instance
 
 ---
@@ -548,7 +548,6 @@ Represents a single vLLM instance with its process and configuration.
 
 - `start()`: Start the vLLM process
 - `stop(timeout=10)`: Stop the vLLM process gracefully (or force kill after timeout)
-- `is_running()`: Check if the process is currently running
 - `get_status()`: Get detailed status information
 
 #### `VllmMultiProcessManager`
@@ -562,7 +561,6 @@ Manages multiple VllmInstance objects.
 - `stop_all_instances(timeout=10)`: Stop all running instances
 - `get_instance_status(instance_id)`: Get status of a specific instance
 - `get_all_instances_status()`: Get status of all instances
-- `list_instances()`: List all instance IDs
 
 ## Best Practices
 
