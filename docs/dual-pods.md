@@ -106,7 +106,7 @@ server-providing Pod runs just one vLLM instance.
 
 We defined an API that is hoped to work for both milestone 2 and
 milestone 3. That API is in [pkg/api](../pkg/api) and in this
-section. The patch defined in the server-providing Pod converts the
+section. The patch defined in the server-requesting Pod converts the
 server-requesting Pod's `.metadata.labels` and `.spec` into those of a
 _nominal_ server-providing Pod and defines the annotations of that
 Pod. This nominal server-providing Pod could satisfactorily run the
