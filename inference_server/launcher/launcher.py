@@ -99,13 +99,6 @@ class VllmInstance:
             "pid": pid,
         }
 
-    def is_running(self) -> bool:
-        """
-        Returns if the process in the manager is running or not.
-        :return: True is running, `False` otherwise.
-        """
-        return self.process is not None and self.process.is_alive()
-
     def get_status(self) -> dict:
         """
         Returns the status of the process and its PID or the no process

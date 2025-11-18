@@ -183,21 +183,6 @@ class TestVllmInstance:
         assert mock_process.killed is True
 
     @patch("launcher.multiprocessing.Process")
-    def test_instance_is_running(self, mock_process_class, vllm_config):
-        """Test checking if instance is running"""
-        mock_process = MockProcess()
-        mock_process_class.return_value = mock_process
-
-        instance = VllmInstance("test-id", vllm_config)
-        assert instance.is_running() is False
-
-        instance.start()
-        assert instance.is_running() is True
-
-        mock_process._is_alive = False
-        assert instance.is_running() is False
-
-    @patch("launcher.multiprocessing.Process")
     def test_instance_get_status(self, mock_process_class, vllm_config):
         """Test getting instance status"""
         mock_process = MockProcess()
