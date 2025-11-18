@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Multi-Instance vLLM Launcher is a REST API service that allows you to dynamically create, manage, and terminate multiple vLLM inference server instances to achieve model swapping functionality under the Fast Model Actuation (FMA) project. This enables flexible model serving where you can spin up different models on demand, and support multiple concurrent inference workloads.
+The Multi-Instance vLLM Launcher is a Python program that implements a REST API service that allows you to dynamically create, manage, and terminate multiple vLLM inference server instances to achieve model swapping functionality without changes to vLLM. This enables flexible model serving where you can spin up different models on demand, and support multiple concurrent inference workloads.
 
 ## Table of Contents
 
@@ -13,12 +13,13 @@ The Multi-Instance vLLM Launcher is a REST API service that allows you to dynami
 - [API Reference](#api-reference)
 - [Usage Examples](#usage-examples)
 - [Configuration](#configuration)
+- [Key Classes](#key-classes)
 - [Best Practices](#best-practices)
 
 ## Features
 
 - **Multiple Instance Management**: Run multiple vLLM instances simultaneously with unique identifiers
-- **Dynamic Creation/Deletion**: Start and stop instances on demand via REST API
+- **Dynamic Creation/Deletion**: Create and delete instances on demand via REST API
 - **Auto & Custom IDs**: Support for both auto-generated UUIDs and custom instance IDs
 - **Process Isolation**: Each vLLM instance runs in a separate process with isolated configuration
 - **Environment Variable Support**: Set custom environment variables per instance
@@ -28,30 +29,28 @@ The Multi-Instance vLLM Launcher is a REST API service that allows you to dynami
 
 ## Architecture
 
-### Components
-
 ```mermaid
 graph TD
     Client[Client/User]
 
-    subgraph Launcher["vLLM Launcher Service (Port 8001)"]
+    subgraph Launcher["vLLM Launcher Service"]
         FastAPI["FastAPI Application<br/>REST API Endpoints"]
         Manager["VllmMultiProcessManager<br/>Manages Instance Lifecycle"]
     end
 
-    subgraph Processes["Process Layer"]
+    subgraph Processes["Instance Layer"]
         Inst1["VllmInstance 1<br/>Process ID: 12345"]
         Inst2["VllmInstance 2<br/>Process ID: 12346"]
         Inst3["VllmInstance 3<br/>Process ID: 12347"]
     end
 
     subgraph Servers["vLLM Servers"]
-        vLLM1["vLLM Server<br/>Model: Llama-2-7b<br/>Port: 8000"]
-        vLLM2["vLLM Server<br/>Model: GPT-2<br/>Port: 8001"]
-        vLLM3["vLLM Server<br/>Model: OPT-1.3b<br/>Port: 8002"]
+        vLLM1["vLLM Server<br/>Model: Llama-2-7b<br/>"]
+        vLLM2["vLLM Server<br/>Model: GPT-2<br/>"]
+        vLLM3["vLLM Server<br/>Model: OPT-1.3b<br/>"]
     end
 
-    Client -->|HTTP Requests<br/>POST/GET/DELETE| FastAPI
+    Client -->|HTTP Requests<br/>POST/PUT/GET/DELETE| FastAPI
     FastAPI -->|Manages| Manager
 
     Manager -->|Creates/Controls| Inst1
@@ -74,64 +73,17 @@ graph TD
     style vLLM1 fill:#FF6B6B,stroke:#CC5555,stroke-width:2px,color:#fff
     style vLLM2 fill:#FF6B6B,stroke:#CC5555,stroke-width:2px,color:#fff
     style vLLM3 fill:#FF6B6B,stroke:#CC5555,stroke-width:2px,color:#fff
-    style Launcher fill:#E8F4F8,stroke:#4A90E2,stroke-width:3px
-    style Processes fill:#F0F8E8,stroke:#50C878,stroke-width:3px
-    style Servers fill:#FFE8E8,stroke:#FF6B6B,stroke-width:3px
+    style Launcher fill:#8F4F8,stroke:#4A90E2,stroke-width:3px
+    style Processes fill:#0F8E8,stroke:#50C878,stroke-width:3px
+    style Servers fill:#FE8E8,stroke:#FF6B6B,stroke-width:3px
 ```
-
-### Key Classes
-
-#### `VllmConfig`
-
-Pydantic model (data class) defining the configuration for a vLLM instance.
-
-**Attributes:**
-
-- `options` (str): Command-line options passed to vLLM (e.g., `"--model meta-llama/Llama-2-7b --port 8000"`)
-- `env_vars` (Optional[Dict[str, Any]]): Environment variables to set for the vLLM process
-
-Ex:
-
-```yaml
-{
-  "options": "--model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --port 8005",
-  "env_vars": {
-    "VLLM_USE_V1": "1",
-    "VLLM_LOGGING_LEVEL": "DEBUG"
-  }
-}
-```
-
-#### `VllmInstance`
-
-Represents a single vLLM instance with its process and configuration.
-
-**Key Methods:**
-
-- `start()`: Start the vLLM process
-- `stop(timeout=10)`: Stop the vLLM process gracefully (or force kill after timeout)
-- `is_running()`: Check if the process is currently running
-- `get_status()`: Get detailed status information
-
-#### `VllmMultiProcessManager`
-
-Manages multiple VllmInstance objects.
-
-**Key Methods:**
-
-- `create_instance(vllm_config, instance_id=None)`: Create and start a new instance
-- `stop_instance(instance_id, timeout=10)`: Stop a specific instance
-- `stop_all_instances(timeout=10)`: Stop all running instances
-- `get_instance_status(instance_id)`: Get status of a specific instance
-- `get_all_instances_status()`: Get status of all instances
-- `list_instances()`: List all instance IDs
 
 ## Installation
 
 ### Prerequisites
 
 - Python 3.12.10+
-- vLLM library installed
+- vLLM and its dependencies
 - FastAPI and dependencies
 - uvicorn (ASGI server)
 - uvloop (event loop)
@@ -163,7 +115,7 @@ The service will start on `http://0.0.0.0:8001`
 ### 2. Create Your First Instance
 
 ```bash
-curl -X PUT http://localhost:8001/v2/vllm \
+curl -X POST http://localhost:8001/v2/vllm/instances \
   -H "Content-Type: application/json" \
   -d '{
     "options": "--model facebook/opt-125m --port 8000"
@@ -183,7 +135,7 @@ Response:
 ### 3. Check Instance Status
 
 ```bash
-curl -X GET http://localhost:8001/v2/vllm/a1b2c3d4-e5f6-7890-abcd-ef1234567890
+curl -X GET http://localhost:8001/v2/vllm/instances/a1b2c3d4-e5f6-7890-abcd-ef1234567890
 ```
 
 ### 4. Use the vLLM Instance
@@ -207,7 +159,7 @@ curl http://localhost:8000/v2/chat/completions \
 ### 5. Delete the Instance
 
 ```bash
-curl -X DELETE http://localhost:8001/v2/vllm/a1b2c3d4-e5f6-7890-abcd-ef1234567890
+curl -X DELETE http://localhost:8001/v2/vllm/instances/a1b2c3d4-e5f6-7890-abcd-ef1234567890
 ```
 
 ## API Reference
@@ -249,13 +201,12 @@ Get service information and available endpoints.
   "name": "Multi-Instance vLLM Management API",
   "version": "2.0",
   "endpoints": {
-    "create_instance": "PUT /v2/vllm",
-    "create_named_instance": "PUT /v2/vllm/{instance_id}",
-    "delete_instance": "DELETE /v2/vllm/{instance_id}",
-    "delete_all_instances": "DELETE /v2/vllm",
-    "get_instance_status": "GET /v2/vllm/{instance_id}",
-    "get_all_instances": "GET /v2/vllm",
-    "list_instances": "GET /v2/vllm/instances"
+    "create_instance": "POST /v2/vllm/instances",
+    "create_named_instance": "PUT /v2/vllm/instances/{instance_id}",
+    "delete_instance": "DELETE /v2/vllm/instances/{instance_id}",
+    "delete_all_instances": "DELETE /v2/vllm/instances",
+    "get_instance_status": "GET /v2/vllm/instances/{instance_id}",
+    "get_all_instances": "GET /v2/vllm/instances",
   }
 }
 ```
@@ -264,7 +215,7 @@ Get service information and available endpoints.
 
 #### Create Instance (Auto-Generated ID)
 
-**POST** `/v2/vllm`
+**POST** `/v2/vllm/instances`
 
 Create a new vLLM instance with an auto-generated UUID.
 
@@ -302,7 +253,7 @@ Create a new vLLM instance with an auto-generated UUID.
 
 #### Create Instance (Custom ID)
 
-**PUT** `/v2/vllm/{instance_id}`
+**PUT** `/v2/vllm/instances/{instance_id}`
 
 Create a new vLLM instance with a custom instance ID.
 
@@ -323,7 +274,7 @@ Create a new vLLM instance with a custom instance ID.
 
 #### Delete Instance
 
-**DELETE** `/v2/vllm/{instance_id}`
+**DELETE** `/v2/vllm/instances/{instance_id}`
 
 Stop and delete a specific vLLM instance.
 
@@ -349,7 +300,7 @@ Stop and delete a specific vLLM instance.
 
 #### Delete All Instances
 
-**DELETE** `/v2/vllm`
+**DELETE** `/v2/vllm/instances`
 
 Stop and delete all running vLLM instances.
 
@@ -370,7 +321,7 @@ Stop and delete all running vLLM instances.
 
 #### List Instance IDs
 
-**GET** `/v2/vllm/instances`
+**GET** `/v2/vllm/instances?detail=False`
 
 List all instance IDs currently managed by the launcher.
 
@@ -385,11 +336,11 @@ List all instance IDs currently managed by the launcher.
 
 ---
 
-#### Get All Instances Status
+#### List Instances Status with details
 
-**GET** `/v2/vllm`
+**GET** `/v2/vllm/instances?detail=True`
 
-Get status information for all instances.
+Get status information for all instances. `Detail` is `True` by default.
 
 **Response (200 OK):**
 
@@ -419,9 +370,9 @@ Get status information for all instances.
 
 ---
 
-#### Get Instance Status
+#### Get Single Instance Status
 
-**GET** `/v2/vllm/{instance_id}`
+**GET** `/v2/vllm/instances/{instance_id}`
 
 Get status information for a specific instance.
 
@@ -455,7 +406,7 @@ Get status information for a specific instance.
 
 ```bash
 # Create instance
-curl -X PUT http://localhost:8001/v2/vllm \
+curl -X PUT http://localhost:8001/v2/vllm/instances \
   -H "Content-Type: application/json" \
   -d '{
     "options": "--model facebook/opt-125m --port 8000"
@@ -467,31 +418,31 @@ curl -X PUT http://localhost:8001/v2/vllm \
 curl http://localhost:8000/v2/models
 
 # Delete instance
-curl -X DELETE http://localhost:8001/v2/vllm/abc123...
+curl -X DELETE http://localhost:8001/v2/vllm/instances/abc123...
 ```
 
 ### Example 2: Multiple Models on Different Ports
 
 ```bash
 # Start Llama 2 on port 8000
-curl -X PUT http://localhost:8001/v2/vllm/llama2 \
+curl -X PUT http://localhost:8001/v2/vllm/instances/llama2 \
   -H "Content-Type: application/json" \
   -d '{
-    "options": "--model meta-llama/Llama-2-7b-hf --port 8000"
+    "options": "--model meta-llama/Llama-2-7b-hf --port 8010"
   }'
 
 # Start GPT-2 on port 8001
-curl -X PUT http://localhost:8001/v2/vllm/gpt2 \
+curl -X PUT http://localhost:8001/v2/vllm/instances/gpt2 \
   -H "Content-Type: application/json" \
   -d '{
-    "options": "--model gpt2 --port 8001"
+    "options": "--model gpt2 --port 8011"
   }'
 
 # Start OPT on port 8002
-curl -X PUT http://localhost:8001/v2/vllm/opt \
+curl -X PUT http://localhost:8001/v2/vllm/instances/opt \
   -H "Content-Type: application/json" \
   -d '{
-    "options": "--model facebook/opt-1.3b --port 8002"
+    "options": "--model facebook/opt-1.3b --port 8012"
   }'
 
 # List all instances
@@ -501,7 +452,7 @@ curl http://localhost:8001/v2/vllm/instances
 ### Example 3: Using Environment Variables
 
 ```bash
-curl -X PUT http://localhost:8001/v2/vllm \
+curl -X POST http://localhost:8001/v2/vllm/instances \
   -H "Content-Type: application/json" \
   -d '{
     "options": "--model meta-llama/Llama-2-7b-hf --port 8000 --tensor-parallel-size 2",
@@ -517,7 +468,7 @@ curl -X PUT http://localhost:8001/v2/vllm \
 
 ```bash
 # Get detailed status
-curl http://localhost:8001/v2/vllm
+curl http://localhost:8001/v2/vllm/instances
 
 # Response:
 # {
@@ -567,6 +518,53 @@ or passing the parameters on the command line:
 uvicorn --port 8001 --log-level info launcher:app
 ```
 
+## Key Classes
+
+### `VllmConfig`
+
+Pydantic model (data class) defining the configuration for a vLLM instance.
+
+**Attributes:**
+
+- `options` (str): Command-line options passed to vLLM (e.g., `"--model meta-llama/Llama-2-7b --port 8000"`)
+- `env_vars` (Optional[Dict[str, Any]]): Environment variables to set for the vLLM process
+
+Ex:
+
+```yaml
+{
+  "options": "--model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --port 8005",
+  "env_vars": {
+    "VLLM_USE_V1": "1",
+    "VLLM_LOGGING_LEVEL": "DEBUG"
+  }
+}
+```
+
+### `VllmInstance`
+
+Represents a single vLLM instance with its process and configuration.
+
+**Key Methods:**
+
+- `start()`: Start the vLLM process
+- `stop(timeout=10)`: Stop the vLLM process gracefully (or force kill after timeout)
+- `is_running()`: Check if the process is currently running
+- `get_status()`: Get detailed status information
+
+#### `VllmMultiProcessManager`
+
+Manages multiple VllmInstance objects.
+
+**Key Methods:**
+
+- `create_instance(vllm_config, instance_id=None)`: Create and start a new instance
+- `stop_instance(instance_id, timeout=10)`: Stop a specific instance
+- `stop_all_instances(timeout=10)`: Stop all running instances
+- `get_instance_status(instance_id)`: Get status of a specific instance
+- `get_all_instances_status()`: Get status of all instances
+- `list_instances()`: List all instance IDs
+
 ## Best Practices
 
 ### 1. Port Management
@@ -590,12 +588,12 @@ Use descriptive custom IDs for easier management:
 
 ```bash
 # Good
-PUT /v2/vllm/llama2-7b-chat
-PUT /v2/vllm/gpt2-small-production
-PUT /v2/vllm/opt-testing
+PUT /v2/vllm/instances/llama2-7b-chat
+PUT /v2/vllm/instances/gpt2-small-production
+PUT /v2/vllm/instances/opt-testing
 
 # Less clear
-PUT /v2/vllm  # Auto-generates UUID
+POST /v2/vllm/instances  # Auto-generates UUID
 ```
 
 ### 3. Graceful Shutdown
@@ -604,10 +602,10 @@ Always delete instances when done to free resources:
 
 ```bash
 # Delete specific instance
-curl -X DELETE http://localhost:8001/v2/vllm/instance-id
+curl -X DELETE http://localhost:8001/v2/vllm/instances/instance-id
 
 # Or clean up all instances
-curl -X DELETE http://localhost:8001/v2/vllm
+curl -X DELETE http://localhost:8001/v2/vllm/instances
 ```
 
 ### 4. Error Handling
