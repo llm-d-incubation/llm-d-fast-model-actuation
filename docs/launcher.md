@@ -2,7 +2,9 @@
 
 ## Overview
 
-The Multi-Instance vLLM Launcher is a Python program that implements a REST API service that allows you to dynamically create, manage, and terminate multiple vLLM inference server instances to achieve model swapping functionality without changes to vLLM. This enables flexible model serving where you can spin up different models on demand, and support multiple concurrent inference workloads.
+The Multi-Instance vLLM Launcher (a.k.a. the launcher) is a Python program that implements a REST API service that allows you to dynamically create, manage, and terminate multiple vLLM inference server instances to achieve model swapping functionality without changes to vLLM. This enables flexible model serving where you can spin up different models on demand, and support multiple concurrent inference workloads.
+
+The launcher preloads vLLM’s Python modules to accelerate the initialization of multiple instances. Each vLLM process launched is therefore a subprocess of the launcher.
 
 ## Table of Contents
 
@@ -26,6 +28,9 @@ The Multi-Instance vLLM Launcher is a Python program that implements a REST API 
 - **Graceful Shutdown**: Proper termination with configurable timeout and force-kill fallback
 - **Status Monitoring**: Query status of individual instances or all instances at once
 - **Health Checks**: Built-in health endpoint for monitoring service availability
+
+> [!NOTE]
+> This is still not implemeted, but the client controls the subset of the node's GPUs that get used by a given vLLM instance.
 
 ## Architecture
 
@@ -163,12 +168,6 @@ curl -X DELETE http://localhost:8001/v2/vllm/instances/a1b2c3d4-e5f6-7890-abcd-e
 ```
 
 ## API Reference
-
-### Base URL
-
-```
-http://localhost:8001
-```
 
 ### Endpoints
 
@@ -406,7 +405,7 @@ Get status information for a specific instance.
 
 ```bash
 # Create instance
-curl -X PUT http://localhost:8001/v2/vllm/instances \
+curl -X POST http://localhost:8001/v2/vllm/instances \
   -H "Content-Type: application/json" \
   -d '{
     "options": "--model facebook/opt-125m --port 8000"
@@ -582,21 +581,7 @@ Instance 1: --port 8000
 Instance 2: --port 8000  # ❌ Port conflict!
 ```
 
-### 2. Instance Naming
-
-Use descriptive custom IDs for easier management:
-
-```bash
-# Good
-PUT /v2/vllm/instances/llama2-7b-chat
-PUT /v2/vllm/instances/gpt2-small-production
-PUT /v2/vllm/instances/opt-testing
-
-# Less clear
-POST /v2/vllm/instances  # Auto-generates UUID
-```
-
-### 3. Graceful Shutdown
+### 2. Graceful Shutdown
 
 Always delete instances when done to free resources:
 
@@ -608,7 +593,7 @@ curl -X DELETE http://localhost:8001/v2/vllm/instances/instance-id
 curl -X DELETE http://localhost:8001/v2/vllm/instances
 ```
 
-### 4. Error Handling
+### 3. Error Handling
 
 Always check response status codes:
 
@@ -622,7 +607,7 @@ elif response.status_code == 500:
     print("Failed to create vLLM instance:", response.json()["detail"])
 ```
 
-### 5. Resource Limits
+### 4. Resource Limits
 
 Be mindful of system resources:
 
@@ -631,7 +616,7 @@ Be mindful of system resources:
 - **CPU**: vLLM uses CPU for pre/post-processing
 - **Disk**: Models are cached in `~/.cache/huggingface`
 
-### 6. Testing
+### 5. Testing
 
 Test with small models first:
 
@@ -648,4 +633,3 @@ Test with small models first:
 ---
 
 **Version:** 2.0
-**Last Updated:** 2025
