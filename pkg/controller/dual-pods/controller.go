@@ -47,25 +47,25 @@ import (
 // The controller works in the context of one Kubernetes API namespace.
 
 // A Pod is a server-requesting Pod if it has the server patch annotation.
-// A Pod is a bound server-running Pod if it has an annotation
+// A Pod is a bound server-providing Pod if it has an annotation
 // with the name "dual-pods.llm-d.ai/requester"; the annotations's value should
 // be `requestingPod.UID + " " + requestingPod.Name`.
-// A Pod is an unbound server-running Pod if it (1) is not bound and
+// A Pod is an unbound server-providing Pod if it (1) is not bound and
 // (2) has an annotation
 // with name "dual-pods.llm-d.ai/nominal", whose value should be the base64 encoding
-// of the SHA-256 hash of bytes that are characteristic of the nominal server-running Pod
+// of the SHA-256 hash of bytes that are characteristic of the nominal server-providing Pod
 // (including node, GPUs; excluding its name, this annotation, and the identity of the server-requesting Pod).
 // This API object metadata is the hard state about binding.
 
-// A bound server-running Pod normally has an awake inference server,
+// A bound server-providing Pod normally has an awake inference server,
 // with possible exceptions during startup, shutdown, binding, and unbinding.
-// An unbound server-running Pod has an inference server that is sleeping.
+// An unbound server-providing Pod has an inference server that is sleeping.
 
-// The controller includes its finalizer when creating a bound server-running Pod,
-// and removes it when unbinding or recognizing the exogenous deletion of a server-running Pod.
+// The controller includes its finalizer when creating a bound server-providing Pod,
+// and removes it when unbinding or recognizing the exogenous deletion of a server-providing Pod.
 
 // At this interim stage of development, the controller does not request
-// deletion of any server-running Pod. Nor does the controller ever try to bind
+// deletion of any server-providing Pod. Nor does the controller ever try to bind
 // one that is unbound; they are only created in the bound state.
 
 // There are two types of item in the controller's work queue.
@@ -235,7 +235,7 @@ type serverData struct {
 	NominalProvidingPod     *corev1.Pod
 	NominalProvidingPodHash string
 
-	// ServerPort is meaningful if NominalRunningPod is not nil
+	// ServerPort is meaningful if NominalProvidingPod is not nil
 	ServerPort int16
 
 	// UUIDs of the server's GPUs
