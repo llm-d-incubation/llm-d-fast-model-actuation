@@ -629,5 +629,3 @@ Test with small models first:
 ```
 
 ---
-
-**Version:** 2.0
