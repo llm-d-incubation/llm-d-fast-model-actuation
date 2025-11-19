@@ -232,8 +232,6 @@ async def index():
             "name": "Multi-Instance vLLM Management API",
             "version": "2.0",
             "endpoints": {
-                "index": "GET /",
-                "health": "GET /health",
                 "create_instance": "POST /v2/vllm/instances",
                 "create_named_instance": "PUT /v2/vllm/instances/{instance_id}",
                 "delete_instance": "DELETE /v2/vllm/instances/{instance_id}",
