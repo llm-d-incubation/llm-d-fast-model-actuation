@@ -40,7 +40,7 @@ from kubernetes import client, config, watch
 from utils import delete_yaml_resources
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
 formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 
 file_handler = logging.FileHandler(f"metrics-{datetime.now()}.log")
@@ -162,8 +162,8 @@ def wait_for_dual_pods_ready(
 
                 # Add them to ready pods for total cardinality of expected replicas.
                 ready_pods.add(ex_podname)
-                logger.info(f"Initially ready pod {ex_podname}")
-        logger.info(f"Pods already ready at start: {initial_ready_pods}")
+                logger.debug(f"Initially ready pod {ex_podname}")
+        logger.debug(f"Pods already ready at start: {initial_ready_pods}")
     except Exception as e:
         logger.warning(f"Could not get initial pod state: {e}")
 
@@ -181,10 +181,10 @@ def wait_for_dual_pods_ready(
                 # Skip any pods that were in the initial set of ready pods or new pods
                 # that have already been accounted for as ready.
                 if podname in initial_ready_pods:
-                    logger.info(f"Skipping INITIALLY ready pod: {podname}")
+                    logger.debug(f"Skipping INITIALLY ready pod: {podname}")
                     continue
                 elif podname in ready_pods:
-                    logger.info(f"Skipping NEWLY ready pod: {podname}")
+                    logger.debug(f"Skipping NEWLY ready pod: {podname}")
                     continue
 
                 # Add pod if it is not already in the list of unready pods.
@@ -204,12 +204,11 @@ def wait_for_dual_pods_ready(
                 # Filter the requester pods.
                 is_requester = REQUESTER_PATCH_ANNOTATION in pod.metadata.annotations
                 if (rs_name in podname) and is_requester:
-                    logger.info(f"Checking Readiness of Requester Pod: {podname}")
+                    logger.info(f"Checking readiness of Requester Pod:{podname}")
                     if check_ready(pod):
                         rq_ready = int(perf_counter() - start)
                         ready_pods.add(podname)
-                        logger.info(f"Requester Pod {podname} ready after {rq_ready}s")
-                        logger.info(f"\nUpdated ready pods {ready_pods}\n")
+                        logger.debug(f"\nUpdated ready pods {ready_pods}")
 
                         # Capture node and accelerator info
                         node_name = pod.spec.node_name if pod.spec else None
@@ -221,25 +220,24 @@ def wait_for_dual_pods_ready(
                             else None
                         )
 
+                        logger.info(
+                            f"Requester Pod:{podname} ready after {rq_ready}s "
+                            f"on node:{node_name} using GPU:{accelerator_info}"
+                        )
+
                         # Checking availability mode.
                         dual_pod = labels[DUAL_LABEL_KEY]
                         binding_match = podname in dual_pod
                         if binding_match:
                             ready_pods.add(podname)
                             prv_mode = COLD_START_MODE
-                            # provider_pod_name = dual_pod
-                            provider_pods.append(dual_pod)
                             logger.info(
-                                f"{dual_pod}:{podname} bound through a Cold start on "
-                                f"node {node_name} with accelerator {accelerator_info}"
+                                f"{dual_pod}:{podname} bound through a COLD START."
                             )
                         else:
                             ready_pods.add(podname)
                             prv_mode = HIT_MODE
-                            logger.info(
-                                f"{dual_pod}:{podname} bound through a Hit on "
-                                f"node {node_name} with accelerator {accelerator_info}"
-                            )
+                            logger.info(f"{dual_pod}:{podname} bound through a HIT.")
 
                         # Add the provider pod info to the list of bound pods.
                         provider_info = BoundProviderPodInfo(
@@ -250,7 +248,7 @@ def wait_for_dual_pods_ready(
                         # Remove the pod pair from the unready pods.
                         unready_pods.remove(podname)
                         unready_pods.discard(dual_pod)
-                        logger.info(f"{podname}:{dual_pod} removed from UNREADY set")
+                        logger.debug(f"{podname}:{dual_pod} removed from UNREADY set")
 
                 if len(ready_pods) == expected_replicas:
                     end = perf_counter()
@@ -274,7 +272,7 @@ def wait_for_dual_pods_ready(
             elapsed = perf_counter() - start
 
     # Collect diagnostics data before raising the time out error.
-    logger.info(f"Unready Pods: {unready_pods}, DPC: {dual_pod_controller}")
+    logger.debug(f"Unready Pods: {unready_pods}, DPC: {dual_pod_controller}")
     failed_scenario = ScenarioResult(
         ScenarioStatus.FAILURE,
         unready_pods,

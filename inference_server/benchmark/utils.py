@@ -23,7 +23,7 @@ from uuid import uuid4
 
 # ---------------- Logging setup ----------------
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
 formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 
 date_stamp = str(datetime.now().isoformat(timespec="minutes"))
@@ -95,28 +95,34 @@ def parse_request_args():
         default=2,
         help="The number of replicas to scale up to (default: 1)",
     )
-
-    # Check for a container image env variables before adding to the parser.
-    requester_img = getenv("CONTAINER_IMG_REG")
-    img_tag = getenv("CONTAINER_IMG_VERSION")
-    if requester_img and img_tag:
-        logger.info("Requester Image Loaded from ENV: {requester_img}:{img_tag}")
-    else:  # Force user to pass both the image and tage as arguments.
-        logger.info("CONTAINER_IMG_REG is not set locally")
-        parser.add_argument(
-            "--image",
-            type=str,
-            required=True,
-            help="Repository for the requester image",
-        )
-        parser.add_argument(
-            "--tag",
-            type=str,
-            required=True,
-            help="Version tag for the requester image",
-        )
+    parser.add_argument(
+        "--image",
+        type=str,
+        help="Repository for the requester image",
+    )
+    parser.add_argument(
+        "--tag",
+        type=str,
+        help="Version tag for the requester image",
+    )
 
     args = parser.parse_args()
+
+    # Check for a container image env variables.
+    requester_img = getenv("CONTAINER_IMG_REG")
+    img_tag = getenv("CONTAINER_IMG_VERSION")
+    if requester_img and img_tag:  # override input args
+        logger.info(f"Requester Image Loaded from ENV: {requester_img}:{img_tag}")
+        args.image = requester_img
+        args.tag = img_tag
+    else:
+        logger.debug("CONTAINER_IMG_REG/CONTAINER_IMG_VERSION not set locally")
+        if not args.image or not args.tag:  # Force user to pass both image and tag
+            raise ValueError(
+                "Must set container image via env vars "
+                "(CONTAINER_IMG_REG & CONTAINER_IMG_VERSION) "
+                "or provide input args --image and --tag."
+            )
 
     # Validate the path for the YAML template.
     yaml_template = args.yaml
@@ -185,7 +191,7 @@ class BaseLogger:
         """
         self.logger = getLogger(owner + "Logger")
         # Set default level and formatting.
-        self.logger.setLevel(INFO)
+        self.logger.setLevel(DEBUG)
         formatter = Formatter("%(asctime)s - %(levelname)s - %(message)s")
 
         # Create the console and stream handler.

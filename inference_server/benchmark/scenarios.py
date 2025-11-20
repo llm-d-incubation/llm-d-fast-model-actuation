@@ -23,18 +23,16 @@ from benchmark_diagnostics import IterationResult
 from utils import replace_repo_variables
 
 
-def run_standard_scenario(
+def run_baseline_scenario(
     benchmark: Any,
     timeout: int,
-    scenario: str,
     yaml_file: str = None,
     rs_name_prefix: str = "my-request",
 ) -> List[Dict[str, Any]]:
     """
-    Run the standard benchmark scenario with multiple iterations.
+    Run the baseline benchmark scenario with multiple iterations.
     :param benchmark: The benchmark instance to run the scenario on.
     :param timeout: The max time to allocate for all pods to be checked.
-    :param scenario: Externally defined details on the scenario.
     :param rs_name_prefix: The externally defined prefix to attach to each
     replicaset name
 
@@ -43,6 +41,7 @@ def run_standard_scenario(
     benchmark.results = []
     cleanup = benchmark.cleanup_enabled
     iterations = benchmark.iterations
+    scenario = benchmark.scenario
     yaml_template = yaml_file if yaml_file else benchmark.yaml_template_file
     try:
         for i in range(iterations):
@@ -56,13 +55,6 @@ def run_standard_scenario(
             benchmark.intermediate_files.append(request_yaml)
 
             try:
-                # Query GPU usage only for emulated or real GPUs before iteration.
-                if benchmark.op_mode != "simulated":
-                    benchmark.logger.info(
-                        f"=== GPU Usage Before Iteration {iter_num} ==="
-                    )
-                    benchmark.query_gpu_usage()
-
                 benchmark.logger.debug(f"Applying YAML: {request_yaml}")
                 benchmark.k8_ops.apply_yaml(request_yaml)
 
@@ -74,7 +66,7 @@ def run_standard_scenario(
                 # TODO: Check whether the iteration result failed to ensure no cleanup
                 # is performed.
                 result.iteration = iter_num
-                result.scenario = benchmark.scenario
+                result.scenario = scenario
 
             except Exception as e:
                 benchmark.logger.error(f"Iteration {i+1} failed with error: {e}")
@@ -112,6 +104,7 @@ def run_scaling_scenario(
     benchmark: Any,
     timeout: int,
     yaml_file: str = None,
+    rs_name_prefix: str = "scale-request",
 ) -> List[Dict[str, Any]]:
 
     benchmark.results = []
@@ -124,17 +117,10 @@ def run_scaling_scenario(
         benchmark.logger.info(f"Running iteration {iter_num}")
 
         try:
-            rs_name = f"scale-request-{iter_num}-" + str(int(time()))
+            rs_name = rs_name_prefix + f"{iter_num}-" + str(int(time()))
             benchmark.logger.debug(f"ReplicaSet Name: {rs_name}")
             request_yaml = benchmark.create_request_yaml(rs_name, yaml_template)
             benchmark.intermediate_files.append(request_yaml)
-
-            # Query GPU usage only for emulated or real GPUs.
-            if benchmark.op_mode != "simulated":
-                benchmark.logger.info(
-                    f"=== GPU Usage Before Scaling Iteration {iter_num} ==="
-                )
-                benchmark.query_gpu_usage()
 
             # Apply the initial deployment at 0 replicas
             benchmark.logger.debug(f"Applying initial YAML: {request_yaml}")
@@ -152,14 +138,8 @@ def run_scaling_scenario(
             benchmark.results.append(result)
 
             # Scale down
-            result = _run_scaling_phase(
-                benchmark, request_yaml, rs_name, timeout, 1, "down"
-            )
-
-            # TODO: Check whether the iteration result failed to ensure no cleanup
-            # is performed.
-            result.iteration = iter_num
-            benchmark.results.append(result)
+            benchmark.logger.debug("=== Scaling step down to 1 replica ===")
+            benchmark.k8_ops.scale_replicaset(request_yaml, 1)
 
             # Slow down to ensure any goner requester pods do not taint number of
             # initial ready pods for the scale up again.
@@ -214,6 +194,11 @@ def _run_scaling_phase(
     )
     benchmark.k8_ops.scale_replicaset(request_yaml, expected_pods)
 
+    # Query GPU usage only for emulated or real GPUs.
+    if benchmark.op_mode != "simulated":
+        benchmark.logger.info("=== Busy GPUs Before Iteration ===")
+        benchmark.query_gpu_usage()
+
     try:
         (
             rq_ready,
@@ -226,17 +211,14 @@ def _run_scaling_phase(
             expected_pods,
         )
 
-        # Track the creation mode of the last provider pod for hit rate computation.
-        prv_mode = None
-
         # Track provider pods created in cold start mode for cleanup
         for pod in provider_pods:
-            benchmark.logger.info(f"Check Mode on Pod: {pod}")
+            benchmark.logger.debug(f"Check Mode on Pod: {pod}")
             if pod.prv_mode == "Cold":
                 if not hasattr(benchmark, "provider_pods"):
                     benchmark.provider_pods = []
                 provider_pod_name = pod.provider
-                benchmark.provider_pods.append(pod.provider_pod_name)
+                benchmark.provider_pods.append(provider_pod_name)
                 benchmark.logger.debug(
                     f"Added provider pod {provider_pod_name} to cleanup list"
                 )
@@ -255,7 +237,10 @@ def _run_scaling_phase(
 
 
 def run_new_variant_scenario(
-    benchmark: Any, timeout: int, yaml_file: str = None
+    benchmark: Any,
+    timeout: int,
+    yaml_file: str = None,
+    rs_name_prefix: str = "model-request",
 ) -> List[Dict[str, Any]]:
     """
     Run the scenario to introduce a new model variant.
@@ -301,14 +286,12 @@ def run_new_variant_scenario(
         )
 
         # Generate a unique replicaset YAML for a particular model.
-        rs_prefix = "model-request"
-        model_scenario = "variant-" + model_registry + "-" + model_repo
-        model_results = run_standard_scenario(
+        benchmark.scenario = "variant-" + model_registry + "-" + model_repo
+        model_results = run_baseline_scenario(
             benchmark,
             timeout,
-            model_scenario,
             model_template,
-            rs_prefix,
+            rs_name_prefix,
         )
         results.extend(model_results)
 

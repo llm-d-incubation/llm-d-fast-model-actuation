@@ -24,9 +24,9 @@ from typing import Any, Dict, List, Optional
 # Local imports
 from kube_ops import KindKubernetesOps, RemoteKubernetesOps, SimKubernetesOps
 from scenarios import (
+    run_baseline_scenario,
     run_new_variant_scenario,
     run_scaling_scenario,
-    run_standard_scenario,
 )
 from utils import BaseLogger, parse_request_args, replace_repo_variables
 
@@ -57,9 +57,7 @@ class DualPodsBenchmark:
         self.logger.info("Logger Type: %s" % (self.logger.name))
         self.op_mode = op_mode
         if op_mode == "kind":  # Default
-
             self.logger.info(f"Operating with kind cluster: {cluster_name}")
-
             # Set context with a kind cluster.
             self.k8_ops = KindKubernetesOps(self.logger, cluster_name)
 
@@ -84,13 +82,14 @@ class DualPodsBenchmark:
         parsed_inputs = self.parse_inputs()
         self.namespace = parsed_inputs[0]
         self.yaml_template_file = parsed_inputs[1]
-        self.requester_img_tag = parsed_inputs[2]
-        self.cleanup_enabled = parsed_inputs[3]
-        self.iterations = parsed_inputs[4]
-        self.cluster_domain = parsed_inputs[5]
-        parsed_model_path = parsed_inputs[6]
-        self.scenario = parsed_inputs[7]
-        self.max_replicas = parsed_inputs[8]
+        self.requester_img = parsed_inputs[2]
+        self.requester_img_tag = parsed_inputs[3]
+        self.cleanup_enabled = parsed_inputs[4]
+        self.iterations = parsed_inputs[5]
+        self.cluster_domain = parsed_inputs[6]
+        parsed_model_path = parsed_inputs[7]
+        self.scenario = parsed_inputs[8]
+        self.max_replicas = parsed_inputs[9]
 
         # Use model_path from parameter if provided, otherwise from parsed args
         self.model_path = model_path if model_path is not None else parsed_model_path
@@ -102,7 +101,7 @@ class DualPodsBenchmark:
         """Get pretty print version of the user inputs"""
         pretty_print_str = "Namespace: {} \n".format(self.namespace)
         pretty_print_str += "Request YAML File: {}\n".format(self.yaml_template_file)
-        pretty_print_str += "Requester Pod Image: {} \n".format(self.requester_img_tag)
+        pretty_print_str += "Requester Pod Image: {} \n".format(self.requester_img)
         pretty_print_str += "Cleanup all pods at end of run: {} \n".format(
             self.cleanup_enabled
         )
@@ -153,6 +152,7 @@ class DualPodsBenchmark:
         return (
             ns,
             request_yaml_template_file,
+            requester_img,
             requester_img_tag,
             cleanup,
             iterations,
@@ -205,7 +205,7 @@ class DualPodsBenchmark:
         elif benchmark_scenario == "new_variant":
             return run_new_variant_scenario(self, timeout, self.yaml_template_file)
 
-        return run_standard_scenario(
+        return run_baseline_scenario(
             self, timeout, benchmark_scenario, self.yaml_template_file
         )
 
@@ -218,14 +218,8 @@ class DualPodsBenchmark:
         if not self.results:
             return {}
 
-        # success_runs = [run for run in self.results if run["success"]]
         success_runs = [run for run in self.results if run.success]
-        rq_times = [
-            # run["rq_time"] for run in success_runs if run["rq_time"] is not None
-            run.rq_time
-            for run in success_runs
-            if run.rq_time is not None
-        ]
+        rq_times = [run.rq_time for run in success_runs if run.rq_time is not None]
 
         # For scaling scenarios, only count hits from the
         # only phase that can wake up sleeping provider pods
@@ -338,7 +332,7 @@ class DualPodsBenchmark:
         cluster_domain = self.cluster_domain
         if not cluster_domain:
             self.logger.warning("cluster_domain not set, skipping GPU usage query")
-            return
+            return []
 
         try:
             token_result = invoke_shell(
@@ -364,7 +358,7 @@ class DualPodsBenchmark:
                 text=True,
                 check=True,
             )
-            self.logger.info(f"Query Result: \n{query_result}\n")
+            self.logger.debug(f"Query Result: \n{query_result}\n")
 
             gpu_data = loads(query_result.stdout)
             gpu_list = []
@@ -380,10 +374,14 @@ class DualPodsBenchmark:
 
             gpu_list.sort(key=lambda x: (x["Hostname"] or "", x["GPU"] or ""))
             for gpu in gpu_list:
-                self.logger.info(f"GPU: {gpu}")
+                if gpu["Mem"] and float(gpu["Mem"]) > 0:
+                    self.logger.info(f"GPU: {gpu}")
+
+            return gpu_list
 
         except Exception as e:
             self.logger.warning(f"Failed to query GPU usage: {e}")
+            return []
 
 
 if __name__ == "__main__":
@@ -393,5 +391,5 @@ if __name__ == "__main__":
     benchmark = DualPodsBenchmark("remote", log_output_file=log_output_file)
 
     # Run benchmark using scenario from command line args (defaults to "scaling")
-    results = benchmark.run_benchmark(timeout=7)
+    results = benchmark.run_benchmark(timeout=1000)
     benchmark.pretty_print_results()
