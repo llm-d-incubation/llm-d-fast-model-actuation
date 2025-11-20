@@ -1,0 +1,9 @@
+ARG BASE_IMAGE=vllm/vllm-openai:latest
+FROM ${BASE_IMAGE}
+
+WORKDIR /app
+
+COPY inference_server/launcher/launcher.py .
+RUN pip install --no-cache-dir uvicorn
+
+ENTRYPOINT ["uvicorn", "--app-dir", "/app", "launcher:app"]
