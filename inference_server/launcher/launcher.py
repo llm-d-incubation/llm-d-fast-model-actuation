@@ -31,7 +31,7 @@ from pydantic import BaseModel
 from vllm.entrypoints.openai.api_server import run_server
 from vllm.entrypoints.openai.cli_args import make_arg_parser, validate_parsed_serve_args
 from vllm.entrypoints.utils import cli_env_setup
-from vllm.utils import FlexibleArgumentParser
+from vllm.utils.argparse_utils import FlexibleArgumentParser
 
 
 # Define a the expected JSON structure in dataclass
