@@ -124,8 +124,8 @@ spec:
         app: dp-example
         instance: "$(date +%H-%M-%S)"
       annotations:
-        dual-pod.llm-d.ai/admin-port: "8081"
-        dual-pod.llm-d.ai/server-patch: |
+        dual-pods.llm-d.ai/admin-port: "8081"
+        dual-pods.llm-d.ai/server-patch: |
           metadata:
             labels: {
               "model-reg": "ibm-granite",
@@ -221,8 +221,8 @@ spec:
         app: dp-example
         instance: "$(date +%H-%M-%S)"
       annotations:
-        dual-pod.llm-d.ai/admin-port: "8081"
-        dual-pod.llm-d.ai/server-patch: |
+        dual-pods.llm-d.ai/admin-port: "8081"
+        dual-pods.llm-d.ai/server-patch: |
           metadata:
             labels: {
               "model-reg": "ibm-granite",
@@ -321,7 +321,7 @@ name will equal the server-requesting Pod's name suffixed with
 
 Expect that once the dual-pods controller starts working on a
 server-requesting Pod, the Pod will have an annotation with name
-`dual-pod.llm-d.ai/status` and a value reflecting the current status
+`dual-pods.llm-d.ai/status` and a value reflecting the current status
 for that Pod, using [the defined data
 structure](../pkg/api/interface.go) (see ServerRequestingPodStatus).
 

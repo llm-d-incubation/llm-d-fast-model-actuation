@@ -48,7 +48,7 @@ import (
 
 // A Pod is a server-requesting Pod if it has the server patch annotation.
 // A Pod is a bound server-providing Pod if it has an annotation
-// with the name "dual-pods.llm-d.ai/requester"; the annotations's value should
+// with the name "dual-pods.llm-d.ai/requester"; the annotation's value should
 // be `requestingPod.UID + " " + requestingPod.Name`.
 // A Pod is an unbound server-providing Pod if it (1) is not bound and
 // (2) has an annotation
