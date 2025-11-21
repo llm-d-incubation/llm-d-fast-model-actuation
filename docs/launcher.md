@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Multi-Instance vLLM Launcher (a.k.a. the launcher) is a Python program that implements a REST API service that allows you to dynamically create, manage, and terminate multiple vLLM inference server instances to achieve model swapping functionality without changes to vLLM. This enables flexible model serving where clients can spin up different models on demand, and support multiple concurrent inference workloads.
+The Multi-Instance vLLM Launcher (a.k.a. the launcher) is a Python program that implements a REST API service that allows you to dynamically create, manage, and terminate vLLM inference server instances. The goal is to achieve model swapping functionality without changes to vLLM. This enables flexible model serving where clients can spin up different models on demand, and support concurrent inference workloads.
 
 The launcher preloads vLLM’s Python modules to accelerate the initialization of multiple instances. Each vLLM process launched is therefore a subprocess of the launcher.
 
@@ -303,7 +303,7 @@ Stop and delete a specific vLLM instance.
 
 **DELETE** `/v2/vllm/instances`
 
-Stop and delete all running vLLM instances.
+Stop and delete all running vLLM instances. This functionality can be specially useful for testing purposes.
 
 **Response (200 OK):**
 
@@ -369,6 +369,11 @@ Get status information for all instances. `Detail` is `True` by default.
 }
 ```
 
+**Possible Status Values:**
+
+- `running`: Instance is currently running
+- `stopped`: Instance process has stopped
+
 ---
 
 #### Get Single Instance Status
@@ -393,7 +398,6 @@ Get status information for a specific instance.
 
 **Possible Status Values:**
 
-- `not_started`: Instance created but not started
 - `running`: Instance is currently running
 - `stopped`: Instance process has stopped
 
@@ -413,8 +417,6 @@ curl -X POST http://localhost:8001/v2/vllm/instances \
     "options": "--model facebook/opt-125m --port 8000"
   }'
 
-# Response: {"status": "started", "instance_id": "abc123...", "pid": 12345}
-
 # Use the instance (vLLM API)
 curl http://localhost:8000/v2/models
 
@@ -425,21 +427,21 @@ curl -X DELETE http://localhost:8001/v2/vllm/instances/abc123...
 ### Example 2: Multiple Models on Different Ports
 
 ```bash
-# Start Llama 2 on port 8000
+# Start Llama 2 on port 8010
 curl -X PUT http://localhost:8001/v2/vllm/instances/llama2 \
   -H "Content-Type: application/json" \
   -d '{
     "options": "--model meta-llama/Llama-2-7b-hf --port 8010"
   }'
 
-# Start GPT-2 on port 8001
+# Start GPT-2 on port 8011
 curl -X PUT http://localhost:8001/v2/vllm/instances/gpt2 \
   -H "Content-Type: application/json" \
   -d '{
     "options": "--model gpt2 --port 8011"
   }'
 
-# Start OPT on port 8002
+# Start OPT on port 8012
 curl -X PUT http://localhost:8001/v2/vllm/instances/opt \
   -H "Content-Type: application/json" \
   -d '{
@@ -470,20 +472,13 @@ curl -X POST http://localhost:8001/v2/vllm/instances \
 ```bash
 # Get detailed status
 curl http://localhost:8001/v2/vllm/instances
-
-# Response:
-# {
-#   "total_instances": 3,
-#   "running_instances": 2,
-#   "instances": [...]
-# }
 ```
 
 ## Configuration
 
 ### vLLM Options
 
-The `options` field accepts any valid vLLM command-line arguments. Common options include:
+The `options` field contains stuff added to the command line of the launched `vllm serve`. Common options include:
 
 #### Required Options
 
