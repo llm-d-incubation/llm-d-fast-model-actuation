@@ -171,22 +171,6 @@ curl -X DELETE http://localhost:8001/v2/vllm/instances/a1b2c3d4-e5f6-7890-abcd-e
 
 ### Endpoints
 
-#### Health Check
-
-**GET** `/health`
-
-Check if the launcher service is running.
-
-**Response:**
-
-```json
-{
-  "status": "OK"
-}
-```
-
----
-
 #### Service Information
 
 **GET** `/`
@@ -209,6 +193,22 @@ Get service information and available endpoints.
     "get_instance_status": "GET /v2/vllm/instances/{instance_id}",
     "get_all_instances": "GET /v2/vllm/instances",
   }
+}
+```
+
+---
+
+#### Health Check
+
+**GET** `/health`
+
+Check if the launcher service is running.
+
+**Response:**
+
+```json
+{
+  "status": "OK"
 }
 ```
 
