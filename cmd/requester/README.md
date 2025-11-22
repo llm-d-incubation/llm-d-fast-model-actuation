@@ -205,7 +205,7 @@ dpctlr-78494ffcc7-p58tc       1/1     Running             0          7m58s   10.
 my-request-5n2m6              0/1     Running             0          8m36s   10.0.0.134   ip-172-31-58-228   <none>           <none>
 my-request-5n2m6-dual-2wn7w   0/1     ContainerCreating   0          40s     <none>       ip-172-31-58-228   <none>           <none>
 $ REQ_IP=10.0.0.134
-$ curl $REQ_IP:8081/v1/dual-pod/accelerators
+$ curl $REQ_IP:8081/v1/dual-pods/accelerators
 ["GPU-0d1d8df2-4bc7-98fe-1d41-a5d13a5866d1"]
 ```
 
