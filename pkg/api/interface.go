@@ -18,7 +18,7 @@ package api
 
 // In the "dual Pod" technique, clients/users create a server-requesting Pod
 // that describes one desired inference server Pod but when it runs is actually
-// just a stub. A dual-pod controller manages
+// just a stub. A dual-pods controller manages
 // server-providing Pods that actually run the inference servers.
 
 // The server-requesting Pod
@@ -42,12 +42,12 @@ package api
 // 1. Remove all annotations;
 // 2. Apply the patch
 
-const ServerPatchAnnotationName = "dual-pod.llm-d.ai/server-patch"
+const ServerPatchAnnotationName = "dual-pods.llm-d.ai/server-patch"
 
 // ServerPatchAnnotationErrorsName is the name of an annotation that the dual-pods controller
 // maintains reporting the ServerRequestingPodStatus. The value of this annotation is the
 // JSON rendering of the status.
-const ServerPatchAnnotationErrorsName = "dual-pod.llm-d.ai/status"
+const ServerPatchAnnotationErrorsName = "dual-pods.llm-d.ai/status"
 
 // ServerRequestingPodStatus is the status of a server-requesting Pod with respect
 // to the dual-pods technique.
@@ -63,7 +63,7 @@ const InferenceServerContainerName = "inference-server"
 // AdminPortAnnotationName is the name of an annotation whose value
 // is the name of the port on the "inference-server" container to be
 // queried to get the set of associated accelerators.
-const AdminPortAnnotationName = "dual-pod.llm-d.ai/admin-port"
+const AdminPortAnnotationName = "dual-pods.llm-d.ai/admin-port"
 
 // AdminPortDefaultValue is the default port number of the server-requesting pod
 // to be queried to get the set of associated accelerators.

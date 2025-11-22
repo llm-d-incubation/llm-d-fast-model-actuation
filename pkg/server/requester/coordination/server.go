@@ -70,7 +70,7 @@ func getGpuUUIDs() ([]string, error) {
 }
 
 // Run starts an HTTP server managing the endpoints
-// consumed by the dual-pod controller.
+// consumed by the dual-pods controller.
 func Run(ctx context.Context, port string, ready *atomic.Bool) error {
 	logger := klog.FromContext(ctx).WithName("spi-server")
 

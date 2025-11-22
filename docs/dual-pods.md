@@ -166,8 +166,8 @@ kind: Pod
 metadata:
   name: example-request
   annotations:
-    dual-pod.llm-d.ai/admin-port: "8082"
-    dual-pod.llm-d.ai/server-patch: |
+    dual-pods.llm-d.ai/admin-port: "8082"
+    dual-pods.llm-d.ai/server-patch: |
       metadata:
         labels: {
           "model-reg": "ibm-granite",
