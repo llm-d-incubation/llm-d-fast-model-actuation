@@ -18,7 +18,7 @@ package api
 
 // In the "dual Pod" technique, clients/users create a server-requesting Pod
 // that describes one desired inference server Pod but when it runs is actually
-// just a stub. A dual-pod controller manages
+// just a stub. A dual-pods controller manages
 // server-providing Pods that actually run the inference servers.
 
 // The server-requesting Pod
