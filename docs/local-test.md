@@ -82,8 +82,8 @@ spec:
         app: dp-example
         instance: "$inst"
       annotations:
-        dual-pod.llm-d.ai/admin-port: "8081"
-        dual-pod.llm-d.ai/server-patch: |
+        dual-pods.llm-d.ai/admin-port: "8081"
+        dual-pods.llm-d.ai/server-patch: |
           metadata:
             labels: {
               "model-reg": "ibm-granite",

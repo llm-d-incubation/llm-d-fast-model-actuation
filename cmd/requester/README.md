@@ -29,6 +29,12 @@ make build-controller CONTAINER_IMG_REG=$CONTAINER_IMG_REG CONTROLLER_IMG_TAG=$Y
 
 **END OF NOTE**
 
+Run the script to populate the `gpu-map` ConfigMap.
+
+```shell
+scripts/ensure-nodes-mapped.sh
+```
+
 Instantiate the Helm chart for the dual-pods controller. Specify the tag produced by the build above. Specify the name of the ClusterRole to use for Node get/list/watch authorization, or omit if not needed.
 
 ```shell
@@ -53,8 +59,8 @@ spec:
       labels:
         app: dp-example
       annotations:
-        dual-pod.llm-d.ai/admin-port: "8081"
-        dual-pod.llm-d.ai/server-patch: |
+        dual-pods.llm-d.ai/admin-port: "8081"
+        dual-pods.llm-d.ai/server-patch: |
           metadata:
             labels: {
               "model-reg": "ibm-granite",
@@ -64,6 +70,7 @@ spec:
             containers:
             - name: inference-server
               image: docker.io/vllm/vllm-openai:v0.10.2
+              imagePullPolicy: IfNotPresent
               command:
               - vllm
               - serve
@@ -122,8 +129,8 @@ spec:
       labels:
         app: dp-example
       annotations:
-        dual-pod.llm-d.ai/admin-port: "8081"
-        dual-pod.llm-d.ai/server-patch: |
+        dual-pods.llm-d.ai/admin-port: "8081"
+        dual-pods.llm-d.ai/server-patch: |
           metadata:
             labels: {
               "model-reg": "ibm-granite",
@@ -133,6 +140,7 @@ spec:
             containers:
             - name: inference-server
               image: docker.io/vllm/vllm-openai:v0.10.2
+              imagePullPolicy: IfNotPresent
               command:
               - vllm
               - serve
@@ -193,52 +201,55 @@ EOF
 
 Check the allocated GPU.
 ```console
-$ kubectl get po my-request -owide
-NAME         READY   STATUS    RESTARTS   AGE     IP           NODE               NOMINATED NODE   READINESS GATES
-my-request   1/1     Running   0          6m27s   10.0.0.218   ip-172-31-58-228   <none>           <none>
-$ REQ_IP=10.0.0.148
-$ curl $REQ_IP:8081/v1/dual-pod/accelerators
-["GPU-7450f677-9aa8-0150-8b11-68727d721976"]
+$ kubectl get po -o wide
+NAME                          READY   STATUS              RESTARTS   AGE     IP           NODE               NOMINATED NODE   READINESS GATES
+dpctlr-78494ffcc7-p58tc       1/1     Running             0          7m58s   10.0.0.218   ip-172-31-58-228   <none>           <none>
+my-request-5n2m6              0/1     Running             0          8m36s   10.0.0.134   ip-172-31-58-228   <none>           <none>
+my-request-5n2m6-dual-2wn7w   0/1     ContainerCreating   0          40s     <none>       ip-172-31-58-228   <none>           <none>
+$ REQ_IP=10.0.0.134
+$ curl $REQ_IP:8081/v1/dual-pods/accelerators
+["GPU-0d1d8df2-4bc7-98fe-1d41-a5d13a5866d1"]
 ```
 
 Check the controller-created server-running pod.
 ```console
-$ kubectl get po my-request-server -oyaml | yq .metadata
+$ kubectl get po my-request-5n2m6-dual-2wn7w -oyaml | yq .metadata
 annotations:
-  dual-pod.llm-d.ai/role: runner
-  kubectl.kubernetes.io/last-applied-configuration: |
-    {"apiVersion":"v1","kind":"Pod","metadata":{"annotations":{"dual-pod.llm-d.ai/admin-port":"8081","dual-pod.llm-d.ai/role":"requester","dual-pod.llm-d.ai/server-patch":"spec:\n  containers:\n  - name: inference-server\n    image: docker.io/vllm/vllm-openai:v0.8.5\n    command:\n    - vllm\n    - serve\n    - --port=8000\n    - /pvcs/local/default/vcp/hf/models--ibm-granite--granite-3.3-2b-instruct/snapshots/c4179de4bf66635b0cf11f410a73ebf95f85d506\n    - --max-model-len=32768\n    env:\n    - name: CUDA_VISIBLE_DEVICES\n      value: \"{{ .GPUIndices }}\"\n    - name: VLLM_CACHE_ROOT\n      value: /pvcs/shared/vcp/vllm\n    resources:\n      limits:\n        cpu: \"2\"\n        memory: 6Gi\n    readinessProbe:\n      httpGet:\n        path: /health\n        port: 8000\n      initialDelaySeconds: 60\n      periodSeconds: 5\n    volumeMounts:\n    - name: local\n      readOnly: true\n      mountPath: /pvcs/local\n    - name: shared\n      mountPath: /pvcs/shared\n  volumes:\n  - name: local\n    persistentVolumeClaim:\n      claimName: {{ .LocalVolume }}\n  - name: shared\n    persistentVolumeClaim:\n      claimName: {{ .SharedVolume }}\n"},"name":"my-request","namespace":"default"},"spec":{"containers":[{"image":"quay.io/my-namespace/requester:latest","imagePullPolicy":"IfNotPresent","name":"inference-server","ports":[{"containerPort":8080},{"containerPort":8081}],"readinessProbe":{"httpGet":{"path":"/ready","port":8080},"initialDelaySeconds":2,"periodSeconds":5},"resources":{"limits":{"cpu":"1","memory":"250Mi","nvidia.com/gpu":"1"}}}]}}
-creationTimestamp: "2025-09-26T09:02:07Z"
-name: my-request-server
+  dual-pods.llm-d.ai/accelerators: GPU-0d1d8df2-4bc7-98fe-1d41-a5d13a5866d1
+  dual-pods.llm-d.ai/nominal: 7O/T2msskzUzLzemXvw/fN3RGTPg9zqr8cpOyRy3VbU
+  dual-pods.llm-d.ai/requester: 811f8932-b608-416c-8a90-589b39ed9bde my-request-5n2m6
+creationTimestamp: "2025-11-21T23:30:32Z"
+finalizers:
+  - dual-pods.llm-d.ai/provider
+generateName: my-request-5n2m6-dual-
+labels:
+  dual-pods.llm-d.ai/dual: my-request-5n2m6
+  dual-pods.llm-d.ai/sleeping: "false"
+  model-reg: ibm-granite
+  model-repo: granite-3.3-2b-instruct
+name: my-request-5n2m6-dual-2wn7w
 namespace: default
-ownerReferences:
-  - apiVersion: v1
-    blockOwnerDeletion: true
-    controller: true
-    kind: Pod
-    name: my-request
-    uid: 15f63f7e-42ad-42b8-96a2-bf66f00cac26
-resourceVersion: "22498428"
-uid: 3e978564-d557-4f67-8f31-03f924d3686e
-$ kubectl get po my-request-server -oyaml | yq .spec.containers[0]
+resourceVersion: "24430539"
+uid: b7aced71-3137-4205-9f50-86eb73f92a61
+$ kubectl get po my-request-5n2m6-dual-2wn7w -oyaml | yq .spec.containers[0]
 command:
   - vllm
   - serve
   - --port=8000
-  - /pvcs/local/default/vcp/hf/models--ibm-granite--granite-3.3-2b-instruct/snapshots/c4179de4bf66635b0cf11f410a73ebf95f85d506
+  - --model=ibm-granite/granite-3.3-2b-instruct
   - --max-model-len=32768
 env:
   - name: CUDA_VISIBLE_DEVICES
     value: "0"
-  - name: VLLM_CACHE_ROOT
-    value: /pvcs/shared/vcp/vllm
-image: docker.io/vllm/vllm-openai:v0.8.5
+image: docker.io/vllm/vllm-openai:v0.10.2
 imagePullPolicy: IfNotPresent
 name: inference-server
 ports:
   - containerPort: 8080
+    name: probes
     protocol: TCP
   - containerPort: 8081
+    name: spi
     protocol: TCP
 readinessProbe:
   failureThreshold: 3
@@ -262,60 +273,52 @@ resources:
 terminationMessagePath: /dev/termination-log
 terminationMessagePolicy: File
 volumeMounts:
-  - mountPath: /pvcs/local
-    name: local
-    readOnly: true
-  - mountPath: /pvcs/shared
-    name: shared
   - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
-    name: kube-api-access-5kwgp
+    name: kube-api-access-9ncxb
     readOnly: true
 ```
 
 Check the relayed readiness.
 ```console
-$ kubectl wait pod/my-request-server --for=condition=Ready --timeout=120s
-pod/my-request-server condition met
+$ kubectl wait pod/my-request-5n2m6-dual-2wn7w --for=condition=Ready --timeout=120s
+pod/my-request-5n2m6-dual-2wn7w condition met
 $ curl $REQ_IP:8080/ready
 OK
 ```
 
 Make an inference request.
 ```console
-$ kc get po -owide
-NAME                              READY   STATUS    RESTARTS   AGE   IP           NODE               NOMINATED NODE   READINESS GATES
-ip-172-31-58-228-na               1/1     Running   0          44h   10.0.0.45    ip-172-31-58-228   <none>           <none>
-my-request                        1/1     Running   0          11m   10.0.0.218   ip-172-31-58-228   <none>           <none>
-my-request-server                 1/1     Running   0          11m   10.0.0.136   ip-172-31-58-228   <none>           <none>
-vcp-model-ctlr-67c7c8dd8b-kwrjv   1/1     Running   0          44h   10.0.0.8     ip-172-31-58-228   <none>           <none>
-$ curl -s http://10.0.0.136:8000/v1/completions \
+$ kubectl get po -owide
+NAME                          READY   STATUS    RESTARTS   AGE     IP           NODE               NOMINATED NODE   READINESS GATES
+dpctlr-78494ffcc7-p58tc       1/1     Running   0          16m     10.0.0.218   ip-172-31-58-228   <none>           <none>
+my-request-5n2m6              1/1     Running   0          17m     10.0.0.134   ip-172-31-58-228   <none>           <none>
+my-request-5n2m6-dual-2wn7w   1/1     Running   0          9m10s   10.0.0.145   ip-172-31-58-228   <none>           <none>
+$ curl -s http://10.0.0.145:8000/v1/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "/pvcs/local/default/vcp/hf/models--ibm-granite--granite-3.3-2b-instruct/snapshots/c4179de4bf66635b0cf11f410a73ebf95f85d506",
+    "model": "ibm-granite/granite-3.3-2b-instruct",
     "prompt": "The capital of France is",
     "max_tokens": 30
   }'
-{"id":"cmpl-f67701446b8a439dbceea4963fd9c0a2","object":"text_completion","created":1758878077,"model":"/pvcs/local/default/vcp/hf/models--ibm-granite--granite-3.3-2b-instruct/snapshots/c4179de4bf66635b0cf11f410a73ebf95f85d506","choices":[{"index":0,"text":" Paris. It is also the most populous city in the European Union.\n\nParis is known for its rich history, iconic","logprobs":null,"finish_reason":"length","stop_reason":null,"prompt_logprobs":null}],"usage":{"prompt_tokens":5,"total_tokens":35,"completion_tokens":30,"prompt_tokens_details":null}}
+{"id":"cmpl-cfe04f79eb904748891561c76ae29986","object":"text_completion","created":1763768447,"model":"ibm-granite/granite-3.3-2b-instruct","choices":[{"index":0,"text":" Paris, which is known for its rich history, cultural landmarks, and iconic architecture like the Eiffel Tower and Notre","logprobs":null,"finish_reason":"length","stop_reason":null,"token_ids":null,"prompt_logprobs":null,"prompt_token_ids":null}],"service_tier":null,"system_fingerprint":null,"usage":{"prompt_tokens":5,"total_tokens":35,"completion_tokens":30,"prompt_tokens_details":null},"kv_transfer_params":null}
 ```
 
 Check the log of the server-requesting pod.
 ```console
-$ kubectl logs my-request
-I0926 09:02:06.183389       1 server.go:64] "starting server" logger="probes-server" port="8080"
-I0926 09:02:06.204610       1 server.go:83] "Got GPU UUIDs" logger="spi-server" uuids=["GPU-7450f677-9aa8-0150-8b11-68727d721976"]
-I0926 09:02:06.204710       1 server.go:122] "starting server" logger="spi-server" port="8081"
-I0926 09:02:07.028900       1 server.go:91] "Setting ready" logger="spi-server" newReady=false
-I0926 09:02:07.037853       1 server.go:91] "Setting ready" logger="spi-server" newReady=false
-I0926 09:02:08.043815       1 server.go:91] "Setting ready" logger="spi-server" newReady=false
-I0926 09:03:24.058287       1 server.go:91] "Setting ready" logger="spi-server" newReady=true
+$ kubectl logs my-request-5n2m6
+I1121 23:22:48.119370       1 server.go:64] "starting server" logger="probes-server" port="8080"
+I1121 23:22:48.142001       1 server.go:84] "Got GPU UUIDs" logger="spi-server" uuids=["GPU-0d1d8df2-4bc7-98fe-1d41-a5d13a5866d1"]
+I1121 23:22:48.142119       1 server.go:171] "starting server" logger="spi-server" port="8081"
+I1121 23:30:32.039243       1 server.go:139] "Setting ready" logger="spi-server" newReady=false
+I1121 23:37:13.904292       1 server.go:139] "Setting ready" logger="spi-server" newReady=true
 ```
 
 Clean up.
 ```console
-$ kubectl delete po my-request
-pod "my-request" deleted
-$ kubectl get po # a few moments later
-NAME                              READY   STATUS    RESTARTS   AGE
-ip-172-31-58-228-na               1/1     Running   0          44h
-vcp-model-ctlr-67c7c8dd8b-kwrjv   1/1     Running   0          44h
+$ kubectl delete rs my-request
+replicaset.apps "my-request" deleted
+$ kubectl delete po my-request-5n2m6-dual-2wn7w
+pod "my-request-5n2m6-dual-2wn7w" deleted
+$ helm delete dpctlr
+release "dpctlr" uninstalled
 ```
