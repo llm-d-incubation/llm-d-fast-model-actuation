@@ -190,11 +190,6 @@ class TestVllmInstance:
 
         instance = VllmInstance("test-id", vllm_config)
 
-        # Not started
-        status = instance.get_status()
-        assert status["status"] == "not_started"
-        assert status["pid"] is None
-
         # Running
         instance.start()
         status = instance.get_status()

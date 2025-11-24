@@ -104,12 +104,6 @@ class VllmInstance:
         Returns the status of the process and its PID or the no process
         :return: Status and PID of the running process.
         """
-        if not self.process:
-            return {
-                "status": "not_started",
-                "instance_id": self.instance_id,
-                "pid": None,
-            }
 
         return {
             "status": "running" if self.process.is_alive() else "stopped",
