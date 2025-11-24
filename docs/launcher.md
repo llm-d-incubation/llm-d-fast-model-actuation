@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Multi-Instance vLLM Launcher (a.k.a. the launcher) is a Python program that implements a REST API service that allows you to dynamically create, manage, and terminate vLLM inference server instances. The goal is to achieve model swapping functionality without changes to vLLM. This enables flexible model serving where clients can spin up different models on demand, and support concurrent inference workloads.
+The Multi-Instance vLLM Launcher (a.k.a. the launcher) is a Python program that implements a REST API service that allows clients to dynamically create, manage, and terminate vLLM inference server instances. The goal is to achieve model swapping functionality without changes to vLLM. This enables flexible model serving where clients can spin up different models on demand, and support concurrent inference workloads.
 
 The launcher preloads vLLM’s Python modules to accelerate the initialization of multiple instances. Each vLLM process launched is therefore a subprocess of the launcher.
 
@@ -467,7 +467,7 @@ curl -X POST http://localhost:8001/v2/vllm/instances \
   }'
 ```
 
-### Example 4: Check All Running Instances
+### Example 4: List Status of All Instances
 
 ```bash
 # Get detailed status
