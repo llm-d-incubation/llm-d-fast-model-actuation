@@ -339,6 +339,7 @@ def vllm_kickoff(vllm_config: VllmConfig):
     :param vllm_config: vLLM configuration parameters and env variables
     """
 
+    logger.info(f"VLLM process (PID: {os.getpid()}) started.")
     # Set env vars in the current process
     if vllm_config.env_vars:
         set_env_vars(vllm_config.env_vars)
