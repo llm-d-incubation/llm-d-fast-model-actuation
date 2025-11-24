@@ -85,6 +85,10 @@ type ProviderData struct {
 // (it does not rely on this label for anything).
 const AcceleratorsAnnotationName string = "dual-pods.llm-d.ai/accelerators"
 
+// LauncherBasedAnnotationName is the name of an annotation that indicates that
+// a server-providing Pod is launcher-based.
+const LauncherBasedAnnotationName string = "dual-pods.llm-d.ai/launcher-based"
+
 // DualLabelName is the name of a label that the dual-pods controller
 // maintains on the server-requesting and server-providing Pods.
 // While bound, this label is present and its value is the name of the
