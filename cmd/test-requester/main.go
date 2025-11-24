@@ -115,7 +115,7 @@ func main() {
 	go func() {
 		defer wg.Done()
 
-		err := coordination.RunWithGPUUUIDs(ctx, strconv.FormatInt(int64(spiPort), 10), &ready, gpuUUIDs)
+		err := coordination.RunWithGPUUUIDs(ctx, strconv.FormatInt(int64(spiPort), 10), &ready, os.Stdout, gpuUUIDs)
 		if err != nil {
 			logger.Error(err, "failed to start requester SPI server")
 		}

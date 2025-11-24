@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os/exec"
 	"strconv"
@@ -71,7 +72,7 @@ func getGpuUUIDs() ([]string, error) {
 
 // Run starts an HTTP server managing the endpoints
 // consumed by the dual-pods controller.
-func Run(ctx context.Context, port string, ready *atomic.Bool) error {
+func Run(ctx context.Context, port string, ready *atomic.Bool, logWriter io.Writer) error {
 	logger := klog.FromContext(ctx).WithName("spi-server")
 
 	gpuUUIDs, err := getGpuUUIDs()
@@ -83,7 +84,7 @@ func Run(ctx context.Context, port string, ready *atomic.Bool) error {
 	} else {
 		logger.Info("Got GPU UUIDs", "uuids", gpuUUIDs)
 	}
-	return RunWithGPUUUIDs(ctx, port, ready, gpuUUIDs)
+	return RunWithGPUUUIDs(ctx, port, ready, logWriter, gpuUUIDs)
 }
 
 func gpuMemoryHandler(logger klog.Logger) func(w http.ResponseWriter, r *http.Request) {
@@ -143,13 +144,66 @@ func newSetReadyHandler(logger klog.Logger, ready *atomic.Bool, newReady bool) f
 	}
 }
 
-func RunWithGPUUUIDs(ctx context.Context, port string, ready *atomic.Bool, gpuUUIDs []string) error {
+func newSetLogHanlder(logger klog.Logger, logWriter io.Writer) func(w http.ResponseWriter, r *http.Request) {
+	var nextLogPos int64
+	return func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close() //nolint:errcheck
+		startPosStr := r.FormValue(stubapi.LogStartPosParam)
+		if len(startPosStr) == 0 {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte("Missing " + stubapi.LogStartPosParam + " parameter\n"))
+			return
+		}
+		startPos, err := strconv.ParseInt(startPosStr, 10, 64)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = fmt.Fprintf(w, "Failed to parse %q as an int64: %s\n", startPosStr, err.Error())
+			return
+		}
+		if startPos > nextLogPos {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = fmt.Fprintf(w, "Starting position %d is beyond the current needed position %d\n", startPos, nextLogPos)
+			return
+		}
+		news, err := io.ReadAll(r.Body)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = fmt.Fprintf(w, "Failed to read log chunk from request body: %s", err.Error())
+			return
+		}
+		if startPos+int64(len(news)) <= nextLogPos {
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, "Accepted startPos=%d, chunkLen=%d, but that has nothing new; next pos=%d\n", startPos, len(news), nextLogPos)
+		} else {
+			if startPos < nextLogPos {
+				news = news[nextLogPos-startPos:]
+			}
+			wrote, err := logWriter.Write(news)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = fmt.Fprintf(w, "Failed to write log chunk: %s", err.Error())
+				return
+			}
+			if wrote != len(news) {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = fmt.Fprintf(w, "Failed to write %d bytes of log, only wrote %d", len(news), wrote)
+				return
+			}
+			nextLogPos += int64(len(news))
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, "Accepted startPos=%d, newContenLen=%d, new next pos=%d", startPos, len(news), nextLogPos)
+		}
+	}
+}
+
+func RunWithGPUUUIDs(ctx context.Context, port string, ready *atomic.Bool, logWriter io.Writer, gpuUUIDs []string) error {
 	logger := klog.FromContext(ctx).WithName("spi-server")
 	mux := http.NewServeMux()
 	mux.HandleFunc(strings.Join([]string{"GET", stubapi.AcceleratorQueryPath}, " "), gpuHandler(gpuUUIDs))
 	mux.HandleFunc(strings.Join([]string{"GET", stubapi.AcceleratorMemoryQueryPath}, " "), gpuMemoryHandler(logger))
 	mux.HandleFunc("POST "+stubapi.BecomeReadyPath, newSetReadyHandler(logger, ready, true))
 	mux.HandleFunc("POST "+stubapi.BecomeUnreadyPath, newSetReadyHandler(logger, ready, false))
+	mux.HandleFunc("POST "+stubapi.SetLogPath, newSetLogHanlder(logger, logWriter))
 
 	server := &http.Server{
 		Addr:    ":" + port,

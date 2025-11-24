@@ -56,7 +56,7 @@ func main() {
 	go func() {
 		defer wg.Done()
 
-		err := coordination.Run(ctx, spiPort, &ready)
+		err := coordination.Run(ctx, spiPort, &ready, os.Stdout)
 		if err != nil {
 			logger.Error(err, "failed to start requester SPI server")
 		}

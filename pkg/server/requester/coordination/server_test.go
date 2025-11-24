@@ -19,9 +19,12 @@ package coordination
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -36,7 +39,7 @@ func FuzzServer(f *testing.F) {
 	ctx, cancel := context.WithCancel(f.Context())
 	port := "28083"
 	go func() {
-		err := RunWithGPUUUIDs(ctx, port, &ready, gpuIDs)
+		err := RunWithGPUUUIDs(ctx, port, &ready, nil, gpuIDs)
 		if err != nil {
 			f.Logf("Run failed: %s", err.Error())
 		}
@@ -72,5 +75,62 @@ func FuzzServer(f *testing.F) {
 		}
 
 	})
+	cancel()
+}
+
+func TestLogChunking(t *testing.T) {
+	var rightLog [600]byte
+	for idx := range 600 {
+		rightLog[idx] = '0' + byte(rand.IntN(10))
+	}
+	var logBuilder strings.Builder
+	ctx, cancel := context.WithCancel(t.Context())
+	var ready atomic.Bool
+	port := "28084"
+	go func() {
+		err := RunWithGPUUUIDs(ctx, port, &ready, &logBuilder, []string{"x"})
+		if err != nil {
+			t.Logf("Run failed: %s", err.Error())
+		}
+	}()
+	for {
+		curLen := logBuilder.Len()
+		var startPos int
+		if curLen > 590 {
+			break
+		}
+		if curLen > 0 {
+			startPos = rand.IntN((curLen + 600) / 2)
+		}
+		chunkLen := 100 + rand.IntN(100)
+		if startPos > 400 {
+			chunkLen = rand.IntN(600 - startPos)
+		}
+		chunkReader := strings.NewReader(string(rightLog[startPos : startPos+chunkLen]))
+		resp, err := http.Post(fmt.Sprintf("http://localhost:%s%s?%s=%d", port, stubapi.SetLogPath, stubapi.LogStartPosParam, startPos), "text/plain", chunkReader)
+		if err != nil {
+			t.Fatalf("Failed: %s", err.Error())
+		}
+		expectBad := startPos > curLen
+		if resp.StatusCode >= 500 {
+			respBody, _ := io.ReadAll(resp.Body)
+			t.Fatalf("At curLen=%d, startPos=%d, chunkLen=%d, got internal error: %s\n%s", curLen, startPos, chunkLen, resp.Status, respBody)
+		}
+		gotBad := resp.StatusCode >= 400
+		if expectBad != gotBad {
+			t.Fatalf("At curLen=%d, startPos=%d, chunkLen=%d, expectedBad=%v but got status %d", curLen, startPos, chunkLen, expectBad, resp.StatusCode)
+		} else if expectBad {
+			t.Logf("At curLen=%d, startPos=%d, chunkLen=%d, got correct 4XX", curLen, startPos, chunkLen)
+		} else {
+			t.Logf("At curLen=%d, startPos=%d, chunkLen=%d, successful chunk write", curLen, startPos, chunkLen)
+		}
+		currentLog := logBuilder.String()
+		if len(currentLog) < startPos+chunkLen && !expectBad {
+			t.Fatalf("At curLen=%d, startPos=%d, chunkLen=%d, resulting log builder len=%d", curLen, startPos, chunkLen, logBuilder.Len())
+		}
+		if currentLog != string(rightLog[:len(currentLog)]) {
+			t.Fatalf("At curLen=%d, startPos=%d, chunkLen=%d, wrong log contents", curLen, startPos, chunkLen)
+		}
+	}
 	cancel()
 }
