@@ -100,11 +100,6 @@ class VllmInstance:
         Returns the status of the process
         :return: Status of the running process.
         """
-        if not self.process:
-            return {
-                "status": "not_started",
-                "instance_id": self.instance_id,
-            }
 
         return {
             "status": "running" if self.process.is_alive() else "stopped",
