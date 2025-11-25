@@ -107,6 +107,9 @@ func TestLogChunking(t *testing.T) {
 		if startPos > 400 {
 			chunkLen = rand.IntN(fullLogSize - startPos)
 		}
+		if rand.IntN(7) == 1 {
+			chunkLen = 0
+		}
 		chunkReader := strings.NewReader(string(rightLog[startPos : startPos+chunkLen]))
 		resp, err := http.Post(fmt.Sprintf("http://localhost:%s%s?%s=%d", port, stubapi.SetLogPath, stubapi.LogStartPosParam, startPos), "text/plain", chunkReader)
 		if err != nil {
