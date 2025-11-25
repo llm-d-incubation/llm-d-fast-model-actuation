@@ -22,6 +22,10 @@ for node in $(kubectl get node -l nvidia.com/gpu.present=true -o name | sed 's$n
     echo "Considering $node"
     got=$(kubectl get cm gpu-map -o jsonpath="{.data.${node}}")
     if [ -n "$got" ]; then continue; fi
+    if [ "$(kubectl get node ${node} -o 'jsonpath={.spec.unschedulable}')" == "true" ]; then
+        echo "Will not index Node $node because it is unschedulable"
+        continue
+    fi
     kubectl create -f - <<EOF
 apiVersion: v1
 kind: Pod
@@ -45,7 +49,11 @@ spec:
   nodeSelector:
     kubernetes.io/hostname: "$node"
 EOF
-    kubectl wait pod/${node}-map --for='jsonpath={.status.phase}'=Succeeded
+    if ! kubectl wait pod/${node}-map --for 'jsonpath={.status.phase}'=Succeeded
+    then echo "Could not index node $node"
+         kubectl delete pod ${node}-map
+         continue
+    fi
     map=$(kubectl logs ${node}-map | while read index id; do echo -n " \"$id\": $index"; done)
     kubectl delete pod ${node}-map
     map_qq=$(sed 's/"/\\\"/g' <<<"${map}")
