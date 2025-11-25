@@ -79,8 +79,9 @@ func FuzzServer(f *testing.F) {
 }
 
 func TestLogChunking(t *testing.T) {
-	var rightLog [600]byte
-	for idx := range 600 {
+	const fullLogSize = 600
+	var rightLog [fullLogSize]byte
+	for idx := range fullLogSize {
 		rightLog[idx] = '0' + byte(rand.IntN(10))
 	}
 	var logBuilder strings.Builder
@@ -100,11 +101,11 @@ func TestLogChunking(t *testing.T) {
 			break
 		}
 		if curLen > 0 {
-			startPos = rand.IntN((curLen + 600) / 2)
+			startPos = rand.IntN((curLen + fullLogSize) / 2)
 		}
 		chunkLen := 100 + rand.IntN(100)
 		if startPos > 400 {
-			chunkLen = rand.IntN(600 - startPos)
+			chunkLen = rand.IntN(fullLogSize - startPos)
 		}
 		chunkReader := strings.NewReader(string(rightLog[startPos : startPos+chunkLen]))
 		resp, err := http.Post(fmt.Sprintf("http://localhost:%s%s?%s=%d", port, stubapi.SetLogPath, stubapi.LogStartPosParam, startPos), "text/plain", chunkReader)
