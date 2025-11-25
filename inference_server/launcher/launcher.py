@@ -56,7 +56,7 @@ class VllmInstance:
     def start(self) -> dict:
         """
         Start this vLLM instance
-        :return: Status of the process and its PID.
+        :return: Status of the process.
         """
         if self.process and self.process.is_alive():
             return {"status": "already_running", "instance_id": self.instance_id}
@@ -67,22 +67,19 @@ class VllmInstance:
         return {
             "status": "started",
             "instance_id": self.instance_id,
-            "pid": self.process.pid,
         }
 
     def stop(self, timeout: int = 10) -> dict:
         """
         Stop existing vLLM instance
         :param timeout: waits for the process to stop, defaults to 10
-        :return: a dictionary with the status "terminated" and the process ID
+        :return: a dictionary with the status "terminated"
         """
         if not self.process or not self.process.is_alive():
             return {
                 "status": "not_running",
                 "instance_id": self.instance_id,
             }
-
-        pid = self.process.pid
 
         # Graceful termination
         self.process.terminate()
@@ -96,25 +93,22 @@ class VllmInstance:
         return {
             "status": "terminated",
             "instance_id": self.instance_id,
-            "pid": pid,
         }
 
     def get_status(self) -> dict:
         """
-        Returns the status of the process and its PID or the no process
-        :return: Status and PID of the running process.
+        Returns the status of the process
+        :return: Status of the running process.
         """
         if not self.process:
             return {
                 "status": "not_started",
                 "instance_id": self.instance_id,
-                "pid": None,
             }
 
         return {
             "status": "running" if self.process.is_alive() else "stopped",
             "instance_id": self.instance_id,
-            "pid": self.process.pid,
         }
 
 
