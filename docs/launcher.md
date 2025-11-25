@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Multi-Instance vLLM Launcher (a.k.a. the launcher) is a Python program that implements a REST API service that allows clients to dynamically create, manage, and terminate vLLM inference server instances. The goal is to achieve model swapping functionality without changes to vLLM. This enables flexible model serving where clients can spin up different models on demand, and support concurrent inference workloads.
+The Multi-Instance vLLM Launcher (a.k.a. the launcher) is a Python program that implements a REST API service that allows clients to dynamically create, manage, and delete vLLM inference server instances. The goal is to achieve model swapping functionality without changes to vLLM. This enables flexible model serving where clients can spin up different models on demand, and support concurrent inference workloads.
 
 The launcher preloads vLLM’s Python modules to accelerate the initialization of multiple instances. Each vLLM process launched is therefore a subprocess of the launcher.
 
@@ -133,7 +133,6 @@ Response:
 {
   "status": "started",
   "instance_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "pid": 12345
 }
 ```
 
@@ -242,7 +241,6 @@ Create a new vLLM instance with an auto-generated UUID.
 {
   "status": "started",
   "instance_id": "uuid-string",
-  "pid": 12345
 }
 ```
 
@@ -289,7 +287,6 @@ Stop and delete a specific vLLM instance.
 {
   "status": "terminated",
   "instance_id": "instance-id",
-  "pid": 12345
 }
 ```
 
@@ -311,8 +308,8 @@ Stop and delete all running vLLM instances. This functionality can be specially 
 {
   "status": "all_stopped",
   "stopped_instances": [
-    {"status": "terminated", "instance_id": "id-1", "pid": 12345},
-    {"status": "terminated", "instance_id": "id-2", "pid": 12346}
+    {"status": "terminated", "instance_id": "id-1"},
+    {"status": "terminated", "instance_id": "id-2"}
   ],
   "total_stopped": 2
 }
@@ -353,17 +350,14 @@ Get status information for all instances. `Detail` is `True` by default.
     {
       "status": "running",
       "instance_id": "id-1",
-      "pid": 12345
     },
     {
       "status": "stopped",
       "instance_id": "id-2",
-      "pid": 12346
     },
     {
       "status": "running",
       "instance_id": "id-3",
-      "pid": 12347
     }
   ]
 }
@@ -392,7 +386,6 @@ Get status information for a specific instance.
 {
   "status": "running",
   "instance_id": "instance-id",
-  "pid": 12345
 }
 ```
 
@@ -478,7 +471,7 @@ curl http://localhost:8001/v2/vllm/instances
 
 ### vLLM Options
 
-The `options` field contains stuff added to the command line of the launched `vllm serve`. Common options include:
+The `options` field contains stuff added to the command line of the launched `vllm serve`. Options are listed below.
 
 #### Required Options
 
@@ -609,7 +602,7 @@ Be mindful of system resources:
 - **Memory**: Each instance loads a full model into memory
 - **GPU**: Plan GPU allocation carefully
 - **CPU**: vLLM uses CPU for pre/post-processing
-- **Disk**: Models are cached in `~/.cache/huggingface`
+- **Disk**: Models are cached in the container's filesystem
 
 ### 5. Testing
 
