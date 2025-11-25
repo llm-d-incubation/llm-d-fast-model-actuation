@@ -82,7 +82,7 @@ func TestLogChunking(t *testing.T) {
 	const fullLogSize = 600
 	var rightLog [fullLogSize]byte
 	for idx := range fullLogSize {
-		rightLog[idx] = '0' + byte(rand.IntN(10))
+		rightLog[idx] = byte(1 + rand.IntN(127))
 	}
 	var logBuilder strings.Builder
 	ctx, cancel := context.WithCancel(t.Context())
