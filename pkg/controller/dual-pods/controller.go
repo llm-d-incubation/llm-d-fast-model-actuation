@@ -266,13 +266,13 @@ type serverData struct {
 
 // nolint
 type launcherData struct {
-	// instances is a map,
+	// Instances is a map,
 	// where key is an instance's ID which is the instance' nominal hash,
 	// and value is the last used time of the instance.
-	instances map[string]time.Time
+	Instances map[string]time.Time
 
-	// accurate indicates whether the set of nominal hash in instances is accurate.
-	accurate bool
+	// Accurate indicates whether the set of nominal hash in Instances is accurate.
+	Accurate bool
 }
 
 type queueItem interface {
