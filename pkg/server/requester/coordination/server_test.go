@@ -96,10 +96,10 @@ func TestLogChunking(t *testing.T) {
 	}()
 	for {
 		curLen := logBuilder.Len()
-		var startPos int
-		if curLen > 590 {
+		if curLen > fullLogSize-fullLogSize/60 {
 			break
 		}
+		var startPos int
 		if curLen > 0 {
 			startPos = rand.IntN((curLen + fullLogSize) / 2)
 		}
@@ -111,11 +111,14 @@ func TestLogChunking(t *testing.T) {
 			chunkLen = 0
 		}
 		chunkReader := strings.NewReader(string(rightLog[startPos : startPos+chunkLen]))
+		if rand.IntN(10) == 1 {
+			startPos = -(1 + rand.IntN(fullLogSize))
+		}
 		resp, err := http.Post(fmt.Sprintf("http://localhost:%s%s?%s=%d", port, stubapi.SetLogPath, stubapi.LogStartPosParam, startPos), "text/plain", chunkReader)
 		if err != nil {
 			t.Fatalf("Failed: %s", err.Error())
 		}
-		expectBad := startPos > curLen
+		expectBad := startPos < 0 || startPos > curLen
 		if resp.StatusCode >= 500 {
 			respBody, _ := io.ReadAll(resp.Body)
 			t.Fatalf("At curLen=%d, startPos=%d, chunkLen=%d, got internal error: %s\n%s", curLen, startPos, chunkLen, resp.Status, respBody)

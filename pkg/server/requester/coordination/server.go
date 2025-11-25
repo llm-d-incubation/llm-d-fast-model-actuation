@@ -151,6 +151,9 @@ func newSetLogHandler(logger klog.Logger, logWriter io.Writer) func(w http.Respo
 	addChunk := func(startPos int64, chunk []byte) (code int, message string) {
 		mutex.Lock()
 		defer mutex.Unlock()
+		if startPos < 0 {
+			return http.StatusBadRequest, fmt.Sprintf("Starting position %d is unacceptable because it is negative", startPos)
+		}
 		if startPos > nextLogPos {
 			return http.StatusBadRequest, fmt.Sprintf("Starting position %d is beyond the current contentLength=%d", startPos, nextLogPos)
 		}
