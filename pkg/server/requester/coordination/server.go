@@ -25,6 +25,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -144,8 +145,32 @@ func newSetReadyHandler(logger klog.Logger, ready *atomic.Bool, newReady bool) f
 	}
 }
 
-func newSetLogHanlder(logger klog.Logger, logWriter io.Writer) func(w http.ResponseWriter, r *http.Request) {
+func newSetLogHandler(logger klog.Logger, logWriter io.Writer) func(w http.ResponseWriter, r *http.Request) {
 	var nextLogPos int64
+	var mutex sync.Mutex
+	addChunk := func(startPos int64, chunk []byte) (code int, message string) {
+		mutex.Lock()
+		defer mutex.Unlock()
+		if startPos > nextLogPos {
+			return http.StatusBadRequest, fmt.Sprintf("Starting position %d is beyond the current contentLength=%d", startPos, nextLogPos)
+		}
+		if startPos+int64(len(chunk)) <= nextLogPos {
+			return http.StatusOK, fmt.Sprintf("Accepted startPos=%d, chunkLength=%d, but that has nothing new; still contentLength=%d", startPos, len(chunk), nextLogPos)
+		}
+		news := chunk
+		if startPos < nextLogPos {
+			news = chunk[nextLogPos-startPos:]
+		}
+		wrote, err := logWriter.Write(news)
+		if err != nil {
+			return http.StatusInternalServerError, fmt.Sprintf("Failed to write log chunk: %s", err.Error())
+		}
+		if wrote != len(news) {
+			return http.StatusInternalServerError, fmt.Sprintf("Failed to write %d bytes of log, only wrote %d", len(news), wrote)
+		}
+		nextLogPos += int64(len(news))
+		return http.StatusOK, fmt.Sprintf("Accepted startPos=%d, chunkLength=%d; addedContentLength=%d, new contentLength=%d", startPos, len(chunk), len(news), nextLogPos)
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close() //nolint:errcheck
 		startPosStr := r.FormValue(stubapi.LogStartPosParam)
@@ -160,39 +185,19 @@ func newSetLogHanlder(logger klog.Logger, logWriter io.Writer) func(w http.Respo
 			_, _ = fmt.Fprintf(w, "Failed to parse %q as an int64: %s\n", startPosStr, err.Error())
 			return
 		}
-		if startPos > nextLogPos {
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = fmt.Fprintf(w, "Starting position %d is beyond the current needed position %d\n", startPos, nextLogPos)
-			return
-		}
 		news, err := io.ReadAll(r.Body)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
-			_, _ = fmt.Fprintf(w, "Failed to read log chunk from request body: %s", err.Error())
+			_, _ = fmt.Fprintf(w, "Failed to read log chunk from request body: %s\n", err.Error())
 			return
 		}
-		if startPos+int64(len(news)) <= nextLogPos {
-			w.WriteHeader(http.StatusOK)
-			_, _ = fmt.Fprintf(w, "Accepted startPos=%d, chunkLen=%d, but that has nothing new; next pos=%d\n", startPos, len(news), nextLogPos)
-		} else {
-			if startPos < nextLogPos {
-				news = news[nextLogPos-startPos:]
-			}
-			wrote, err := logWriter.Write(news)
-			if err != nil {
-				w.WriteHeader(http.StatusInternalServerError)
-				_, _ = fmt.Fprintf(w, "Failed to write log chunk: %s", err.Error())
-				return
-			}
-			if wrote != len(news) {
-				w.WriteHeader(http.StatusInternalServerError)
-				_, _ = fmt.Fprintf(w, "Failed to write %d bytes of log, only wrote %d", len(news), wrote)
-				return
-			}
-			nextLogPos += int64(len(news))
-			w.WriteHeader(http.StatusOK)
-			_, _ = fmt.Fprintf(w, "Accepted startPos=%d, newContenLen=%d, new next pos=%d", startPos, len(news), nextLogPos)
+		status, message := addChunk(startPos, news)
+		if status == http.StatusOK {
+			logger.Info(message)
 		}
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(message))
+		_, _ = w.Write([]byte{'\r', '\n'})
 	}
 }
 
@@ -203,7 +208,7 @@ func RunWithGPUUUIDs(ctx context.Context, port string, ready *atomic.Bool, logWr
 	mux.HandleFunc(strings.Join([]string{"GET", stubapi.AcceleratorMemoryQueryPath}, " "), gpuMemoryHandler(logger))
 	mux.HandleFunc("POST "+stubapi.BecomeReadyPath, newSetReadyHandler(logger, ready, true))
 	mux.HandleFunc("POST "+stubapi.BecomeUnreadyPath, newSetReadyHandler(logger, ready, false))
-	mux.HandleFunc("POST "+stubapi.SetLogPath, newSetLogHanlder(logger, logWriter))
+	mux.HandleFunc("POST "+stubapi.SetLogPath, newSetLogHandler(logger, logWriter))
 
 	server := &http.Server{
 		Addr:    ":" + port,
