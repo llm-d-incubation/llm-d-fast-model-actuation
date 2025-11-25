@@ -26,14 +26,14 @@ package spi
 // A 200 response's body must contain a JSON array of strings.
 // Each string identifies one accelerator, in a way that
 // is appropriate for the software used to access the accelerators.
-const AcceleratorQueryPath = "/v1/dual-pod/accelerators"
+const AcceleratorQueryPath = "/v1/dual-pods/accelerators"
 
 // AcceleratorMemoryQueryPath is the path part of the URL that
 // responds to an HTTP GET rquest with a response body that is
 // the JSON for a JSON "object" whose keys are accelerator IDs
 // and whose values are integers, the number of bytes of accelerator
 // memory in use.
-const AcceleratorMemoryQueryPath = "/v1/dual-pod/accelerator-memory-usage"
+const AcceleratorMemoryQueryPath = "/v1/dual-pods/accelerator-memory-usage"
 
 // BecomeReadyPath is the path to POST to in order to set readiness to true
 const BecomeReadyPath = "/v1/become-ready"

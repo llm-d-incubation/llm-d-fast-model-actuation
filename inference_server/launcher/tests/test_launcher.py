@@ -63,7 +63,6 @@ def client():
 # Mock process for testing without actually starting vLLM
 class MockProcess:
     def __init__(self):
-        self.pid = 12345
         self._is_alive = True
         self.terminated = False
         self.killed = False
@@ -125,7 +124,6 @@ class TestVllmInstance:
 
         assert result["status"] == "started"
         assert result["instance_id"] == "test-id"
-        assert result["pid"] == 12345
 
     @patch("launcher.multiprocessing.Process")
     def test_instance_start_already_running(self, mock_process_class, vllm_config):
@@ -152,7 +150,6 @@ class TestVllmInstance:
 
         assert result["status"] == "terminated"
         assert result["instance_id"] == "test-id"
-        assert result["pid"] == 12345
         assert mock_process.terminated is True
 
     @patch("launcher.multiprocessing.Process")
@@ -194,13 +191,11 @@ class TestVllmInstance:
         instance.start()
         status = instance.get_status()
         assert status["status"] == "running"
-        assert status["pid"] == 12345
 
         # Stopped
         mock_process._is_alive = False
         status = instance.get_status()
         assert status["status"] == "stopped"
-        assert status["pid"] == 12345
 
 
 # Tests for VllmMultiProcessManager
@@ -215,7 +210,6 @@ class TestVllmMultiProcessManager:
 
         assert result["status"] == "started"
         assert "instance_id" in result
-        assert result["pid"] == 12345
         assert len(manager.instances) == 1
 
     @patch("launcher.multiprocessing.Process")
@@ -353,7 +347,6 @@ class TestAPIEndpoints:
         mock_manager.create_instance.return_value = {
             "status": "started",
             "instance_id": "test-id",
-            "pid": 12345,
         }
 
         response = client.post(
@@ -371,7 +364,6 @@ class TestAPIEndpoints:
         mock_manager.create_instance.return_value = {
             "status": "started",
             "instance_id": "custom-id",
-            "pid": 12345,
         }
 
         response = client.put(
@@ -400,7 +392,6 @@ class TestAPIEndpoints:
         mock_manager.stop_instance.return_value = {
             "status": "terminated",
             "instance_id": "test-id",
-            "pid": 12345,
         }
 
         response = client.delete("/v2/vllm/instances/test-id")
@@ -450,7 +441,6 @@ class TestAPIEndpoints:
             "instances": {
                 "status": "running",
                 "instance_id": "test-id",
-                "pid": 12345,
             },
         }
 
@@ -467,7 +457,6 @@ class TestAPIEndpoints:
         mock_manager.get_instance_status.return_value = {
             "status": "running",
             "instance_id": "test-id",
-            "pid": 12345,
         }
 
         response = client.get("/v2/vllm/instances/test-id")
