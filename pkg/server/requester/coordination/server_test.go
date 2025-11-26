@@ -99,16 +99,19 @@ func TestLogChunking(t *testing.T) {
 		if curLen > fullLogSize-fullLogSize/60 {
 			break
 		}
-		var startPos int
-		if curLen > 0 {
+		var startPos, chunkLen int
+		if rand.IntN(6) == 1 {
+			startPos = max(0, curLen-rand.IntN(4))
+		} else {
 			startPos = rand.IntN((curLen + fullLogSize) / 2)
 		}
-		chunkLen := 100 + rand.IntN(100)
-		if startPos > 400 {
-			chunkLen = rand.IntN(fullLogSize - startPos)
+		if rand.IntN(3) == 1 {
+			chunkLen = rand.IntN(8)
+		} else {
+			chunkLen = rand.IntN(100)
 		}
-		if rand.IntN(7) == 1 {
-			chunkLen = 0
+		if startPos+chunkLen > fullLogSize {
+			chunkLen = rand.IntN(fullLogSize - startPos)
 		}
 		chunkReader := strings.NewReader(string(rightLog[startPos : startPos+chunkLen]))
 		if rand.IntN(10) == 1 {
