@@ -26,6 +26,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -211,9 +212,13 @@ type GpuLocation struct {
 }
 
 type nodeData struct {
-	// inferenceServers maps UID of serve-requesting Pod to data.
+	// InferenceServers maps UID of serve-requesting Pod to data.
 	// Access only while holding controller mutex.
 	InferenceServers map[apitypes.UID]*serverData
+
+	// Launchers maps name of launcher-based server-providing Pod to launcherData.
+	// Access only while holding controller mutex.
+	Launchers map[string]*launcherData
 
 	// ItemsMutex may be acquired while holding controller mutex, not vice-versa.
 	ItemsMutex sync.Mutex
@@ -257,6 +262,17 @@ type serverData struct {
 	// from apiserver. Remember there is no sync between the notification streams for
 	// different objects.
 	RequesterDeleteRequested bool
+}
+
+// nolint
+type launcherData struct {
+	// Instances is a map,
+	// where key is an instance's ID which is the instance' nominal hash,
+	// and value is the last used time of the instance.
+	Instances map[string]time.Time
+
+	// Accurate indicates whether the set of nominal hash in Instances is accurate.
+	Accurate bool
 }
 
 type queueItem interface {
