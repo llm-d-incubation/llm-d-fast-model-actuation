@@ -90,6 +90,10 @@ spec:
     spec:
       containers:
         - name: inference-server
+          command:
+          - /app/requester
+          - --logtostderr=false
+          - --log_file=/tmp/requester.log
           image: ${CONTAINER_IMG_REG}/requester:latest
           imagePullPolicy: Always
           ports:
@@ -106,7 +110,7 @@ spec:
           resources:
             limits:
               nvidia.com/gpu: "1"
-              cpu: "1"
+              cpu: "200m"
               memory: 250Mi
 EOF
 ```

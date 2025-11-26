@@ -20,10 +20,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -71,7 +73,7 @@ func getGpuUUIDs() ([]string, error) {
 
 // Run starts an HTTP server managing the endpoints
 // consumed by the dual-pods controller.
-func Run(ctx context.Context, port string, ready *atomic.Bool) error {
+func Run(ctx context.Context, port string, ready *atomic.Bool, logWriter io.Writer) error {
 	logger := klog.FromContext(ctx).WithName("spi-server")
 
 	gpuUUIDs, err := getGpuUUIDs()
@@ -83,7 +85,7 @@ func Run(ctx context.Context, port string, ready *atomic.Bool) error {
 	} else {
 		logger.Info("Got GPU UUIDs", "uuids", gpuUUIDs)
 	}
-	return RunWithGPUUUIDs(ctx, port, ready, gpuUUIDs)
+	return RunWithGPUUUIDs(ctx, port, ready, logWriter, gpuUUIDs)
 }
 
 func gpuMemoryHandler(logger klog.Logger) func(w http.ResponseWriter, r *http.Request) {
@@ -143,13 +145,73 @@ func newSetReadyHandler(logger klog.Logger, ready *atomic.Bool, newReady bool) f
 	}
 }
 
-func RunWithGPUUUIDs(ctx context.Context, port string, ready *atomic.Bool, gpuUUIDs []string) error {
+func newSetLogHandler(logger klog.Logger, logWriter io.Writer) func(w http.ResponseWriter, r *http.Request) {
+	var nextLogPos int64
+	var mutex sync.Mutex
+	addChunk := func(startPos int64, chunk []byte) (code int, message string) {
+		mutex.Lock()
+		defer mutex.Unlock()
+		if startPos < 0 {
+			return http.StatusBadRequest, fmt.Sprintf("Starting position %d is unacceptable because it is negative", startPos)
+		}
+		if startPos > nextLogPos {
+			return http.StatusBadRequest, fmt.Sprintf("Starting position %d is beyond the current contentLength=%d", startPos, nextLogPos)
+		}
+		if startPos+int64(len(chunk)) <= nextLogPos {
+			return http.StatusOK, fmt.Sprintf("Accepted startPos=%d, chunkLength=%d, but that has nothing new; still contentLength=%d", startPos, len(chunk), nextLogPos)
+		}
+		news := chunk
+		if startPos < nextLogPos {
+			news = chunk[nextLogPos-startPos:]
+		}
+		wrote, err := logWriter.Write(news)
+		if err != nil {
+			return http.StatusInternalServerError, fmt.Sprintf("Failed to write log chunk: %s", err.Error())
+		}
+		if wrote != len(news) {
+			return http.StatusInternalServerError, fmt.Sprintf("Failed to write %d bytes of log, only wrote %d", len(news), wrote)
+		}
+		nextLogPos += int64(len(news))
+		return http.StatusOK, fmt.Sprintf("Accepted startPos=%d, chunkLength=%d; addedContentLength=%d, new contentLength=%d", startPos, len(chunk), len(news), nextLogPos)
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close() //nolint:errcheck
+		startPosStr := r.FormValue(stubapi.LogStartPosParam)
+		if len(startPosStr) == 0 {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte("Missing " + stubapi.LogStartPosParam + " parameter\n"))
+			return
+		}
+		startPos, err := strconv.ParseInt(startPosStr, 10, 64)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = fmt.Fprintf(w, "Failed to parse %q as an int64: %s\n", startPosStr, err.Error())
+			return
+		}
+		news, err := io.ReadAll(r.Body)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = fmt.Fprintf(w, "Failed to read log chunk from request body: %s\n", err.Error())
+			return
+		}
+		status, message := addChunk(startPos, news)
+		if status == http.StatusOK {
+			logger.Info(message)
+		}
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(message))
+		_, _ = w.Write([]byte{'\r', '\n'})
+	}
+}
+
+func RunWithGPUUUIDs(ctx context.Context, port string, ready *atomic.Bool, logWriter io.Writer, gpuUUIDs []string) error {
 	logger := klog.FromContext(ctx).WithName("spi-server")
 	mux := http.NewServeMux()
 	mux.HandleFunc(strings.Join([]string{"GET", stubapi.AcceleratorQueryPath}, " "), gpuHandler(gpuUUIDs))
 	mux.HandleFunc(strings.Join([]string{"GET", stubapi.AcceleratorMemoryQueryPath}, " "), gpuMemoryHandler(logger))
 	mux.HandleFunc("POST "+stubapi.BecomeReadyPath, newSetReadyHandler(logger, ready, true))
 	mux.HandleFunc("POST "+stubapi.BecomeUnreadyPath, newSetReadyHandler(logger, ready, false))
+	mux.HandleFunc("POST "+stubapi.SetLogPath, newSetLogHandler(logger, logWriter))
 
 	server := &http.Server{
 		Addr:    ":" + port,

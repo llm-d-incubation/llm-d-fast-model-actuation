@@ -43,3 +43,19 @@ const BecomeUnreadyPath = "/v1/become-unready"
 
 // ReadyPath is where to send a GET to query readiness
 const ReadyPath = "/ready"
+
+// SetLogPath is the path to POST to in order to relay a chunk of the
+// inference server's log.
+// The body contains the log chunk, and should have content type "text/plain".
+// There should be a query parameter named "startPod" whose value
+// is the decimal representation of the starting position of the chunk,
+// 0 based.
+// The requester will utilize only new log content.
+// Response has status 200 if no problem,
+// status 400 if the startPos is beyond the last accepted content,
+// status 5XX on internal problem.
+const SetLogPath = "/v1/set-log"
+
+// LogStartPosParam is the name of the query parameter that
+// holds that starting position of a log chunk.
+const LogStartPosParam = "startPos"
