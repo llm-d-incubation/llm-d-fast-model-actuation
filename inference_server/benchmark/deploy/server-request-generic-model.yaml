@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: ${REPLICASET_NAME}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dp-example
+  template:
+    metadata:
+      labels:
+        app: dp-example
+      annotations:
+        dual-pod.llm-d.ai/admin-port: "8081"
+        dual-pod.llm-d.ai/server-patch: |
+          metadata:
+            labels: {
+              "model-reg": ${MODEL_REGISTRY},
+              "model-repo": ${MODEL_REPO},
+              "app": null}
+          spec:
+            containers:
+            - name: inference-server
+              image: docker.io/vllm/vllm-openai:v0.10.2
+              command:
+              - vllm
+              - serve
+              - --port=8000
+              - --model=${MODEL_REGISTRY}/${MODEL_REPO}
+              - --max-model-len=32768
+              - --kv-cache-memory=40974729216
+              env:
+              - name: VLLM_SERVER_DEV_MODE
+                value: "1"
+              - name: VLLM_CACHE_ROOT
+                value: /tmp
+              - name: FLASHINFER_WORKSPACE_BASE
+                value: /tmp
+              - name: XDG_CONFIG_HOME
+                value: /tmp
+              - name: XDG_CACHE_HOME
+                value: /tmp
+              - name: TRITON_HOME
+                value: /tmp
+              resources:
+                limits:
+                  cpu: "2"
+                  memory: 6Gi
+              readinessProbe:
+                httpGet:
+                  path: /health
+                  port: 8000
+                initialDelaySeconds: 60
+                periodSeconds: 5
+    spec:
+      containers:
+        - name: inference-server
+          image: ${CONTAINER_IMG_REG}/requester:${CONTAINER_IMG_VERSION}
+          imagePullPolicy: Always
+          ports:
+          - name: probes
+            containerPort: 8080
+          - name: spi
+            containerPort: 8081
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            limits:
+              nvidia.com/gpu: "1"
+              cpu: "1"
+              memory: 250Mi
