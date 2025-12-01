@@ -26,8 +26,6 @@ import (
 	"k8s.io/klog/v2"
 )
 
-// This generic controller is authored by Mike Spreitzer.
-
 // QueueAndWorkers is generic code for a typical controller's workqueue and worker goroutines
 // that pull from that queue.
 type QueueAndWorkers[Item comparable] struct {

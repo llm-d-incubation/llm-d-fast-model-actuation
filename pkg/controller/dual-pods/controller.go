@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -137,6 +138,8 @@ type Controller interface {
 	Start(context.Context) error
 }
 
+const sentinelNS = "Senti Nel"
+
 // NewController makes a new dual pods controller.
 // The given namespace is the one to focus on.
 func (config ControllerConfig) NewController(
@@ -168,7 +171,21 @@ func (config ControllerConfig) NewController(
 	if err != nil { //impossible
 		return nil, err
 	}
-	ctl.QueueAndWorkers = genctlr.NewQueueAndWorkers(string(ControllerName), config.NumWorkers, ctl.process)
+	ctl.KnowsProcessedSync = genctlr.NewKnowsProcessedSync(ControllerName, config.NumWorkers, ctl.process,
+		func(distinguisher int) queueItem {
+			return cmItem{ObjectName: cache.ObjectName{Name: strconv.FormatInt(int64(distinguisher), 10), Namespace: sentinelNS}}
+		},
+		func(qi queueItem) bool {
+			if cm, ok := qi.(cmItem); ok {
+				return cm.Namespace == sentinelNS
+			}
+			return false
+		},
+		func(ctx context.Context) {
+			logger := klog.FromContext(ctx)
+			logger.V(1).Info("All initial items processed")
+		})
+
 	_, err = ctl.podInformer.AddEventHandler(ctl)
 	if err != nil {
 		panic(err)
@@ -190,7 +207,7 @@ type controller struct {
 	cmLister      corev1listers.ConfigMapLister
 	nodeInformer  cache.SharedIndexInformer
 	nodeLister    corev1listers.NodeLister
-	genctlr.QueueAndWorkers[queueItem]
+	genctlr.KnowsProcessedSync[queueItem]
 
 	sleeperLimit        int
 	debugAccelMemory    bool
