@@ -63,18 +63,18 @@ echo-var:
 
 
 ## Location to install dependencies to
-LOCALBIN ?= $(shell pwd)/hack/tools
-$(LOCALBIN):
-	mkdir -p $(LOCALBIN)
+TOOLBIN ?= $(shell pwd)/hack/tools
+$(TOOLBIN):
+	mkdir -p $(TOOLBIN)
 
 ## Tool Binaries
-CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
+CONTROLLER_GEN ?= $(TOOLBIN)/controller-gen
 CONTROLLER_TOOLS_VERSION ?= v0.19.0
 CONTROLLER_GEN_VERSION ?= $(CONTROLLER_GEN)-$(CONTROLLER_TOOLS_VERSION)
 
 .PHONY: controller-gen
 controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary.
-$(CONTROLLER_GEN): $(LOCALBIN)
+$(CONTROLLER_GEN): $(TOOLBIN)
 	$(call go-install-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen,$(CONTROLLER_TOOLS_VERSION))
 
 .PHONY: manifests
@@ -96,7 +96,7 @@ set -e; \
 package=$(2)@$(3) ;\
 echo "Downloading $${package}" ;\
 rm -f $(1) || true ;\
-GOBIN=$(LOCALBIN) go install $${package} ;\
+GOBIN=$(TOOLBIN) go install $${package} ;\
 mv $(1) $(1)-$(3) ;\
 }
 endef
