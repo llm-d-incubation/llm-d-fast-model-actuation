@@ -63,13 +63,14 @@ echo-var:
 
 
 ## Location to install dependencies to
-LOCALBIN ?= $(shell pwd)/bin
+LOCALBIN ?= $(shell pwd)/hack/tools
 $(LOCALBIN):
 	mkdir -p $(LOCALBIN)
 
 ## Tool Binaries
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
-CONTROLLER_TOOLS_VERSION ?= v0.17.2
+CONTROLLER_TOOLS_VERSION ?= v0.19.0
+CONTROLLER_GEN_VERSION ?= $(CONTROLLER_GEN)-$(CONTROLLER_TOOLS_VERSION)
 
 .PHONY: controller-gen
 controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary.
@@ -78,11 +79,11 @@ $(CONTROLLER_GEN): $(LOCALBIN)
 
 .PHONY: manifests
 manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
-	$(CONTROLLER_GEN) rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+	$(CONTROLLER_GEN_VERSION) rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
 
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
-	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./..."
+	$(CONTROLLER_GEN_VERSION) object:headerFile="hack/boilerplate.go.txt" paths="./..."
 
 
 # go-install-tool will 'go install' any package with custom target and name of binary, if it doesn't exist
@@ -97,6 +98,5 @@ echo "Downloading $${package}" ;\
 rm -f $(1) || true ;\
 GOBIN=$(LOCALBIN) go install $${package} ;\
 mv $(1) $(1)-$(3) ;\
-} ;\
-ln -sf $(1)-$(3) $(1)
+}
 endef
