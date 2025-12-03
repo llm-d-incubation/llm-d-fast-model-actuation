@@ -306,43 +306,42 @@ type infSvrItem struct {
 	UID apitypes.UID
 	// RequesterName is the name of the Pod that had this UID
 	RequesterName string
+	InfSvrItemType
 }
 
-type infSvrItemType string
+type InfSvrItemType string
 
 // infSvrItemRequester is for a server-requesting Pod.
-const infSvrItemRequester infSvrItemType = "requester"
+const infSvrItemRequester InfSvrItemType = "requester"
 
 // infSvrItemBoundDirectProvider is for a server-providing Pod that
 // is 'direct' (i.e. not launcher-based), and bound to a server-requesting Pod.
-const infSvrItemBoundDirectProvider infSvrItemType = "bound_direct_provider"
+const infSvrItemBoundDirectProvider InfSvrItemType = "bound_direct_provider"
 
 // infSvrItemLauncherBasedProvider is for a server-providing Pod that is launcher-based.
-const infSvrItemLauncherBasedProvider infSvrItemType = "launcher_based_provider"
+const infSvrItemLauncherBasedProvider InfSvrItemType = "launcher_based_provider"
 
-const infSvrItemUndefined infSvrItemType = "undefined"
-
-// careAbout returns infSvrItem, infSvrItemType, owned.
+// careAbout returns an infSvrItem item and a bool owned.
 // Returns owned=true for server-requesting Pods, bound direct server-providing Pods, and launcher-based server-providing Pods;
 // returns owned=false for unbound direct providers and other Pods.
-func careAbout(pod *corev1.Pod) (infSvrItem, infSvrItemType, bool) {
+func careAbout(pod *corev1.Pod) (item infSvrItem, owned bool) {
 	if len(pod.Annotations[api.ServerPatchAnnotationName]) > 0 {
-		return infSvrItem{pod.UID, pod.Name}, infSvrItemRequester, true
+		return infSvrItem{pod.UID, pod.Name, infSvrItemRequester}, true
 	}
 	requesterStr := pod.Annotations[requesterAnnotationKey]
 	requesterParts := strings.Split(requesterStr, " ")
 	if len(requesterParts) != 2 {
-		return infSvrItem{}, infSvrItemUndefined, false
+		return infSvrItem{}, false
 	}
-	return infSvrItem{apitypes.UID(requesterParts[0]), requesterParts[1]}, infSvrItemBoundDirectProvider, true
+	return infSvrItem{apitypes.UID(requesterParts[0]), requesterParts[1], infSvrItemBoundDirectProvider}, true
 }
 
 const requesterIndexName = "requester"
 
 func requesterIndexFunc(obj any) ([]string, error) {
 	pod := obj.(*corev1.Pod)
-	item, it, have := careAbout(pod)
-	if have && it == infSvrItemBoundDirectProvider {
+	item, have := careAbout(pod)
+	if have && item.InfSvrItemType == infSvrItemBoundDirectProvider {
 		return []string{string(item.UID)}, nil
 	}
 	return []string{}, nil
@@ -351,24 +350,24 @@ func requesterIndexFunc(obj any) ([]string, error) {
 func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 	switch typed := obj.(type) {
 	case *corev1.Pod:
-		if item, it, owned := careAbout(typed); !owned {
+		if item, owned := careAbout(typed); !owned {
 			ctl.enqueueLogger.V(5).Info("Ignoring add of irrelevant Pod", "name", typed.Name)
 			return
 		} else {
 			nodeName := typed.Spec.NodeName
-			if it == infSvrItemBoundDirectProvider || it == infSvrItemLauncherBasedProvider {
+			if item.InfSvrItemType == infSvrItemBoundDirectProvider || item.InfSvrItemType == infSvrItemLauncherBasedProvider {
 				var err error
 				nodeName, err = getProviderNodeName(typed)
 				if err != nil {
 					ctl.enqueueLogger.Error(err, "Failed to determine node of provider")
 					return
 				}
-			} else if it == infSvrItemRequester && nodeName == "" {
+			} else if item.InfSvrItemType == infSvrItemRequester && nodeName == "" {
 				ctl.enqueueLogger.V(5).Info("Ignoring add of non-scheduled server-requesting Pod", "name", typed.Name)
 				return
 			}
 			nd := ctl.getNodeData(nodeName)
-			ctl.enqueueLogger.V(5).Info("Enqueuing inference server reference due to notification of add", "nodeName", nodeName, "item", item, "itemType", it, "isInInitialList", isInInitialList, "resourceVersion", typed.ResourceVersion)
+			ctl.enqueueLogger.V(5).Info("Enqueuing inference server reference due to notification of add", "nodeName", nodeName, "item", item, "isInInitialList", isInInitialList, "resourceVersion", typed.ResourceVersion)
 			nd.add(item)
 			ctl.Queue.Add(nodeItem{nodeName})
 		}
@@ -390,24 +389,24 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 func (ctl *controller) OnUpdate(prev, obj any) {
 	switch typed := obj.(type) {
 	case *corev1.Pod:
-		if item, it, owned := careAbout(typed); !owned {
+		if item, owned := careAbout(typed); !owned {
 			ctl.enqueueLogger.V(5).Info("Ignoring update of irrelevant Pod", "name", typed.Name)
 			return
 		} else {
 			nodeName := typed.Spec.NodeName
-			if it == infSvrItemBoundDirectProvider || it == infSvrItemLauncherBasedProvider {
+			if item.InfSvrItemType == infSvrItemBoundDirectProvider || item.InfSvrItemType == infSvrItemLauncherBasedProvider {
 				var err error
 				nodeName, err = getProviderNodeName(typed)
 				if err != nil {
 					ctl.enqueueLogger.Error(err, "Failed to determine node of provider")
 					return
 				}
-			} else if it == infSvrItemRequester && nodeName == "" {
+			} else if item.InfSvrItemType == infSvrItemRequester && nodeName == "" {
 				ctl.enqueueLogger.V(5).Info("Ignoring update of non-scheduled server-requesting Pod", "name", typed.Name)
 				return
 			}
 			nd := ctl.getNodeData(nodeName)
-			ctl.enqueueLogger.V(5).Info("Enqueuing inference server reference due to notification of update", "nodeName", nodeName, "item", item, "itemType", it, "resourceVersion", typed.ResourceVersion)
+			ctl.enqueueLogger.V(5).Info("Enqueuing inference server reference due to notification of update", "nodeName", nodeName, "item", item, "resourceVersion", typed.ResourceVersion)
 			nd.add(item)
 			ctl.Queue.Add(nodeItem{nodeName})
 		}
@@ -432,24 +431,24 @@ func (ctl *controller) OnDelete(obj any) {
 	}
 	switch typed := obj.(type) {
 	case *corev1.Pod:
-		if item, it, owned := careAbout(typed); !owned {
+		if item, owned := careAbout(typed); !owned {
 			ctl.enqueueLogger.V(5).Info("Ignoring delete of irrelevant Pod", "name", typed.Name)
 			return
 		} else {
 			nodeName := typed.Spec.NodeName
-			if it == infSvrItemBoundDirectProvider || it == infSvrItemLauncherBasedProvider {
+			if item.InfSvrItemType == infSvrItemBoundDirectProvider || item.InfSvrItemType == infSvrItemLauncherBasedProvider {
 				var err error
 				nodeName, err = getProviderNodeName(typed)
 				if err != nil {
 					ctl.enqueueLogger.Error(err, "Failed to determine node of provider")
 					return
 				}
-			} else if it == infSvrItemRequester && nodeName == "" {
+			} else if item.InfSvrItemType == infSvrItemRequester && nodeName == "" {
 				ctl.enqueueLogger.V(5).Info("Ignoring delete of non-scheduled server-requesting Pod", "name", typed.Name)
 				return
 			}
 			nd := ctl.getNodeData(nodeName)
-			ctl.enqueueLogger.V(5).Info("Enqueuing inference server reference due to notification of delete", "nodeName", nodeName, "item", item, "itemType", it, "resourceVersion", typed.ResourceVersion)
+			ctl.enqueueLogger.V(5).Info("Enqueuing inference server reference due to notification of delete", "nodeName", nodeName, "item", item, "resourceVersion", typed.ResourceVersion)
 			nd.add(item)
 			ctl.Queue.Add(nodeItem{nodeName})
 		}
@@ -538,7 +537,7 @@ func (ctl *controller) enqueueRequesters(ctx context.Context) {
 	for nodeName, nodeDat := range ctl.nodeNameToData {
 		var some bool
 		for infSvrUID, serverDat := range nodeDat.InferenceServers {
-			item := infSvrItem{infSvrUID, serverDat.RequestingPodName}
+			item := infSvrItem{infSvrUID, serverDat.RequestingPodName, infSvrItemRequester}
 			logger.V(5).Info("Enqueuing inference server because of change to GPU map", "node", nodeName, "item", item)
 			nodeDat.add(item)
 			some = true
