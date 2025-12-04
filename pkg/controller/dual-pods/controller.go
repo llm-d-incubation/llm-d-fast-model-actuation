@@ -323,27 +323,27 @@ const (
 	infSvrItemDontCare infSvrItemType = "dont_care"
 )
 
-// careAbout returns an infSvrItem item and a bool owned.
-// Returns owned=true for server-requesting Pods, bound direct server-providing Pods, and launcher-based server-providing Pods;
-// returns owned=false for unbound direct providers and other Pods.
-func careAbout(pod *corev1.Pod) (item infSvrItem, it infSvrItemType, owned bool) {
+// careAbout returns an infSvrItem and an infSvrItemType.
+// The controller cares about server-requesting Pods, bound direct server-providing Pods, and launcher-based server-providing Pods.
+// The controller doesn't care about unbound direct providers and other Pods.
+func careAbout(pod *corev1.Pod) (item infSvrItem, it infSvrItemType) {
 	if len(pod.Annotations[api.ServerPatchAnnotationName]) > 0 {
-		return infSvrItem{pod.UID, pod.Name}, infSvrItemRequester, true
+		return infSvrItem{pod.UID, pod.Name}, infSvrItemRequester
 	}
 	requesterStr := pod.Annotations[requesterAnnotationKey]
 	requesterParts := strings.Split(requesterStr, " ")
 	if len(requesterParts) != 2 {
-		return infSvrItem{}, infSvrItemDontCare, false
+		return infSvrItem{}, infSvrItemDontCare
 	}
-	return infSvrItem{apitypes.UID(requesterParts[0]), requesterParts[1]}, infSvrItemBoundDirectProvider, true
+	return infSvrItem{apitypes.UID(requesterParts[0]), requesterParts[1]}, infSvrItemBoundDirectProvider
 }
 
 const requesterIndexName = "requester"
 
 func requesterIndexFunc(obj any) ([]string, error) {
 	pod := obj.(*corev1.Pod)
-	item, it, owned := careAbout(pod)
-	if owned && it == infSvrItemBoundDirectProvider {
+	item, it := careAbout(pod)
+	if it == infSvrItemBoundDirectProvider {
 		return []string{string(item.UID)}, nil
 	}
 	return []string{}, nil
@@ -352,7 +352,7 @@ func requesterIndexFunc(obj any) ([]string, error) {
 func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 	switch typed := obj.(type) {
 	case *corev1.Pod:
-		if item, it, owned := careAbout(typed); !owned {
+		if item, it := careAbout(typed); it == infSvrItemDontCare {
 			ctl.enqueueLogger.V(5).Info("Ignoring add of irrelevant Pod", "name", typed.Name)
 			return
 		} else {
@@ -391,7 +391,7 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 func (ctl *controller) OnUpdate(prev, obj any) {
 	switch typed := obj.(type) {
 	case *corev1.Pod:
-		if item, it, owned := careAbout(typed); !owned {
+		if item, it := careAbout(typed); it == infSvrItemDontCare {
 			ctl.enqueueLogger.V(5).Info("Ignoring update of irrelevant Pod", "name", typed.Name)
 			return
 		} else {
@@ -433,7 +433,7 @@ func (ctl *controller) OnDelete(obj any) {
 	}
 	switch typed := obj.(type) {
 	case *corev1.Pod:
-		if item, it, owned := careAbout(typed); !owned {
+		if item, it := careAbout(typed); it == infSvrItemDontCare {
 			ctl.enqueueLogger.V(5).Info("Ignoring delete of irrelevant Pod", "name", typed.Name)
 			return
 		} else {
