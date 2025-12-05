@@ -602,7 +602,7 @@ func (ctl *controller) maybeRemoveRequesterFinalizer(ctx context.Context, reques
 	return true, false, nil, false
 }
 
-// addRequesterFinalizer does the API call to remove the controller's finalizer from the server-requesting Pod.
+// addRequesterFinalizer does the API call to add the controller's finalizer to the server-requesting Pod.
 // Returns (newResourceVersion string, err error)
 func (ctl *controller) addRequesterFinalizer(ctx context.Context, requestingPod *corev1.Pod, providingPodName string) (string, error) {
 	podOps := ctl.coreclient.Pods(ctl.namespace)
