@@ -90,6 +90,10 @@ generate: $(CONTROLLER_GEN_VERSION) ## Generate code containing DeepCopy, DeepCo
 # $3 - specific version of package
 define go-install-tool
 set -e; \
+if [ -z "$(1)" ]; then \
+    echo "Error: Target path is empty but must not be"; \
+    exit 1; \
+fi; \
 package=$(2)@$(3) ;\
 echo "Downloading $${package}" ;\
 rm -f $(1) || true ;\
