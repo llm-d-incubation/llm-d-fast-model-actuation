@@ -55,6 +55,8 @@ type LauncherConfigReference struct {
 type InferenceServerConfigStatus struct {
 }
 
+// +genclient
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:shortName=isc
@@ -77,15 +79,11 @@ type InferenceServerConfig struct {
 }
 
 // InferenceServerConfigList contains a list of InferenceServerConfig resources.
-// +kubebuilder:object:root=true
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 type InferenceServerConfigList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 
 	// Items is the list of InferenceServerConfig resources.
 	Items []InferenceServerConfig `json:"items"`
-}
-
-func init() {
-	SchemeBuilder.Register(&InferenceServerConfig{}, &InferenceServerConfigList{})
 }

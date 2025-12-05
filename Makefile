@@ -63,26 +63,39 @@ echo-var:
 
 
 ## Location to install dependencies to
-TOOLBIN ?= $(shell pwd)/hack/tools
+TOOLDIR ?= $(shell pwd)/hack/tools
+TOOLBIN ?= $(TOOLDIR)/bin
 $(TOOLBIN):
 	mkdir -p $(TOOLBIN)
 
-## Tool Binaries
+## Tools
 CONTROLLER_GEN ?= $(TOOLBIN)/controller-gen
 CONTROLLER_TOOLS_VERSION ?= v0.19.0
 CONTROLLER_GEN_VERSION ?= $(CONTROLLER_GEN)-$(CONTROLLER_TOOLS_VERSION)
 
+CODE_GEN_VERSION ?= v0.34.2
+KUBE_CODEGEN_TAG := release-1.34
+CODE_GEN_DIR ?= $(TOOLDIR)/code-generator-$(CODE_GEN_VERSION)
+export CODE_GEN_DIR KUBE_CODEGEN_TAG
+
 $(CONTROLLER_GEN_VERSION): $(TOOLBIN)
 	$(call go-install-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen,$(CONTROLLER_TOOLS_VERSION))
 
+$(CODE_GEN_DIR):
+	mkdir -p $(TOOLDIR)
+	git clone -b $(CODE_GEN_VERSION) --depth 1 https://github.com/kubernetes/code-generator.git $(CODE_GEN_DIR)
+
 .PHONY: manifests
 manifests: $(CONTROLLER_GEN_VERSION) ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
-	$(CONTROLLER_GEN_VERSION) crd paths=./...
+	$(CONTROLLER_GEN_VERSION) crd paths=./api/...
 
 .PHONY: generate
 generate: $(CONTROLLER_GEN_VERSION) ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
-	$(CONTROLLER_GEN_VERSION) object:headerFile="hack/boilerplate.go.txt" paths="./..."
+	$(CONTROLLER_GEN_VERSION) object:headerFile="hack/boilerplate.go.txt" paths="./api/..."
 
+.PHONY: generate_client
+generate_client: $(CODE_GEN_DIR) ## (Re-)generate generated files
+	./hack/generate-client.sh
 
 # go-install-tool will 'go install' any package with custom target and name of binary, if it doesn't exist
 # $1 - target path with name of binary
