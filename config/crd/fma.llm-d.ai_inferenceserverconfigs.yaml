@@ -4,24 +4,24 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.19.0
-  name: inferenceservertemplates.fma.llmd.ai
+  name: inferenceserverconfigs.fma.llm-d.ai
 spec:
-  group: fma.llmd.ai
+  group: fma.llm-d.ai
   names:
-    kind: InferenceServerTemplate
-    listKind: InferenceServerTemplateList
-    plural: inferenceservertemplates
+    kind: InferenceServerConfig
+    listKind: InferenceServerConfigList
+    plural: inferenceserverconfigs
     shortNames:
-    - ist
-    singular: inferenceservertemplate
+    - isc
+    singular: inferenceserverconfig
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
         description: |-
-          InferenceServerTemplate is the Schema for the InferenceServerTemplates API.
-          It represents the configuration to manage the nominal server-providing pod definition.
+          InferenceServerConfig is the Schema for the InferenceServerConfigs API.
+          It represents the configuration parameters required to launch the vLLM process inside the launcher pod.
         properties:
           apiVersion:
             description: |-
@@ -41,10 +41,10 @@ spec:
           metadata:
             type: object
           spec:
-            description: Spec defines the desired state of the InferenceServerTemplate.
+            description: Spec defines the desired state of the InferenceServerConfig.
             type: object
           status:
-            description: Status represents the observed status of the InferenceServerTemplate.
+            description: Status represents the observed status of the InferenceServerConfig.
             type: object
         required:
         - spec
