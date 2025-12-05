@@ -86,11 +86,11 @@ $(CODE_GEN_DIR):
 
 .PHONY: manifests
 manifests: $(CONTROLLER_GEN_VERSION) ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
-	$(CONTROLLER_GEN_VERSION) crd paths=./...
+	$(CONTROLLER_GEN_VERSION) crd paths=./api/...
 
 .PHONY: generate
 generate: $(CONTROLLER_GEN_VERSION) ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
-	$(CONTROLLER_GEN_VERSION) object:headerFile="hack/boilerplate.go.txt" paths="./..."
+	$(CONTROLLER_GEN_VERSION) object:headerFile="hack/boilerplate.go.txt" paths="./api/..."
 
 .PHONY: generate_client
 generate_client: $(CODE_GEN_DIR) ## (Re-)generate generated files
