@@ -21,7 +21,7 @@ import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 // PoolPolicy defines the proactive provisioning policy for idle launcher pods.
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:path=poolpolicies,scope=Namespaced
+// +kubebuilder:resource:path=serverproviderprovisionpoolpolicies,scope=Namespaced
 
 type ServerProviderProvisionPoolPolicy struct {
 	metav1.TypeMeta   `json:",inline"`

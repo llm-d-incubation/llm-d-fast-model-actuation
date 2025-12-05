@@ -4,13 +4,13 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.19.0
-  name: poolpolicies.llmd.ai
+  name: serverproviderprovisionpoolpolicies.llmd.ai
 spec:
   group: llmd.ai
   names:
     kind: ServerProviderProvisionPoolPolicy
     listKind: ServerProviderProvisionPoolPolicyList
-    plural: poolpolicies
+    plural: serverproviderprovisionpoolpolicies
     singular: serverproviderprovisionpoolpolicy
   scope: Namespaced
   versions:
@@ -53,41 +53,44 @@ spec:
                             required.
                           format: int32
                           type: integer
-                        acceleratorType:
-                          description: AcceleratorType is the GPU type (e.g., "nvidia.com/a100").
-                          type: string
-                        minMemoryGB:
-                          description: MinMemoryGB is the minimum GPU memory in GB.
+                        minCPUMemoryGB:
+                          description: MinCPUMemoryGB is the minimum CPU memory in
+                            GB.
+                          format: int32
+                          type: integer
+                        minGPUMemoryGB:
+                          description: MinGPUMemoryGB is the minimum GPU memory in
+                            GB.
                           format: int32
                           type: integer
                       required:
                       - acceleratorCount
-                      - acceleratorType
-                      - minMemoryGB
+                      - minCPUMemoryGB
+                      - minGPUMemoryGB
                       type: object
                     totalCountPerTemplate:
                       description: |-
-                        TotalCountPerTemplate is the total number of launcher or vLLM pods for each ServerProviderConfig
+                        ServerProviderTemplateCount is the total number of launcher or vLLM pods for each ServerProviderConfig
                         to maintain on each matching node.
                       items:
                         properties:
+                          launcherCount:
+                            description: LauncherCount is the total number of launcher
+                              pods to maintain.
+                            format: int32
+                            type: integer
                           templateRef:
                             description: TemplateRef references the name of the ServerProviderConfig
                               this policy applies to.
                             properties:
                               name:
-                                description: Name of the referenced ModelServerPool
+                                description: Name of the referenced ServerProviderConfig
                                 type: string
                             required:
                             - name
                             type: object
-                          totalCount:
-                            description: TotalCount is the total number of idle launcher
-                              pods to maintain.
-                            format: int32
-                            type: integer
                         required:
-                        - totalCount
+                        - launcherCount
                         type: object
                       type: array
                   required:
