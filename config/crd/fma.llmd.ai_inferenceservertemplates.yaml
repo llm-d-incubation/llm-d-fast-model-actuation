@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.19.0
-  name: inferenceservertemplates.llmd.ai
+  name: inferenceservertemplates.fma.llmd.ai
 spec:
-  group: llmd.ai
+  group: fma.llmd.ai
   names:
     kind: InferenceServerTemplate
     listKind: InferenceServerTemplateList
