@@ -63,7 +63,7 @@ echo-var:
 
 
 ## Location to install dependencies to
-TOOLBIN ?= $(shell pwd)/hack/tools
+TOOLBIN ?= $(shell pwd)/hack/tools/bin
 $(TOOLBIN):
 	mkdir -p $(TOOLBIN)
 
