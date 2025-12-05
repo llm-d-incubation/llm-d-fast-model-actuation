@@ -72,17 +72,15 @@ CONTROLLER_GEN ?= $(TOOLBIN)/controller-gen
 CONTROLLER_TOOLS_VERSION ?= v0.19.0
 CONTROLLER_GEN_VERSION ?= $(CONTROLLER_GEN)-$(CONTROLLER_TOOLS_VERSION)
 
-.PHONY: controller-gen
-controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary.
-$(CONTROLLER_GEN): $(TOOLBIN)
+$(CONTROLLER_GEN_VERSION): $(TOOLBIN)
 	$(call go-install-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen,$(CONTROLLER_TOOLS_VERSION))
 
 .PHONY: manifests
-manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
-	$(CONTROLLER_GEN_VERSION) rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+manifests: $(CONTROLLER_GEN_VERSION) ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
+	$(CONTROLLER_GEN_VERSION) crd paths=./...
 
 .PHONY: generate
-generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
+generate: $(CONTROLLER_GEN_VERSION) ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
 	$(CONTROLLER_GEN_VERSION) object:headerFile="hack/boilerplate.go.txt" paths="./..."
 
 
@@ -91,12 +89,10 @@ generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and
 # $2 - package url which can be installed
 # $3 - specific version of package
 define go-install-tool
-@[ -f "$(1)-$(3)" ] || { \
 set -e; \
 package=$(2)@$(3) ;\
 echo "Downloading $${package}" ;\
 rm -f $(1) || true ;\
 GOBIN=$(TOOLBIN) go install $${package} ;\
-mv $(1) $(1)-$(3) ;\
-}
+mv $(1) $(1)-$(3)
 endef
