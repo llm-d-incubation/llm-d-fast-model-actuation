@@ -29,6 +29,8 @@ type InferenceServerTemplateSpec struct {
 type InferenceServerTemplateStatus struct {
 }
 
+// +genclient
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:shortName=ist
@@ -51,15 +53,11 @@ type InferenceServerTemplate struct {
 }
 
 // InferenceServerTemplateList contains a list of InferenceServerTemplate resources.
-// +kubebuilder:object:root=true
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 type InferenceServerTemplateList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 
 	// Items is the list of InferenceServerTemplate resources.
 	Items []InferenceServerTemplate `json:"items"`
-}
-
-func init() {
-	SchemeBuilder.Register(&InferenceServerTemplate{}, &InferenceServerTemplateList{})
 }
