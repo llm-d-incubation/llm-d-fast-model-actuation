@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package v1alpha1
 
 import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -41,7 +42,7 @@ type NodePoolSpec struct {
 	// Selector describes the hardware characteristics of target nodes.
 	Selector NodeSelector `json:"selector"`
 
-	// TotalCountPerTemplate is the total number of launcher or vLLM pods for each ServerProviderConfig
+	// ServerProviderTemplateCount is the total number of launcher or vLLM pods for each ServerProviderConfig
 	// to maintain on each matching node.
 	ServerProviderTemplateCount []ServerProviderTemplateCount `json:"totalCountPerTemplate"`
 }
@@ -51,17 +52,18 @@ type ServerProviderTemplateCount struct {
 	// +optional
 	TemplateRef ServerProviderConfigReference `json:"templateRef,omitempty"`
 
-	// TotalCount is the total number of idle launcher pods to maintain.
-	TotalCount int32 `json:"totalCount"`
+	// LauncherCount is the total number of launcher pods to maintain.
+	LauncherCount int32 `json:"launcherCount"`
 }
 
 // NodeSelector selects nodes by hardware attributes.
 type NodeSelector struct {
-	// AcceleratorType is the GPU type (e.g., "nvidia.com/a100").
-	AcceleratorType string `json:"acceleratorType"`
 
-	// MinMemoryGB is the minimum GPU memory in GB.
-	MinMemoryGB int32 `json:"minMemoryGB"`
+	// MinGPUMemoryGB is the minimum GPU memory in GB.
+	MinGPUMemoryGB int32 `json:"minGPUMemoryGB"`
+
+	// MinCPUMemoryGB is the minimum CPU memory in GB.
+	MinCPUMemoryGB int32 `json:"minCPUMemoryGB"`
 
 	// AcceleratorCount is the number of accelerators required.
 	AcceleratorCount int32 `json:"acceleratorCount"`
