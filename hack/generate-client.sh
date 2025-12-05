@@ -12,7 +12,7 @@ PKG_ROOT="github.com/llm-d-incubation/llm-d-fast-model-actuation"
 
 rm -rf "${SCRIPT_ROOT}/pkg/generated"
 
-kube::codegen::gen_helpers \
+true || kube::codegen::gen_helpers \
     --boilerplate "${SCRIPT_ROOT}/hack/boilerplate.go.txt" \
     "${SCRIPT_ROOT}/api"
 
