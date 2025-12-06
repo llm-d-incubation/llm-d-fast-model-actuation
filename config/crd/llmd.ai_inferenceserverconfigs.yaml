@@ -43,9 +43,6 @@ spec:
           spec:
             description: Spec defines the desired state of the InferenceServerConfig.
             properties:
-              modelName:
-                description: ModelName is the name of the model
-                type: string
               modelServerConfig:
                 description: ModelServerConfig defines the configuration for the model
                   server
@@ -79,7 +76,6 @@ spec:
                 - name
                 type: object
             required:
-            - modelName
             - modelServerConfig
             - templateRef
             type: object

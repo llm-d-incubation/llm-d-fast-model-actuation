@@ -22,10 +22,6 @@ import (
 
 // InferenceServerConfigSpec defines the configuration parameters required to launch the vLLM process inside the launcher pod
 type InferenceServerConfigSpec struct {
-	// ModelName is the name of the model
-	// +kubebuilder:validation:Required
-	ModelName string `json:"modelName"`
-
 	// ModelServerConfig defines the configuration for the model server
 	// +kubebuilder:validation:Required
 	ModelServerConfig ModelServerConfig `json:"modelServerConfig"`
