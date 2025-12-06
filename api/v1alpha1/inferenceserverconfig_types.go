@@ -22,7 +22,33 @@ import (
 
 // InferenceServerConfigSpec defines the configuration parameters required to launch the vLLM process inside the launcher pod
 type InferenceServerConfigSpec struct {
-	// TODO
+	// ModelServerConfig defines the configuration for the model server
+	// +kubebuilder:validation:Required
+	ModelServerConfig ModelServerConfig `json:"modelServerConfig"`
+
+	// ServerProviderConfigRef is a reference to the ServerProviderConfig that this InferenceServerConfig belongs to
+	// +kubebuilder:validation:Required
+	TemplateRef ServerProviderConfigReference `json:"templateRef,omitempty"`
+}
+
+// ModelServerConfig defines the configuration for a model server
+type ModelServerConfig struct {
+	// Options are the vLLM startup options
+	// +optional
+	Options string `json:"options,omitempty"`
+
+	// EnvVars are the environment variables for the vLLM instance
+	// +optional
+	EnvVars     map[string]string `json:"env_vars,omitempty"`
+	Labels      map[string]string `json:"labels,omitempty"`
+	Annotations map[string]string `json:"annotations,omitempty"`
+}
+
+// ServerProviderConfigReference is a reference to an ServerProviderConfig resource
+type ServerProviderConfigReference struct {
+	// Name of the referenced ServerProviderConfig
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
 }
 
 // InferenceServerConfigStatus represents the current status.
