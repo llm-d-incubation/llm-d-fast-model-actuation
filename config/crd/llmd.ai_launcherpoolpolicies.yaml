@@ -1,0 +1,133 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: launcherpoolpolicies.llmd.ai
+spec:
+  group: llmd.ai
+  names:
+    kind: LauncherPoolPolicy
+    listKind: LauncherPoolPolicyList
+    plural: launcherpoolpolicies
+    singular: launcherpoolpolicy
+  scope: Cluster
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: LauncherPoolPolicySpec defines the node-level idle pool configuration.
+            properties:
+              nodePool:
+                description: NodePool defines pool spec per node type.
+                items:
+                  description: NodePoolSpec defines launcher count for a class of
+                    nodes.
+                  properties:
+                    nodeSelector:
+                      description: Selector describes the hardware characteristics
+                        of target nodes.
+                      properties:
+                        matchExpressions:
+                          description: matchExpressions is a list of label selector
+                            requirements. The requirements are ANDed.
+                          items:
+                            description: |-
+                              A label selector requirement is a selector that contains values, a key, and an operator that
+                              relates the key and values.
+                            properties:
+                              key:
+                                description: key is the label key that the selector
+                                  applies to.
+                                type: string
+                              operator:
+                                description: |-
+                                  operator represents a key's relationship to a set of values.
+                                  Valid operators are In, NotIn, Exists and DoesNotExist.
+                                type: string
+                              values:
+                                description: |-
+                                  values is an array of string values. If the operator is In or NotIn,
+                                  the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                  the values array must be empty. This array is replaced during a strategic
+                                  merge patch.
+                                items:
+                                  type: string
+                                type: array
+                                x-kubernetes-list-type: atomic
+                            required:
+                            - key
+                            - operator
+                            type: object
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        matchLabels:
+                          additionalProperties:
+                            type: string
+                          description: |-
+                            matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                            map is equivalent to an element of matchExpressions, whose key field is "key", the
+                            operator is "In", and the values array contains only "value". The requirements are ANDed.
+                          type: object
+                      type: object
+                      x-kubernetes-map-type: atomic
+                    totalCountPerTemplate:
+                      description: |-
+                        ServerProviderTemplateCount is the total number of launcher or vLLM pods for each ServerProviderConfig
+                        to maintain on each matching node.
+                      items:
+                        properties:
+                          launcherCount:
+                            description: LauncherCount is the total number of launcher
+                              pods to maintain.
+                            format: int32
+                            type: integer
+                          templateRef:
+                            description: TemplateRef references the name of the ServerProviderConfig
+                              this policy applies to.
+                            properties:
+                              name:
+                                description: Name of the referenced ServerProviderConfig
+                                type: string
+                            required:
+                            - name
+                            type: object
+                        required:
+                        - launcherCount
+                        type: object
+                      type: array
+                  required:
+                  - nodeSelector
+                  - totalCountPerTemplate
+                  type: object
+                type: array
+            required:
+            - nodePool
+            type: object
+          status:
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

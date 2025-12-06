@@ -21,16 +21,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// ServerProviderConfigSpec defines the configuration to manage the nominal server-providing pod definition.
-type ServerProviderConfigSpec struct {
-	// Mode specifies how the inference engine is launched. Valid values: "direct", "launcher".
-	// +kubebuilder:validation:Enum=direct;launcher
-	// +optional
-	Mode string `json:"mode"`
-
+// LauncherConfigSpec defines the configuration to manage the nominal server-providing pod definition.
+type LauncherConfigSpec struct {
 	// PodTemplate defines the pod specification for the server-providing pod.
 	// +optional
-	PodTemplate corev1.PodSpec `json:"podTemplate,omitempty"`
+	PodTemplate corev1.PodTemplateSpec `json:"podTemplate,omitempty"`
 
 	// MaxSleepingInstances is the maximum number of sleeping inference engine instances allowed per launcher pod.
 	// Only applicable when Mode is "launcher".
@@ -38,41 +33,42 @@ type ServerProviderConfigSpec struct {
 	MaxSleepingInstances *int32 `json:"maxSleepingInstances,omitempty"`
 }
 
-// ServerProviderConfigStatus represents the current status
-type ServerProviderConfigStatus struct {
+// LauncherConfigStatus represents the current status
+type LauncherConfigStatus struct {
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:shortName=ist
+// +kubebuilder:resource:path=launcherconfigs,scope=Namespaced
 
-// ServerProviderConfig is the Schema for the ServerProviderConfigs API.
+// LauncherConfig is the Schema for the LauncherConfigs API.
 // It represents the configuration to manage the nominal server-providing pod definition.
-type ServerProviderConfig struct {
+type LauncherConfig struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	// Spec defines the desired state of the ServerProviderConfig.
+	// Spec defines the desired state of the LauncherConfig.
 	//
 	// +required
-	Spec ServerProviderConfigSpec `json:"spec,omitempty"`
+	Spec LauncherConfigSpec `json:"spec,omitempty"`
 
-	// Status represents the observed status of the ServerProviderConfig.
+	// Status represents the observed status of the LauncherConfig.
 	//
 	// +optional
-	Status ServerProviderConfigStatus `json:"status,omitempty"`
+	Status LauncherConfigStatus `json:"status,omitempty"`
 }
 
-// ServerProviderConfigList contains a list of ServerProviderConfig resources.
-// +kubebuilder:object:root=true
-type ServerProviderConfigList struct {
+// LauncherConfigList contains a list of LauncherConfig resources.
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+type LauncherConfigList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 
-	// Items is the list of ServerProviderConfig resources.
-	Items []ServerProviderConfig `json:"items"`
+	// Items is the list of LauncherConfig resources.
+	Items []LauncherConfig `json:"items"`
 }
 
 func init() {
-	SchemeBuilder.Register(&ServerProviderConfig{}, &ServerProviderConfigList{})
+	SchemeBuilder.Register(&LauncherConfig{}, &LauncherConfigList{})
 }

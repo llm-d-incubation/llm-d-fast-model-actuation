@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package v1alpha1
 
 import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -20,28 +21,28 @@ import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 // PoolPolicy defines the proactive provisioning policy for idle launcher pods.
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:path=poolpolicies,scope=Namespaced
+// +kubebuilder:resource:path=launcherpoolpolicies,scope=Cluster
 
-type ServerProviderProvisionPoolPolicy struct {
+type LauncherPoolPolicy struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   PoolPolicySpec   `json:"spec,omitempty"`
-	Status PoolPolicyStatus `json:"status,omitempty"`
+	Spec   LauncherPoolPolicySpec   `json:"spec,omitempty"`
+	Status LauncherPoolPolicyStatus `json:"status,omitempty"`
 }
 
-// PoolPolicySpec defines the node-level idle pool configuration.
-type PoolPolicySpec struct {
-	// PoolsPerNode defines idle launcher counts per node type.
-	PoolsPerNode []NodePoolSpec `json:"poolsPerNode"`
+// LauncherPoolPolicySpec defines the node-level idle pool configuration.
+type LauncherPoolPolicySpec struct {
+	// NodePool defines pool spec per node type.
+	NodePool []NodePoolSpec `json:"nodePool"`
 }
 
 // NodePoolSpec defines launcher count for a class of nodes.
 type NodePoolSpec struct {
 	// Selector describes the hardware characteristics of target nodes.
-	Selector NodeSelector `json:"selector"`
+	NodeSelector metav1.LabelSelector `json:"nodeSelector"`
 
-	// TotalCountPerTemplate is the total number of launcher or vLLM pods for each ServerProviderConfig
+	// ServerProviderTemplateCount is the total number of launcher or vLLM pods for each ServerProviderConfig
 	// to maintain on each matching node.
 	ServerProviderTemplateCount []ServerProviderTemplateCount `json:"totalCountPerTemplate"`
 }
@@ -51,29 +52,17 @@ type ServerProviderTemplateCount struct {
 	// +optional
 	TemplateRef ServerProviderConfigReference `json:"templateRef,omitempty"`
 
-	// TotalCount is the total number of idle launcher pods to maintain.
-	TotalCount int32 `json:"totalCount"`
+	// LauncherCount is the total number of launcher pods to maintain.
+	LauncherCount int32 `json:"launcherCount"`
 }
 
-// NodeSelector selects nodes by hardware attributes.
-type NodeSelector struct {
-	// AcceleratorType is the GPU type (e.g., "nvidia.com/a100").
-	AcceleratorType string `json:"acceleratorType"`
-
-	// MinMemoryGB is the minimum GPU memory in GB.
-	MinMemoryGB int32 `json:"minMemoryGB"`
-
-	// AcceleratorCount is the number of accelerators required.
-	AcceleratorCount int32 `json:"acceleratorCount"`
-}
-
-type PoolPolicyStatus struct {
+type LauncherPoolPolicyStatus struct {
 	// Add status fields if needed (e.g., current idle pod counts)
 }
 
-// +kubebuilder:object:root=true
-type ServerProviderProvisionPoolPolicyList struct {
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+type LauncherPoolPolicyList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []ServerProviderProvisionPoolPolicy `json:"items"`
+	Items           []LauncherPoolPolicy `json:"items"`
 }

@@ -73,7 +73,7 @@ spec:
                   that this InferenceServerConfig belongs to
                 properties:
                   name:
-                    description: Name of the referenced ModelServerPool
+                    description: Name of the referenced ServerProviderConfig
                     type: string
                 required:
                 - name
