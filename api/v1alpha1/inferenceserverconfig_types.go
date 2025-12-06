@@ -62,6 +62,7 @@ type InferenceServerConfigStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:shortName=isc
+// +kubebuilder:resource:path=inferenceserverconfigs,scope=Namespaced
 
 // InferenceServerConfig is the Schema for the InferenceServerConfigs API.
 // It represents the configuration parameters required to launch the vLLM process inside the launcher pod.
@@ -81,7 +82,7 @@ type InferenceServerConfig struct {
 }
 
 // InferenceServerConfigList contains a list of InferenceServerConfig resources.
-// +kubebuilder:object:root=true
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 type InferenceServerConfigList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`

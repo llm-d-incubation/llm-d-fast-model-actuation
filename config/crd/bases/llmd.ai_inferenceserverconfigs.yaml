@@ -11,8 +11,6 @@ spec:
     kind: InferenceServerConfig
     listKind: InferenceServerConfigList
     plural: inferenceserverconfigs
-    shortNames:
-    - isc
     singular: inferenceserverconfig
   scope: Namespaced
   versions:
