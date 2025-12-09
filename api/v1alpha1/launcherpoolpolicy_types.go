@@ -1,5 +1,5 @@
 /*
-Copyright 2025.
+Copyright 2025 The llm-d Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -42,15 +42,15 @@ type NodePoolSpec struct {
 	// Selector describes the hardware characteristics of target nodes.
 	NodeSelector metav1.LabelSelector `json:"nodeSelector"`
 
-	// ServerProviderTemplateCount is the total number of launcher or vLLM pods for each ServerProviderConfig
+	// ServerProviderTemplateCount is the total number of launcher or vLLM pods for each LauncherConfig
 	// to maintain on each matching node.
 	ServerProviderTemplateCount []ServerProviderTemplateCount `json:"totalCountPerTemplate"`
 }
 
 type ServerProviderTemplateCount struct {
-	// TemplateRef references the name of the ServerProviderConfig this policy applies to.
+	// TemplateRef references the name of the LauncherConfig this policy applies to.
 	// +optional
-	TemplateRef ServerProviderConfigReference `json:"templateRef,omitempty"`
+	TemplateRef LauncherConfigReference `json:"templateRef,omitempty"`
 
 	// LauncherCount is the total number of launcher pods to maintain.
 	LauncherCount int32 `json:"launcherCount"`

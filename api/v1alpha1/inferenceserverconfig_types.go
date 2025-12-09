@@ -1,11 +1,11 @@
 /*
-Copyright 2025.
+Copyright 2025 The llm-d Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-    http://www.apache.org/licenses/LICENSE-2.0
+	http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -26,9 +26,9 @@ type InferenceServerConfigSpec struct {
 	// +kubebuilder:validation:Required
 	ModelServerConfig ModelServerConfig `json:"modelServerConfig"`
 
-	// ServerProviderConfigRef is a reference to the ServerProviderConfig that this InferenceServerConfig belongs to
+	// TemplateRef is a reference to the LauncherConfig that this InferenceServerConfig belongs to
 	// +kubebuilder:validation:Required
-	TemplateRef ServerProviderConfigReference `json:"templateRef,omitempty"`
+	TemplateRef LauncherConfigReference `json:"templateRef,omitempty"`
 }
 
 // ModelServerConfig defines the configuration for a model server
@@ -44,9 +44,9 @@ type ModelServerConfig struct {
 	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
-// ServerProviderConfigReference is a reference to an ServerProviderConfig resource
-type ServerProviderConfigReference struct {
-	// Name of the referenced ServerProviderConfig
+// LauncherConfigReference is a reference to an LauncherConfig resource
+type LauncherConfigReference struct {
+	// Name of the referenced LauncherConfig
 	// +kubebuilder:validation:Required
 	Name string `json:"name"`
 }
