@@ -42,9 +42,8 @@ spec:
             description: Spec defines the desired state of the LauncherConfig.
             properties:
               maxSleepingInstances:
-                description: |-
-                  MaxSleepingInstances is the maximum number of sleeping inference engine instances allowed per launcher pod.
-                  Only applicable when Mode is "launcher".
+                description: MaxSleepingInstances is the maximum number of sleeping
+                  inference engine instances allowed per launcher pod.
                 format: int32
                 type: integer
               podTemplate:

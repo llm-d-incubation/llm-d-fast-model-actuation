@@ -33,21 +33,21 @@ type LauncherPoolPolicy struct {
 
 // LauncherPoolPolicySpec defines the node-level idle pool configuration.
 type LauncherPoolPolicySpec struct {
-	// NodePool defines pool spec per node type.
-	NodePool []NodePoolSpec `json:"nodePool"`
+	// LauncherPoolForNodeType defines pool spec per node type.
+	LauncherPoolForNodeType []LauncherPoolForNodeType `json:"launcherPoolForNodeType"`
 }
 
-// NodePoolSpec defines launcher count for a class of nodes.
-type NodePoolSpec struct {
+// LauncherPoolForNodeType defines launcher count for a class of nodes.
+type LauncherPoolForNodeType struct {
 	// Selector describes the hardware characteristics of target nodes.
 	NodeSelector metav1.LabelSelector `json:"nodeSelector"`
 
-	// ServerProviderTemplateCount is the total number of launcher or vLLM pods for each LauncherConfig
+	// CountForLauncher is the total number of launcher for each LauncherConfig
 	// to maintain on each matching node.
-	ServerProviderTemplateCount []ServerProviderTemplateCount `json:"totalCountPerTemplate"`
+	CountForLauncher []CountForLauncher `json:"totalCountPerTemplate"`
 }
 
-type ServerProviderTemplateCount struct {
+type CountForLauncher struct {
 	// TemplateRef references the name of the LauncherConfig this policy applies to.
 	// +optional
 	TemplateRef LauncherConfigReference `json:"templateRef,omitempty"`

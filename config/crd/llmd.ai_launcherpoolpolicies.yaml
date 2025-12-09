@@ -38,11 +38,11 @@ spec:
           spec:
             description: LauncherPoolPolicySpec defines the node-level idle pool configuration.
             properties:
-              nodePool:
-                description: NodePool defines pool spec per node type.
+              launcherPoolForNodeType:
+                description: LauncherPoolForNodeType defines pool spec per node type.
                 items:
-                  description: NodePoolSpec defines launcher count for a class of
-                    nodes.
+                  description: LauncherPoolForNodeType defines launcher count for
+                    a class of nodes.
                   properties:
                     nodeSelector:
                       description: Selector describes the hardware characteristics
@@ -93,7 +93,7 @@ spec:
                       x-kubernetes-map-type: atomic
                     totalCountPerTemplate:
                       description: |-
-                        ServerProviderTemplateCount is the total number of launcher or vLLM pods for each ServerProviderConfig
+                        CountForLauncher is the total number of launcher for each LauncherConfig
                         to maintain on each matching node.
                       items:
                         properties:
@@ -103,11 +103,11 @@ spec:
                             format: int32
                             type: integer
                           templateRef:
-                            description: TemplateRef references the name of the ServerProviderConfig
+                            description: TemplateRef references the name of the LauncherConfig
                               this policy applies to.
                             properties:
                               name:
-                                description: Name of the referenced ServerProviderConfig
+                                description: Name of the referenced LauncherConfig
                                 type: string
                             required:
                             - name
@@ -122,7 +122,7 @@ spec:
                   type: object
                 type: array
             required:
-            - nodePool
+            - launcherPoolForNodeType
             type: object
           status:
             type: object

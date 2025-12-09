@@ -66,18 +66,17 @@ spec:
                     type: string
                 type: object
               templateRef:
-                description: ServerProviderConfigRef is a reference to the ServerProviderConfig
-                  that this InferenceServerConfig belongs to
+                description: TemplateRef is a reference to the LauncherConfig that
+                  this InferenceServerConfig belongs to
                 properties:
                   name:
-                    description: Name of the referenced ServerProviderConfig
+                    description: Name of the referenced LauncherConfig
                     type: string
                 required:
                 - name
                 type: object
             required:
             - modelServerConfig
-            - templateRef
             type: object
           status:
             description: Status represents the observed status of the InferenceServerConfig.
