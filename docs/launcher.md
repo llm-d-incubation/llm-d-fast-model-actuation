@@ -11,6 +11,7 @@ The launcher preloads vLLM’s Python modules to accelerate the initialization o
 - [Features](#features)
 - [Architecture](#architecture)
 - [Installation](#installation)
+- [Build Image](#build-image)
 - [Quick Start](#quick-start)
 - [API Reference](#api-reference)
 - [Usage Examples](#usage-examples)
@@ -105,6 +106,23 @@ pip install -r inference_server/launcher/requirements.txt
 ```bash
 # Clone or copy the launcher.py file
 # No additional installation needed
+```
+
+## Build Image
+
+An image containining vLLM and the launcher.py can be built.
+Build and push it (use your favorate
+`CONTAINER_IMG_REG`) with a command like the following:
+
+```shell
+make build-launcher CONTAINER_IMG_REG=$CONTAINER_IMG_REG
+make push-launcher  CONTAINER_IMG_REG=$CONTAINER_IMG_REG
+```
+
+or for building and pushing at the same time:
+
+```shell
+make build-and-push-launcher CONTAINER_IMG_REG=$CONTAINER_IMG_REG
 ```
 
 ## Quick Start

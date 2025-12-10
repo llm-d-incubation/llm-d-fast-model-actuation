@@ -1,4 +1,8 @@
 CONTAINER_IMG_REG ?= my-registry/my-namespace
+LAUNCHER_IMG_REPO ?= launcher
+LAUNCHER_IMG_TAG ?= $(shell git rev-parse --short HEAD)
+LAUNCHER_IMAGE := $(CONTAINER_IMG_REG)/$(LAUNCHER_IMG_REPO):$(LAUNCHER_IMG_TAG)
+
 REQUESTER_IMG_REPO ?= requester
 REQUESTER_IMG_TAG ?= latest
 REQUESTER_IMAGE := $(CONTAINER_IMG_REG)/$(REQUESTER_IMG_REPO):$(REQUESTER_IMG_TAG)
@@ -13,6 +17,18 @@ TEST_SERVER_IMG ?= $(CONTAINER_IMG_REG)/test-server:$(TEST_SERVER_IMG_TAG)
 TARGETARCH ?= $(shell go env GOARCH)
 
 CLUSTER_NAME ?= fmatest
+
+.PHONY: build-launcher
+build-launcher:
+	docker build -t $(LAUNCHER_IMAGE) -f dockerfiles/Dockerfile.launcher.benchmark . --progress=plain --platform linux/amd64
+
+.PHONY: push-launcher
+push-launcher:
+	docker push $(LAUNCHER_IMAGE)
+
+.PHONY: build-and-push-launcher
+build-and-push-launcher:
+	docker buildx build --push -t $(LAUNCHER_IMAGE) -f dockerfiles/Dockerfile.launcher.benchmark . --progress=plain --platform linux/amd64
 
 .PHONY: build-requester
 build-requester:
