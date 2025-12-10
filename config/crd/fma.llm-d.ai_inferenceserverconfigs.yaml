@@ -1,0 +1,85 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: inferenceserverconfigs.fma.llm-d.ai
+spec:
+  group: fma.llm-d.ai
+  names:
+    kind: InferenceServerConfig
+    listKind: InferenceServerConfigList
+    plural: inferenceserverconfigs
+    shortNames:
+    - isc
+    singular: inferenceserverconfig
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          InferenceServerConfig is the Schema for the InferenceServerConfigs API.
+          It represents the configuration parameters required to launch the vLLM process inside the launcher pod.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: Spec defines the desired state of the InferenceServerConfig.
+            properties:
+              launcherConfigName:
+                description: TemplateRef is a reference to the LauncherConfig that
+                  this InferenceServerConfig belongs to
+                type: string
+              modelServerConfig:
+                description: ModelServerConfig defines the configuration for the model
+                  server
+                properties:
+                  annotations:
+                    additionalProperties:
+                      type: string
+                    type: object
+                  env_vars:
+                    additionalProperties:
+                      type: string
+                    description: EnvVars are the environment variables for the vLLM
+                      instance
+                    type: object
+                  labels:
+                    additionalProperties:
+                      type: string
+                    type: object
+                  options:
+                    description: Options are the vLLM startup options
+                    type: string
+                type: object
+            required:
+            - launcherConfigName
+            - modelServerConfig
+            type: object
+          status:
+            description: Status represents the observed status of the InferenceServerConfig.
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
