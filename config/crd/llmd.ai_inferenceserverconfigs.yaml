@@ -42,6 +42,36 @@ spec:
             type: object
           spec:
             description: Spec defines the desired state of the InferenceServerConfig.
+            properties:
+              launcherConfigName:
+                description: TemplateRef is a reference to the LauncherConfig that
+                  this InferenceServerConfig belongs to
+                type: string
+              modelServerConfig:
+                description: ModelServerConfig defines the configuration for the model
+                  server
+                properties:
+                  annotations:
+                    additionalProperties:
+                      type: string
+                    type: object
+                  env_vars:
+                    additionalProperties:
+                      type: string
+                    description: EnvVars are the environment variables for the vLLM
+                      instance
+                    type: object
+                  labels:
+                    additionalProperties:
+                      type: string
+                    type: object
+                  options:
+                    description: Options are the vLLM startup options
+                    type: string
+                type: object
+            required:
+            - launcherConfigName
+            - modelServerConfig
             type: object
           status:
             description: Status represents the observed status of the InferenceServerConfig.

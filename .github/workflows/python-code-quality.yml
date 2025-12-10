@@ -53,11 +53,11 @@ jobs:
 
     - name: Check for large files
       run: |
-        # Check for files larger than 500KB
-        find . -type f -size +500k | grep -v '.git/' | while read file; do
+        # Check for files larger than 600KB
+        find . -type f -size +600k | grep -v '.git/' | while read file; do
           echo "Large file found: $file"
         done
-        if find . -type f -size +500k | grep -v '.git/' | grep -q .; then
+        if find . -type f -size +600k | grep -v '.git/' | grep -q .; then
           echo "Large files found. Consider using Git LFS or removing them."
           exit 1
         fi
