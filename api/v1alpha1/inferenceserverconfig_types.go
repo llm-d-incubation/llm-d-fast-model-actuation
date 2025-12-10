@@ -27,8 +27,8 @@ type InferenceServerConfigSpec struct {
 	ModelServerConfig ModelServerConfig `json:"modelServerConfig"`
 
 	// TemplateRef is a reference to the LauncherConfig that this InferenceServerConfig belongs to
-	// +optional
-	TemplateRef LauncherConfigReference `json:"templateRef,omitempty"`
+	// +kubebuilder:validation:Required
+	LauncherConfigName string `json:"launcherConfigName"`
 }
 
 // ModelServerConfig defines the configuration for a model server

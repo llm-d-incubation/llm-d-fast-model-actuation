@@ -28,8 +28,8 @@ type LauncherConfigSpec struct {
 	PodTemplate corev1.PodTemplateSpec `json:"podTemplate,omitempty"`
 
 	// MaxSleepingInstances is the maximum number of sleeping inference engine instances allowed per launcher pod.
-	// +optional
-	MaxSleepingInstances *int32 `json:"maxSleepingInstances,omitempty"`
+	// +kubebuilder:validation:Required
+	MaxSleepingInstances int32 `json:"maxSleepingInstances,omitempty"`
 }
 
 // LauncherConfigStatus represents the current status

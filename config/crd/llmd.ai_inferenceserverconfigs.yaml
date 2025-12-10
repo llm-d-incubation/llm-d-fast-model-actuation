@@ -43,6 +43,10 @@ spec:
           spec:
             description: Spec defines the desired state of the InferenceServerConfig.
             properties:
+              launcherConfigName:
+                description: TemplateRef is a reference to the LauncherConfig that
+                  this InferenceServerConfig belongs to
+                type: string
               modelServerConfig:
                 description: ModelServerConfig defines the configuration for the model
                   server
@@ -65,17 +69,8 @@ spec:
                     description: Options are the vLLM startup options
                     type: string
                 type: object
-              templateRef:
-                description: TemplateRef is a reference to the LauncherConfig that
-                  this InferenceServerConfig belongs to
-                properties:
-                  name:
-                    description: Name of the referenced LauncherConfig
-                    type: string
-                required:
-                - name
-                type: object
             required:
+            - launcherConfigName
             - modelServerConfig
             type: object
           status:

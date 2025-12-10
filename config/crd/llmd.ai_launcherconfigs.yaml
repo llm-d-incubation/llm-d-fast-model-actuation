@@ -8460,6 +8460,8 @@ spec:
                     - containers
                     type: object
                 type: object
+            required:
+            - maxSleepingInstances
             type: object
           status:
             description: Status represents the observed status of the LauncherConfig.
