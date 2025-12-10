@@ -31,8 +31,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 	scheme.AddKnownTypes(SchemeGroupVersion,
 		&InferenceServerConfig{},
 		&InferenceServerConfigList{},
-		&InferenceServerTemplate{},
-		&InferenceServerTemplateList{},
+		&LauncherConfig{},
+		&LauncherConfigList{},
 	)
 	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
 	return nil
