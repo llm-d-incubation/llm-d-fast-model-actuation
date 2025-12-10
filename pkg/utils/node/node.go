@@ -115,7 +115,7 @@ func parseCondition(expr string) (*Condition, error) {
 	/// Default to ==
 	qty, err := resource.ParseQuantity(expr)
 	if err != nil {
-		return nil, fmt.Errorf("invalid expression %q: must be like '>=100Mi', '==4', etc.", expr)
+		return nil, fmt.Errorf("invalid expression %q: must be like '>=100Mi', '==4', etc", expr)
 	}
 	return &Condition{Op: "==", Val: qty}, nil
 }
