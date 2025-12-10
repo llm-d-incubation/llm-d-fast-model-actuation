@@ -44,10 +44,10 @@ package api
 
 const ServerPatchAnnotationName = "dual-pods.llm-d.ai/server-patch"
 
-// ServerPatchAnnotationErrorsName is the name of an annotation that the dual-pods controller
+// StatusAnnotationName is the name of an annotation that the dual-pods controller
 // maintains reporting the ServerRequestingPodStatus. The value of this annotation is the
 // JSON rendering of the status.
-const ServerPatchAnnotationErrorsName = "dual-pods.llm-d.ai/status"
+const StatusAnnotationName = "dual-pods.llm-d.ai/status"
 
 // ServerRequestingPodStatus is the status of a server-requesting Pod with respect
 // to the dual-pods technique.

@@ -956,7 +956,7 @@ func (ctl *controller) ensureReqStatus(ctx context.Context, requestingPod *corev
 
 // ensureReqState makes the API call if necessary to:
 // 1. set the controller's reported state to consist of the given errors;
-// 2. add or remove the controll'er finalizer if stipulated.
+// 2. add or remove the controller's finalizer if stipulated.
 // The returned (err error, retry bool) is a convenient match for the signature of
 // a sync function; always `retry == (err != nil)`.
 func (ctl *controller) ensureReqState(ctx context.Context, requestingPod *corev1.Pod, serverDat *serverData, addFinalizer, removeFinalizer bool, errors ...string) (error, bool) {
@@ -967,7 +967,7 @@ func (ctl *controller) ensureReqState(ctx context.Context, requestingPod *corev1
 		return fmt.Errorf("failed to marshal status (%#v): %w", status, err), true
 	}
 	newStatusStr := string(newStatusBytes)
-	oldStatusStr := requestingPod.Annotations[api.ServerPatchAnnotationErrorsName]
+	oldStatusStr := requestingPod.Annotations[api.StatusAnnotationName]
 	newFinalizers := requestingPod.Finalizers
 	if removeFinalizer {
 		newFinalizers, _ = SliceRemoveOnce(newFinalizers, requesterFinalizer)
@@ -981,7 +981,7 @@ func (ctl *controller) ensureReqState(ctx context.Context, requestingPod *corev1
 		return nil, false
 	}
 	requestingPod = requestingPod.DeepCopy()
-	requestingPod.Annotations = MapSet(requestingPod.Annotations, api.ServerPatchAnnotationErrorsName, newStatusStr)
+	requestingPod.Annotations = MapSet(requestingPod.Annotations, api.StatusAnnotationName, newStatusStr)
 	requestingPod.Annotations[api.AcceleratorsAnnotationName] = desiredAccelerators
 	requestingPod.Finalizers = newFinalizers
 	if serverDat.ProvidingPodName != "" {
