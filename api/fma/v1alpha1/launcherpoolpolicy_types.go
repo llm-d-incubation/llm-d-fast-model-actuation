@@ -98,9 +98,20 @@ type LauncherPoolForNodeType struct {
 	//  # 2. Resource condition selector (new capability)
 	//  resourceRequirements:
 	//    allocatable:
-	//      memory: ">=200Gi"
-	//      nvidia.com/gpu: ">=1"
-	//      cpu: ">=32"
+	//      cpu:
+	//        min: "16"
+	//        max: "64"
+	//      memory:
+	//        min: "128Gi"
+	//        max: "512Gi"
+	//      gpus:
+	//        nvidia.com/gpu:
+	//          min: "2"
+	//	        max: "8"
+	//  acceleratorSelector:
+	//    type: "nvidia.com/gpu"
+	//    memory: "48Gi"
+	//    count: 4
 	EnhancedNodeSelector EnhancedNodeSelector `json:"enhancedNodeSelector"`
 
 	// PerAcceleratorCount defines pre-configuration quantities for each accelerator type
@@ -124,9 +135,34 @@ type PerAcceleratorCount struct {
 
 // ResourceRequirements defines resource requirements for a node.
 type ResourceRequirements struct {
-	// Allocatable defines the allocatable resources for a node.
-	// +kubebuilder:validation:Required
-	Allocatable map[string]resource.Quantity `json:"allocatable,omitempty"`
+	// Allocatable defines the allocatable resources for a node with min/max ranges.	// +kubebuilder:validation:Required
+	Allocatable *ResourceRanges `json:"allocatable,omitempty"`
+}
+
+// ResourceRanges defines min/max ranges for various resources.
+type ResourceRanges struct {
+	// CPU defines the CPU resource range requirement.
+	// +kubebuilder:validation:Optional
+	CPU *ResourceRange `json:"cpu,omitempty"`
+
+	// Memory defines the memory resource range requirement.
+	// +kubebuilder:validation:Optional
+	Memory *ResourceRange `json:"memory,omitempty"`
+
+	// GPUs defines the GPU resource range requirements keyed by GPU type.
+	// +kubebuilder:validation:Optional
+	GPUs map[string]*ResourceRange `json:"gpus,omitempty"`
+}
+
+// ResourceRange defines a range with minimum and maximum quantity values.
+type ResourceRange struct {
+	// Min specifies the minimum quantity required.
+	// +kubebuilder:validation:Optional
+	Min *resource.Quantity `json:"min,omitempty"`
+
+	// Max specifies the maximum quantity allowed.
+	// +kubebuilder:validation:Optional
+	Max *resource.Quantity `json:"max,omitempty"`
 }
 
 // EnhancedNodeSelector defines node selector with label selector and resource requirements.

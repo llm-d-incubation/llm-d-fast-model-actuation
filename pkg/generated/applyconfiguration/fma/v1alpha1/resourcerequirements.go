@@ -17,14 +17,10 @@ limitations under the License.
 
 package v1alpha1
 
-import (
-	resource "k8s.io/apimachinery/pkg/api/resource"
-)
-
 // ResourceRequirementsApplyConfiguration represents a declarative configuration of the ResourceRequirements type for use
 // with apply.
 type ResourceRequirementsApplyConfiguration struct {
-	Allocatable map[string]resource.Quantity `json:"allocatable,omitempty"`
+	Allocatable *ResourceRangesApplyConfiguration `json:"allocatable,omitempty"`
 }
 
 // ResourceRequirementsApplyConfiguration constructs a declarative configuration of the ResourceRequirements type for use with
@@ -33,16 +29,10 @@ func ResourceRequirements() *ResourceRequirementsApplyConfiguration {
 	return &ResourceRequirementsApplyConfiguration{}
 }
 
-// WithAllocatable puts the entries into the Allocatable field in the declarative configuration
-// and returns the receiver, so that objects can be build by chaining "With" function invocations.
-// If called multiple times, the entries provided by each call will be put on the Allocatable field,
-// overwriting an existing map entries in Allocatable field with the same key.
-func (b *ResourceRequirementsApplyConfiguration) WithAllocatable(entries map[string]resource.Quantity) *ResourceRequirementsApplyConfiguration {
-	if b.Allocatable == nil && len(entries) > 0 {
-		b.Allocatable = make(map[string]resource.Quantity, len(entries))
-	}
-	for k, v := range entries {
-		b.Allocatable[k] = v
-	}
+// WithAllocatable sets the Allocatable field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Allocatable field is set to the value of the last call.
+func (b *ResourceRequirementsApplyConfiguration) WithAllocatable(value *ResourceRangesApplyConfiguration) *ResourceRequirementsApplyConfiguration {
+	b.Allocatable = value
 	return b
 }
