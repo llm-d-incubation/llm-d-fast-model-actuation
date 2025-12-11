@@ -26,7 +26,7 @@ type InferenceServerConfigSpec struct {
 	// +kubebuilder:validation:Required
 	ModelServerConfig ModelServerConfig `json:"modelServerConfig"`
 
-	// LauncherConfigName is a reference name to the LauncherConfig that this InferenceServerConfig belongs to
+	// LauncherConfigName is the name of the LauncherConfig that this InferenceServerConfig belongs to
 	// +kubebuilder:validation:Required
 	LauncherConfigName string `json:"launcherConfigName"`
 }
@@ -48,7 +48,7 @@ type ModelServerConfig struct {
 type InferenceServerConfigStatus struct {
 	// `observedGeneration` is the `metadata.generation` last seen by the controller.
 	// +optional
-	ObservedGeneration int32 `json:"observedGeneration,omitempty"`
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
 	// `errors` reports problems seen in the desired state of this object;
 	// in particular, in the version reported by `observedGeneration`.
