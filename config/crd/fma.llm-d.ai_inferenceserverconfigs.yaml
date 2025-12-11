@@ -44,7 +44,7 @@ spec:
             description: Spec defines the desired state of the InferenceServerConfig.
             properties:
               launcherConfigName:
-                description: LauncherConfigName is a reference name to the LauncherConfig
+                description: LauncherConfigName is the name of the LauncherConfig
                   that this InferenceServerConfig belongs to
                 type: string
               modelServerConfig:
@@ -86,7 +86,7 @@ spec:
               observedGeneration:
                 description: '`observedGeneration` is the `metadata.generation` last
                   seen by the controller.'
-                format: int32
+                format: int64
                 type: integer
             type: object
         required:
