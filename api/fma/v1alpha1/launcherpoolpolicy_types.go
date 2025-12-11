@@ -81,7 +81,7 @@ type LauncherPoolPolicySpec struct {
 // LauncherPoolForNodeType defines launcher count for a class of nodes.
 type LauncherPoolForNodeType struct {
 	// Selector describes the hardware characteristics of target nodes.
-	// +kubebuilder:validation:Required
+	//
 	// Introduce an EnhancedNodeSelector that supports combining label-based
 	// matching with resource field conditions.
 	// For example:
@@ -104,7 +104,7 @@ type LauncherPoolForNodeType struct {
 	//      memory:
 	//        min: "128Gi"
 	//        max: "512Gi"
-	//      gpus:
+	//      accelerators:
 	//        nvidia.com/gpu:
 	//          min: "2"
 	//	        max: "8"
@@ -112,6 +112,7 @@ type LauncherPoolForNodeType struct {
 	//    type: "nvidia.com/gpu"
 	//    memory: "48Gi"
 	//    count: 4
+	// +required
 	EnhancedNodeSelector EnhancedNodeSelector `json:"enhancedNodeSelector"`
 
 	// PerAcceleratorCount defines pre-configuration quantities for each accelerator type
@@ -135,34 +136,35 @@ type PerAcceleratorCount struct {
 
 // ResourceRequirements defines resource requirements for a node.
 type ResourceRequirements struct {
-	// Allocatable defines the allocatable resources for a node with min/max ranges.	// +kubebuilder:validation:Required
-	Allocatable *ResourceRanges `json:"allocatable,omitempty"`
+	// Allocatable defines the allocatable resources for a node with min/max ranges.
+	// +kubebuilder:validation:Required
+	Allocatable ResourceRanges `json:"allocatable,omitempty"`
 }
 
-// ResourceRanges defines min/max ranges for various resources.
+// ResourceRanges defines min/max ranges for various resources of a Node.
 type ResourceRanges struct {
 	// CPU defines the CPU resource range requirement.
 	// +kubebuilder:validation:Optional
-	CPU *ResourceRange `json:"cpu,omitempty"`
+	CPU ResourceRange `json:"cpu,omitempty"`
 
 	// Memory defines the memory resource range requirement.
 	// +kubebuilder:validation:Optional
-	Memory *ResourceRange `json:"memory,omitempty"`
+	Memory ResourceRange `json:"memory,omitempty"`
 
-	// GPUs defines the GPU resource range requirements keyed by GPU type.
+	// Accelerators defines the GPU resource range requirements keyed by GPU type.
 	// +kubebuilder:validation:Optional
-	GPUs map[string]*ResourceRange `json:"gpus,omitempty"`
+	Accelerators map[string]ResourceRange `json:"accelerators,omitempty"`
 }
 
 // ResourceRange defines a range with minimum and maximum quantity values.
 type ResourceRange struct {
 	// Min specifies the minimum quantity required.
 	// +kubebuilder:validation:Optional
-	Min *resource.Quantity `json:"min,omitempty"`
+	Min resource.Quantity `json:"min,omitempty"`
 
 	// Max specifies the maximum quantity allowed.
 	// +kubebuilder:validation:Optional
-	Max *resource.Quantity `json:"max,omitempty"`
+	Max resource.Quantity `json:"max,omitempty"`
 }
 
 // EnhancedNodeSelector defines node selector with label selector and resource requirements.

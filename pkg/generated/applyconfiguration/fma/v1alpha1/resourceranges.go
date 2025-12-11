@@ -17,16 +17,12 @@ limitations under the License.
 
 package v1alpha1
 
-import (
-	fmav1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
-)
-
 // ResourceRangesApplyConfiguration represents a declarative configuration of the ResourceRanges type for use
 // with apply.
 type ResourceRangesApplyConfiguration struct {
-	CPU    *ResourceRangeApplyConfiguration      `json:"cpu,omitempty"`
-	Memory *ResourceRangeApplyConfiguration      `json:"memory,omitempty"`
-	GPUs   map[string]*fmav1alpha1.ResourceRange `json:"gpus,omitempty"`
+	CPU          *ResourceRangeApplyConfiguration           `json:"cpu,omitempty"`
+	Memory       *ResourceRangeApplyConfiguration           `json:"memory,omitempty"`
+	Accelerators map[string]ResourceRangeApplyConfiguration `json:"accelerators,omitempty"`
 }
 
 // ResourceRangesApplyConfiguration constructs a declarative configuration of the ResourceRanges type for use with
@@ -51,16 +47,16 @@ func (b *ResourceRangesApplyConfiguration) WithMemory(value *ResourceRangeApplyC
 	return b
 }
 
-// WithGPUs puts the entries into the GPUs field in the declarative configuration
+// WithAccelerators puts the entries into the Accelerators field in the declarative configuration
 // and returns the receiver, so that objects can be build by chaining "With" function invocations.
-// If called multiple times, the entries provided by each call will be put on the GPUs field,
-// overwriting an existing map entries in GPUs field with the same key.
-func (b *ResourceRangesApplyConfiguration) WithGPUs(entries map[string]*fmav1alpha1.ResourceRange) *ResourceRangesApplyConfiguration {
-	if b.GPUs == nil && len(entries) > 0 {
-		b.GPUs = make(map[string]*fmav1alpha1.ResourceRange, len(entries))
+// If called multiple times, the entries provided by each call will be put on the Accelerators field,
+// overwriting an existing map entries in Accelerators field with the same key.
+func (b *ResourceRangesApplyConfiguration) WithAccelerators(entries map[string]ResourceRangeApplyConfiguration) *ResourceRangesApplyConfiguration {
+	if b.Accelerators == nil && len(entries) > 0 {
+		b.Accelerators = make(map[string]ResourceRangeApplyConfiguration, len(entries))
 	}
 	for k, v := range entries {
-		b.GPUs[k] = v
+		b.Accelerators[k] = v
 	}
 	return b
 }
