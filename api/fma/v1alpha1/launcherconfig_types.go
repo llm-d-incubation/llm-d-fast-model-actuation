@@ -36,10 +36,11 @@ type LauncherConfigSpec struct {
 type LauncherConfigStatus struct {
 }
 
+// +genclient
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:shortName=ist
-// +kubebuilder:resource:path=launcherconfigs,scope=Namespaced
 
 // LauncherConfig is the Schema for the LauncherConfigs API.
 // It represents the configuration to manage the nominal server-providing pod definition.
@@ -66,8 +67,4 @@ type LauncherConfigList struct {
 
 	// Items is the list of LauncherConfig resources.
 	Items []LauncherConfig `json:"items"`
-}
-
-func init() {
-	SchemeBuilder.Register(&LauncherConfig{}, &LauncherConfigList{})
 }
