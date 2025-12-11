@@ -18,7 +18,6 @@ limitations under the License.
 package v1alpha1
 
 import (
-	fmav1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	types "k8s.io/apimachinery/pkg/types"
 	v1 "k8s.io/client-go/applyconfigurations/meta/v1"
@@ -29,8 +28,8 @@ import (
 type InferenceServerConfigApplyConfiguration struct {
 	v1.TypeMetaApplyConfiguration    `json:",inline"`
 	*v1.ObjectMetaApplyConfiguration `json:"metadata,omitempty"`
-	Spec                             *InferenceServerConfigSpecApplyConfiguration `json:"spec,omitempty"`
-	Status                           *fmav1alpha1.InferenceServerConfigStatus     `json:"status,omitempty"`
+	Spec                             *InferenceServerConfigSpecApplyConfiguration   `json:"spec,omitempty"`
+	Status                           *InferenceServerConfigStatusApplyConfiguration `json:"status,omitempty"`
 }
 
 // InferenceServerConfig constructs a declarative configuration of the InferenceServerConfig type for use with
@@ -214,8 +213,8 @@ func (b *InferenceServerConfigApplyConfiguration) WithSpec(value *InferenceServe
 // WithStatus sets the Status field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the Status field is set to the value of the last call.
-func (b *InferenceServerConfigApplyConfiguration) WithStatus(value fmav1alpha1.InferenceServerConfigStatus) *InferenceServerConfigApplyConfiguration {
-	b.Status = &value
+func (b *InferenceServerConfigApplyConfiguration) WithStatus(value *InferenceServerConfigStatusApplyConfiguration) *InferenceServerConfigApplyConfiguration {
+	b.Status = value
 	return b
 }
 
