@@ -31,6 +31,12 @@ import (
 func ForKind(kind schema.GroupVersionKind) interface{} {
 	switch kind {
 	// Group=fma.llm-d.ai, Version=v1alpha1
+	case v1alpha1.SchemeGroupVersion.WithKind("AcceleratorSelector"):
+		return &fmav1alpha1.AcceleratorSelectorApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("CountForLauncher"):
+		return &fmav1alpha1.CountForLauncherApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("EnhancedNodeSelector"):
+		return &fmav1alpha1.EnhancedNodeSelectorApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("InferenceServerConfig"):
 		return &fmav1alpha1.InferenceServerConfigApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("InferenceServerConfigSpec"):
@@ -41,8 +47,20 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &fmav1alpha1.LauncherConfigApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("LauncherConfigSpec"):
 		return &fmav1alpha1.LauncherConfigSpecApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("LauncherPoolForNodeType"):
+		return &fmav1alpha1.LauncherPoolForNodeTypeApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("LauncherPoolPolicy"):
+		return &fmav1alpha1.LauncherPoolPolicyApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("LauncherPoolPolicySpec"):
+		return &fmav1alpha1.LauncherPoolPolicySpecApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("LauncherPoolPolicyStatus"):
+		return &fmav1alpha1.LauncherPoolPolicyStatusApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("ModelServerConfig"):
 		return &fmav1alpha1.ModelServerConfigApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("PerAcceleratorCount"):
+		return &fmav1alpha1.PerAcceleratorCountApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("ResourceRequirements"):
+		return &fmav1alpha1.ResourceRequirementsApplyConfiguration{}
 
 	}
 	return nil

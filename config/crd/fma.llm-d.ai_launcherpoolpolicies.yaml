@@ -1,0 +1,244 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: launcherpoolpolicies.fma.llm-d.ai
+spec:
+  group: fma.llm-d.ai
+  names:
+    kind: LauncherPoolPolicy
+    listKind: LauncherPoolPolicyList
+    plural: launcherpoolpolicies
+    shortNames:
+    - lpp
+    singular: launcherpoolpolicy
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: LauncherPoolPolicySpec defines the node-level idle pool configuration.
+            properties:
+              launcherPoolForNodeType:
+                description: LauncherPoolForNodeType defines pool spec per node type.
+                items:
+                  description: LauncherPoolForNodeType defines launcher count for
+                    a class of nodes.
+                  properties:
+                    enhancedNodeSelector:
+                      description: |-
+                        Selector describes the hardware characteristics of target nodes.
+                        Introduce an EnhancedNodeSelector that supports combining label-based
+                        matching with resource field conditions.
+                        For example:
+                        enhancedNodeSelector:
+                         # 1. Label selector (compatible with existing metav1.LabelSelector)
+                         labelSelector:
+                           matchLabels:
+                             nvidia.com/gpu.family: ada-lovelace
+                           matchExpressions:
+                             - key: node.kubernetes.io/instance-type
+                               operator: In
+                               values: ["gx3-48x240x2l40s", "gx3-96x480x4l40s"]
+
+                         # 2. Resource condition selector (new capability)
+                         resourceRequirements:
+                           allocatable:
+                             memory: ">=200Gi"
+                             nvidia.com/gpu: ">=1"
+                             cpu: ">=32"
+                      properties:
+                        acceleratorSelector:
+                          description: AcceleratorSelector defines accelerator-specific
+                            selection criteria
+                          properties:
+                            count:
+                              description: Count specifies required number of accelerators
+                              format: int32
+                              type: integer
+                            memory:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              description: Memory specifies accelerator memory size
+                                requirement
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            type:
+                              description: Type specifies accelerator type (e.g.,
+                                nvidia.com/gpu)
+                              type: string
+                          type: object
+                        labelSelector:
+                          description: LabelSelector defines the label selector for
+                            a node.
+                          properties:
+                            matchExpressions:
+                              description: matchExpressions is a list of label selector
+                                requirements. The requirements are ANDed.
+                              items:
+                                description: |-
+                                  A label selector requirement is a selector that contains values, a key, and an operator that
+                                  relates the key and values.
+                                properties:
+                                  key:
+                                    description: key is the label key that the selector
+                                      applies to.
+                                    type: string
+                                  operator:
+                                    description: |-
+                                      operator represents a key's relationship to a set of values.
+                                      Valid operators are In, NotIn, Exists and DoesNotExist.
+                                    type: string
+                                  values:
+                                    description: |-
+                                      values is an array of string values. If the operator is In or NotIn,
+                                      the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                      the values array must be empty. This array is replaced during a strategic
+                                      merge patch.
+                                    items:
+                                      type: string
+                                    type: array
+                                    x-kubernetes-list-type: atomic
+                                required:
+                                - key
+                                - operator
+                                type: object
+                              type: array
+                              x-kubernetes-list-type: atomic
+                            matchLabels:
+                              additionalProperties:
+                                type: string
+                              description: |-
+                                matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                                map is equivalent to an element of matchExpressions, whose key field is "key", the
+                                operator is "In", and the values array contains only "value". The requirements are ANDed.
+                              type: object
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        resourceRequirements:
+                          description: ResourceRequirements defines the resource requirements
+                            for a node.
+                          properties:
+                            allocatable:
+                              additionalProperties:
+                                anyOf:
+                                - type: integer
+                                - type: string
+                                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                x-kubernetes-int-or-string: true
+                              description: Allocatable defines the allocatable resources
+                                for a node.
+                              type: object
+                          required:
+                          - allocatable
+                          type: object
+                      required:
+                      - labelSelector
+                      type: object
+                    perAcceleratorCount:
+                      description: PerAcceleratorCount defines pre-configuration quantities
+                        for each accelerator type
+                      items:
+                        description: PerAcceleratorCount defines configuration for
+                          specific accelerators
+                        properties:
+                          acceleratorSelector:
+                            description: AcceleratorSelector accelerator selector
+                            properties:
+                              count:
+                                description: Count specifies required number of accelerators
+                                format: int32
+                                type: integer
+                              memory:
+                                anyOf:
+                                - type: integer
+                                - type: string
+                                description: Memory specifies accelerator memory size
+                                  requirement
+                                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                x-kubernetes-int-or-string: true
+                              type:
+                                description: Type specifies accelerator type (e.g.,
+                                  nvidia.com/gpu)
+                                type: string
+                            type: object
+                          countForLauncher:
+                            description: |-
+                              CountForLauncher is the total number of launcher for each LauncherConfig
+                              to maintain on each matching node per accelerator.
+                              If two different counts are specified for the same (Node, Accelerator, LauncherConfig),
+                              the higher count is used and will be populated into LauncherPoolPolicyStatus.
+                              If no CountForLauncher applies to a given (Node, Accelerator, LauncherConfig), this Node
+                              will be ignored for this LauncherConfig.
+                            items:
+                              properties:
+                                launcherConfigName:
+                                  description: LauncherConfigName is the name of the
+                                    LauncherConfig this policy applies to.
+                                  type: string
+                                launcherCount:
+                                  description: LauncherCount is the total number of
+                                    launcher pods to maintain.
+                                  format: int32
+                                  type: integer
+                              required:
+                              - launcherConfigName
+                              - launcherCount
+                              type: object
+                            minItems: 1
+                            type: array
+                        required:
+                        - acceleratorSelector
+                        - countForLauncher
+                        type: object
+                      type: array
+                  required:
+                  - enhancedNodeSelector
+                  - perAcceleratorCount
+                  type: object
+                type: array
+            required:
+            - launcherPoolForNodeType
+            type: object
+          status:
+            properties:
+              errors:
+                description: |-
+                  `errors` reports problems seen in the desired state of this object;
+                  in particular, in the version reported by `observedGeneration`.
+                items:
+                  type: string
+                type: array
+              observedGeneration:
+                description: '`observedGeneration` is the `metadata.generation` last
+                  seen by the controller.'
+                format: int64
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -20,3 +20,5 @@ package v1alpha1
 type InferenceServerConfigExpansion interface{}
 
 type LauncherConfigExpansion interface{}
+
+type LauncherPoolPolicyExpansion interface{}
