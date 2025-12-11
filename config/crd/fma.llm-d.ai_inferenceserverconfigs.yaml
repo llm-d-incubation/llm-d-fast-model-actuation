@@ -44,8 +44,8 @@ spec:
             description: Spec defines the desired state of the InferenceServerConfig.
             properties:
               launcherConfigName:
-                description: TemplateRef is a reference to the LauncherConfig that
-                  this InferenceServerConfig belongs to
+                description: LauncherConfigName is the name of the LauncherConfig
+                  that this InferenceServerConfig belongs to
                 type: string
               modelServerConfig:
                 description: ModelServerConfig defines the configuration for the model
@@ -75,6 +75,19 @@ spec:
             type: object
           status:
             description: Status represents the observed status of the InferenceServerConfig.
+            properties:
+              errors:
+                description: |-
+                  `errors` reports problems seen in the desired state of this object;
+                  in particular, in the version reported by `observedGeneration`.
+                items:
+                  type: string
+                type: array
+              observedGeneration:
+                description: '`observedGeneration` is the `metadata.generation` last
+                  seen by the controller.'
+                format: int64
+                type: integer
             type: object
         required:
         - spec

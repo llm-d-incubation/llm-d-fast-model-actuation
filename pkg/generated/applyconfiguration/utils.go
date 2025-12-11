@@ -35,6 +35,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &fmav1alpha1.InferenceServerConfigApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("InferenceServerConfigSpec"):
 		return &fmav1alpha1.InferenceServerConfigSpecApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("InferenceServerConfigStatus"):
+		return &fmav1alpha1.InferenceServerConfigStatusApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("LauncherConfig"):
 		return &fmav1alpha1.LauncherConfigApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("LauncherConfigSpec"):
