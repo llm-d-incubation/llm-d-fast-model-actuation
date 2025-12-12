@@ -6,6 +6,9 @@ metadata:
     app.kubernetes.io/component: controller
   name: dual-pods-controller
 rules:
+- apiGroups: [ "fma.llm-d.ai" ]
+  resources: [ launcherconfigs ]
+  verbs: [ get, list, watch ]
 - apiGroups: [ "" ]
   resources: [ configmaps ]
   verbs: [ get, list, watch ]
