@@ -39,7 +39,7 @@ import (
 //
 // 1. **Multiple Matches**
 //   - When multiple LauncherPoolForNodeType structs match a single Node (across same or different LauncherPoolPolicy objects):
-//     - For each unique combination of (Node, Accelerator, LauncherConfig), select the highest LauncherCount value
+//     - For each unique combination of (Node, AcceleratorSet, LauncherConfig), select the highest LauncherCount value
 //     - This forms the effective policy for that specific tuple
 //
 // 2. **Zero Matches**
@@ -50,12 +50,12 @@ import (
 // ## Multiple CountForLauncher with Same LauncherConfig
 //
 // 1. **Duplicate LauncherConfig Names**
-//   - When multiple CountForLauncher structs specify the same LauncherConfigName for the same (Node, Accelerator) combination:
+//   - When multiple CountForLauncher structs specify the same LauncherConfigName for the same (Node, AcceleratorSet) combination:
 //     - Select the highest LauncherCount value among all matching entries
 //     - This determines the target pool size for that LauncherConfig on that Node with that Accelerator
 //
 // 2. **Zero Matching CountForLauncher**
-//   - When no CountForLauncher matches a specific (Node, Accelerator, LauncherConfig) tuple:
+//   - When no CountForLauncher matches a specific (Node, AcceleratorSet, LauncherConfig) tuple:
 //     - No pre-provisioning occurs for that specific combination
 //     - Launcher pods are created on-demand when needed
 //
@@ -119,10 +119,22 @@ type LauncherPoolForNodeType struct {
 	PerAcceleratorCount []PerAcceleratorCount `json:"perAcceleratorCount"`
 }
 
+// EnhancedNodeSelector defines node selector with label selector and resource requirements.
+type EnhancedNodeSelector struct {
+	// LabelSelector defines the label selector for a node.
+	// +required
+	LabelSelector *metav1.LabelSelector `json:"labelSelector,omitempty"`
+	// ResourceRequirements defines the resource requirements for a node.
+	// +optional
+	ResourceRequirements *ResourceRequirements `json:"resourceRequirements,omitempty"`
+	// AcceleratorSelector defines accelerator-specific selection criteria
+	AcceleratorSelector *AcceleratorSelector `json:"acceleratorSelector,omitempty"`
+}
+
 // PerAcceleratorCount defines configuration for specific accelerators
 type PerAcceleratorCount struct {
-	// AcceleratorSelector accelerator selector
-	AcceleratorSelector AcceleratorSelector `json:"acceleratorSelector"`
+	// AcceleratorType specifies accelerator type (e.g., nvidia.com/gpu)
+	AcceleratorType string `json:"acceleratorType,omitempty"`
 
 	// CountForLauncher is the total number of launcher for each LauncherConfig
 	// to maintain on each matching node per accelerator.
@@ -137,46 +149,34 @@ type PerAcceleratorCount struct {
 // ResourceRequirements defines resource requirements for a node.
 type ResourceRequirements struct {
 	// Allocatable defines the allocatable resources for a node with min/max ranges.
-	// +kubebuilder:validation:Required
+	// +required
 	Allocatable ResourceRanges `json:"allocatable,omitempty"`
 }
 
 // ResourceRanges defines min/max ranges for various resources of a Node.
 type ResourceRanges struct {
 	// CPU defines the CPU resource range requirement.
-	// +kubebuilder:validation:Optional
+	// +optional
 	CPU ResourceRange `json:"cpu,omitempty"`
 
 	// Memory defines the memory resource range requirement.
-	// +kubebuilder:validation:Optional
+	// +optional
 	Memory ResourceRange `json:"memory,omitempty"`
 
 	// Accelerators defines the GPU resource range requirements keyed by GPU type.
-	// +kubebuilder:validation:Optional
+	// +optional
 	Accelerators map[string]ResourceRange `json:"accelerators,omitempty"`
 }
 
 // ResourceRange defines a range with minimum and maximum quantity values.
 type ResourceRange struct {
 	// Min specifies the minimum quantity required.
-	// +kubebuilder:validation:Optional
+	// +optional
 	Min resource.Quantity `json:"min,omitempty"`
 
 	// Max specifies the maximum quantity allowed.
-	// +kubebuilder:validation:Optional
+	// +optional
 	Max resource.Quantity `json:"max,omitempty"`
-}
-
-// EnhancedNodeSelector defines node selector with label selector and resource requirements.
-type EnhancedNodeSelector struct {
-	// LabelSelector defines the label selector for a node.
-	// +kubebuilder:validation:Required
-	LabelSelector *metav1.LabelSelector `json:"labelSelector,omitempty"`
-	// ResourceRequirements defines the resource requirements for a node.
-	// +kubebuilder:validation:Optional
-	ResourceRequirements *ResourceRequirements `json:"resourceRequirements,omitempty"`
-	// AcceleratorSelector defines accelerator-specific selection criteria
-	AcceleratorSelector *AcceleratorSelector `json:"acceleratorSelector,omitempty"`
 }
 
 // AcceleratorSelector defines accelerator selection criteria
@@ -193,11 +193,11 @@ type AcceleratorSelector struct {
 
 type CountForLauncher struct {
 	// LauncherConfigName is the name of the LauncherConfig this policy applies to.
-	// +kubebuilder:validation:Required
+	// +required
 	LauncherConfigName string `json:"launcherConfigName"`
 
 	// LauncherCount is the total number of launcher pods to maintain.
-	// +kubebuilder:validation:Required
+	// +required
 	LauncherCount int32 `json:"launcherCount"`
 }
 

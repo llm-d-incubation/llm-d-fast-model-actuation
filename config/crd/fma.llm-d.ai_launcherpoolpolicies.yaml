@@ -220,26 +220,10 @@ spec:
                         description: PerAcceleratorCount defines configuration for
                           specific accelerators
                         properties:
-                          acceleratorSelector:
-                            description: AcceleratorSelector accelerator selector
-                            properties:
-                              count:
-                                description: Count specifies required number of accelerators
-                                format: int32
-                                type: integer
-                              memory:
-                                anyOf:
-                                - type: integer
-                                - type: string
-                                description: Memory specifies accelerator memory size
-                                  requirement
-                                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
-                                x-kubernetes-int-or-string: true
-                              type:
-                                description: Type specifies accelerator type (e.g.,
-                                  nvidia.com/gpu)
-                                type: string
-                            type: object
+                          acceleratorType:
+                            description: AcceleratorType specifies accelerator type
+                              (e.g., nvidia.com/gpu)
+                            type: string
                           countForLauncher:
                             description: |-
                               CountForLauncher is the total number of launcher for each LauncherConfig
@@ -266,7 +250,6 @@ spec:
                             minItems: 1
                             type: array
                         required:
-                        - acceleratorSelector
                         - countForLauncher
                         type: object
                       type: array

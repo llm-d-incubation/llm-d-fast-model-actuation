@@ -20,8 +20,8 @@ package v1alpha1
 // PerAcceleratorCountApplyConfiguration represents a declarative configuration of the PerAcceleratorCount type for use
 // with apply.
 type PerAcceleratorCountApplyConfiguration struct {
-	AcceleratorSelector *AcceleratorSelectorApplyConfiguration `json:"acceleratorSelector,omitempty"`
-	CountForLauncher    []CountForLauncherApplyConfiguration   `json:"countForLauncher,omitempty"`
+	AcceleratorType  *string                              `json:"acceleratorType,omitempty"`
+	CountForLauncher []CountForLauncherApplyConfiguration `json:"countForLauncher,omitempty"`
 }
 
 // PerAcceleratorCountApplyConfiguration constructs a declarative configuration of the PerAcceleratorCount type for use with
@@ -30,11 +30,11 @@ func PerAcceleratorCount() *PerAcceleratorCountApplyConfiguration {
 	return &PerAcceleratorCountApplyConfiguration{}
 }
 
-// WithAcceleratorSelector sets the AcceleratorSelector field in the declarative configuration to the given value
+// WithAcceleratorType sets the AcceleratorType field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
-// If called multiple times, the AcceleratorSelector field is set to the value of the last call.
-func (b *PerAcceleratorCountApplyConfiguration) WithAcceleratorSelector(value *AcceleratorSelectorApplyConfiguration) *PerAcceleratorCountApplyConfiguration {
-	b.AcceleratorSelector = value
+// If called multiple times, the AcceleratorType field is set to the value of the last call.
+func (b *PerAcceleratorCountApplyConfiguration) WithAcceleratorType(value string) *PerAcceleratorCountApplyConfiguration {
+	b.AcceleratorType = &value
 	return b
 }
 
