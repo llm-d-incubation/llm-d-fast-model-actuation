@@ -32,6 +32,8 @@ import (
 	"k8s.io/klog/v2"
 
 	dpctlr "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/dual-pods"
+	fmaclient "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/generated/clientset/versioned"
+	fmainformers "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/generated/informers/externalversions"
 )
 
 func main() {
@@ -83,17 +85,20 @@ func main() {
 
 	kubeClient := kubernetes.NewForConfigOrDie(restConfig)
 	kubePreInformers := kubeinformers.NewSharedInformerFactoryWithOptions(kubeClient, 0, kubeinformers.WithNamespace(overrides.Context.Namespace))
-
+	fmaClient := fmaclient.NewForConfigOrDie(restConfig)
+	fmaPreInformers := fmainformers.NewSharedInformerFactoryWithOptions(fmaClient, 0, fmainformers.WithNamespace(overrides.Context.Namespace))
 	ctlr, err := config.NewController(
 		logger,
 		kubeClient.CoreV1(),
 		overrides.Context.Namespace,
 		kubePreInformers.Core().V1(),
+		fmaPreInformers,
 	)
 	if err != nil {
 		klog.Fatal(err)
 	}
 	kubePreInformers.Start(ctx.Done())
+	fmaPreInformers.Start(ctx.Done())
 	err = ctlr.Start(ctx)
 	if err != nil {
 		klog.Fatal(err)
