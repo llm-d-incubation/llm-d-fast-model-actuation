@@ -35,6 +35,10 @@ func (c *FakeFmaV1alpha1) LauncherConfigs(namespace string) v1alpha1.LauncherCon
 	return newFakeLauncherConfigs(c, namespace)
 }
 
+func (c *FakeFmaV1alpha1) LauncherPoolPolicies(namespace string) v1alpha1.LauncherPoolPolicyInterface {
+	return newFakeLauncherPoolPolicies(c, namespace)
+}
+
 // RESTClient returns a RESTClient that is used to communicate
 // with API server by this client implementation.
 func (c *FakeFmaV1alpha1) RESTClient() rest.Interface {
