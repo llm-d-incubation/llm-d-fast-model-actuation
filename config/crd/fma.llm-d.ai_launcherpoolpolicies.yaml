@@ -247,7 +247,6 @@ spec:
                               - launcherConfigName
                               - launcherCount
                               type: object
-                            minItems: 1
                             type: array
                         required:
                         - countForLauncher

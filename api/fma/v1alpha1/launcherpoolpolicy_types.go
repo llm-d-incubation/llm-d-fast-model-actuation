@@ -142,7 +142,7 @@ type PerAcceleratorCount struct {
 	// the higher count is used and will be populated into LauncherPoolPolicyStatus.
 	// If no CountForLauncher applies to a given (Node, Accelerator, LauncherConfig), this Node
 	// will be ignored for this LauncherConfig.
-	// +kubebuilder:validation:MinItems=1
+	// +required
 	CountForLauncher []CountForLauncher `json:"countForLauncher"`
 }
 
