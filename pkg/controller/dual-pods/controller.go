@@ -40,8 +40,11 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
 
+	fmav1aplha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/api"
 	genctlr "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/generic"
+	fmainformers "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/generated/informers/externalversions"
+	fmalisters "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/generated/listers/fma/v1alpha1"
 )
 
 // This package implements the dual-pods controller.
@@ -147,6 +150,7 @@ func (config ControllerConfig) NewController(
 	coreClient coreclient.CoreV1Interface,
 	namespace string,
 	corev1PreInformers corev1preinformers.Interface,
+	fmaInformerFactory fmainformers.SharedInformerFactory,
 ) (*controller, error) {
 	ctl := &controller{
 		enqueueLogger:       logger.WithName(ControllerName),
@@ -158,6 +162,7 @@ func (config ControllerConfig) NewController(
 		cmLister:            corev1PreInformers.ConfigMaps().Lister(),
 		nodeInformer:        corev1PreInformers.Nodes().Informer(),
 		nodeLister:          corev1PreInformers.Nodes().Lister(),
+		lcInformer:          fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Informer(),
 		sleeperLimit:        config.SleeperLimit,
 		debugAccelMemory:    config.AcceleratorSleepingMemoryLimitMiB < math.MaxInt32,
 		accelMemoryLimitMiB: config.AcceleratorSleepingMemoryLimitMiB,
@@ -194,6 +199,10 @@ func (config ControllerConfig) NewController(
 	if err != nil {
 		panic(err)
 	}
+	_, err = ctl.lcInformer.AddEventHandler(ctl)
+	if err != nil {
+		panic(err)
+	}
 	return ctl, nil
 }
 
@@ -207,6 +216,8 @@ type controller struct {
 	cmLister      corev1listers.ConfigMapLister
 	nodeInformer  cache.SharedIndexInformer
 	nodeLister    corev1listers.NodeLister
+	lcInformer    cache.SharedIndexInformer
+	lcLister      fmalisters.LauncherConfigLister
 	genctlr.KnowsProcessedSync[queueItem]
 
 	sleeperLimit        int
@@ -382,6 +393,9 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 			ctl.enqueueLogger.V(5).Info("Enqueuing ConfigMap reference due to notification of add", "item", item, "isInInitialList", isInInitialList, "resourceVersion", typed.ResourceVersion)
 			ctl.Queue.Add(item)
 		}
+	case *fmav1aplha1.LauncherConfig:
+		ctl.Queue.Add(nodeItem{"fakeNodeName"})
+		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherConfig reference due to notification of add", "ref", cache.MetaObjectToName(typed), "isInInitialList", isInInitialList, "resourceVersion", typed.ResourceVersion)
 	default:
 		ctl.enqueueLogger.Error(nil, "Notified of add of unexpected type of object", "type", fmt.Sprintf("%T", obj))
 		return
@@ -478,7 +492,7 @@ func getProviderNodeName(pod *corev1.Pod) (string, error) {
 }
 
 func (ctl *controller) Start(ctx context.Context) error {
-	if !cache.WaitForNamedCacheSync(ControllerName, ctx.Done(), ctl.cmInformer.HasSynced, ctl.podInformer.HasSynced, ctl.nodeInformer.HasSynced) {
+	if !cache.WaitForNamedCacheSync(ControllerName, ctx.Done(), ctl.cmInformer.HasSynced, ctl.podInformer.HasSynced, ctl.nodeInformer.HasSynced, ctl.lcInformer.HasSynced) {
 		return fmt.Errorf("caches not synced before end of Start context")
 	}
 	err := ctl.StartWorkers(ctx)
