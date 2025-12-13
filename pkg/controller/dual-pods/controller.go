@@ -170,9 +170,10 @@ func (config ControllerConfig) NewController(
 	}
 	ctl.gpuMap.Store(&map[string]GpuLocation{})
 	err := ctl.podInformer.AddIndexers(cache.Indexers{
-		requesterIndexName:   requesterIndexFunc,
-		nominalHashIndexName: nominalHashIndexFunc,
-		GPUIndexName:         GPUIndexFunc})
+		launcherconfigIndexName: launcherconfigIndexFunc,
+		requesterIndexName:      requesterIndexFunc,
+		nominalHashIndexName:    nominalHashIndexFunc,
+		GPUIndexName:            GPUIndexFunc})
 	if err != nil { //impossible
 		return nil, err
 	}
@@ -349,6 +350,17 @@ func careAbout(pod *corev1.Pod) (item infSvrItem, it infSvrItemType) {
 	return infSvrItem{apitypes.UID(requesterParts[0]), requesterParts[1]}, infSvrItemBoundDirectProvider
 }
 
+const launcherconfigIndexName = "launcherconfig"
+
+func launcherconfigIndexFunc(obj any) ([]string, error) {
+	pod := obj.(*corev1.Pod)
+	launcherConfigName := pod.Annotations[api.LauncherConfigAnnotationName]
+	if len(launcherConfigName) == 0 {
+		return []string{}, nil
+	}
+	return []string{launcherConfigName}, nil
+}
+
 const requesterIndexName = "requester"
 
 func requesterIndexFunc(obj any) ([]string, error) {
@@ -384,6 +396,8 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 			nd.add(item)
 			ctl.Queue.Add(nodeItem{nodeName})
 		}
+	case *fmav1aplha1.LauncherConfig:
+		ctl.enqueueRequestersByLauncherConfig(typed, isInInitialList)
 	case *corev1.ConfigMap:
 		if typed.Name != GPUMapName {
 			ctl.enqueueLogger.V(5).Info("Ignoring ConfigMap that is not the GPU map", "ref", cache.MetaObjectToName(typed))
@@ -393,9 +407,6 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 			ctl.enqueueLogger.V(5).Info("Enqueuing ConfigMap reference due to notification of add", "item", item, "isInInitialList", isInInitialList, "resourceVersion", typed.ResourceVersion)
 			ctl.Queue.Add(item)
 		}
-	case *fmav1aplha1.LauncherConfig:
-		ctl.Queue.Add(nodeItem{"fakeNodeName"})
-		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherConfig reference due to notification of add", "ref", cache.MetaObjectToName(typed), "isInInitialList", isInInitialList, "resourceVersion", typed.ResourceVersion)
 	default:
 		ctl.enqueueLogger.Error(nil, "Notified of add of unexpected type of object", "type", fmt.Sprintf("%T", obj))
 		return
@@ -426,6 +437,8 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 			nd.add(item)
 			ctl.Queue.Add(nodeItem{nodeName})
 		}
+	case *fmav1aplha1.LauncherConfig:
+		ctl.enqueueRequestersByLauncherConfig(typed, false)
 	case *corev1.ConfigMap:
 		if typed.Name != GPUMapName {
 			ctl.enqueueLogger.V(5).Info("Ignoring ConfigMap that is not the GPU map", "ref", cache.MetaObjectToName(typed))
@@ -468,6 +481,8 @@ func (ctl *controller) OnDelete(obj any) {
 			nd.add(item)
 			ctl.Queue.Add(nodeItem{nodeName})
 		}
+	case *fmav1aplha1.LauncherConfig:
+		ctl.enqueueRequestersByLauncherConfig(typed, false)
 	case *corev1.ConfigMap:
 		if typed.Name != GPUMapName {
 			ctl.enqueueLogger.V(5).Info("Ignoring ConfigMap that is not the GPU map", "ref", cache.MetaObjectToName(typed))
@@ -561,6 +576,37 @@ func (ctl *controller) enqueueRequesters(ctx context.Context) {
 		if some {
 			ctl.Queue.Add(nodeItem{nodeName})
 		}
+	}
+}
+
+func (ctl *controller) enqueueRequestersByLauncherConfig(lc *fmav1aplha1.LauncherConfig, isInInitialList bool) {
+	launcherConfigName := lc.Name
+	requesters, err := ctl.podInformer.GetIndexer().ByIndex(launcherconfigIndexName, launcherConfigName)
+	if err != nil {
+		ctl.enqueueLogger.Error(err, "Failed to get server requesting pods that use LauncherConfig", "ref", cache.MetaObjectToName(lc))
+		return
+	}
+	nodeNames := sets.New[string]()
+	for _, podObj := range requesters {
+		pod := podObj.(*corev1.Pod)
+		item, it := careAbout(pod)
+		if it != infSvrItemRequester {
+			// should not happen because of the nature of launcherconfigIndexFunc
+			ctl.enqueueLogger.V(5).Info("Ignoring Pod that uses LauncherConfig but is not a server-requesting Pod", "name", pod.Name)
+			continue
+		}
+		nodeName := pod.Spec.NodeName
+		if nodeName == "" {
+			ctl.enqueueLogger.V(5).Info("Ignoring add of non-scheduled server-requesting Pod that uses LauncherConfig", "name", pod.Name)
+			continue
+		}
+		nd := ctl.getNodeData(nodeName)
+		ctl.enqueueLogger.V(5).Info("Enqueuing inference server reference due to notification of LauncherConfig add", "nodeName", nodeName, "item", item, "infSvrItemType", it, "launcherConfigName", launcherConfigName, "isInInitialList", isInInitialList, "resourceVersion", lc.ResourceVersion)
+		nd.add(item)
+		nodeNames.Insert(nodeName)
+	}
+	for nodeName := range nodeNames {
+		ctl.Queue.Add(nodeItem{nodeName})
 	}
 }
 
