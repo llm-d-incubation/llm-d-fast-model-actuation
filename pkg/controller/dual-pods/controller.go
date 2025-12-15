@@ -163,6 +163,7 @@ func (config ControllerConfig) NewController(
 		nodeInformer:        corev1PreInformers.Nodes().Informer(),
 		nodeLister:          corev1PreInformers.Nodes().Lister(),
 		lcInformer:          fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Informer(),
+		lcLister:            fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Lister(),
 		sleeperLimit:        config.SleeperLimit,
 		debugAccelMemory:    config.AcceleratorSleepingMemoryLimitMiB < math.MaxInt32,
 		accelMemoryLimitMiB: config.AcceleratorSleepingMemoryLimitMiB,
@@ -339,7 +340,7 @@ const (
 // The controller cares about server-requesting Pods, bound direct server-providing Pods, and launcher-based server-providing Pods.
 // The controller doesn't care about unbound direct providers and other Pods.
 func careAbout(pod *corev1.Pod) (item infSvrItem, it infSvrItemType) {
-	if len(pod.Annotations[api.ServerPatchAnnotationName]) > 0 {
+	if len(pod.Annotations[api.ServerPatchAnnotationName]) > 0 || len(pod.Annotations[api.LauncherConfigAnnotationName]) > 0 {
 		return infSvrItem{pod.UID, pod.Name}, infSvrItemRequester
 	}
 	requesterStr := pod.Annotations[requesterAnnotationKey]
