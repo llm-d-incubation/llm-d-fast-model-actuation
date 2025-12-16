@@ -149,11 +149,11 @@ type ResourceRequirements struct {
 type ResourceRanges struct {
 	// CPU defines the CPU resource range requirement.
 	// +optional
-	CPU ResourceRange `json:"cpu,omitempty"`
+	CPU *ResourceRange `json:"cpu,omitempty"`
 
 	// Memory defines the memory resource range requirement.
 	// +optional
-	Memory ResourceRange `json:"memory,omitempty"`
+	Memory *ResourceRange `json:"memory,omitempty"`
 
 	// Accelerators defines the GPU resource range requirements keyed by GPU type.
 	// +optional
@@ -164,11 +164,11 @@ type ResourceRanges struct {
 type ResourceRange struct {
 	// Min specifies the minimum quantity required.
 	// +optional
-	Min resource.Quantity `json:"min,omitempty"`
+	Min *resource.Quantity `json:"min,omitempty"`
 
 	// Max specifies the maximum quantity allowed.
 	// +optional
-	Max resource.Quantity `json:"max,omitempty"`
+	Max *resource.Quantity `json:"max,omitempty"`
 }
 
 // AcceleratorSelector defines accelerator selection criteria
