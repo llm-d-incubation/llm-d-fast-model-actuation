@@ -21,7 +21,7 @@ package v1alpha1
 // with apply.
 type LauncherPoolForNodeTypeApplyConfiguration struct {
 	EnhancedNodeSelector *EnhancedNodeSelectorApplyConfiguration `json:"enhancedNodeSelector,omitempty"`
-	PerAcceleratorCount  []PerAcceleratorCountApplyConfiguration `json:"perAcceleratorCount,omitempty"`
+	CountForLauncher     []CountForLauncherApplyConfiguration    `json:"countForLauncher,omitempty"`
 }
 
 // LauncherPoolForNodeTypeApplyConfiguration constructs a declarative configuration of the LauncherPoolForNodeType type for use with
@@ -38,15 +38,15 @@ func (b *LauncherPoolForNodeTypeApplyConfiguration) WithEnhancedNodeSelector(val
 	return b
 }
 
-// WithPerAcceleratorCount adds the given value to the PerAcceleratorCount field in the declarative configuration
+// WithCountForLauncher adds the given value to the CountForLauncher field in the declarative configuration
 // and returns the receiver, so that objects can be build by chaining "With" function invocations.
-// If called multiple times, values provided by each call will be appended to the PerAcceleratorCount field.
-func (b *LauncherPoolForNodeTypeApplyConfiguration) WithPerAcceleratorCount(values ...*PerAcceleratorCountApplyConfiguration) *LauncherPoolForNodeTypeApplyConfiguration {
+// If called multiple times, values provided by each call will be appended to the CountForLauncher field.
+func (b *LauncherPoolForNodeTypeApplyConfiguration) WithCountForLauncher(values ...*CountForLauncherApplyConfiguration) *LauncherPoolForNodeTypeApplyConfiguration {
 	for i := range values {
 		if values[i] == nil {
-			panic("nil value passed to WithPerAcceleratorCount")
+			panic("nil value passed to WithCountForLauncher")
 		}
-		b.PerAcceleratorCount = append(b.PerAcceleratorCount, *values[i])
+		b.CountForLauncher = append(b.CountForLauncher, *values[i])
 	}
 	return b
 }

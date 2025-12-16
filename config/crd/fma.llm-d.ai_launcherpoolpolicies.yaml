@@ -46,6 +46,51 @@ spec:
                   description: LauncherPoolForNodeType defines launcher count for
                     a class of nodes.
                   properties:
+                    countForLauncher:
+                      description: |-
+                        CountForLauncher defines pre-configuration quantities for each LauncherConfig
+                        to maintain on each matching node. Each entry may optionally include
+                        an AcceleratorSelector to restrict the entry to nodes that have a
+                        matching accelerator (if omitted, apply regardless of accelerator sets).
+                      items:
+                        properties:
+                          acceleratorSelector:
+                            description: |-
+                              Apply this count only to accelerators on the node that
+                              match this selector. When omitted, the count applies to the node regardless
+                              of accelerator sets (convenient for homogeneous clusters).
+                            properties:
+                              count:
+                                description: Count specifies required number of accelerators
+                                format: int32
+                                type: integer
+                              memory:
+                                anyOf:
+                                - type: integer
+                                - type: string
+                                description: Memory specifies accelerator memory size
+                                  requirement
+                                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                x-kubernetes-int-or-string: true
+                              type:
+                                description: Type specifies accelerator type (e.g.,
+                                  nvidia.com/gpu)
+                                type: string
+                            type: object
+                          launcherConfigName:
+                            description: LauncherConfigName is the name of the LauncherConfig
+                              this policy applies to.
+                            type: string
+                          launcherCount:
+                            description: LauncherCount is the total number of launcher
+                              pods to maintain.
+                            format: int32
+                            type: integer
+                        required:
+                        - launcherConfigName
+                        - launcherCount
+                        type: object
+                      type: array
                     enhancedNodeSelector:
                       description: "Selector describes the hardware characteristics
                         of target nodes.\n\nIntroduce an EnhancedNodeSelector that
@@ -64,8 +109,10 @@ spec:
                         \  memory: \"48Gi\"\n   count: 4"
                       properties:
                         acceleratorSelector:
-                          description: AcceleratorSelector defines accelerator-specific
-                            selection criteria
+                          description: |-
+                            AcceleratorSelector defines accelerator-specific selection criteria at the
+                            node level. When omitted, node matching does not filter based on accelerator
+                            (convenient for homogeneous clusters).
                           properties:
                             count:
                               description: Count specifies required number of accelerators
@@ -213,48 +260,9 @@ spec:
                       required:
                       - labelSelector
                       type: object
-                    perAcceleratorCount:
-                      description: PerAcceleratorCount defines pre-configuration quantities
-                        for each accelerator type
-                      items:
-                        description: PerAcceleratorCount defines configuration for
-                          specific accelerators
-                        properties:
-                          acceleratorType:
-                            description: AcceleratorType specifies accelerator type
-                              (e.g., nvidia.com/gpu)
-                            type: string
-                          countForLauncher:
-                            description: |-
-                              CountForLauncher is the total number of launcher for each LauncherConfig
-                              to maintain on each matching node per accelerator.
-                              If two different counts are specified for the same (Node, Accelerator, LauncherConfig),
-                              the higher count is used and will be populated into LauncherPoolPolicyStatus.
-                              If no CountForLauncher applies to a given (Node, Accelerator, LauncherConfig), this Node
-                              will be ignored for this LauncherConfig.
-                            items:
-                              properties:
-                                launcherConfigName:
-                                  description: LauncherConfigName is the name of the
-                                    LauncherConfig this policy applies to.
-                                  type: string
-                                launcherCount:
-                                  description: LauncherCount is the total number of
-                                    launcher pods to maintain.
-                                  format: int32
-                                  type: integer
-                              required:
-                              - launcherConfigName
-                              - launcherCount
-                              type: object
-                            type: array
-                        required:
-                        - countForLauncher
-                        type: object
-                      type: array
                   required:
+                  - countForLauncher
                   - enhancedNodeSelector
-                  - perAcceleratorCount
                   type: object
                 type: array
             required:
