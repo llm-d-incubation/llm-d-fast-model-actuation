@@ -20,9 +20,8 @@ package v1alpha1
 // CountForLauncherApplyConfiguration represents a declarative configuration of the CountForLauncher type for use
 // with apply.
 type CountForLauncherApplyConfiguration struct {
-	LauncherConfigName  *string                                `json:"launcherConfigName,omitempty"`
-	LauncherCount       *int32                                 `json:"launcherCount,omitempty"`
-	AcceleratorSelector *AcceleratorSelectorApplyConfiguration `json:"acceleratorSelector,omitempty"`
+	LauncherConfigName *string `json:"launcherConfigName,omitempty"`
+	LauncherCount      *int32  `json:"launcherCount,omitempty"`
 }
 
 // CountForLauncherApplyConfiguration constructs a declarative configuration of the CountForLauncher type for use with
@@ -44,13 +43,5 @@ func (b *CountForLauncherApplyConfiguration) WithLauncherConfigName(value string
 // If called multiple times, the LauncherCount field is set to the value of the last call.
 func (b *CountForLauncherApplyConfiguration) WithLauncherCount(value int32) *CountForLauncherApplyConfiguration {
 	b.LauncherCount = &value
-	return b
-}
-
-// WithAcceleratorSelector sets the AcceleratorSelector field in the declarative configuration to the given value
-// and returns the receiver, so that objects can be built by chaining "With" function invocations.
-// If called multiple times, the AcceleratorSelector field is set to the value of the last call.
-func (b *CountForLauncherApplyConfiguration) WithAcceleratorSelector(value *AcceleratorSelectorApplyConfiguration) *CountForLauncherApplyConfiguration {
-	b.AcceleratorSelector = value
 	return b
 }
