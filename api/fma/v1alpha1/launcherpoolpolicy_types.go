@@ -115,8 +115,12 @@ type LauncherPoolForNodeType struct {
 	// +required
 	EnhancedNodeSelector EnhancedNodeSelector `json:"enhancedNodeSelector"`
 
-	// PerAcceleratorCount defines pre-configuration quantities for each accelerator type
-	PerAcceleratorCount []PerAcceleratorCount `json:"perAcceleratorCount"`
+	// CountForLauncher defines pre-configuration quantities for each LauncherConfig
+	// to maintain on each matching node. Each entry may optionally include
+	// an AcceleratorSelector to restrict the entry to nodes that have a
+	// matching accelerator (if omitted, apply regardless of accelerator sets).
+	// +required
+	CountForLauncher []CountForLauncher `json:"countForLauncher"`
 }
 
 // EnhancedNodeSelector defines node selector with label selector and resource requirements.
@@ -127,23 +131,27 @@ type EnhancedNodeSelector struct {
 	// ResourceRequirements defines the resource requirements for a node.
 	// +optional
 	ResourceRequirements *ResourceRequirements `json:"resourceRequirements,omitempty"`
-	// AcceleratorSelector defines accelerator-specific selection criteria
+	// AcceleratorSelector defines accelerator-specific selection criteria at the
+	// node level. When omitted, node matching does not filter based on accelerator
+	// (convenient for homogeneous clusters).
+	// +optional
 	AcceleratorSelector *AcceleratorSelector `json:"acceleratorSelector,omitempty"`
 }
 
-// PerAcceleratorCount defines configuration for specific accelerators
-type PerAcceleratorCount struct {
-	// AcceleratorType specifies accelerator type (e.g., nvidia.com/gpu)
-	AcceleratorType string `json:"acceleratorType,omitempty"`
-
-	// CountForLauncher is the total number of launcher for each LauncherConfig
-	// to maintain on each matching node per accelerator.
-	// If two different counts are specified for the same (Node, Accelerator, LauncherConfig),
-	// the higher count is used and will be populated into LauncherPoolPolicyStatus.
-	// If no CountForLauncher applies to a given (Node, Accelerator, LauncherConfig), this Node
-	// will be ignored for this LauncherConfig.
+type CountForLauncher struct {
+	// LauncherConfigName is the name of the LauncherConfig this policy applies to.
 	// +required
-	CountForLauncher []CountForLauncher `json:"countForLauncher"`
+	LauncherConfigName string `json:"launcherConfigName"`
+
+	// LauncherCount is the total number of launcher pods to maintain.
+	// +required
+	LauncherCount int32 `json:"launcherCount"`
+
+	// Apply this count only to accelerators on the node that
+	// match this selector. When omitted, the count applies to the node regardless
+	// of accelerator sets (convenient for homogeneous clusters).
+	// +optional
+	AcceleratorSelector *AcceleratorSelector `json:"acceleratorSelector,omitempty"`
 }
 
 // ResourceRequirements defines resource requirements for a node.
@@ -189,16 +197,6 @@ type AcceleratorSelector struct {
 
 	// Count specifies required number of accelerators
 	Count *int32 `json:"count,omitempty"`
-}
-
-type CountForLauncher struct {
-	// LauncherConfigName is the name of the LauncherConfig this policy applies to.
-	// +required
-	LauncherConfigName string `json:"launcherConfigName"`
-
-	// LauncherCount is the total number of launcher pods to maintain.
-	// +required
-	LauncherCount int32 `json:"launcherCount"`
 }
 
 type LauncherPoolPolicyStatus struct {
