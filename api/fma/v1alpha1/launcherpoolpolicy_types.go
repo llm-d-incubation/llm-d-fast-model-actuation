@@ -17,11 +17,14 @@ limitations under the License.
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// LauncherPopulationPolicy defines the policy for pro-active creation of launcher Pods.
+// LauncherPopulationPolicy defines the policy for pro-active creation of launcher Pods
+// for a given type of Node.
+// Here we introduce and use a particular definition of "type" for Nodes.
 // All the LauncherPopulationPolicy objects together define a map,
 // from (Node, LauncherConfig) to count.
 // Call this map `PopulationPolicy`.
@@ -49,14 +52,8 @@ type LauncherPopulationPolicy struct {
 	Status LauncherPopulationPolicyStatus `json:"status,omitempty"`
 }
 
-// LauncherPopulationPolicySpec defines policy by case analysis on types of nodes.
+// LauncherPopulationPolicySpec defines policy for one type of Node.
 type LauncherPopulationPolicySpec struct {
-	// LauncherPopulationForNodeTypes defines the policy for each of several types of node.
-	LauncherPopulationForNodeTypes []LauncherPopulationForNodeType `json:"launcherPopulationForNodeTypes"`
-}
-
-// LauncherPopulationForNodeType defines launcher count for a class of nodes.
-type LauncherPopulationForNodeType struct {
 	// Selector describes the hardware characteristics of target nodes.
 	//
 	// Introduce an EnhancedNodeSelector that supports combining label-based
@@ -73,18 +70,10 @@ type LauncherPopulationForNodeType struct {
 	//        values: ["gx3-48x240x2l40s", "gx3-96x480x4l40s"]
 	//
 	//  # 2. Resource condition selector (new capability)
-	//  resourceRequirements:
-	//    allocatable:
-	//      cpu:
-	//        min: "16"
-	//        max: "64"
-	//      memory:
-	//        min: "128Gi"
-	//        max: "512Gi"
-	//      accelerators:
-	//        nvidia.com/gpu:
-	//          min: "2"
-	//	        max: "8"
+	//  allocatableResources:
+	//    cpu: {min: "16", max: "64"}
+	//    memory: {min: 128Gi, max: 512Gi}
+	//    "nvidia.com/gpu": {min: 8, max: 8}
 	// +required
 	EnhancedNodeSelector EnhancedNodeSelector `json:"enhancedNodeSelector"`
 
@@ -103,31 +92,23 @@ type EnhancedNodeSelector struct {
 	LabelSelector *metav1.LabelSelector `json:"labelSelector,omitempty"`
 	// ResourceRequirements defines the resource requirements for a node.
 	// +optional
-	AllocatableResources *ResourceRanges `json:"allocatableResources,omitempty"`
+	AllocatableResources ResourceRanges `json:"allocatableResources,omitempty"`
 }
 
-// ResourceRanges defines min/max ranges for various resources of a Node.
-type ResourceRanges struct {
-	// CPU defines the CPU resource range requirement.
-	// +optional
-	CPU *ResourceRange `json:"cpu,omitempty"`
+// ResourceRanges defines the required range for some resources.
+// These are the same sort of resources that appear in the `.status.allocatable`
+// of a Node object.
+type ResourceRanges map[corev1.ResourceName]ResourceRange
 
-	// Memory defines the memory resource range requirement.
-	// +optional
-	Memory *ResourceRange `json:"memory,omitempty"`
-
-	// Accelerators defines the GPU resource range requirements keyed by GPU type.
-	// +optional
-	Accelerators map[string]ResourceRange `json:"accelerators,omitempty"`
-}
-
-// ResourceRange defines a range with minimum and maximum quantity values.
+// ResourceRange defines a range by inclusive minimum and maximum quantity values.
 type ResourceRange struct {
-	// Min specifies the minimum quantity required.
+	// Min specifies the minimum quantity required,
+	// or is `null` to signal that there is no lower bound.
 	// +optional
 	Min *resource.Quantity `json:"min,omitempty"`
 
-	// Max specifies the maximum quantity allowed.
+	// Max specifies the maximum quantity allowed,
+	// or is `null` to signal that there is no upper bound.
 	// +optional
 	Max *resource.Quantity `json:"max,omitempty"`
 }
