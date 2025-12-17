@@ -108,10 +108,6 @@ type LauncherPoolForNodeType struct {
 	//        nvidia.com/gpu:
 	//          min: "2"
 	//	        max: "8"
-	//  acceleratorSelector:
-	//    type: "nvidia.com/gpu"
-	//    memory: "48Gi"
-	//    count: 4
 	// +required
 	EnhancedNodeSelector EnhancedNodeSelector `json:"enhancedNodeSelector"`
 
@@ -130,19 +126,7 @@ type EnhancedNodeSelector struct {
 	LabelSelector *metav1.LabelSelector `json:"labelSelector,omitempty"`
 	// ResourceRequirements defines the resource requirements for a node.
 	// +optional
-	ResourceRequirements *ResourceRequirements `json:"resourceRequirements,omitempty"`
-	// AcceleratorSelector defines accelerator-specific selection criteria at the
-	// node level. When omitted, node matching does not filter based on accelerator
-	// (convenient for homogeneous clusters).
-	// +optional
-	AcceleratorSelector *AcceleratorSelector `json:"acceleratorSelector,omitempty"`
-}
-
-// ResourceRequirements defines resource requirements for a node.
-type ResourceRequirements struct {
-	// Allocatable defines the allocatable resources for a node with min/max ranges.
-	// +required
-	Allocatable ResourceRanges `json:"allocatable,omitempty"`
+	AllocatableResources *ResourceRanges `json:"allocatableResources,omitempty"`
 }
 
 // ResourceRanges defines min/max ranges for various resources of a Node.
@@ -169,18 +153,6 @@ type ResourceRange struct {
 	// Max specifies the maximum quantity allowed.
 	// +optional
 	Max *resource.Quantity `json:"max,omitempty"`
-}
-
-// AcceleratorSelector defines accelerator selection criteria
-type AcceleratorSelector struct {
-	// Type specifies accelerator type (e.g., nvidia.com/gpu)
-	Type string `json:"type,omitempty"`
-
-	// Memory specifies accelerator memory size requirement
-	Memory *resource.Quantity `json:"memory,omitempty"`
-
-	// Count specifies required number of accelerators
-	Count *int32 `json:"count,omitempty"`
 }
 
 type CountForLauncher struct {

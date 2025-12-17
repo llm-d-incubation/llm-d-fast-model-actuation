@@ -24,9 +24,8 @@ import (
 // EnhancedNodeSelectorApplyConfiguration represents a declarative configuration of the EnhancedNodeSelector type for use
 // with apply.
 type EnhancedNodeSelectorApplyConfiguration struct {
-	LabelSelector        *v1.LabelSelectorApplyConfiguration     `json:"labelSelector,omitempty"`
-	ResourceRequirements *ResourceRequirementsApplyConfiguration `json:"resourceRequirements,omitempty"`
-	AcceleratorSelector  *AcceleratorSelectorApplyConfiguration  `json:"acceleratorSelector,omitempty"`
+	LabelSelector        *v1.LabelSelectorApplyConfiguration `json:"labelSelector,omitempty"`
+	AllocatableResources *ResourceRangesApplyConfiguration   `json:"allocatableResources,omitempty"`
 }
 
 // EnhancedNodeSelectorApplyConfiguration constructs a declarative configuration of the EnhancedNodeSelector type for use with
@@ -43,18 +42,10 @@ func (b *EnhancedNodeSelectorApplyConfiguration) WithLabelSelector(value *v1.Lab
 	return b
 }
 
-// WithResourceRequirements sets the ResourceRequirements field in the declarative configuration to the given value
+// WithAllocatableResources sets the AllocatableResources field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
-// If called multiple times, the ResourceRequirements field is set to the value of the last call.
-func (b *EnhancedNodeSelectorApplyConfiguration) WithResourceRequirements(value *ResourceRequirementsApplyConfiguration) *EnhancedNodeSelectorApplyConfiguration {
-	b.ResourceRequirements = value
-	return b
-}
-
-// WithAcceleratorSelector sets the AcceleratorSelector field in the declarative configuration to the given value
-// and returns the receiver, so that objects can be built by chaining "With" function invocations.
-// If called multiple times, the AcceleratorSelector field is set to the value of the last call.
-func (b *EnhancedNodeSelectorApplyConfiguration) WithAcceleratorSelector(value *AcceleratorSelectorApplyConfiguration) *EnhancedNodeSelectorApplyConfiguration {
-	b.AcceleratorSelector = value
+// If called multiple times, the AllocatableResources field is set to the value of the last call.
+func (b *EnhancedNodeSelectorApplyConfiguration) WithAllocatableResources(value *ResourceRangesApplyConfiguration) *EnhancedNodeSelectorApplyConfiguration {
+	b.AllocatableResources = value
 	return b
 }

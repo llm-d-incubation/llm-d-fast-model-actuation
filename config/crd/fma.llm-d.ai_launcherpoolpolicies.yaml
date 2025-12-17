@@ -82,31 +82,78 @@ spec:
                         \    cpu:\n       min: \"16\"\n       max: \"64\"\n     memory:\n
                         \      min: \"128Gi\"\n       max: \"512Gi\"\n     accelerators:\n
                         \      nvidia.com/gpu:\n         min: \"2\"\n\t        max:
-                        \"8\"\n acceleratorSelector:\n   type: \"nvidia.com/gpu\"\n
-                        \  memory: \"48Gi\"\n   count: 4"
+                        \"8\""
                       properties:
-                        acceleratorSelector:
-                          description: |-
-                            AcceleratorSelector defines accelerator-specific selection criteria at the
-                            node level. When omitted, node matching does not filter based on accelerator
-                            (convenient for homogeneous clusters).
+                        allocatableResources:
+                          description: ResourceRequirements defines the resource requirements
+                            for a node.
                           properties:
-                            count:
-                              description: Count specifies required number of accelerators
-                              format: int32
-                              type: integer
+                            accelerators:
+                              additionalProperties:
+                                description: ResourceRange defines a range with minimum
+                                  and maximum quantity values.
+                                properties:
+                                  max:
+                                    anyOf:
+                                    - type: integer
+                                    - type: string
+                                    description: Max specifies the maximum quantity
+                                      allowed.
+                                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                    x-kubernetes-int-or-string: true
+                                  min:
+                                    anyOf:
+                                    - type: integer
+                                    - type: string
+                                    description: Min specifies the minimum quantity
+                                      required.
+                                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                    x-kubernetes-int-or-string: true
+                                type: object
+                              description: Accelerators defines the GPU resource range
+                                requirements keyed by GPU type.
+                              type: object
+                            cpu:
+                              description: CPU defines the CPU resource range requirement.
+                              properties:
+                                max:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  description: Max specifies the maximum quantity
+                                    allowed.
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                                min:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  description: Min specifies the minimum quantity
+                                    required.
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                              type: object
                             memory:
-                              anyOf:
-                              - type: integer
-                              - type: string
-                              description: Memory specifies accelerator memory size
-                                requirement
-                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
-                              x-kubernetes-int-or-string: true
-                            type:
-                              description: Type specifies accelerator type (e.g.,
-                                nvidia.com/gpu)
-                              type: string
+                              description: Memory defines the memory resource range
+                                requirement.
+                              properties:
+                                max:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  description: Max specifies the maximum quantity
+                                    allowed.
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                                min:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  description: Min specifies the minimum quantity
+                                    required.
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                              type: object
                           type: object
                         labelSelector:
                           description: LabelSelector defines the label selector for
@@ -155,85 +202,6 @@ spec:
                               type: object
                           type: object
                           x-kubernetes-map-type: atomic
-                        resourceRequirements:
-                          description: ResourceRequirements defines the resource requirements
-                            for a node.
-                          properties:
-                            allocatable:
-                              description: Allocatable defines the allocatable resources
-                                for a node with min/max ranges.
-                              properties:
-                                accelerators:
-                                  additionalProperties:
-                                    description: ResourceRange defines a range with
-                                      minimum and maximum quantity values.
-                                    properties:
-                                      max:
-                                        anyOf:
-                                        - type: integer
-                                        - type: string
-                                        description: Max specifies the maximum quantity
-                                          allowed.
-                                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
-                                        x-kubernetes-int-or-string: true
-                                      min:
-                                        anyOf:
-                                        - type: integer
-                                        - type: string
-                                        description: Min specifies the minimum quantity
-                                          required.
-                                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
-                                        x-kubernetes-int-or-string: true
-                                    type: object
-                                  description: Accelerators defines the GPU resource
-                                    range requirements keyed by GPU type.
-                                  type: object
-                                cpu:
-                                  description: CPU defines the CPU resource range
-                                    requirement.
-                                  properties:
-                                    max:
-                                      anyOf:
-                                      - type: integer
-                                      - type: string
-                                      description: Max specifies the maximum quantity
-                                        allowed.
-                                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
-                                      x-kubernetes-int-or-string: true
-                                    min:
-                                      anyOf:
-                                      - type: integer
-                                      - type: string
-                                      description: Min specifies the minimum quantity
-                                        required.
-                                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
-                                      x-kubernetes-int-or-string: true
-                                  type: object
-                                memory:
-                                  description: Memory defines the memory resource
-                                    range requirement.
-                                  properties:
-                                    max:
-                                      anyOf:
-                                      - type: integer
-                                      - type: string
-                                      description: Max specifies the maximum quantity
-                                        allowed.
-                                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
-                                      x-kubernetes-int-or-string: true
-                                    min:
-                                      anyOf:
-                                      - type: integer
-                                      - type: string
-                                      description: Min specifies the minimum quantity
-                                        required.
-                                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
-                                      x-kubernetes-int-or-string: true
-                                  type: object
-                              type: object
-                          required:
-                          - allocatable
-                          type: object
                       required:
                       - labelSelector
                       type: object

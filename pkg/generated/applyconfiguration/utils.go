@@ -31,8 +31,6 @@ import (
 func ForKind(kind schema.GroupVersionKind) interface{} {
 	switch kind {
 	// Group=fma.llm-d.ai, Version=v1alpha1
-	case v1alpha1.SchemeGroupVersion.WithKind("AcceleratorSelector"):
-		return &fmav1alpha1.AcceleratorSelectorApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("CountForLauncher"):
 		return &fmav1alpha1.CountForLauncherApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("EnhancedNodeSelector"):
@@ -61,8 +59,6 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &fmav1alpha1.ResourceRangeApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("ResourceRanges"):
 		return &fmav1alpha1.ResourceRangesApplyConfiguration{}
-	case v1alpha1.SchemeGroupVersion.WithKind("ResourceRequirements"):
-		return &fmav1alpha1.ResourceRequirementsApplyConfiguration{}
 
 	}
 	return nil
