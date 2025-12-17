@@ -29,7 +29,7 @@ import (
 type LauncherPoolPolicyLister interface {
 	// List lists all LauncherPoolPolicies in the indexer.
 	// Objects returned here must be treated as read-only.
-	List(selector labels.Selector) (ret []*fmav1alpha1.LauncherPoolPolicy, err error)
+	List(selector labels.Selector) (ret []*fmav1alpha1.LauncherPopulationPolicy, err error)
 	// LauncherPoolPolicies returns an object that can list and get LauncherPoolPolicies.
 	LauncherPoolPolicies(namespace string) LauncherPoolPolicyNamespaceLister
 	LauncherPoolPolicyListerExpansion
@@ -37,17 +37,17 @@ type LauncherPoolPolicyLister interface {
 
 // launcherPoolPolicyLister implements the LauncherPoolPolicyLister interface.
 type launcherPoolPolicyLister struct {
-	listers.ResourceIndexer[*fmav1alpha1.LauncherPoolPolicy]
+	listers.ResourceIndexer[*fmav1alpha1.LauncherPopulationPolicy]
 }
 
 // NewLauncherPoolPolicyLister returns a new LauncherPoolPolicyLister.
 func NewLauncherPoolPolicyLister(indexer cache.Indexer) LauncherPoolPolicyLister {
-	return &launcherPoolPolicyLister{listers.New[*fmav1alpha1.LauncherPoolPolicy](indexer, fmav1alpha1.Resource("launcherpoolpolicy"))}
+	return &launcherPoolPolicyLister{listers.New[*fmav1alpha1.LauncherPopulationPolicy](indexer, fmav1alpha1.Resource("launcherpoolpolicy"))}
 }
 
 // LauncherPoolPolicies returns an object that can list and get LauncherPoolPolicies.
 func (s *launcherPoolPolicyLister) LauncherPoolPolicies(namespace string) LauncherPoolPolicyNamespaceLister {
-	return launcherPoolPolicyNamespaceLister{listers.NewNamespaced[*fmav1alpha1.LauncherPoolPolicy](s.ResourceIndexer, namespace)}
+	return launcherPoolPolicyNamespaceLister{listers.NewNamespaced[*fmav1alpha1.LauncherPopulationPolicy](s.ResourceIndexer, namespace)}
 }
 
 // LauncherPoolPolicyNamespaceLister helps list and get LauncherPoolPolicies.
@@ -55,15 +55,15 @@ func (s *launcherPoolPolicyLister) LauncherPoolPolicies(namespace string) Launch
 type LauncherPoolPolicyNamespaceLister interface {
 	// List lists all LauncherPoolPolicies in the indexer for a given namespace.
 	// Objects returned here must be treated as read-only.
-	List(selector labels.Selector) (ret []*fmav1alpha1.LauncherPoolPolicy, err error)
+	List(selector labels.Selector) (ret []*fmav1alpha1.LauncherPopulationPolicy, err error)
 	// Get retrieves the LauncherPoolPolicy from the indexer for a given namespace and name.
 	// Objects returned here must be treated as read-only.
-	Get(name string) (*fmav1alpha1.LauncherPoolPolicy, error)
+	Get(name string) (*fmav1alpha1.LauncherPopulationPolicy, error)
 	LauncherPoolPolicyNamespaceListerExpansion
 }
 
 // launcherPoolPolicyNamespaceLister implements the LauncherPoolPolicyNamespaceLister
 // interface.
 type launcherPoolPolicyNamespaceLister struct {
-	listers.ResourceIndexer[*fmav1alpha1.LauncherPoolPolicy]
+	listers.ResourceIndexer[*fmav1alpha1.LauncherPopulationPolicy]
 }

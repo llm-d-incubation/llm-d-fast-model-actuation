@@ -21,65 +21,42 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// LauncherPoolPolicy defines the proactive provisioning policy for the idle launcher pods.
-// The LauncherPoolPolicy semantics should be defined as below:
+// LauncherPopulationPolicy defines the policy for pro-active creation of launcher Pods.
+// All the LauncherPopulationPolicy objects together define a map,
+// from (Node, LauncherConfig) to count.
+// Call this map `PopulationPolicy`.
+// When multiple CountForLauncher apply to the same (Node, LauncherConfig) pair
+// the maximum of their counts is what appears in `PopulationPolicy`.
+// When no CountForLauncher applies to a given (Node, LauncherConfig),
+// `PopulationPolicy` implicitly maps that pair to zero.
 //
-// ## Multiple LauncherPoolPolicy Objects
-//
-// 1. **Additive Semantics**
-//   - Multiple LauncherPoolPolicy objects follow additive semantics
-//   - All policies across all objects are evaluated together
-//   - Rules from different objects are combined to form the complete policy set
-//
-// 2. **Zero Objects Behavior**
-//   - When no LauncherPoolPolicy objects exist, no proactive provisioning occurs
-//   - System falls back to on-demand launcher pod creation
-//
-// ## Multiple LauncherPoolForNodeType Matching
-//
-// 1. **Multiple Matches**
-//   - When multiple LauncherPoolForNodeType structs match a single Node (across same or different LauncherPoolPolicy objects):
-//     - For each unique combination of (Node, AcceleratorSet, LauncherConfig), select the highest LauncherCount value
-//     - This forms the effective policy for that specific tuple
-//
-// 2. **Zero Matches**
-//   - When no LauncherPoolForNodeType matches a Node:
-//     - No pre-provisioning policy applies to that Node
-//     - Launcher pods for that Node are created on-demand
-//
-// ## Multiple CountForLauncher with Same LauncherConfig
-//
-// 1. **Duplicate LauncherConfig Names**
-//   - When multiple CountForLauncher structs specify the same LauncherConfigName for the same (Node, AcceleratorSet) combination:
-//     - Select the highest LauncherCount value among all matching entries
-//     - This determines the target pool size for that LauncherConfig on that Node with that Accelerator
-//
-// 2. **Zero Matching CountForLauncher**
-//   - When no CountForLauncher matches a specific (Node, AcceleratorSet, LauncherConfig) tuple:
-//     - No pre-provisioning occurs for that specific combination
-//     - Launcher pods are created on-demand when needed
+// The collective meaning of all the LauncherPopulationPolicy objects
+// and all the server-rquesting Pods is that for a given (Node, LauncherConfig)
+// the number of launchers that should exist is the larger of
+// (a) what `PopulationPolicy` says for that pair, and
+// (b) the number needed to satisfy the server-requesting Pods.
 //
 // +genclient
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:shortName=lpp
 
-type LauncherPoolPolicy struct {
+type LauncherPopulationPolicy struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   LauncherPoolPolicySpec   `json:"spec,omitempty"`
-	Status LauncherPoolPolicyStatus `json:"status,omitempty"`
+	Spec   LauncherPopulationPolicySpec   `json:"spec,omitempty"`
+	Status LauncherPopulationPolicyStatus `json:"status,omitempty"`
 }
 
-// LauncherPoolPolicySpec defines the node-level idle pool configuration.
-type LauncherPoolPolicySpec struct {
-	// LauncherPoolForNodeType defines pool spec per node type.
-	LauncherPoolForNodeType []LauncherPoolForNodeType `json:"launcherPoolForNodeType"`
+// LauncherPopulationPolicySpec defines policy by case analysis on types of nodes.
+type LauncherPopulationPolicySpec struct {
+	// LauncherPopulationForNodeTypes defines the policy for each of several types of node.
+	LauncherPopulationForNodeTypes []LauncherPopulationForNodeType `json:"launcherPopulationForNodeTypes"`
 }
 
-// LauncherPoolForNodeType defines launcher count for a class of nodes.
-type LauncherPoolForNodeType struct {
+// LauncherPopulationForNodeType defines launcher count for a class of nodes.
+type LauncherPopulationForNodeType struct {
 	// Selector describes the hardware characteristics of target nodes.
 	//
 	// Introduce an EnhancedNodeSelector that supports combining label-based
@@ -165,7 +142,7 @@ type CountForLauncher struct {
 	LauncherCount int32 `json:"launcherCount"`
 }
 
-type LauncherPoolPolicyStatus struct {
+type LauncherPopulationPolicyStatus struct {
 	// `observedGeneration` is the `metadata.generation` last seen by the controller.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
@@ -177,10 +154,10 @@ type LauncherPoolPolicyStatus struct {
 	// Add status fields if needed (e.g., current idle pod counts)
 }
 
-// LauncherPoolPolicyList contains a list of LauncherPoolPolicy resources.
+// LauncherPopulationPolicyList contains a list of LauncherPopulationPolicy resources.
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-type LauncherPoolPolicyList struct {
+type LauncherPopulationPolicyList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []LauncherPoolPolicy `json:"items"`
+	Items           []LauncherPopulationPolicy `json:"items"`
 }

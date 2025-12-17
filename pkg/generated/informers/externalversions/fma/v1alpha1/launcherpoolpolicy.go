@@ -82,7 +82,7 @@ func NewFilteredLauncherPoolPolicyInformer(client versioned.Interface, namespace
 				return client.FmaV1alpha1().LauncherPoolPolicies(namespace).Watch(ctx, options)
 			},
 		},
-		&apifmav1alpha1.LauncherPoolPolicy{},
+		&apifmav1alpha1.LauncherPopulationPolicy{},
 		resyncPeriod,
 		indexers,
 	)
@@ -93,7 +93,7 @@ func (f *launcherPoolPolicyInformer) defaultInformer(client versioned.Interface,
 }
 
 func (f *launcherPoolPolicyInformer) Informer() cache.SharedIndexInformer {
-	return f.factory.InformerFor(&apifmav1alpha1.LauncherPoolPolicy{}, f.defaultInformer)
+	return f.factory.InformerFor(&apifmav1alpha1.LauncherPopulationPolicy{}, f.defaultInformer)
 }
 
 func (f *launcherPoolPolicyInformer) Lister() fmav1alpha1.LauncherPoolPolicyLister {
