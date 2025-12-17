@@ -29,40 +29,40 @@ import (
 	gentype "k8s.io/client-go/gentype"
 )
 
-// LauncherPoolPoliciesGetter has a method to return a LauncherPoolPolicyInterface.
+// LauncherPopulationPoliciesGetter has a method to return a LauncherPopulationPolicyInterface.
 // A group's client should implement this interface.
-type LauncherPoolPoliciesGetter interface {
-	LauncherPoolPolicies(namespace string) LauncherPoolPolicyInterface
+type LauncherPopulationPoliciesGetter interface {
+	LauncherPopulationPolicies(namespace string) LauncherPopulationPolicyInterface
 }
 
-// LauncherPoolPolicyInterface has methods to work with LauncherPoolPolicy resources.
-type LauncherPoolPolicyInterface interface {
-	Create(ctx context.Context, launcherPoolPolicy *fmav1alpha1.LauncherPopulationPolicy, opts v1.CreateOptions) (*fmav1alpha1.LauncherPopulationPolicy, error)
-	Update(ctx context.Context, launcherPoolPolicy *fmav1alpha1.LauncherPopulationPolicy, opts v1.UpdateOptions) (*fmav1alpha1.LauncherPopulationPolicy, error)
+// LauncherPopulationPolicyInterface has methods to work with LauncherPopulationPolicy resources.
+type LauncherPopulationPolicyInterface interface {
+	Create(ctx context.Context, launcherPopulationPolicy *fmav1alpha1.LauncherPopulationPolicy, opts v1.CreateOptions) (*fmav1alpha1.LauncherPopulationPolicy, error)
+	Update(ctx context.Context, launcherPopulationPolicy *fmav1alpha1.LauncherPopulationPolicy, opts v1.UpdateOptions) (*fmav1alpha1.LauncherPopulationPolicy, error)
 	// Add a +genclient:noStatus comment above the type to avoid generating UpdateStatus().
-	UpdateStatus(ctx context.Context, launcherPoolPolicy *fmav1alpha1.LauncherPopulationPolicy, opts v1.UpdateOptions) (*fmav1alpha1.LauncherPopulationPolicy, error)
+	UpdateStatus(ctx context.Context, launcherPopulationPolicy *fmav1alpha1.LauncherPopulationPolicy, opts v1.UpdateOptions) (*fmav1alpha1.LauncherPopulationPolicy, error)
 	Delete(ctx context.Context, name string, opts v1.DeleteOptions) error
 	DeleteCollection(ctx context.Context, opts v1.DeleteOptions, listOpts v1.ListOptions) error
 	Get(ctx context.Context, name string, opts v1.GetOptions) (*fmav1alpha1.LauncherPopulationPolicy, error)
 	List(ctx context.Context, opts v1.ListOptions) (*fmav1alpha1.LauncherPopulationPolicyList, error)
 	Watch(ctx context.Context, opts v1.ListOptions) (watch.Interface, error)
 	Patch(ctx context.Context, name string, pt types.PatchType, data []byte, opts v1.PatchOptions, subresources ...string) (result *fmav1alpha1.LauncherPopulationPolicy, err error)
-	Apply(ctx context.Context, launcherPoolPolicy *applyconfigurationfmav1alpha1.LauncherPoolPolicyApplyConfiguration, opts v1.ApplyOptions) (result *fmav1alpha1.LauncherPopulationPolicy, err error)
+	Apply(ctx context.Context, launcherPopulationPolicy *applyconfigurationfmav1alpha1.LauncherPopulationPolicyApplyConfiguration, opts v1.ApplyOptions) (result *fmav1alpha1.LauncherPopulationPolicy, err error)
 	// Add a +genclient:noStatus comment above the type to avoid generating ApplyStatus().
-	ApplyStatus(ctx context.Context, launcherPoolPolicy *applyconfigurationfmav1alpha1.LauncherPoolPolicyApplyConfiguration, opts v1.ApplyOptions) (result *fmav1alpha1.LauncherPopulationPolicy, err error)
-	LauncherPoolPolicyExpansion
+	ApplyStatus(ctx context.Context, launcherPopulationPolicy *applyconfigurationfmav1alpha1.LauncherPopulationPolicyApplyConfiguration, opts v1.ApplyOptions) (result *fmav1alpha1.LauncherPopulationPolicy, err error)
+	LauncherPopulationPolicyExpansion
 }
 
-// launcherPoolPolicies implements LauncherPoolPolicyInterface
-type launcherPoolPolicies struct {
-	*gentype.ClientWithListAndApply[*fmav1alpha1.LauncherPopulationPolicy, *fmav1alpha1.LauncherPopulationPolicyList, *applyconfigurationfmav1alpha1.LauncherPoolPolicyApplyConfiguration]
+// launcherPopulationPolicies implements LauncherPopulationPolicyInterface
+type launcherPopulationPolicies struct {
+	*gentype.ClientWithListAndApply[*fmav1alpha1.LauncherPopulationPolicy, *fmav1alpha1.LauncherPopulationPolicyList, *applyconfigurationfmav1alpha1.LauncherPopulationPolicyApplyConfiguration]
 }
 
-// newLauncherPoolPolicies returns a LauncherPoolPolicies
-func newLauncherPoolPolicies(c *FmaV1alpha1Client, namespace string) *launcherPoolPolicies {
-	return &launcherPoolPolicies{
-		gentype.NewClientWithListAndApply[*fmav1alpha1.LauncherPopulationPolicy, *fmav1alpha1.LauncherPopulationPolicyList, *applyconfigurationfmav1alpha1.LauncherPoolPolicyApplyConfiguration](
-			"launcherpoolpolicies",
+// newLauncherPopulationPolicies returns a LauncherPopulationPolicies
+func newLauncherPopulationPolicies(c *FmaV1alpha1Client, namespace string) *launcherPopulationPolicies {
+	return &launcherPopulationPolicies{
+		gentype.NewClientWithListAndApply[*fmav1alpha1.LauncherPopulationPolicy, *fmav1alpha1.LauncherPopulationPolicyList, *applyconfigurationfmav1alpha1.LauncherPopulationPolicyApplyConfiguration](
+			"launcherpopulationpolicies",
 			c.RESTClient(),
 			scheme.ParameterCodec,
 			namespace,

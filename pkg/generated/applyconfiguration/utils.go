@@ -45,14 +45,14 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &fmav1alpha1.LauncherConfigApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("LauncherConfigSpec"):
 		return &fmav1alpha1.LauncherConfigSpecApplyConfiguration{}
-	case v1alpha1.SchemeGroupVersion.WithKind("LauncherPoolForNodeType"):
-		return &fmav1alpha1.LauncherPoolForNodeTypeApplyConfiguration{}
-	case v1alpha1.SchemeGroupVersion.WithKind("LauncherPoolPolicy"):
-		return &fmav1alpha1.LauncherPoolPolicyApplyConfiguration{}
-	case v1alpha1.SchemeGroupVersion.WithKind("LauncherPoolPolicySpec"):
-		return &fmav1alpha1.LauncherPoolPolicySpecApplyConfiguration{}
-	case v1alpha1.SchemeGroupVersion.WithKind("LauncherPoolPolicyStatus"):
-		return &fmav1alpha1.LauncherPoolPolicyStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("LauncherPopulationForNodeType"):
+		return &fmav1alpha1.LauncherPopulationForNodeTypeApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("LauncherPopulationPolicy"):
+		return &fmav1alpha1.LauncherPopulationPolicyApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("LauncherPopulationPolicySpec"):
+		return &fmav1alpha1.LauncherPopulationPolicySpecApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("LauncherPopulationPolicyStatus"):
+		return &fmav1alpha1.LauncherPopulationPolicyStatusApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("ModelServerConfig"):
 		return &fmav1alpha1.ModelServerConfigApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("ResourceRange"):

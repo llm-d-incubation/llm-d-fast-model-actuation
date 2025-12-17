@@ -17,23 +17,23 @@ limitations under the License.
 
 package v1alpha1
 
-// LauncherPoolForNodeTypeApplyConfiguration represents a declarative configuration of the LauncherPoolForNodeType type for use
+// LauncherPopulationForNodeTypeApplyConfiguration represents a declarative configuration of the LauncherPopulationForNodeType type for use
 // with apply.
-type LauncherPoolForNodeTypeApplyConfiguration struct {
+type LauncherPopulationForNodeTypeApplyConfiguration struct {
 	EnhancedNodeSelector *EnhancedNodeSelectorApplyConfiguration `json:"enhancedNodeSelector,omitempty"`
 	CountForLauncher     []CountForLauncherApplyConfiguration    `json:"countForLauncher,omitempty"`
 }
 
-// LauncherPoolForNodeTypeApplyConfiguration constructs a declarative configuration of the LauncherPoolForNodeType type for use with
+// LauncherPopulationForNodeTypeApplyConfiguration constructs a declarative configuration of the LauncherPopulationForNodeType type for use with
 // apply.
-func LauncherPoolForNodeType() *LauncherPoolForNodeTypeApplyConfiguration {
-	return &LauncherPoolForNodeTypeApplyConfiguration{}
+func LauncherPopulationForNodeType() *LauncherPopulationForNodeTypeApplyConfiguration {
+	return &LauncherPopulationForNodeTypeApplyConfiguration{}
 }
 
 // WithEnhancedNodeSelector sets the EnhancedNodeSelector field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the EnhancedNodeSelector field is set to the value of the last call.
-func (b *LauncherPoolForNodeTypeApplyConfiguration) WithEnhancedNodeSelector(value *EnhancedNodeSelectorApplyConfiguration) *LauncherPoolForNodeTypeApplyConfiguration {
+func (b *LauncherPopulationForNodeTypeApplyConfiguration) WithEnhancedNodeSelector(value *EnhancedNodeSelectorApplyConfiguration) *LauncherPopulationForNodeTypeApplyConfiguration {
 	b.EnhancedNodeSelector = value
 	return b
 }
@@ -41,7 +41,7 @@ func (b *LauncherPoolForNodeTypeApplyConfiguration) WithEnhancedNodeSelector(val
 // WithCountForLauncher adds the given value to the CountForLauncher field in the declarative configuration
 // and returns the receiver, so that objects can be build by chaining "With" function invocations.
 // If called multiple times, values provided by each call will be appended to the CountForLauncher field.
-func (b *LauncherPoolForNodeTypeApplyConfiguration) WithCountForLauncher(values ...*CountForLauncherApplyConfiguration) *LauncherPoolForNodeTypeApplyConfiguration {
+func (b *LauncherPopulationForNodeTypeApplyConfiguration) WithCountForLauncher(values ...*CountForLauncherApplyConfiguration) *LauncherPopulationForNodeTypeApplyConfiguration {
 	for i := range values {
 		if values[i] == nil {
 			panic("nil value passed to WithCountForLauncher")

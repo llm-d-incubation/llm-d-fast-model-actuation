@@ -33,10 +33,10 @@ type LauncherConfigListerExpansion interface{}
 // LauncherConfigNamespaceLister.
 type LauncherConfigNamespaceListerExpansion interface{}
 
-// LauncherPoolPolicyListerExpansion allows custom methods to be added to
-// LauncherPoolPolicyLister.
-type LauncherPoolPolicyListerExpansion interface{}
+// LauncherPopulationPolicyListerExpansion allows custom methods to be added to
+// LauncherPopulationPolicyLister.
+type LauncherPopulationPolicyListerExpansion interface{}
 
-// LauncherPoolPolicyNamespaceListerExpansion allows custom methods to be added to
-// LauncherPoolPolicyNamespaceLister.
-type LauncherPoolPolicyNamespaceListerExpansion interface{}
+// LauncherPopulationPolicyNamespaceListerExpansion allows custom methods to be added to
+// LauncherPopulationPolicyNamespaceLister.
+type LauncherPopulationPolicyNamespaceListerExpansion interface{}

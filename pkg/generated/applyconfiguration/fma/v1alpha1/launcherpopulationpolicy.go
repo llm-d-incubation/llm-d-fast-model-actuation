@@ -23,31 +23,31 @@ import (
 	v1 "k8s.io/client-go/applyconfigurations/meta/v1"
 )
 
-// LauncherPoolPolicyApplyConfiguration represents a declarative configuration of the LauncherPoolPolicy type for use
+// LauncherPopulationPolicyApplyConfiguration represents a declarative configuration of the LauncherPopulationPolicy type for use
 // with apply.
-type LauncherPoolPolicyApplyConfiguration struct {
+type LauncherPopulationPolicyApplyConfiguration struct {
 	v1.TypeMetaApplyConfiguration    `json:",inline"`
 	*v1.ObjectMetaApplyConfiguration `json:"metadata,omitempty"`
-	Spec                             *LauncherPoolPolicySpecApplyConfiguration   `json:"spec,omitempty"`
-	Status                           *LauncherPoolPolicyStatusApplyConfiguration `json:"status,omitempty"`
+	Spec                             *LauncherPopulationPolicySpecApplyConfiguration   `json:"spec,omitempty"`
+	Status                           *LauncherPopulationPolicyStatusApplyConfiguration `json:"status,omitempty"`
 }
 
-// LauncherPoolPolicy constructs a declarative configuration of the LauncherPoolPolicy type for use with
+// LauncherPopulationPolicy constructs a declarative configuration of the LauncherPopulationPolicy type for use with
 // apply.
-func LauncherPoolPolicy(name, namespace string) *LauncherPoolPolicyApplyConfiguration {
-	b := &LauncherPoolPolicyApplyConfiguration{}
+func LauncherPopulationPolicy(name, namespace string) *LauncherPopulationPolicyApplyConfiguration {
+	b := &LauncherPopulationPolicyApplyConfiguration{}
 	b.WithName(name)
 	b.WithNamespace(namespace)
-	b.WithKind("LauncherPoolPolicy")
+	b.WithKind("LauncherPopulationPolicy")
 	b.WithAPIVersion("fma.llm-d.ai/v1alpha1")
 	return b
 }
-func (b LauncherPoolPolicyApplyConfiguration) IsApplyConfiguration() {}
+func (b LauncherPopulationPolicyApplyConfiguration) IsApplyConfiguration() {}
 
 // WithKind sets the Kind field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the Kind field is set to the value of the last call.
-func (b *LauncherPoolPolicyApplyConfiguration) WithKind(value string) *LauncherPoolPolicyApplyConfiguration {
+func (b *LauncherPopulationPolicyApplyConfiguration) WithKind(value string) *LauncherPopulationPolicyApplyConfiguration {
 	b.TypeMetaApplyConfiguration.Kind = &value
 	return b
 }
@@ -55,7 +55,7 @@ func (b *LauncherPoolPolicyApplyConfiguration) WithKind(value string) *LauncherP
 // WithAPIVersion sets the APIVersion field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the APIVersion field is set to the value of the last call.
-func (b *LauncherPoolPolicyApplyConfiguration) WithAPIVersion(value string) *LauncherPoolPolicyApplyConfiguration {
+func (b *LauncherPopulationPolicyApplyConfiguration) WithAPIVersion(value string) *LauncherPopulationPolicyApplyConfiguration {
 	b.TypeMetaApplyConfiguration.APIVersion = &value
 	return b
 }
@@ -63,7 +63,7 @@ func (b *LauncherPoolPolicyApplyConfiguration) WithAPIVersion(value string) *Lau
 // WithName sets the Name field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the Name field is set to the value of the last call.
-func (b *LauncherPoolPolicyApplyConfiguration) WithName(value string) *LauncherPoolPolicyApplyConfiguration {
+func (b *LauncherPopulationPolicyApplyConfiguration) WithName(value string) *LauncherPopulationPolicyApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	b.ObjectMetaApplyConfiguration.Name = &value
 	return b
@@ -72,7 +72,7 @@ func (b *LauncherPoolPolicyApplyConfiguration) WithName(value string) *LauncherP
 // WithGenerateName sets the GenerateName field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the GenerateName field is set to the value of the last call.
-func (b *LauncherPoolPolicyApplyConfiguration) WithGenerateName(value string) *LauncherPoolPolicyApplyConfiguration {
+func (b *LauncherPopulationPolicyApplyConfiguration) WithGenerateName(value string) *LauncherPopulationPolicyApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	b.ObjectMetaApplyConfiguration.GenerateName = &value
 	return b
@@ -81,7 +81,7 @@ func (b *LauncherPoolPolicyApplyConfiguration) WithGenerateName(value string) *L
 // WithNamespace sets the Namespace field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the Namespace field is set to the value of the last call.
-func (b *LauncherPoolPolicyApplyConfiguration) WithNamespace(value string) *LauncherPoolPolicyApplyConfiguration {
+func (b *LauncherPopulationPolicyApplyConfiguration) WithNamespace(value string) *LauncherPopulationPolicyApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	b.ObjectMetaApplyConfiguration.Namespace = &value
 	return b
@@ -90,7 +90,7 @@ func (b *LauncherPoolPolicyApplyConfiguration) WithNamespace(value string) *Laun
 // WithUID sets the UID field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the UID field is set to the value of the last call.
-func (b *LauncherPoolPolicyApplyConfiguration) WithUID(value types.UID) *LauncherPoolPolicyApplyConfiguration {
+func (b *LauncherPopulationPolicyApplyConfiguration) WithUID(value types.UID) *LauncherPopulationPolicyApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	b.ObjectMetaApplyConfiguration.UID = &value
 	return b
@@ -99,7 +99,7 @@ func (b *LauncherPoolPolicyApplyConfiguration) WithUID(value types.UID) *Launche
 // WithResourceVersion sets the ResourceVersion field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the ResourceVersion field is set to the value of the last call.
-func (b *LauncherPoolPolicyApplyConfiguration) WithResourceVersion(value string) *LauncherPoolPolicyApplyConfiguration {
+func (b *LauncherPopulationPolicyApplyConfiguration) WithResourceVersion(value string) *LauncherPopulationPolicyApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	b.ObjectMetaApplyConfiguration.ResourceVersion = &value
 	return b
@@ -108,7 +108,7 @@ func (b *LauncherPoolPolicyApplyConfiguration) WithResourceVersion(value string)
 // WithGeneration sets the Generation field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the Generation field is set to the value of the last call.
-func (b *LauncherPoolPolicyApplyConfiguration) WithGeneration(value int64) *LauncherPoolPolicyApplyConfiguration {
+func (b *LauncherPopulationPolicyApplyConfiguration) WithGeneration(value int64) *LauncherPopulationPolicyApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	b.ObjectMetaApplyConfiguration.Generation = &value
 	return b
@@ -117,7 +117,7 @@ func (b *LauncherPoolPolicyApplyConfiguration) WithGeneration(value int64) *Laun
 // WithCreationTimestamp sets the CreationTimestamp field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the CreationTimestamp field is set to the value of the last call.
-func (b *LauncherPoolPolicyApplyConfiguration) WithCreationTimestamp(value metav1.Time) *LauncherPoolPolicyApplyConfiguration {
+func (b *LauncherPopulationPolicyApplyConfiguration) WithCreationTimestamp(value metav1.Time) *LauncherPopulationPolicyApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	b.ObjectMetaApplyConfiguration.CreationTimestamp = &value
 	return b
@@ -126,7 +126,7 @@ func (b *LauncherPoolPolicyApplyConfiguration) WithCreationTimestamp(value metav
 // WithDeletionTimestamp sets the DeletionTimestamp field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the DeletionTimestamp field is set to the value of the last call.
-func (b *LauncherPoolPolicyApplyConfiguration) WithDeletionTimestamp(value metav1.Time) *LauncherPoolPolicyApplyConfiguration {
+func (b *LauncherPopulationPolicyApplyConfiguration) WithDeletionTimestamp(value metav1.Time) *LauncherPopulationPolicyApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	b.ObjectMetaApplyConfiguration.DeletionTimestamp = &value
 	return b
@@ -135,7 +135,7 @@ func (b *LauncherPoolPolicyApplyConfiguration) WithDeletionTimestamp(value metav
 // WithDeletionGracePeriodSeconds sets the DeletionGracePeriodSeconds field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the DeletionGracePeriodSeconds field is set to the value of the last call.
-func (b *LauncherPoolPolicyApplyConfiguration) WithDeletionGracePeriodSeconds(value int64) *LauncherPoolPolicyApplyConfiguration {
+func (b *LauncherPopulationPolicyApplyConfiguration) WithDeletionGracePeriodSeconds(value int64) *LauncherPopulationPolicyApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	b.ObjectMetaApplyConfiguration.DeletionGracePeriodSeconds = &value
 	return b
@@ -145,7 +145,7 @@ func (b *LauncherPoolPolicyApplyConfiguration) WithDeletionGracePeriodSeconds(va
 // and returns the receiver, so that objects can be build by chaining "With" function invocations.
 // If called multiple times, the entries provided by each call will be put on the Labels field,
 // overwriting an existing map entries in Labels field with the same key.
-func (b *LauncherPoolPolicyApplyConfiguration) WithLabels(entries map[string]string) *LauncherPoolPolicyApplyConfiguration {
+func (b *LauncherPopulationPolicyApplyConfiguration) WithLabels(entries map[string]string) *LauncherPopulationPolicyApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	if b.ObjectMetaApplyConfiguration.Labels == nil && len(entries) > 0 {
 		b.ObjectMetaApplyConfiguration.Labels = make(map[string]string, len(entries))
@@ -160,7 +160,7 @@ func (b *LauncherPoolPolicyApplyConfiguration) WithLabels(entries map[string]str
 // and returns the receiver, so that objects can be build by chaining "With" function invocations.
 // If called multiple times, the entries provided by each call will be put on the Annotations field,
 // overwriting an existing map entries in Annotations field with the same key.
-func (b *LauncherPoolPolicyApplyConfiguration) WithAnnotations(entries map[string]string) *LauncherPoolPolicyApplyConfiguration {
+func (b *LauncherPopulationPolicyApplyConfiguration) WithAnnotations(entries map[string]string) *LauncherPopulationPolicyApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	if b.ObjectMetaApplyConfiguration.Annotations == nil && len(entries) > 0 {
 		b.ObjectMetaApplyConfiguration.Annotations = make(map[string]string, len(entries))
@@ -174,7 +174,7 @@ func (b *LauncherPoolPolicyApplyConfiguration) WithAnnotations(entries map[strin
 // WithOwnerReferences adds the given value to the OwnerReferences field in the declarative configuration
 // and returns the receiver, so that objects can be build by chaining "With" function invocations.
 // If called multiple times, values provided by each call will be appended to the OwnerReferences field.
-func (b *LauncherPoolPolicyApplyConfiguration) WithOwnerReferences(values ...*v1.OwnerReferenceApplyConfiguration) *LauncherPoolPolicyApplyConfiguration {
+func (b *LauncherPopulationPolicyApplyConfiguration) WithOwnerReferences(values ...*v1.OwnerReferenceApplyConfiguration) *LauncherPopulationPolicyApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	for i := range values {
 		if values[i] == nil {
@@ -188,7 +188,7 @@ func (b *LauncherPoolPolicyApplyConfiguration) WithOwnerReferences(values ...*v1
 // WithFinalizers adds the given value to the Finalizers field in the declarative configuration
 // and returns the receiver, so that objects can be build by chaining "With" function invocations.
 // If called multiple times, values provided by each call will be appended to the Finalizers field.
-func (b *LauncherPoolPolicyApplyConfiguration) WithFinalizers(values ...string) *LauncherPoolPolicyApplyConfiguration {
+func (b *LauncherPopulationPolicyApplyConfiguration) WithFinalizers(values ...string) *LauncherPopulationPolicyApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	for i := range values {
 		b.ObjectMetaApplyConfiguration.Finalizers = append(b.ObjectMetaApplyConfiguration.Finalizers, values[i])
@@ -196,7 +196,7 @@ func (b *LauncherPoolPolicyApplyConfiguration) WithFinalizers(values ...string) 
 	return b
 }
 
-func (b *LauncherPoolPolicyApplyConfiguration) ensureObjectMetaApplyConfigurationExists() {
+func (b *LauncherPopulationPolicyApplyConfiguration) ensureObjectMetaApplyConfigurationExists() {
 	if b.ObjectMetaApplyConfiguration == nil {
 		b.ObjectMetaApplyConfiguration = &v1.ObjectMetaApplyConfiguration{}
 	}
@@ -205,7 +205,7 @@ func (b *LauncherPoolPolicyApplyConfiguration) ensureObjectMetaApplyConfiguratio
 // WithSpec sets the Spec field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the Spec field is set to the value of the last call.
-func (b *LauncherPoolPolicyApplyConfiguration) WithSpec(value *LauncherPoolPolicySpecApplyConfiguration) *LauncherPoolPolicyApplyConfiguration {
+func (b *LauncherPopulationPolicyApplyConfiguration) WithSpec(value *LauncherPopulationPolicySpecApplyConfiguration) *LauncherPopulationPolicyApplyConfiguration {
 	b.Spec = value
 	return b
 }
@@ -213,29 +213,29 @@ func (b *LauncherPoolPolicyApplyConfiguration) WithSpec(value *LauncherPoolPolic
 // WithStatus sets the Status field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the Status field is set to the value of the last call.
-func (b *LauncherPoolPolicyApplyConfiguration) WithStatus(value *LauncherPoolPolicyStatusApplyConfiguration) *LauncherPoolPolicyApplyConfiguration {
+func (b *LauncherPopulationPolicyApplyConfiguration) WithStatus(value *LauncherPopulationPolicyStatusApplyConfiguration) *LauncherPopulationPolicyApplyConfiguration {
 	b.Status = value
 	return b
 }
 
 // GetKind retrieves the value of the Kind field in the declarative configuration.
-func (b *LauncherPoolPolicyApplyConfiguration) GetKind() *string {
+func (b *LauncherPopulationPolicyApplyConfiguration) GetKind() *string {
 	return b.TypeMetaApplyConfiguration.Kind
 }
 
 // GetAPIVersion retrieves the value of the APIVersion field in the declarative configuration.
-func (b *LauncherPoolPolicyApplyConfiguration) GetAPIVersion() *string {
+func (b *LauncherPopulationPolicyApplyConfiguration) GetAPIVersion() *string {
 	return b.TypeMetaApplyConfiguration.APIVersion
 }
 
 // GetName retrieves the value of the Name field in the declarative configuration.
-func (b *LauncherPoolPolicyApplyConfiguration) GetName() *string {
+func (b *LauncherPopulationPolicyApplyConfiguration) GetName() *string {
 	b.ensureObjectMetaApplyConfigurationExists()
 	return b.ObjectMetaApplyConfiguration.Name
 }
 
 // GetNamespace retrieves the value of the Namespace field in the declarative configuration.
-func (b *LauncherPoolPolicyApplyConfiguration) GetNamespace() *string {
+func (b *LauncherPopulationPolicyApplyConfiguration) GetNamespace() *string {
 	b.ensureObjectMetaApplyConfigurationExists()
 	return b.ObjectMetaApplyConfiguration.Namespace
 }

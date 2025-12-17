@@ -56,8 +56,8 @@ func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Fma().V1alpha1().InferenceServerConfigs().Informer()}, nil
 	case v1alpha1.SchemeGroupVersion.WithResource("launcherconfigs"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Fma().V1alpha1().LauncherConfigs().Informer()}, nil
-	case v1alpha1.SchemeGroupVersion.WithResource("launcherpoolpolicies"):
-		return &genericInformer{resource: resource.GroupResource(), informer: f.Fma().V1alpha1().LauncherPoolPolicies().Informer()}, nil
+	case v1alpha1.SchemeGroupVersion.WithResource("launcherpopulationpolicies"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Fma().V1alpha1().LauncherPopulationPolicies().Informer()}, nil
 
 	}
 

@@ -27,8 +27,8 @@ type Interface interface {
 	InferenceServerConfigs() InferenceServerConfigInformer
 	// LauncherConfigs returns a LauncherConfigInformer.
 	LauncherConfigs() LauncherConfigInformer
-	// LauncherPoolPolicies returns a LauncherPoolPolicyInformer.
-	LauncherPoolPolicies() LauncherPoolPolicyInformer
+	// LauncherPopulationPolicies returns a LauncherPopulationPolicyInformer.
+	LauncherPopulationPolicies() LauncherPopulationPolicyInformer
 }
 
 type version struct {
@@ -52,7 +52,7 @@ func (v *version) LauncherConfigs() LauncherConfigInformer {
 	return &launcherConfigInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
 }
 
-// LauncherPoolPolicies returns a LauncherPoolPolicyInformer.
-func (v *version) LauncherPoolPolicies() LauncherPoolPolicyInformer {
-	return &launcherPoolPolicyInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
+// LauncherPopulationPolicies returns a LauncherPopulationPolicyInformer.
+func (v *version) LauncherPopulationPolicies() LauncherPopulationPolicyInformer {
+	return &launcherPopulationPolicyInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
 }

@@ -24,19 +24,19 @@ import (
 	gentype "k8s.io/client-go/gentype"
 )
 
-// fakeLauncherPoolPolicies implements LauncherPoolPolicyInterface
-type fakeLauncherPoolPolicies struct {
-	*gentype.FakeClientWithListAndApply[*v1alpha1.LauncherPopulationPolicy, *v1alpha1.LauncherPopulationPolicyList, *fmav1alpha1.LauncherPoolPolicyApplyConfiguration]
+// fakeLauncherPopulationPolicies implements LauncherPopulationPolicyInterface
+type fakeLauncherPopulationPolicies struct {
+	*gentype.FakeClientWithListAndApply[*v1alpha1.LauncherPopulationPolicy, *v1alpha1.LauncherPopulationPolicyList, *fmav1alpha1.LauncherPopulationPolicyApplyConfiguration]
 	Fake *FakeFmaV1alpha1
 }
 
-func newFakeLauncherPoolPolicies(fake *FakeFmaV1alpha1, namespace string) typedfmav1alpha1.LauncherPoolPolicyInterface {
-	return &fakeLauncherPoolPolicies{
-		gentype.NewFakeClientWithListAndApply[*v1alpha1.LauncherPopulationPolicy, *v1alpha1.LauncherPopulationPolicyList, *fmav1alpha1.LauncherPoolPolicyApplyConfiguration](
+func newFakeLauncherPopulationPolicies(fake *FakeFmaV1alpha1, namespace string) typedfmav1alpha1.LauncherPopulationPolicyInterface {
+	return &fakeLauncherPopulationPolicies{
+		gentype.NewFakeClientWithListAndApply[*v1alpha1.LauncherPopulationPolicy, *v1alpha1.LauncherPopulationPolicyList, *fmav1alpha1.LauncherPopulationPolicyApplyConfiguration](
 			fake.Fake,
 			namespace,
-			v1alpha1.SchemeGroupVersion.WithResource("launcherpoolpolicies"),
-			v1alpha1.SchemeGroupVersion.WithKind("LauncherPoolPolicy"),
+			v1alpha1.SchemeGroupVersion.WithResource("launcherpopulationpolicies"),
+			v1alpha1.SchemeGroupVersion.WithKind("LauncherPopulationPolicy"),
 			func() *v1alpha1.LauncherPopulationPolicy { return &v1alpha1.LauncherPopulationPolicy{} },
 			func() *v1alpha1.LauncherPopulationPolicyList { return &v1alpha1.LauncherPopulationPolicyList{} },
 			func(dst, src *v1alpha1.LauncherPopulationPolicyList) { dst.ListMeta = src.ListMeta },

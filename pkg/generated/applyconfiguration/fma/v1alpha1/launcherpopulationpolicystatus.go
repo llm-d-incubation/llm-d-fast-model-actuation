@@ -17,23 +17,23 @@ limitations under the License.
 
 package v1alpha1
 
-// LauncherPoolPolicyStatusApplyConfiguration represents a declarative configuration of the LauncherPoolPolicyStatus type for use
+// LauncherPopulationPolicyStatusApplyConfiguration represents a declarative configuration of the LauncherPopulationPolicyStatus type for use
 // with apply.
-type LauncherPoolPolicyStatusApplyConfiguration struct {
+type LauncherPopulationPolicyStatusApplyConfiguration struct {
 	ObservedGeneration *int64   `json:"observedGeneration,omitempty"`
 	Errors             []string `json:"errors,omitempty"`
 }
 
-// LauncherPoolPolicyStatusApplyConfiguration constructs a declarative configuration of the LauncherPoolPolicyStatus type for use with
+// LauncherPopulationPolicyStatusApplyConfiguration constructs a declarative configuration of the LauncherPopulationPolicyStatus type for use with
 // apply.
-func LauncherPoolPolicyStatus() *LauncherPoolPolicyStatusApplyConfiguration {
-	return &LauncherPoolPolicyStatusApplyConfiguration{}
+func LauncherPopulationPolicyStatus() *LauncherPopulationPolicyStatusApplyConfiguration {
+	return &LauncherPopulationPolicyStatusApplyConfiguration{}
 }
 
 // WithObservedGeneration sets the ObservedGeneration field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the ObservedGeneration field is set to the value of the last call.
-func (b *LauncherPoolPolicyStatusApplyConfiguration) WithObservedGeneration(value int64) *LauncherPoolPolicyStatusApplyConfiguration {
+func (b *LauncherPopulationPolicyStatusApplyConfiguration) WithObservedGeneration(value int64) *LauncherPopulationPolicyStatusApplyConfiguration {
 	b.ObservedGeneration = &value
 	return b
 }
@@ -41,7 +41,7 @@ func (b *LauncherPoolPolicyStatusApplyConfiguration) WithObservedGeneration(valu
 // WithErrors adds the given value to the Errors field in the declarative configuration
 // and returns the receiver, so that objects can be build by chaining "With" function invocations.
 // If called multiple times, values provided by each call will be appended to the Errors field.
-func (b *LauncherPoolPolicyStatusApplyConfiguration) WithErrors(values ...string) *LauncherPoolPolicyStatusApplyConfiguration {
+func (b *LauncherPopulationPolicyStatusApplyConfiguration) WithErrors(values ...string) *LauncherPopulationPolicyStatusApplyConfiguration {
 	for i := range values {
 		b.Errors = append(b.Errors, values[i])
 	}
