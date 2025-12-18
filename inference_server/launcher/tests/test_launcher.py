@@ -17,14 +17,22 @@ Unit tests for Multi-Instance vLLM Launcher
 Run as:
 python -m pytest tests/test_launcher.py -v
 """
-
-from unittest.mock import patch
+import sys
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
+# Mock vllm before importing launcher
+sys.modules["vllm"] = MagicMock()
+sys.modules["vllm.utils"] = MagicMock()
+sys.modules["vllm.utils.argparse_utils"] = MagicMock()
+sys.modules["vllm.entrypoints.openai.api_server"] = MagicMock()
+sys.modules["vllm.entrypoints.openai.cli_args"] = MagicMock()
+sys.modules["vllm.entrypoints.utils"] = MagicMock()
+
 # Import the application and classes
-from launcher import (
+from launcher import (  # noqa: E402
     VllmConfig,
     VllmInstance,
     VllmMultiProcessManager,
