@@ -34,7 +34,7 @@ import (
 // `PopulationPolicy` implicitly maps that pair to zero.
 //
 // The collective meaning of all the LauncherPopulationPolicy objects
-// and all the server-rquesting Pods is that for a given (Node, LauncherConfig)
+// and all the server-requesting Pods is that for a given (Node, LauncherConfig)
 // the number of launchers that should exist is the larger of
 // (a) what `PopulationPolicy` says for that pair, and
 // (b) the number needed to satisfy the server-requesting Pods.
@@ -43,7 +43,6 @@ import (
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:shortName=lpp
-
 type LauncherPopulationPolicy struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
