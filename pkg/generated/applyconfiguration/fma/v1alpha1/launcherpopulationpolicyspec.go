@@ -20,7 +20,8 @@ package v1alpha1
 // LauncherPopulationPolicySpecApplyConfiguration represents a declarative configuration of the LauncherPopulationPolicySpec type for use
 // with apply.
 type LauncherPopulationPolicySpecApplyConfiguration struct {
-	LauncherPopulationForNodeTypes []LauncherPopulationForNodeTypeApplyConfiguration `json:"launcherPopulationForNodeTypes,omitempty"`
+	EnhancedNodeSelector *EnhancedNodeSelectorApplyConfiguration `json:"enhancedNodeSelector,omitempty"`
+	CountForLauncher     []CountForLauncherApplyConfiguration    `json:"countForLauncher,omitempty"`
 }
 
 // LauncherPopulationPolicySpecApplyConfiguration constructs a declarative configuration of the LauncherPopulationPolicySpec type for use with
@@ -29,15 +30,23 @@ func LauncherPopulationPolicySpec() *LauncherPopulationPolicySpecApplyConfigurat
 	return &LauncherPopulationPolicySpecApplyConfiguration{}
 }
 
-// WithLauncherPopulationForNodeTypes adds the given value to the LauncherPopulationForNodeTypes field in the declarative configuration
+// WithEnhancedNodeSelector sets the EnhancedNodeSelector field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the EnhancedNodeSelector field is set to the value of the last call.
+func (b *LauncherPopulationPolicySpecApplyConfiguration) WithEnhancedNodeSelector(value *EnhancedNodeSelectorApplyConfiguration) *LauncherPopulationPolicySpecApplyConfiguration {
+	b.EnhancedNodeSelector = value
+	return b
+}
+
+// WithCountForLauncher adds the given value to the CountForLauncher field in the declarative configuration
 // and returns the receiver, so that objects can be build by chaining "With" function invocations.
-// If called multiple times, values provided by each call will be appended to the LauncherPopulationForNodeTypes field.
-func (b *LauncherPopulationPolicySpecApplyConfiguration) WithLauncherPopulationForNodeTypes(values ...*LauncherPopulationForNodeTypeApplyConfiguration) *LauncherPopulationPolicySpecApplyConfiguration {
+// If called multiple times, values provided by each call will be appended to the CountForLauncher field.
+func (b *LauncherPopulationPolicySpecApplyConfiguration) WithCountForLauncher(values ...*CountForLauncherApplyConfiguration) *LauncherPopulationPolicySpecApplyConfiguration {
 	for i := range values {
 		if values[i] == nil {
-			panic("nil value passed to WithLauncherPopulationForNodeTypes")
+			panic("nil value passed to WithCountForLauncher")
 		}
-		b.LauncherPopulationForNodeTypes = append(b.LauncherPopulationForNodeTypes, *values[i])
+		b.CountForLauncher = append(b.CountForLauncher, *values[i])
 	}
 	return b
 }

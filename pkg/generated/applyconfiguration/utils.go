@@ -45,8 +45,6 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &fmav1alpha1.LauncherConfigApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("LauncherConfigSpec"):
 		return &fmav1alpha1.LauncherConfigSpecApplyConfiguration{}
-	case v1alpha1.SchemeGroupVersion.WithKind("LauncherPopulationForNodeType"):
-		return &fmav1alpha1.LauncherPopulationForNodeTypeApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("LauncherPopulationPolicy"):
 		return &fmav1alpha1.LauncherPopulationPolicyApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("LauncherPopulationPolicySpec"):
@@ -57,8 +55,6 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &fmav1alpha1.ModelServerConfigApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("ResourceRange"):
 		return &fmav1alpha1.ResourceRangeApplyConfiguration{}
-	case v1alpha1.SchemeGroupVersion.WithKind("ResourceRanges"):
-		return &fmav1alpha1.ResourceRangesApplyConfiguration{}
 
 	}
 	return nil

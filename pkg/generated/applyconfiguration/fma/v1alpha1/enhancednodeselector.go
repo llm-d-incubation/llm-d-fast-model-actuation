@@ -18,6 +18,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	fmav1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
 	v1 "k8s.io/client-go/applyconfigurations/meta/v1"
 )
 
@@ -25,7 +26,7 @@ import (
 // with apply.
 type EnhancedNodeSelectorApplyConfiguration struct {
 	LabelSelector        *v1.LabelSelectorApplyConfiguration `json:"labelSelector,omitempty"`
-	AllocatableResources *ResourceRangesApplyConfiguration   `json:"allocatableResources,omitempty"`
+	AllocatableResources *fmav1alpha1.ResourceRanges         `json:"allocatableResources,omitempty"`
 }
 
 // EnhancedNodeSelectorApplyConfiguration constructs a declarative configuration of the EnhancedNodeSelector type for use with
@@ -45,7 +46,7 @@ func (b *EnhancedNodeSelectorApplyConfiguration) WithLabelSelector(value *v1.Lab
 // WithAllocatableResources sets the AllocatableResources field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the AllocatableResources field is set to the value of the last call.
-func (b *EnhancedNodeSelectorApplyConfiguration) WithAllocatableResources(value *ResourceRangesApplyConfiguration) *EnhancedNodeSelectorApplyConfiguration {
-	b.AllocatableResources = value
+func (b *EnhancedNodeSelectorApplyConfiguration) WithAllocatableResources(value fmav1alpha1.ResourceRanges) *EnhancedNodeSelectorApplyConfiguration {
+	b.AllocatableResources = &value
 	return b
 }
