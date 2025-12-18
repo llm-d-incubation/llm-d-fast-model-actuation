@@ -86,7 +86,7 @@ type LauncherPopulationPolicySpec struct {
 type EnhancedNodeSelector struct {
 	// LabelSelector defines the label selector for a node.
 	// +required
-	LabelSelector *metav1.LabelSelector `json:"labelSelector"`
+	LabelSelector metav1.LabelSelector `json:"labelSelector"`
 	// ResourceRequirements defines the resource requirements for a node.
 	// +optional
 	AllocatableResources ResourceRanges `json:"allocatableResources,omitempty"`
