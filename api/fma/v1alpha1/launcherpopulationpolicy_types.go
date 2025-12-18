@@ -76,10 +76,8 @@ type LauncherPopulationPolicySpec struct {
 	// +required
 	EnhancedNodeSelector EnhancedNodeSelector `json:"enhancedNodeSelector"`
 
-	// CountForLauncher defines pre-configuration quantities for each LauncherConfig
-	// to maintain on each matching node. Each entry may optionally include
-	// an AcceleratorSelector to restrict the entry to nodes that have a
-	// matching accelerator (if omitted, apply regardless of accelerator sets).
+	// CountForLauncher declares the desired number of launchers on the
+	// relevant Node, for various LauncherConfigs.
 	// +required
 	CountForLauncher []CountForLauncher `json:"countForLauncher"`
 }
@@ -88,7 +86,7 @@ type LauncherPopulationPolicySpec struct {
 type EnhancedNodeSelector struct {
 	// LabelSelector defines the label selector for a node.
 	// +required
-	LabelSelector *metav1.LabelSelector `json:"labelSelector,omitempty"`
+	LabelSelector *metav1.LabelSelector `json:"labelSelector"`
 	// ResourceRequirements defines the resource requirements for a node.
 	// +optional
 	AllocatableResources ResourceRanges `json:"allocatableResources,omitempty"`
