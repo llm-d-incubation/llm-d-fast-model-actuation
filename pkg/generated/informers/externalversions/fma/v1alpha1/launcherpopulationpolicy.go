@@ -31,71 +31,71 @@ import (
 	cache "k8s.io/client-go/tools/cache"
 )
 
-// LauncherPoolPolicyInformer provides access to a shared informer and lister for
-// LauncherPoolPolicies.
-type LauncherPoolPolicyInformer interface {
+// LauncherPopulationPolicyInformer provides access to a shared informer and lister for
+// LauncherPopulationPolicies.
+type LauncherPopulationPolicyInformer interface {
 	Informer() cache.SharedIndexInformer
-	Lister() fmav1alpha1.LauncherPoolPolicyLister
+	Lister() fmav1alpha1.LauncherPopulationPolicyLister
 }
 
-type launcherPoolPolicyInformer struct {
+type launcherPopulationPolicyInformer struct {
 	factory          internalinterfaces.SharedInformerFactory
 	tweakListOptions internalinterfaces.TweakListOptionsFunc
 	namespace        string
 }
 
-// NewLauncherPoolPolicyInformer constructs a new informer for LauncherPoolPolicy type.
+// NewLauncherPopulationPolicyInformer constructs a new informer for LauncherPopulationPolicy type.
 // Always prefer using an informer factory to get a shared informer instead of getting an independent
 // one. This reduces memory footprint and number of connections to the server.
-func NewLauncherPoolPolicyInformer(client versioned.Interface, namespace string, resyncPeriod time.Duration, indexers cache.Indexers) cache.SharedIndexInformer {
-	return NewFilteredLauncherPoolPolicyInformer(client, namespace, resyncPeriod, indexers, nil)
+func NewLauncherPopulationPolicyInformer(client versioned.Interface, namespace string, resyncPeriod time.Duration, indexers cache.Indexers) cache.SharedIndexInformer {
+	return NewFilteredLauncherPopulationPolicyInformer(client, namespace, resyncPeriod, indexers, nil)
 }
 
-// NewFilteredLauncherPoolPolicyInformer constructs a new informer for LauncherPoolPolicy type.
+// NewFilteredLauncherPopulationPolicyInformer constructs a new informer for LauncherPopulationPolicy type.
 // Always prefer using an informer factory to get a shared informer instead of getting an independent
 // one. This reduces memory footprint and number of connections to the server.
-func NewFilteredLauncherPoolPolicyInformer(client versioned.Interface, namespace string, resyncPeriod time.Duration, indexers cache.Indexers, tweakListOptions internalinterfaces.TweakListOptionsFunc) cache.SharedIndexInformer {
+func NewFilteredLauncherPopulationPolicyInformer(client versioned.Interface, namespace string, resyncPeriod time.Duration, indexers cache.Indexers, tweakListOptions internalinterfaces.TweakListOptionsFunc) cache.SharedIndexInformer {
 	return cache.NewSharedIndexInformer(
 		&cache.ListWatch{
 			ListFunc: func(options v1.ListOptions) (runtime.Object, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
-				return client.FmaV1alpha1().LauncherPoolPolicies(namespace).List(context.Background(), options)
+				return client.FmaV1alpha1().LauncherPopulationPolicies(namespace).List(context.Background(), options)
 			},
 			WatchFunc: func(options v1.ListOptions) (watch.Interface, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
-				return client.FmaV1alpha1().LauncherPoolPolicies(namespace).Watch(context.Background(), options)
+				return client.FmaV1alpha1().LauncherPopulationPolicies(namespace).Watch(context.Background(), options)
 			},
 			ListWithContextFunc: func(ctx context.Context, options v1.ListOptions) (runtime.Object, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
-				return client.FmaV1alpha1().LauncherPoolPolicies(namespace).List(ctx, options)
+				return client.FmaV1alpha1().LauncherPopulationPolicies(namespace).List(ctx, options)
 			},
 			WatchFuncWithContext: func(ctx context.Context, options v1.ListOptions) (watch.Interface, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
-				return client.FmaV1alpha1().LauncherPoolPolicies(namespace).Watch(ctx, options)
+				return client.FmaV1alpha1().LauncherPopulationPolicies(namespace).Watch(ctx, options)
 			},
 		},
-		&apifmav1alpha1.LauncherPoolPolicy{},
+		&apifmav1alpha1.LauncherPopulationPolicy{},
 		resyncPeriod,
 		indexers,
 	)
 }
 
-func (f *launcherPoolPolicyInformer) defaultInformer(client versioned.Interface, resyncPeriod time.Duration) cache.SharedIndexInformer {
-	return NewFilteredLauncherPoolPolicyInformer(client, f.namespace, resyncPeriod, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc}, f.tweakListOptions)
+func (f *launcherPopulationPolicyInformer) defaultInformer(client versioned.Interface, resyncPeriod time.Duration) cache.SharedIndexInformer {
+	return NewFilteredLauncherPopulationPolicyInformer(client, f.namespace, resyncPeriod, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc}, f.tweakListOptions)
 }
 
-func (f *launcherPoolPolicyInformer) Informer() cache.SharedIndexInformer {
-	return f.factory.InformerFor(&apifmav1alpha1.LauncherPoolPolicy{}, f.defaultInformer)
+func (f *launcherPopulationPolicyInformer) Informer() cache.SharedIndexInformer {
+	return f.factory.InformerFor(&apifmav1alpha1.LauncherPopulationPolicy{}, f.defaultInformer)
 }
 
-func (f *launcherPoolPolicyInformer) Lister() fmav1alpha1.LauncherPoolPolicyLister {
-	return fmav1alpha1.NewLauncherPoolPolicyLister(f.Informer().GetIndexer())
+func (f *launcherPopulationPolicyInformer) Lister() fmav1alpha1.LauncherPopulationPolicyLister {
+	return fmav1alpha1.NewLauncherPopulationPolicyLister(f.Informer().GetIndexer())
 }

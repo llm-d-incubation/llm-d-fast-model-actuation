@@ -1,0 +1,203 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: launcherpopulationpolicies.fma.llm-d.ai
+spec:
+  group: fma.llm-d.ai
+  names:
+    kind: LauncherPopulationPolicy
+    listKind: LauncherPopulationPolicyList
+    plural: launcherpopulationpolicies
+    shortNames:
+    - lpp
+    singular: launcherpopulationpolicy
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          LauncherPopulationPolicy defines the policy for pro-active creation of launcher Pods
+          for a given type of Node.
+          Here we introduce and use a particular definition of "type" for Nodes.
+          All the LauncherPopulationPolicy objects together define a map,
+          from (Node, LauncherConfig) to count.
+          Call this map `PopulationPolicy`.
+          When multiple CountForLauncher apply to the same (Node, LauncherConfig) pair
+          the maximum of their counts is what appears in `PopulationPolicy`.
+          When no CountForLauncher applies to a given (Node, LauncherConfig),
+          `PopulationPolicy` implicitly maps that pair to zero.
+
+          The collective meaning of all the LauncherPopulationPolicy objects
+          and all the server-requesting Pods is that for a given (Node, LauncherConfig)
+          the number of launchers that should exist is the larger of
+          (a) what `PopulationPolicy` says for that pair, and
+          (b) the number needed to satisfy the server-requesting Pods.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: LauncherPopulationPolicySpec defines policy for one type
+              of Node.
+            properties:
+              countForLauncher:
+                description: |-
+                  CountForLauncher declares the desired number of launchers on the
+                  relevant Node, for various LauncherConfigs.
+                items:
+                  properties:
+                    launcherConfigName:
+                      description: LauncherConfigName is the name of the LauncherConfig
+                        this policy applies to.
+                      type: string
+                    launcherCount:
+                      description: LauncherCount is the total number of launcher pods
+                        to maintain.
+                      format: int32
+                      type: integer
+                  required:
+                  - launcherConfigName
+                  - launcherCount
+                  type: object
+                type: array
+              enhancedNodeSelector:
+                description: |-
+                  Selector describes the hardware characteristics of target nodes.
+
+                  Introduce an EnhancedNodeSelector that supports combining label-based
+                  matching with resource field conditions.
+                  For example:
+                  enhancedNodeSelector:
+                   # 1. Label selector (compatible with existing metav1.LabelSelector)
+                   labelSelector:
+                     matchLabels:
+                       nvidia.com/gpu.family: ada-lovelace
+                     matchExpressions:
+                       - key: node.kubernetes.io/instance-type
+                         operator: In
+                         values: ["gx3-48x240x2l40s", "gx3-96x480x4l40s"]
+
+                   # 2. Resource condition selector (new capability)
+                   allocatableResources:
+                     cpu: {min: "16", max: "64"}
+                     memory: {min: 128Gi, max: 512Gi}
+                     "nvidia.com/gpu": {min: 8, max: 8}
+                properties:
+                  allocatableResources:
+                    additionalProperties:
+                      description: ResourceRange defines a range by inclusive minimum
+                        and maximum quantity values.
+                      properties:
+                        max:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          description: |-
+                            Max specifies the maximum quantity allowed,
+                            or is `null` to signal that there is no upper bound.
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        min:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          description: |-
+                            Min specifies the minimum quantity required,
+                            or is `null` to signal that there is no lower bound.
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                      type: object
+                    description: ResourceRequirements defines the resource requirements
+                      for a node.
+                    type: object
+                  labelSelector:
+                    description: LabelSelector defines the label selector for a node.
+                    properties:
+                      matchExpressions:
+                        description: matchExpressions is a list of label selector
+                          requirements. The requirements are ANDed.
+                        items:
+                          description: |-
+                            A label selector requirement is a selector that contains values, a key, and an operator that
+                            relates the key and values.
+                          properties:
+                            key:
+                              description: key is the label key that the selector
+                                applies to.
+                              type: string
+                            operator:
+                              description: |-
+                                operator represents a key's relationship to a set of values.
+                                Valid operators are In, NotIn, Exists and DoesNotExist.
+                              type: string
+                            values:
+                              description: |-
+                                values is an array of string values. If the operator is In or NotIn,
+                                the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                the values array must be empty. This array is replaced during a strategic
+                                merge patch.
+                              items:
+                                type: string
+                              type: array
+                              x-kubernetes-list-type: atomic
+                          required:
+                          - key
+                          - operator
+                          type: object
+                        type: array
+                        x-kubernetes-list-type: atomic
+                      matchLabels:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                          map is equivalent to an element of matchExpressions, whose key field is "key", the
+                          operator is "In", and the values array contains only "value". The requirements are ANDed.
+                        type: object
+                    type: object
+                    x-kubernetes-map-type: atomic
+                required:
+                - labelSelector
+                type: object
+            required:
+            - countForLauncher
+            - enhancedNodeSelector
+            type: object
+          status:
+            properties:
+              errors:
+                description: |-
+                  `errors` reports problems seen in the desired state of this object;
+                  in particular, in the version reported by `observedGeneration`.
+                items:
+                  type: string
+                type: array
+              observedGeneration:
+                description: '`observedGeneration` is the `metadata.generation` last
+                  seen by the controller.'
+                format: int64
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

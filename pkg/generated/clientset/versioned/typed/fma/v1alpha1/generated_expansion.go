@@ -21,4 +21,4 @@ type InferenceServerConfigExpansion interface{}
 
 type LauncherConfigExpansion interface{}
 
-type LauncherPoolPolicyExpansion interface{}
+type LauncherPopulationPolicyExpansion interface{}

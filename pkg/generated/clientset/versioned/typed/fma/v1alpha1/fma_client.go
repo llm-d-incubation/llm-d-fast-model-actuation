@@ -29,7 +29,7 @@ type FmaV1alpha1Interface interface {
 	RESTClient() rest.Interface
 	InferenceServerConfigsGetter
 	LauncherConfigsGetter
-	LauncherPoolPoliciesGetter
+	LauncherPopulationPoliciesGetter
 }
 
 // FmaV1alpha1Client is used to interact with features provided by the fma.llm-d.ai group.
@@ -45,8 +45,8 @@ func (c *FmaV1alpha1Client) LauncherConfigs(namespace string) LauncherConfigInte
 	return newLauncherConfigs(c, namespace)
 }
 
-func (c *FmaV1alpha1Client) LauncherPoolPolicies(namespace string) LauncherPoolPolicyInterface {
-	return newLauncherPoolPolicies(c, namespace)
+func (c *FmaV1alpha1Client) LauncherPopulationPolicies(namespace string) LauncherPopulationPolicyInterface {
+	return newLauncherPopulationPolicies(c, namespace)
 }
 
 // NewForConfig creates a new FmaV1alpha1Client for the given config.
