@@ -41,8 +41,19 @@ package api
 // to define the server-providing Pod.
 // 1. Remove all annotations;
 // 2. Apply the patch
-
+// This annotation is the single source of truth to signal that the server-requesting Pod
+// is using the server patch to define its server-providing Pod.
+// This annotation is mutually exclusive with the 'LauncherConfigAnnotationName' annotation.
 const ServerPatchAnnotationName = "dual-pods.llm-d.ai/server-patch"
+
+// LauncherConfigAnnotationName is the name of an annotation on the
+// server-requesting Pod. The value of the annotation is the name of the LauncherConfig
+// object (in the same namespace as the server-requesting Pod) that describes
+// a launcher-based server-providing Pod.
+// This annotation is the single source of truth to signal that the server-requesting Pod
+// is using a LauncherConfig to define its server-providing Pod.
+// This annotation is mutually exclusive with the 'ServerPatchAnnotationName' annotation.
+const LauncherConfigAnnotationName = "dual-pods.llm-d.ai/launcher-config"
 
 // StatusAnnotationName is the name of an annotation that the dual-pods controller
 // maintains reporting the ServerRequestingPodStatus. The value of this annotation is the
