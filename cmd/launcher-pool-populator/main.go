@@ -46,11 +46,11 @@ func main() {
 	AddFlags(*pflag.CommandLine, loadingRules, overrides)
 	pflag.Parse()
 
-	// 创建一个带取消信号的上下文
+	// Create a context with cancellation signal
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// 设置信号处理，用于优雅关闭
+	// Set up signal handling for graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(sigChan)
@@ -96,28 +96,28 @@ func main() {
 		klog.Fatal(err)
 	}
 
-	// 启动 informers
+	// Start informers
 	kubePreInformers.Start(ctx.Done())
 	fmaPreInformers.Start(ctx.Done())
 
-	// 在 goroutine 中启动控制器
+	// Start the controller in a goroutine
 	go func() {
 		if err := ctlr.Start(ctx); err != nil {
 			klog.ErrorS(err, "Controller failed to start")
-			cancel() // 发生错误时取消上下文
+			cancel() // Cancel the context when an error occurs
 		}
 	}()
 
-	// 等待终止信号或上下文取消
+	// Wait for termination signal or context cancellation
 	select {
 	case <-ctx.Done():
 		logger.Info("Context cancelled, shutting down...")
 	case sig := <-sigChan:
 		logger.Info("Received signal, shutting down...", "signal", sig)
-		cancel() // 收到信号时取消上下文
+		cancel() // Cancel the context when receiving a signal
 	}
 
-	// 等待一段时间让资源优雅关闭
+	// Wait for a period to allow resources to shut down gracefully
 	time.Sleep(5 * time.Second)
 }
 
