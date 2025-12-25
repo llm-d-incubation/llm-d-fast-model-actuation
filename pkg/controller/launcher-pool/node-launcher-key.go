@@ -12,6 +12,9 @@ type NodeLauncherKey struct {
 	NodeName                string
 }
 
+// mapToString converts a map of NodeLauncherKey to int32 values into a string representation.
+// This function formats the map as a string with the format "{namespace/name/node:count, ...}"
+// for debugging and logging purposes.
 func mapToString(m map[NodeLauncherKey]int32) string {
 	if len(m) == 0 {
 		return "{}"
