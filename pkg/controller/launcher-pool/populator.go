@@ -106,8 +106,6 @@ type controller struct {
 	namespace     string
 	podInformer   cache.SharedIndexInformer
 	podLister     corev1listers.PodLister
-	cmInformer    cache.SharedIndexInformer
-	cmLister      corev1listers.ConfigMapLister
 	nodeInformer  cache.SharedIndexInformer
 	nodeLister    corev1listers.NodeLister
 	lppInformer   cache.SharedIndexInformer
@@ -348,7 +346,7 @@ func (ctl *controller) getCurrentLaunchersOnNode(ctx context.Context, key NodeLa
 func (ctl *controller) createLaunchers(ctx context.Context, node corev1.Node, key NodeLauncherKey, count int) error {
 	logger := klog.FromContext(ctx)
 	// Fetch the LauncherConfig
-	launcherConfig := &fmav1alpha1.LauncherConfig{}
+	var launcherConfig *fmav1alpha1.LauncherConfig
 	launcherConfigName := key.LauncherConfigName
 	launcherConfigNamespace := key.LauncherConfigNamespace
 	launcherConfig, err := ctl.lcLister.LauncherConfigs(launcherConfigNamespace).Get(launcherConfigName)
