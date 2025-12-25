@@ -208,29 +208,29 @@ func (ctl *controller) process(ctx context.Context, item queueItem) (error, bool
 
 func (item lppItem) process(ctx context.Context, ctl *controller) (error, bool) {
 	logger := klog.FromContext(ctx)
-	// 获取LauncherPopulationPolicies列表
+	// Get the list of LauncherPopulationPolicies
 	policies, err := ctl.lppLister.List(labels.Everything())
 	if err != nil {
 		logger.Error(err, "Failed to list LauncherPopulationPolicies")
-		return err, true // 返回错误并重试
+		return err, true // Return error and retry
 	}
 
-	// 如果需要，可以在这里处理获取到的policies
-	// 例如：遍历policies进行相应的业务逻辑处理
+	// If needed, process the retrieved policies here
+	// For example: iterate through policies to perform corresponding business logic
 
 	logger.Info("Successfully listed LauncherPopulationPolicies", "count", len(policies))
 
-	// 构建 PopulationPolicy 映射表，对于每个 (Node, LauncherConfig) 对存储最大计数
+	// Build the PopulationPolicy map, storing the maximum count for each (Node, LauncherConfig) pair
 	populationPolicy := make(map[NodeLauncherKey]int32)
 	for _, lpp := range policies {
-		// 获取匹配的节点
+		// Get matching nodes
 		nodes, err := ctl.getMatchingNodes(ctx, lpp.Spec.EnhancedNodeSelector)
 		if err != nil {
 			logger.Error(err, "Failed to get matching nodes for policy", "policy", lpp.Name)
 			return err, true
 		}
 		logger.Info("Found matching nodes", "count", len(nodes), "policy", lpp.Name)
-		// 对于每个 CountForLauncher 规则
+		// For each CountForLauncher rule
 		for _, countRule := range lpp.Spec.CountForLauncher {
 			for _, node := range nodes {
 				key := NodeLauncherKey{
@@ -241,7 +241,7 @@ func (item lppItem) process(ctx context.Context, ctl *controller) (error, bool) 
 				currentCount, exists := populationPolicy[key]
 				logger.Info("Current count for node", "node", node.Name, "countRule.LauncherConfigName",
 					countRule.LauncherConfigName, "countRule.LauncherCount", countRule.LauncherCount, "currentCount", currentCount)
-				// 取最大值 (规则: 当多个 CountForLauncher 应用于同一对时，取最大值)
+				// Take the maximum value (rule: when multiple CountForLauncher apply to the same pair, take the maximum)
 				if !exists || countRule.LauncherCount > currentCount {
 					populationPolicy[key] = countRule.LauncherCount
 					logger.Info("Updated population policy",
@@ -254,7 +254,7 @@ func (item lppItem) process(ctx context.Context, ctl *controller) (error, bool) 
 		}
 	}
 
-	// 根据最终需求调整 launcher pods
+	// Adjust launcher pods according to final requirements
 	if err := ctl.reconcileAllLaunchers(ctx, populationPolicy); err != nil {
 		logger.Error(err, "Failed to reconcile launchers")
 		return err, true
@@ -262,34 +262,34 @@ func (item lppItem) process(ctx context.Context, ctl *controller) (error, bool) 
 	return nil, false
 }
 
-// reconcileAllLaunchers 根据最终需求调整所有 launcher pods
+// reconcileAllLaunchers adjusts all launcher pods according to final requirements
 func (ctl *controller) reconcileAllLaunchers(ctx context.Context, desired map[NodeLauncherKey]int32) error {
 	logger := klog.FromContext(ctx)
-	// 为每个 (Node, LauncherConfig) 对进行调和
+	// Reconcile for each (Node, LauncherConfig) pair
 	for key, desiredCount := range desired {
 		if err := ctl.reconcileLaunchersOnNode(ctx, key, desiredCount); err != nil {
 			logger.Error(err, "Failed to reconcile launchers on node",
 				"node", key.NodeName,
 				"config", key.LauncherConfigName)
-			// 继续处理其他组合
+			// Continue processing other combinations
 		}
 	}
-	// TODO: 清理不再需要的 launcher pods (那些在 desired 中不存在但在集群中存在的)
-	// 这需要跟踪哪些 launcher pods 是由我们创建的
+	// TODO: Clean up unnecessary launcher pods (those that exist in the cluster but not in desired)
+	// This requires tracking which launcher pods were created by us
 	return nil
 }
 
-// reconcileLaunchersOnNode 确保节点上特定 launcher config 的 launcher 数量符合需求
+// reconcileLaunchersOnNode ensures the number of launchers with a specific launcher config on a node matches the requirement
 func (ctl *controller) reconcileLaunchersOnNode(ctx context.Context, key NodeLauncherKey, desiredCount int32) error {
 	logger := klog.FromContext(ctx)
-	// 获取节点对象
+	// Get node object
 	nodeName := key.NodeName
 	launcherConfigName := key.LauncherConfigName
 	node, err := ctl.nodeLister.Get(nodeName)
 	if err != nil {
 		return fmt.Errorf("failed to get node %s: %w", nodeName, err)
 	}
-	// 获取当前 launchers
+	// Get current launchers
 	currentLaunchers, err := ctl.getCurrentLaunchersOnNode(ctx, key)
 	if err != nil {
 		return fmt.Errorf("failed to get current launchers: %w", err)
@@ -303,13 +303,13 @@ func (ctl *controller) reconcileLaunchersOnNode(ctx context.Context, key NodeLau
 		"desired", desiredCount,
 		"diff", diff)
 	if diff > 0 {
-		// 需要创建更多 launchers
+		// Need to create more launchers
 		err := ctl.createLaunchers(ctx, *node, key, int(diff))
 		if err != nil {
 			return fmt.Errorf("failed to create launchers: %w", err)
 		}
 	} else if diff < 0 {
-		// 需要删除多余 launchers
+		// Need to delete excess launchers
 		err := ctl.deleteExcessLaunchers(ctx, currentLaunchers, int(-diff))
 		if err != nil {
 			return fmt.Errorf("failed to delete excess launchers: %w", err)
@@ -325,17 +325,17 @@ func (ctl *controller) getCurrentLaunchersOnNode(ctx context.Context, key NodeLa
 		"app.kubernetes.io/launcher-config-namespace": key.LauncherConfigNamespace,
 		"app.kubernetes.io/launcher-config-name":      key.LauncherConfigName,
 	}
-	// 使用podLister的List方法，传入label selector
+	// Use podLister's List method with label selector
 	pods, err := ctl.podLister.List(labels.SelectorFromSet(launcherLabels))
 	if err != nil {
 		return nil, fmt.Errorf("failed to list pods with launcher labels: %w", err)
 	}
 
-	// 过滤出在指定节点上的pods
+	// Filter pods that are on the specified node
 	var filteredPods []corev1.Pod
 	for _, pod := range pods {
 		if pod.Spec.NodeName == key.NodeName {
-			// 深拷贝pod对象以避免并发问题
+			// Deep copy pod object to avoid concurrency issues
 			podCopy := pod.DeepCopy()
 			filteredPods = append(filteredPods, *podCopy)
 		}
@@ -355,9 +355,9 @@ func (ctl *controller) createLaunchers(ctx context.Context, node corev1.Node, ke
 	if err != nil {
 		return fmt.Errorf("failed to get LauncherConfig %s/%s: %+v", launcherConfigNamespace, launcherConfigName, err)
 	}
-	// 创建 runtime.Scheme 实例
+	// Create runtime.Scheme instance
 	scheme := runtime.NewScheme()
-	// 注册需要的类型到 scheme 中
+	// Register required types to scheme
 	_ = fmav1alpha1.AddToScheme(scheme)
 	_ = corev1.AddToScheme(scheme)
 	// Create the specified number of launcher pods

@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// NodeLauncherKey 定义 (Node, LauncherConfig) 对的唯一标识
+// NodeLauncherKey defines the unique identifier for a (Node, LauncherConfig) pair
 type NodeLauncherKey struct {
 	LauncherConfigName      string
 	LauncherConfigNamespace string
