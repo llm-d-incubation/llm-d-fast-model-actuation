@@ -33,6 +33,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&InferenceServerConfigList{},
 		&LauncherConfig{},
 		&LauncherConfigList{},
+		&LauncherPopulationPolicy{},
+		&LauncherPopulationPolicyList{},
 	)
 	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
 	return nil
