@@ -44,7 +44,7 @@ func main() {
 
 	klog.InitFlags(flag.CommandLine)
 	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
-	common.AddFlags(*pflag.CommandLine, loadingRules, overrides)
+	common.AddKubernetesClientFlags(*pflag.CommandLine, loadingRules, overrides)
 	pflag.Parse()
 
 	// Create a context with cancellation signal

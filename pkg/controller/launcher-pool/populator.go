@@ -98,6 +98,10 @@ func NewController(
 	if err != nil {
 		panic(err)
 	}
+	_, err = ctl.nodeInformer.AddEventHandler(ctl)
+	if err != nil {
+		panic(err)
+	}
 
 	return ctl, nil
 }
@@ -143,11 +147,8 @@ func launcherIndexFunc(obj any) ([]string, error) {
 func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 	switch typed := obj.(type) {
 	case *fmav1alpha1.LauncherPopulationPolicy:
-		if typed == nil {
-			return
-		}
 		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherPopulationPolicy reference due to notification of add", "name", typed.Name)
-		item := lppItem{cache.ObjectName{Name: typed.Name, Namespace: typed.Namespace}}
+		item := lppItem{cache.MetaObjectToName(typed)}
 		ctl.Queue.Add(item)
 	default:
 		ctl.enqueueLogger.V(5).Info("Notified of add of type of ignored object", "type", fmt.Sprintf("%T", obj))
@@ -158,11 +159,8 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 func (ctl *controller) OnUpdate(prev, obj any) {
 	switch typed := obj.(type) {
 	case *fmav1alpha1.LauncherPopulationPolicy:
-		if typed == nil {
-			return
-		}
-		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherPopulationPolicy reference due to notification of add", "name", typed.Name)
-		item := lppItem{cache.ObjectName{Name: typed.Name, Namespace: typed.Namespace}}
+		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherPopulationPolicy reference due to notification of update", "name", typed.Name)
+		item := lppItem{cache.MetaObjectToName(typed)}
 		ctl.Queue.Add(item)
 	default:
 		ctl.enqueueLogger.V(5).Info("Notified of update of type of ignored object", "type", fmt.Sprintf("%T", obj))
@@ -176,11 +174,8 @@ func (ctl *controller) OnDelete(obj any) {
 	}
 	switch typed := obj.(type) {
 	case *fmav1alpha1.LauncherPopulationPolicy:
-		if typed == nil {
-			return
-		}
-		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherPopulationPolicy reference due to notification of add", "name", typed.Name)
-		item := lppItem{cache.ObjectName{Name: typed.Name, Namespace: typed.Namespace}}
+		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherPopulationPolicy reference due to notification of delete", "name", typed.Name)
+		item := lppItem{cache.MetaObjectToName(typed)}
 		ctl.Queue.Add(item)
 
 	default:
@@ -287,7 +282,7 @@ func (ctl *controller) reconcileLaunchersOnNode(ctx context.Context, key NodeLau
 	launcherConfigName := key.LauncherConfigName
 	node, err := ctl.nodeLister.Get(nodeName)
 	if err != nil {
-		return fmt.Errorf("failed to get node %s: %w", nodeName, err)
+		logger.Info("Failed to get node but continue to reconcile", "node", nodeName, "error", err)
 	}
 	// Get current launchers
 	currentLaunchers, err := ctl.getCurrentLaunchersOnNode(ctx, key)
