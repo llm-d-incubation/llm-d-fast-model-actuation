@@ -25,6 +25,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/common"
 	launcherpool "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/launcher-pool"
 	"github.com/spf13/pflag"
 
@@ -43,7 +44,7 @@ func main() {
 
 	klog.InitFlags(flag.CommandLine)
 	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
-	AddFlags(*pflag.CommandLine, loadingRules, overrides)
+	common.AddFlags(*pflag.CommandLine, loadingRules, overrides)
 	pflag.Parse()
 
 	// Create a context with cancellation signal
@@ -119,11 +120,4 @@ func main() {
 
 	// Wait for a period to allow resources to shut down gracefully
 	time.Sleep(5 * time.Second)
-}
-
-func AddFlags(flags pflag.FlagSet, loadingRules *clientcmd.ClientConfigLoadingRules, overrides *clientcmd.ConfigOverrides) {
-	flags.StringVar(&overrides.CurrentContext, "context", overrides.CurrentContext, "The name of the kubeconfig context to use")
-	flags.StringVar(&overrides.Context.AuthInfo, "user", overrides.Context.AuthInfo, "The name of the kubeconfig user to use")
-	flags.StringVar(&overrides.Context.Cluster, "cluster", overrides.Context.Cluster, "The name of the kubeconfig cluster to use")
-	flags.StringVarP(&overrides.Context.Namespace, "namespace", "n", overrides.Context.Namespace, "The name of the Kubernetes Namespace to work in (NOT optional)")
 }
