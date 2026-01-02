@@ -45,7 +45,7 @@ import (
 const ControllerName = "launcher-pool-populator"
 
 const (
-	LauncherComponentAnnotationKey   = "app.kubernetes.io/component"
+	LauncherComponentAnnotationKey   = "dual-pods.llm-d.ai/component"
 	LauncherComponentAnnotationValue = "launcher"
 )
 
@@ -82,6 +82,8 @@ func NewController(
 		return nil, err
 	}
 
+	// Use a single worker thread to ensure sequential processing of LauncherPopulationPolicy updates
+	// Prevents race conditions when multiple threads simultaneously modify the same node/configuration pairs
 	ctl.QueueAndWorkers = genctlr.NewQueueAndWorkers(ControllerName, 1, ctl.process)
 	_, err = ctl.podInformer.AddEventHandler(ctl)
 	if err != nil {
