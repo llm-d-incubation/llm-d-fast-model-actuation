@@ -21,6 +21,7 @@ import (
 	"fmt"
 
 	fmav1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -282,7 +283,11 @@ func (ctl *controller) reconcileLaunchersOnNode(ctx context.Context, key NodeLau
 	launcherConfigName := key.LauncherConfigName
 	node, err := ctl.nodeLister.Get(nodeName)
 	if err != nil {
-		logger.Info("Failed to get node but continue to reconcile", "node", nodeName, "error", err)
+		if apierrors.IsNotFound(err) {
+			logger.Info("Node no longer exists, skipping reconciliation", "node", nodeName)
+			return nil
+		}
+		return fmt.Errorf("failed to get node %s: %w", nodeName, err)
 	}
 	// Get current launchers
 	currentLaunchers, err := ctl.getCurrentLaunchersOnNode(ctx, key)
