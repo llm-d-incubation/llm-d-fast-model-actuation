@@ -78,6 +78,7 @@ rules:
 - apiGroups:
   - "fma.llm-d.ai"
   resources:
+  - inferenceserverconfigs
   - launcherconfigs
   verbs:
   - get

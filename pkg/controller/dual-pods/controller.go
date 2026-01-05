@@ -162,6 +162,8 @@ func (config ControllerConfig) NewController(
 		cmLister:            corev1PreInformers.ConfigMaps().Lister(),
 		nodeInformer:        corev1PreInformers.Nodes().Informer(),
 		nodeLister:          corev1PreInformers.Nodes().Lister(),
+		iscInformer:         fmaInformerFactory.Fma().V1alpha1().InferenceServerConfigs().Informer(),
+		iscLister:           fmaInformerFactory.Fma().V1alpha1().InferenceServerConfigs().Lister(),
 		lcInformer:          fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Informer(),
 		lcLister:            fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Lister(),
 		sleeperLimit:        config.SleeperLimit,
@@ -171,10 +173,10 @@ func (config ControllerConfig) NewController(
 	}
 	ctl.gpuMap.Store(&map[string]GpuLocation{})
 	err := ctl.podInformer.AddIndexers(cache.Indexers{
-		launcherconfigIndexName: launcherconfigIndexFunc,
-		requesterIndexName:      requesterIndexFunc,
-		nominalHashIndexName:    nominalHashIndexFunc,
-		GPUIndexName:            GPUIndexFunc})
+		inferenceserverconfigIndexName: inferenceserverconfigIndexFunc,
+		requesterIndexName:             requesterIndexFunc,
+		nominalHashIndexName:           nominalHashIndexFunc,
+		GPUIndexName:                   GPUIndexFunc})
 	if err != nil { //impossible
 		return nil, err
 	}
@@ -201,6 +203,10 @@ func (config ControllerConfig) NewController(
 	if err != nil {
 		panic(err)
 	}
+	_, err = ctl.iscInformer.AddEventHandler(ctl)
+	if err != nil {
+		panic(err)
+	}
 	_, err = ctl.lcInformer.AddEventHandler(ctl)
 	if err != nil {
 		panic(err)
@@ -218,6 +224,8 @@ type controller struct {
 	cmLister      corev1listers.ConfigMapLister
 	nodeInformer  cache.SharedIndexInformer
 	nodeLister    corev1listers.NodeLister
+	iscInformer   cache.SharedIndexInformer
+	iscLister     fmalisters.InferenceServerConfigLister
 	lcInformer    cache.SharedIndexInformer
 	lcLister      fmalisters.LauncherConfigLister
 	genctlr.KnowsProcessedSync[queueItem]
@@ -340,7 +348,7 @@ const (
 // The controller cares about server-requesting Pods, bound direct server-providing Pods, and launcher-based server-providing Pods.
 // The controller doesn't care about unbound direct providers and other Pods.
 func careAbout(pod *corev1.Pod) (item infSvrItem, it infSvrItemType) {
-	if len(pod.Annotations[api.ServerPatchAnnotationName]) > 0 || len(pod.Annotations[api.LauncherConfigAnnotationName]) > 0 {
+	if len(pod.Annotations[api.ServerPatchAnnotationName]) > 0 || len(pod.Annotations[api.InferenceServerConfigAnnotationName]) > 0 {
 		return infSvrItem{pod.UID, pod.Name}, infSvrItemRequester
 	}
 	requesterStr := pod.Annotations[requesterAnnotationKey]
@@ -351,15 +359,15 @@ func careAbout(pod *corev1.Pod) (item infSvrItem, it infSvrItemType) {
 	return infSvrItem{apitypes.UID(requesterParts[0]), requesterParts[1]}, infSvrItemBoundDirectProvider
 }
 
-const launcherconfigIndexName = "launcherconfig"
+const inferenceserverconfigIndexName = "inferenceserverconfig"
 
-func launcherconfigIndexFunc(obj any) ([]string, error) {
+func inferenceserverconfigIndexFunc(obj any) ([]string, error) {
 	pod := obj.(*corev1.Pod)
-	launcherConfigName := pod.Annotations[api.LauncherConfigAnnotationName]
-	if len(launcherConfigName) == 0 {
+	inferenceServerConfigName := pod.Annotations[api.InferenceServerConfigAnnotationName]
+	if len(inferenceServerConfigName) == 0 {
 		return []string{}, nil
 	}
-	return []string{launcherConfigName}, nil
+	return []string{inferenceServerConfigName}, nil
 }
 
 const requesterIndexName = "requester"
@@ -397,8 +405,8 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 			nd.add(item)
 			ctl.Queue.Add(nodeItem{nodeName})
 		}
-	case *fmav1aplha1.LauncherConfig:
-		ctl.enqueueRequestersByLauncherConfig(typed, isInInitialList)
+	case *fmav1aplha1.InferenceServerConfig:
+		ctl.enqueueRequestersByInferenceServerConfig(typed, isInInitialList)
 	case *corev1.ConfigMap:
 		if typed.Name != GPUMapName {
 			ctl.enqueueLogger.V(5).Info("Ignoring ConfigMap that is not the GPU map", "ref", cache.MetaObjectToName(typed))
@@ -438,8 +446,8 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 			nd.add(item)
 			ctl.Queue.Add(nodeItem{nodeName})
 		}
-	case *fmav1aplha1.LauncherConfig:
-		ctl.enqueueRequestersByLauncherConfig(typed, false)
+	case *fmav1aplha1.InferenceServerConfig:
+		ctl.enqueueRequestersByInferenceServerConfig(typed, false)
 	case *corev1.ConfigMap:
 		if typed.Name != GPUMapName {
 			ctl.enqueueLogger.V(5).Info("Ignoring ConfigMap that is not the GPU map", "ref", cache.MetaObjectToName(typed))
@@ -482,8 +490,8 @@ func (ctl *controller) OnDelete(obj any) {
 			nd.add(item)
 			ctl.Queue.Add(nodeItem{nodeName})
 		}
-	case *fmav1aplha1.LauncherConfig:
-		ctl.enqueueRequestersByLauncherConfig(typed, false)
+	case *fmav1aplha1.InferenceServerConfig:
+		ctl.enqueueRequestersByInferenceServerConfig(typed, false)
 	case *corev1.ConfigMap:
 		if typed.Name != GPUMapName {
 			ctl.enqueueLogger.V(5).Info("Ignoring ConfigMap that is not the GPU map", "ref", cache.MetaObjectToName(typed))
@@ -508,7 +516,7 @@ func getProviderNodeName(pod *corev1.Pod) (string, error) {
 }
 
 func (ctl *controller) Start(ctx context.Context) error {
-	if !cache.WaitForNamedCacheSync(ControllerName, ctx.Done(), ctl.cmInformer.HasSynced, ctl.podInformer.HasSynced, ctl.nodeInformer.HasSynced, ctl.lcInformer.HasSynced) {
+	if !cache.WaitForNamedCacheSync(ControllerName, ctx.Done(), ctl.cmInformer.HasSynced, ctl.podInformer.HasSynced, ctl.nodeInformer.HasSynced, ctl.iscInformer.HasSynced, ctl.lcInformer.HasSynced) {
 		return fmt.Errorf("caches not synced before end of Start context")
 	}
 	err := ctl.StartWorkers(ctx)
@@ -580,11 +588,11 @@ func (ctl *controller) enqueueRequesters(ctx context.Context) {
 	}
 }
 
-func (ctl *controller) enqueueRequestersByLauncherConfig(lc *fmav1aplha1.LauncherConfig, isInInitialList bool) {
-	launcherConfigName := lc.Name
-	requesters, err := ctl.podInformer.GetIndexer().ByIndex(launcherconfigIndexName, launcherConfigName)
+func (ctl *controller) enqueueRequestersByInferenceServerConfig(isc *fmav1aplha1.InferenceServerConfig, isInInitialList bool) {
+	inferenceServerConfigName := isc.Name
+	requesters, err := ctl.podInformer.GetIndexer().ByIndex(inferenceserverconfigIndexName, inferenceServerConfigName)
 	if err != nil {
-		ctl.enqueueLogger.Error(err, "Failed to get server requesting pods that use LauncherConfig", "ref", cache.MetaObjectToName(lc))
+		ctl.enqueueLogger.Error(err, "Failed to get server requesting pods that use InferenceServerConfig", "ref", cache.MetaObjectToName(isc))
 		return
 	}
 	nodeNames := sets.New[string]()
@@ -592,17 +600,17 @@ func (ctl *controller) enqueueRequestersByLauncherConfig(lc *fmav1aplha1.Launche
 		pod := podObj.(*corev1.Pod)
 		item, it := careAbout(pod)
 		if it != infSvrItemRequester {
-			// should not happen because of the nature of launcherconfigIndexFunc
-			ctl.enqueueLogger.V(5).Info("Ignoring Pod that uses LauncherConfig but is not a server-requesting Pod", "name", pod.Name)
+			// should not happen because of the nature of inferenceserverconfigIndexFunc
+			ctl.enqueueLogger.V(5).Info("Ignoring Pod that is not a server-requesting Pod", "pod", pod.Name)
 			continue
 		}
 		nodeName := pod.Spec.NodeName
 		if nodeName == "" {
-			ctl.enqueueLogger.V(5).Info("Ignoring add of non-scheduled server-requesting Pod that uses LauncherConfig", "name", pod.Name)
+			ctl.enqueueLogger.V(5).Info("Ignoring non-scheduled server-requesting Pod that uses InferenceServerConfig", "pod", pod.Name, "inferenceServerConfigName", inferenceServerConfigName)
 			continue
 		}
 		nd := ctl.getNodeData(nodeName)
-		ctl.enqueueLogger.V(5).Info("Enqueuing inference server reference due to notification of LauncherConfig add", "nodeName", nodeName, "item", item, "infSvrItemType", it, "launcherConfigName", launcherConfigName, "isInInitialList", isInInitialList, "resourceVersion", lc.ResourceVersion)
+		ctl.enqueueLogger.V(5).Info("Enqueuing inference server reference due to notification of InferenceServerConfig", "nodeName", nodeName, "item", item, "infSvrItemType", it, "inferenceServerConfigName", inferenceServerConfigName, "isInInitialList", isInInitialList, "resourceVersion", isc.ResourceVersion)
 		nd.add(item)
 		nodeNames.Insert(nodeName)
 	}
