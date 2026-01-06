@@ -40,7 +40,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
 
-	fmav1aplha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
+	fmav1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/api"
 	genctlr "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/generic"
 	fmainformers "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/generated/informers/externalversions"
@@ -173,7 +173,7 @@ func (config ControllerConfig) NewController(
 	}
 	ctl.gpuMap.Store(&map[string]GpuLocation{})
 	err := ctl.podInformer.AddIndexers(cache.Indexers{
-		inferenceserverconfigIndexName: inferenceserverconfigIndexFunc,
+		inferenceServerConfigIndexName: inferenceServerConfigIndexFunc,
 		requesterIndexName:             requesterIndexFunc,
 		nominalHashIndexName:           nominalHashIndexFunc,
 		GPUIndexName:                   GPUIndexFunc})
@@ -359,9 +359,9 @@ func careAbout(pod *corev1.Pod) (item infSvrItem, it infSvrItemType) {
 	return infSvrItem{apitypes.UID(requesterParts[0]), requesterParts[1]}, infSvrItemBoundDirectProvider
 }
 
-const inferenceserverconfigIndexName = "inferenceserverconfig"
+const inferenceServerConfigIndexName = "inferenceserverconfig"
 
-func inferenceserverconfigIndexFunc(obj any) ([]string, error) {
+func inferenceServerConfigIndexFunc(obj any) ([]string, error) {
 	pod := obj.(*corev1.Pod)
 	inferenceServerConfigName := pod.Annotations[api.InferenceServerConfigAnnotationName]
 	if len(inferenceServerConfigName) == 0 {
@@ -405,7 +405,7 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 			nd.add(item)
 			ctl.Queue.Add(nodeItem{nodeName})
 		}
-	case *fmav1aplha1.InferenceServerConfig:
+	case *fmav1alpha1.InferenceServerConfig:
 		ctl.enqueueRequestersByInferenceServerConfig(typed, isInInitialList)
 	case *corev1.ConfigMap:
 		if typed.Name != GPUMapName {
@@ -446,7 +446,7 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 			nd.add(item)
 			ctl.Queue.Add(nodeItem{nodeName})
 		}
-	case *fmav1aplha1.InferenceServerConfig:
+	case *fmav1alpha1.InferenceServerConfig:
 		ctl.enqueueRequestersByInferenceServerConfig(typed, false)
 	case *corev1.ConfigMap:
 		if typed.Name != GPUMapName {
@@ -490,7 +490,7 @@ func (ctl *controller) OnDelete(obj any) {
 			nd.add(item)
 			ctl.Queue.Add(nodeItem{nodeName})
 		}
-	case *fmav1aplha1.InferenceServerConfig:
+	case *fmav1alpha1.InferenceServerConfig:
 		ctl.enqueueRequestersByInferenceServerConfig(typed, false)
 	case *corev1.ConfigMap:
 		if typed.Name != GPUMapName {
@@ -588,9 +588,9 @@ func (ctl *controller) enqueueRequesters(ctx context.Context) {
 	}
 }
 
-func (ctl *controller) enqueueRequestersByInferenceServerConfig(isc *fmav1aplha1.InferenceServerConfig, isInInitialList bool) {
+func (ctl *controller) enqueueRequestersByInferenceServerConfig(isc *fmav1alpha1.InferenceServerConfig, isInInitialList bool) {
 	inferenceServerConfigName := isc.Name
-	requesters, err := ctl.podInformer.GetIndexer().ByIndex(inferenceserverconfigIndexName, inferenceServerConfigName)
+	requesters, err := ctl.podInformer.GetIndexer().ByIndex(inferenceServerConfigIndexName, inferenceServerConfigName)
 	if err != nil {
 		ctl.enqueueLogger.Error(err, "Failed to get server requesting pods that use InferenceServerConfig", "ref", cache.MetaObjectToName(isc))
 		return
