@@ -312,9 +312,7 @@ func (ctl *controller) getCurrentLaunchersOnNode(ctx context.Context, key NodeLa
 	var filteredPods []corev1.Pod
 	for _, pod := range pods {
 		if pod.Spec.NodeName == key.NodeName {
-			// Deep copy pod object to avoid concurrency issues
-			podCopy := pod.DeepCopy()
-			filteredPods = append(filteredPods, *podCopy)
+			filteredPods = append(filteredPods, *pod)
 		}
 	}
 
