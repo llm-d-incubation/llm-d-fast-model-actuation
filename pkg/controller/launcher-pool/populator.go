@@ -212,8 +212,9 @@ func (item lppItem) process(ctx context.Context, ctl *controller) (error, bool) 
 					LauncherConfigName: countRule.LauncherConfigName,
 				}
 				currentCount, exists := populationPolicy[key]
-				logger.Info("Current count for node", "node", node.Name, "countRule.LauncherConfigName",
-					countRule.LauncherConfigName, "countRule.LauncherCount", countRule.LauncherCount, "currentCount", currentCount)
+				logger.Info("Current count for node", "node", node.Name, "launcherConfigName",
+					countRule.LauncherConfigName, "launcherCount", countRule.LauncherCount, "currentCount", currentCount, "exists", exists)
+
 				// Take the maximum value (rule: when multiple CountForLauncher apply to the same pair, take the maximum)
 				if !exists || countRule.LauncherCount > currentCount {
 					populationPolicy[key] = countRule.LauncherCount
