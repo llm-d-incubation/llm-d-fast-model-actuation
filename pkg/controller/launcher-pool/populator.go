@@ -23,9 +23,7 @@ import (
 	fmav1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	ctrl "sigs.k8s.io/controller-runtime"
-
+	"k8s.io/utils/ptr"
 	//apierrors "k8s.io/apimachinery/pkg/api/errors"
 	//metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -330,19 +328,18 @@ func (ctl *controller) createLaunchers(ctx context.Context, node corev1.Node, ke
 	if err != nil {
 		return fmt.Errorf("failed to get LauncherConfig %s/%s: %+v", ctl.namespace, launcherConfigName, err)
 	}
-	// Create runtime.Scheme instance
-	scheme := runtime.NewScheme()
-	// Register required types to scheme
-	_ = fmav1alpha1.AddToScheme(scheme)
-	_ = corev1.AddToScheme(scheme)
+
 	// Create the specified number of launcher pods
 	for i := 0; i < count; i++ {
 		pod := ctl.buildPodFromTemplate(launcherConfig.Spec.PodTemplate, key)
 		pod.GenerateName = fmt.Sprintf("launcher-%s-", launcherConfig.Name)
-		// Set owner reference so pods get cleaned up when LauncherConfig is deleted
-		if err := ctrl.SetControllerReference(launcherConfig, pod, scheme); err != nil {
-			return fmt.Errorf("failed to set controller reference: %w", err)
+		// Set owner reference pointing to LauncherConfig
+		ownerRef := *metav1.NewControllerRef(launcherConfig, fmav1alpha1.SchemeGroupVersion.WithKind("LauncherConfig"))
+		ownerRef.BlockOwnerDeletion = ptr.To(false)
+		pod.OwnerReferences = []metav1.OwnerReference{
+			ownerRef,
 		}
+
 		if _, err := ctl.coreclient.Pods(pod.Namespace).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 			return fmt.Errorf("failed to create launcher pod: %w", err)
 		}
