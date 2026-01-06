@@ -232,9 +232,8 @@ func (item lppItem) process(ctx context.Context, ctl *controller) (error, bool) 
 		for _, countRule := range lpp.Spec.CountForLauncher {
 			for _, node := range nodes {
 				key := NodeLauncherKey{
-					NodeName:                node.Name,
-					LauncherConfigName:      countRule.LauncherConfigName,
-					LauncherConfigNamespace: lpp.Namespace,
+					NodeName:           node.Name,
+					LauncherConfigName: countRule.LauncherConfigName,
 				}
 				currentCount, exists := populationPolicy[key]
 				logger.Info("Current count for node", "node", node.Name, "countRule.LauncherConfigName",
@@ -252,7 +251,7 @@ func (item lppItem) process(ctx context.Context, ctl *controller) (error, bool) 
 		}
 	}
 
-	logger.Info("Final population policy", "policy", mapToString(populationPolicy))
+	logger.Info("Final population policy", "policy", MapToLoggable(populationPolicy))
 	// Adjust launcher pods according to final requirements
 	if err := ctl.reconcileAllLaunchers(ctx, populationPolicy); err != nil {
 		logger.Error(err, "Failed to reconcile launchers")
@@ -320,9 +319,8 @@ func (ctl *controller) reconcileLaunchersOnNode(ctx context.Context, key NodeLau
 // getCurrentLaunchersOnNode returns launcher pods for a specific config on a specific node
 func (ctl *controller) getCurrentLaunchersOnNode(ctx context.Context, key NodeLauncherKey) ([]corev1.Pod, error) {
 	launcherLabels := map[string]string{
-		LauncherComponentAnnotationKey:                LauncherComponentAnnotationValue,
-		"app.kubernetes.io/launcher-config-namespace": key.LauncherConfigNamespace,
-		"app.kubernetes.io/launcher-config-name":      key.LauncherConfigName,
+		LauncherComponentAnnotationKey:           LauncherComponentAnnotationValue,
+		"app.kubernetes.io/launcher-config-name": key.LauncherConfigName,
 	}
 	// Use podLister's List method with label selector
 	pods, err := ctl.podLister.List(labels.SelectorFromSet(launcherLabels))
@@ -349,10 +347,9 @@ func (ctl *controller) createLaunchers(ctx context.Context, node corev1.Node, ke
 	// Fetch the LauncherConfig
 	var launcherConfig *fmav1alpha1.LauncherConfig
 	launcherConfigName := key.LauncherConfigName
-	launcherConfigNamespace := key.LauncherConfigNamespace
-	launcherConfig, err := ctl.lcLister.LauncherConfigs(launcherConfigNamespace).Get(launcherConfigName)
+	launcherConfig, err := ctl.lcLister.LauncherConfigs(ctl.namespace).Get(launcherConfigName)
 	if err != nil {
-		return fmt.Errorf("failed to get LauncherConfig %s/%s: %+v", launcherConfigNamespace, launcherConfigName, err)
+		return fmt.Errorf("failed to get LauncherConfig %s/%s: %+v", ctl.namespace, launcherConfigName, err)
 	}
 	// Create runtime.Scheme instance
 	scheme := runtime.NewScheme()
@@ -395,13 +392,12 @@ func (ctl *controller) buildPodFromTemplate(template corev1.PodTemplateSpec, key
 		ObjectMeta: template.ObjectMeta,
 		Spec:       template.Spec,
 	}
-	pod.Namespace = key.LauncherConfigNamespace
+	pod.Namespace = ctl.namespace
 	// Ensure labels are set
 	if pod.Labels == nil {
 		pod.Labels = make(map[string]string)
 	}
 	pod.Labels["app.kubernetes.io/component"] = "launcher"
-	pod.Labels["app.kubernetes.io/launcher-config-namespace"] = key.LauncherConfigNamespace
 	pod.Labels["app.kubernetes.io/launcher-config-name"] = key.LauncherConfigName
 	// Assign to specific node
 	pod.Spec.NodeName = key.NodeName
