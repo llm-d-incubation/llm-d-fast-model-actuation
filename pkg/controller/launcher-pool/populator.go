@@ -45,11 +45,6 @@ import (
 
 const ControllerName = "launcher-pool-populator"
 
-const (
-	LauncherComponentAnnotationKey   = "dual-pods.llm-d.ai/component"
-	LauncherComponentAnnotationValue = "launcher"
-)
-
 type Controller interface {
 	Start(context.Context) error
 }
@@ -76,17 +71,11 @@ func NewController(
 		lcInformer:    fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Informer(),
 		lcLister:      fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Lister(),
 	}
-	err := ctl.podInformer.AddIndexers(cache.Indexers{
-		launcherPodIndexName: launcherIndexFunc,
-	})
-	if err != nil { //impossible
-		return nil, err
-	}
 
 	// Use a single worker thread to ensure sequential processing of LauncherPopulationPolicy updates
 	// Prevents race conditions when multiple threads simultaneously modify the same node/configuration pairs
 	ctl.QueueAndWorkers = genctlr.NewQueueAndWorkers(ControllerName, 1, ctl.process)
-	_, err = ctl.podInformer.AddEventHandler(ctl)
+	_, err := ctl.podInformer.AddEventHandler(ctl)
 	if err != nil {
 		panic(err)
 	}
@@ -132,17 +121,6 @@ type queueItem interface {
 
 type lppItem struct {
 	cache.ObjectName
-}
-
-const launcherPodIndexName = "launcher"
-
-func launcherIndexFunc(obj any) ([]string, error) {
-	pod := obj.(*corev1.Pod)
-	if pod.Annotations[LauncherComponentAnnotationKey] == LauncherComponentAnnotationValue {
-		return []string{string(pod.UID)}, nil
-	}
-
-	return []string{}, nil
 }
 
 func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
@@ -321,8 +299,8 @@ func (ctl *controller) reconcileLaunchersOnNode(ctx context.Context, key NodeLau
 // getCurrentLaunchersOnNode returns launcher pods for a specific config on a specific node
 func (ctl *controller) getCurrentLaunchersOnNode(ctx context.Context, key NodeLauncherKey) ([]corev1.Pod, error) {
 	launcherLabels := map[string]string{
-		LauncherComponentAnnotationKey:           LauncherComponentAnnotationValue,
-		"app.kubernetes.io/launcher-config-name": key.LauncherConfigName,
+		ComponentLabelKey:          LauncherComponentLabelValue,
+		LauncherConfigNameLabelKey: key.LauncherConfigName,
 	}
 	// Use podLister's List method with label selector
 	pods, err := ctl.podLister.List(labels.SelectorFromSet(launcherLabels))
@@ -399,8 +377,9 @@ func (ctl *controller) buildPodFromTemplate(template corev1.PodTemplateSpec, key
 	if pod.Labels == nil {
 		pod.Labels = make(map[string]string)
 	}
-	pod.Labels["app.kubernetes.io/component"] = "launcher"
-	pod.Labels["app.kubernetes.io/launcher-config-name"] = key.LauncherConfigName
+	pod.Labels[ComponentLabelKey] = LauncherComponentLabelValue
+	pod.Labels[LauncherGeneratedByLabelKey] = LauncherGeneratedByLabelValue
+	pod.Labels[LauncherConfigNameLabelKey] = key.LauncherConfigName
 	// Assign to specific node
 	pod.Spec.NodeName = key.NodeName
 	return pod
