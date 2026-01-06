@@ -14,14 +14,14 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package launcherpool
+package launcherpopulator
 
 const (
 	ComponentLabelKey           = "app.kubernetes.io/component"
 	LauncherComponentLabelValue = "launcher"
 
 	LauncherGeneratedByLabelKey   = "dual-pods.llm-d.ai/generated-by"
-	LauncherGeneratedByLabelValue = "launcher-pool"
+	LauncherGeneratedByLabelValue = "launcher-populator"
 
 	LauncherConfigNameLabelKey = "dual-pods.llm-d.ai/launcher-config-name"
 )
