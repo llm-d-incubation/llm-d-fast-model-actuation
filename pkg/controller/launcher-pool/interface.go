@@ -17,11 +17,11 @@ limitations under the License.
 package launcherpool
 
 const (
-	LauncherComponentAnnotationKey   = "dual-pods.llm-d.ai/component"
-	LauncherComponentAnnotationValue = "launcher"
+	ComponentLabelKey           = "app.kubernetes.io/component"
+	LauncherComponentLabelValue = "launcher"
 
-	LauncherGeneratedByAnnotationKey   = "dual-pods.llm-d.ai/generated-by"
-	LauncherGeneratedByAnnotationValue = "launcher-pool"
+	LauncherGeneratedByLabelKey   = "dual-pods.llm-d.ai/generated-by"
+	LauncherGeneratedByLabelValue = "launcher-pool"
 
-	LauncherConfigNameAnnotationKey = "dual-pods.llm-d.ai/launcher-config-name"
+	LauncherConfigNameLabelKey = "dual-pods.llm-d.ai/launcher-config-name"
 )
