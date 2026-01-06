@@ -339,7 +339,7 @@ func (ctl *controller) createLaunchers(ctx context.Context, node corev1.Node, ke
 	// Create the specified number of launcher pods
 	for i := 0; i < count; i++ {
 		pod := ctl.buildPodFromTemplate(launcherConfig.Spec.PodTemplate, key)
-		pod.GenerateName = fmt.Sprintf("launcher-%s-%s-", launcherConfig.Namespace, launcherConfig.Name)
+		pod.GenerateName = fmt.Sprintf("launcher-%s-", launcherConfig.Name)
 		// Set owner reference so pods get cleaned up when LauncherConfig is deleted
 		if err := ctrl.SetControllerReference(launcherConfig, pod, scheme); err != nil {
 			return fmt.Errorf("failed to set controller reference: %w", err)
