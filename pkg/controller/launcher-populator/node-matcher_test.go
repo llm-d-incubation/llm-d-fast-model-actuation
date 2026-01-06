@@ -1,4 +1,4 @@
-package launcherpool
+package launcherpopulator
 
 import (
 	"testing"

@@ -26,7 +26,7 @@ import (
 	"time"
 
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/common"
-	launcherpool "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/launcher-pool"
+	launcherpopulator "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/launcher-populator"
 	"github.com/spf13/pflag"
 
 	kubeinformers "k8s.io/client-go/informers"
@@ -76,9 +76,9 @@ func main() {
 		klog.Fatal(err)
 	}
 	if len(restConfig.UserAgent) == 0 {
-		restConfig.UserAgent = launcherpool.ControllerName
+		restConfig.UserAgent = launcherpopulator.ControllerName
 	} else {
-		restConfig.UserAgent += "/" + launcherpool.ControllerName
+		restConfig.UserAgent += "/" + launcherpopulator.ControllerName
 	}
 
 	kubeClient := kubernetes.NewForConfigOrDie(restConfig)
@@ -86,7 +86,7 @@ func main() {
 	fmaClient := fmaclient.NewForConfigOrDie(restConfig)
 	fmaPreInformers := fmainformers.NewSharedInformerFactoryWithOptions(fmaClient, 0, fmainformers.WithNamespace(overrides.Context.Namespace))
 
-	ctlr, err := launcherpool.NewController(
+	ctlr, err := launcherpopulator.NewController(
 		logger,
 		kubeClient.CoreV1(),
 		overrides.Context.Namespace,
