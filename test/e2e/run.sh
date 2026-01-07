@@ -2,7 +2,7 @@
 
 # Usage: $0
 # Current working directory must be the root of the Git repository.
-# The only reason for this is the `make` commands.
+# The reasons for this are the `make` commands and the location of CRDs.
 
 set -euo pipefail
 
@@ -67,12 +67,23 @@ kubectl get pods -A -o wide
 
 kubectl create clusterrole node-viewer --verb=get,list,watch --resource=nodes
 
+kubectl create -f ./config/crd/
+
 kubectl apply -f - <<EOF
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: testreq
 rules:
+- apiGroups:
+  - "fma.llm-d.ai"
+  resources:
+  - inferenceserverconfigs
+  - launcherconfigs
+  verbs:
+  - get
+  - list
+  - watch
 - apiGroups:
   - ""
   resourceNames:

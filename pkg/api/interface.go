@@ -41,8 +41,16 @@ package api
 // to define the server-providing Pod.
 // 1. Remove all annotations;
 // 2. Apply the patch
-
+// This annotation is the single source of truth to signal that the server-requesting Pod
+// is using the server patch to define its server-providing Pod.
+// This annotation is mutually exclusive with the 'InferenceServerConfigAnnotationName' annotation.
 const ServerPatchAnnotationName = "dual-pods.llm-d.ai/server-patch"
+
+// InferenceServerConfigAnnotationName is the name of an annotation on the
+// server-requesting Pod. The value of the annotation is the name of the
+// InferenceServerConfig object that the server-providing Pod uses.
+// This annotation is mutually exclusive with the 'ServerPatchAnnotationName' annotation.
+const InferenceServerConfigAnnotationName = "dual-pods.llm-d.ai/inference-server-config"
 
 // StatusAnnotationName is the name of an annotation that the dual-pods controller
 // maintains reporting the ServerRequestingPodStatus. The value of this annotation is the

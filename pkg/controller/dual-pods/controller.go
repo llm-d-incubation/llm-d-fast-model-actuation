@@ -40,8 +40,11 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
 
+	fmav1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/api"
 	genctlr "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/generic"
+	fmainformers "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/generated/informers/externalversions"
+	fmalisters "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/generated/listers/fma/v1alpha1"
 )
 
 // This package implements the dual-pods controller.
@@ -147,6 +150,7 @@ func (config ControllerConfig) NewController(
 	coreClient coreclient.CoreV1Interface,
 	namespace string,
 	corev1PreInformers corev1preinformers.Interface,
+	fmaInformerFactory fmainformers.SharedInformerFactory,
 ) (*controller, error) {
 	ctl := &controller{
 		enqueueLogger:       logger.WithName(ControllerName),
@@ -158,6 +162,10 @@ func (config ControllerConfig) NewController(
 		cmLister:            corev1PreInformers.ConfigMaps().Lister(),
 		nodeInformer:        corev1PreInformers.Nodes().Informer(),
 		nodeLister:          corev1PreInformers.Nodes().Lister(),
+		iscInformer:         fmaInformerFactory.Fma().V1alpha1().InferenceServerConfigs().Informer(),
+		iscLister:           fmaInformerFactory.Fma().V1alpha1().InferenceServerConfigs().Lister(),
+		lcInformer:          fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Informer(),
+		lcLister:            fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Lister(),
 		sleeperLimit:        config.SleeperLimit,
 		debugAccelMemory:    config.AcceleratorSleepingMemoryLimitMiB < math.MaxInt32,
 		accelMemoryLimitMiB: config.AcceleratorSleepingMemoryLimitMiB,
@@ -165,9 +173,10 @@ func (config ControllerConfig) NewController(
 	}
 	ctl.gpuMap.Store(&map[string]GpuLocation{})
 	err := ctl.podInformer.AddIndexers(cache.Indexers{
-		requesterIndexName:   requesterIndexFunc,
-		nominalHashIndexName: nominalHashIndexFunc,
-		GPUIndexName:         GPUIndexFunc})
+		inferenceServerConfigIndexName: inferenceServerConfigIndexFunc,
+		requesterIndexName:             requesterIndexFunc,
+		nominalHashIndexName:           nominalHashIndexFunc,
+		GPUIndexName:                   GPUIndexFunc})
 	if err != nil { //impossible
 		return nil, err
 	}
@@ -194,6 +203,14 @@ func (config ControllerConfig) NewController(
 	if err != nil {
 		panic(err)
 	}
+	_, err = ctl.iscInformer.AddEventHandler(ctl)
+	if err != nil {
+		panic(err)
+	}
+	_, err = ctl.lcInformer.AddEventHandler(ctl)
+	if err != nil {
+		panic(err)
+	}
 	return ctl, nil
 }
 
@@ -207,6 +224,10 @@ type controller struct {
 	cmLister      corev1listers.ConfigMapLister
 	nodeInformer  cache.SharedIndexInformer
 	nodeLister    corev1listers.NodeLister
+	iscInformer   cache.SharedIndexInformer
+	iscLister     fmalisters.InferenceServerConfigLister
+	lcInformer    cache.SharedIndexInformer
+	lcLister      fmalisters.LauncherConfigLister
 	genctlr.KnowsProcessedSync[queueItem]
 
 	sleeperLimit        int
@@ -327,7 +348,7 @@ const (
 // The controller cares about server-requesting Pods, bound direct server-providing Pods, and launcher-based server-providing Pods.
 // The controller doesn't care about unbound direct providers and other Pods.
 func careAbout(pod *corev1.Pod) (item infSvrItem, it infSvrItemType) {
-	if len(pod.Annotations[api.ServerPatchAnnotationName]) > 0 {
+	if len(pod.Annotations[api.ServerPatchAnnotationName]) > 0 || len(pod.Annotations[api.InferenceServerConfigAnnotationName]) > 0 {
 		return infSvrItem{pod.UID, pod.Name}, infSvrItemRequester
 	}
 	requesterStr := pod.Annotations[requesterAnnotationKey]
@@ -336,6 +357,17 @@ func careAbout(pod *corev1.Pod) (item infSvrItem, it infSvrItemType) {
 		return infSvrItem{}, infSvrItemDontCare
 	}
 	return infSvrItem{apitypes.UID(requesterParts[0]), requesterParts[1]}, infSvrItemBoundDirectProvider
+}
+
+const inferenceServerConfigIndexName = "inferenceserverconfig"
+
+func inferenceServerConfigIndexFunc(obj any) ([]string, error) {
+	pod := obj.(*corev1.Pod)
+	inferenceServerConfigName := pod.Annotations[api.InferenceServerConfigAnnotationName]
+	if len(inferenceServerConfigName) == 0 {
+		return []string{}, nil
+	}
+	return []string{inferenceServerConfigName}, nil
 }
 
 const requesterIndexName = "requester"
@@ -373,6 +405,8 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 			nd.add(item)
 			ctl.Queue.Add(nodeItem{nodeName})
 		}
+	case *fmav1alpha1.InferenceServerConfig:
+		ctl.enqueueRequestersByInferenceServerConfig(typed, isInInitialList)
 	case *corev1.ConfigMap:
 		if typed.Name != GPUMapName {
 			ctl.enqueueLogger.V(5).Info("Ignoring ConfigMap that is not the GPU map", "ref", cache.MetaObjectToName(typed))
@@ -412,6 +446,8 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 			nd.add(item)
 			ctl.Queue.Add(nodeItem{nodeName})
 		}
+	case *fmav1alpha1.InferenceServerConfig:
+		ctl.enqueueRequestersByInferenceServerConfig(typed, false)
 	case *corev1.ConfigMap:
 		if typed.Name != GPUMapName {
 			ctl.enqueueLogger.V(5).Info("Ignoring ConfigMap that is not the GPU map", "ref", cache.MetaObjectToName(typed))
@@ -454,6 +490,8 @@ func (ctl *controller) OnDelete(obj any) {
 			nd.add(item)
 			ctl.Queue.Add(nodeItem{nodeName})
 		}
+	case *fmav1alpha1.InferenceServerConfig:
+		ctl.enqueueRequestersByInferenceServerConfig(typed, false)
 	case *corev1.ConfigMap:
 		if typed.Name != GPUMapName {
 			ctl.enqueueLogger.V(5).Info("Ignoring ConfigMap that is not the GPU map", "ref", cache.MetaObjectToName(typed))
@@ -478,7 +516,7 @@ func getProviderNodeName(pod *corev1.Pod) (string, error) {
 }
 
 func (ctl *controller) Start(ctx context.Context) error {
-	if !cache.WaitForNamedCacheSync(ControllerName, ctx.Done(), ctl.cmInformer.HasSynced, ctl.podInformer.HasSynced, ctl.nodeInformer.HasSynced) {
+	if !cache.WaitForNamedCacheSync(ControllerName, ctx.Done(), ctl.cmInformer.HasSynced, ctl.podInformer.HasSynced, ctl.nodeInformer.HasSynced, ctl.iscInformer.HasSynced, ctl.lcInformer.HasSynced) {
 		return fmt.Errorf("caches not synced before end of Start context")
 	}
 	err := ctl.StartWorkers(ctx)
@@ -547,6 +585,37 @@ func (ctl *controller) enqueueRequesters(ctx context.Context) {
 		if some {
 			ctl.Queue.Add(nodeItem{nodeName})
 		}
+	}
+}
+
+func (ctl *controller) enqueueRequestersByInferenceServerConfig(isc *fmav1alpha1.InferenceServerConfig, isInInitialList bool) {
+	inferenceServerConfigName := isc.Name
+	requesters, err := ctl.podInformer.GetIndexer().ByIndex(inferenceServerConfigIndexName, inferenceServerConfigName)
+	if err != nil {
+		ctl.enqueueLogger.Error(err, "Failed to get server requesting pods that use InferenceServerConfig", "ref", cache.MetaObjectToName(isc))
+		return
+	}
+	nodeNames := sets.New[string]()
+	for _, podObj := range requesters {
+		pod := podObj.(*corev1.Pod)
+		item, it := careAbout(pod)
+		if it != infSvrItemRequester {
+			// should not happen because of the nature of inferenceServerConfigIndexFunc
+			ctl.enqueueLogger.V(5).Info("Ignoring Pod that is not a server-requesting Pod", "pod", pod.Name)
+			continue
+		}
+		nodeName := pod.Spec.NodeName
+		if nodeName == "" {
+			ctl.enqueueLogger.V(5).Info("Ignoring non-scheduled server-requesting Pod that uses InferenceServerConfig", "pod", pod.Name, "inferenceServerConfigName", inferenceServerConfigName)
+			continue
+		}
+		nd := ctl.getNodeData(nodeName)
+		ctl.enqueueLogger.V(5).Info("Enqueuing inference server reference due to notification of InferenceServerConfig", "nodeName", nodeName, "item", item, "infSvrItemType", it, "inferenceServerConfigName", inferenceServerConfigName, "isInInitialList", isInInitialList, "resourceVersion", isc.ResourceVersion)
+		nd.add(item)
+		nodeNames.Insert(nodeName)
+	}
+	for nodeName := range nodeNames {
+		ctl.Queue.Add(nodeItem{nodeName})
 	}
 }
 
