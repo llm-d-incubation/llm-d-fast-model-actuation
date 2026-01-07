@@ -77,7 +77,7 @@ jobs:
         run: |
           flake8 --max-line-length=88 --extend-ignore=E203,W503 .
 
-      - name: Run pytest - tests
+      - name: Run pytest launcher
         run: |
           cd inference_server/launcher
           python -m pytest tests/test_launcher.py -v
