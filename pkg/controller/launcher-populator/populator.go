@@ -318,6 +318,7 @@ func (ctl *controller) getCurrentLaunchersOnNode(ctx context.Context, key NodeLa
 	launcherLabels := map[string]string{
 		ComponentLabelKey:          LauncherComponentLabelValue,
 		LauncherConfigNameLabelKey: key.LauncherConfigName,
+		NodeNameLabelKey:           key.NodeName,
 	}
 	// Use podLister's List method with label selector
 	pods, err := ctl.podLister.List(labels.SelectorFromSet(launcherLabels))
@@ -328,9 +329,7 @@ func (ctl *controller) getCurrentLaunchersOnNode(ctx context.Context, key NodeLa
 	// Filter pods that are on the specified node
 	var filteredPods []corev1.Pod
 	for _, pod := range pods {
-		if pod.Spec.NodeName == key.NodeName {
-			filteredPods = append(filteredPods, *pod)
-		}
+		filteredPods = append(filteredPods, *pod)
 	}
 
 	return filteredPods, nil
@@ -394,6 +393,7 @@ func (ctl *controller) buildPodFromTemplate(template corev1.PodTemplateSpec, key
 	pod.Labels[ComponentLabelKey] = LauncherComponentLabelValue
 	pod.Labels[LauncherGeneratedByLabelKey] = LauncherGeneratedByLabelValue
 	pod.Labels[LauncherConfigNameLabelKey] = key.LauncherConfigName
+	pod.Labels[NodeNameLabelKey] = key.NodeName
 	// Assign to specific node
 	pod.Spec.NodeName = key.NodeName
 	return pod
