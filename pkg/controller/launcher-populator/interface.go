@@ -24,4 +24,6 @@ const (
 	LauncherGeneratedByLabelValue = "launcher-populator"
 
 	LauncherConfigNameLabelKey = "dual-pods.llm-d.ai/launcher-config-name"
+
+	NodeNameLabelKey = "node.kubernetes.io/node-name"
 )
