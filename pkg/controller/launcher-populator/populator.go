@@ -20,26 +20,22 @@ import (
 	"context"
 	"fmt"
 
-	fmav1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/utils/ptr"
 
-	//apierrors "k8s.io/apimachinery/pkg/api/errors"
-	//metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
-
-	fmainformers "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/generated/informers/externalversions"
-	fmalisters "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/generated/listers/fma/v1alpha1"
-
-	corev1 "k8s.io/api/core/v1"
 	corev1preinformers "k8s.io/client-go/informers/core/v1"
 	coreclient "k8s.io/client-go/kubernetes/typed/core/v1"
 	corev1listers "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
 
+	fmav1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
 	genctlr "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/generic"
+	fmainformers "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/generated/informers/externalversions"
+	fmalisters "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/generated/listers/fma/v1alpha1"
 )
 
 const ControllerName = "launcher-populator"
@@ -236,6 +232,27 @@ func (item lppItem) process(ctx context.Context, ctl *controller) (error, bool) 
 	return nil, false
 }
 
+// getMatchingNodes returns nodes that match the EnhancedNodeSelector
+func (ctl *controller) getMatchingNodes(ctx context.Context, selector fmav1alpha1.EnhancedNodeSelector) ([]corev1.Node, error) {
+	// Use label selector to filter nodes
+	labelSelector, err := metav1.LabelSelectorAsSelector(&selector.LabelSelector)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert label selector: %w", err)
+	}
+	nodes, err := ctl.nodeLister.List(labelSelector)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list nodes using nodeLister: %w", err)
+	}
+
+	var matchedNodes []corev1.Node
+	for _, node := range nodes {
+		if matchesResourceConditions(node.Status.Allocatable, selector.AllocatableResources) {
+			matchedNodes = append(matchedNodes, *node)
+		}
+	}
+	return matchedNodes, nil
+}
+
 // reconcileAllLaunchers adjusts all launcher pods according to final requirements
 func (ctl *controller) reconcileAllLaunchers(ctx context.Context, desired map[NodeLauncherKey]int32) error {
 	logger := klog.FromContext(ctx)
@@ -380,25 +397,4 @@ func (ctl *controller) buildPodFromTemplate(template corev1.PodTemplateSpec, key
 	// Assign to specific node
 	pod.Spec.NodeName = key.NodeName
 	return pod
-}
-
-// getMatchingNodes returns nodes that match the EnhancedNodeSelector
-func (ctl *controller) getMatchingNodes(ctx context.Context, selector fmav1alpha1.EnhancedNodeSelector) ([]corev1.Node, error) {
-	// Use label selector to filter nodes
-	labelSelector, err := metav1.LabelSelectorAsSelector(&selector.LabelSelector)
-	if err != nil {
-		return nil, fmt.Errorf("failed to convert label selector: %w", err)
-	}
-	nodes, err := ctl.nodeLister.List(labelSelector)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list nodes using nodeLister: %w", err)
-	}
-
-	var matchedNodes []corev1.Node
-	for _, node := range nodes {
-		if matchesResourceConditions(node.Status.Allocatable, selector.AllocatableResources) {
-			matchedNodes = append(matchedNodes, *node)
-		}
-	}
-	return matchedNodes, nil
 }

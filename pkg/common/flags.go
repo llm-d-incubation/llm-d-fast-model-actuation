@@ -30,10 +30,7 @@ import (
 //   - loadingRules: A pointer to clientcmd.ClientConfigLoadingRules that contains rules for loading kubeconfig
 //   - overrides: A pointer to clientcmd.ConfigOverrides that contains configuration overrides
 func AddKubernetesClientFlags(flags pflag.FlagSet, loadingRules *clientcmd.ClientConfigLoadingRules, overrides *clientcmd.ConfigOverrides) {
-	if loadingRules == nil {
-		return
-	}
-	if overrides == nil {
+	if loadingRules == nil || overrides == nil {
 		return
 	}
 
