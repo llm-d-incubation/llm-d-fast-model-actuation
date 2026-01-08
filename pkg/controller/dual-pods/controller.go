@@ -600,8 +600,7 @@ func (ctl *controller) enqueueRequestersByInferenceServerConfig(isc *fmav1alpha1
 		pod := podObj.(*corev1.Pod)
 		item, it := careAbout(pod)
 		if it != infSvrItemRequester {
-			// should not happen because of the nature of inferenceServerConfigIndexFunc
-			ctl.enqueueLogger.V(5).Info("Ignoring Pod that is not a server-requesting Pod", "pod", pod.Name)
+			ctl.enqueueLogger.Error(fmt.Errorf("unexpected inference server item type"), "Ignoring Pod that is not a server-requesting Pod", "pod", pod.Name, "infSvrItemType", it)
 			continue
 		}
 		nodeName := pod.Spec.NodeName
