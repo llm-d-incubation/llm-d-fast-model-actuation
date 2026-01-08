@@ -12,11 +12,20 @@ jobs:
     name: lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+      - uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c
         with:
           go-version: '1.24'
+
+      - name: check go mod tidy
+        run: |
+             go mod tidy
+             if [ -n "$(git status --porcelain=v2)" ]; then
+                 echo 'You need to run `go mod tidy`' >&2
+                 exit 1
+             fi
+
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v8
+        uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20
         with:
-          version: v2.1
+          version: v2.8.0
