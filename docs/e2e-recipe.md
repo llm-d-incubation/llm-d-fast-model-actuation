@@ -64,11 +64,18 @@ to use for Node get/list/watch authorization, or omit if not
 needed. Adjust the SleeperLimit setting to your liking (the default is
 2).
 
+If your cluster does not support `ValidatingAdmissionPolicy` objects with CEL (`admissionregistration.k8s.io/v1`), set EnableValidationPolicy to false (the default is
+true) so that the install does not attempt to create unsupported resources. More about validation admission policies [here](#validating-admission-policies-cel).
+
+```shell
+POLICIES_ENABLED=false # SET TO WHAT FITS YOUR CLUSTER
+```
+
 NOTE: if you have done this before then you will need to delete the
 old Helm chart instance before re-making it.
 
 ```shell
-helm upgrade --install dpctlr charts/dpctlr --set Image="${CONTAINER_IMG_REG}/dual-pods-controller:${CONTROLLER_IMG_TAG}" --set NodeViewClusterRole=vcp-node-viewer --set SleeperLimit=1
+helm upgrade --install dpctlr charts/dpctlr --set Image="${CONTAINER_IMG_REG}/dual-pods-controller:${CONTROLLER_IMG_TAG}" --set NodeViewClusterRole=vcp-node-viewer --set SleeperLimit=1 --set EnableValidationPolicy=${POLICIES_ENABLED}
 ```
 
 Finally, define a shell function that creates a new ReplicaSet whose
@@ -482,3 +489,14 @@ Or, for more fun, before going past N+1, make a server-requesting Pod
 that causes the oldest runner to be re-used. Then delete that
 requester. Then force a deletion; observe that the deled one is the
 least recently used.
+
+## Validating admission policies (CEL)
+
+Kubernetes `ValidatingAdmissionPolicy` (CEL) resources are used to
+protect a subset of annotations and labels that are critical to FMA
+controller operations (dual-pods controller and
+launcher-populator). The policy manifests and their
+bindings are managed as Helm chart templates under `charts/dpctlr/templates/policies/` and can be installed by the chart when
+`EnableValidationPolicy` is `true`.
+
+For admission policy support, it is required to have a Kubernetes API server that supports `ValidatingAdmissionPolicy` with CEL (`admissionregistration.k8s.io/v1`). If your cluster does not support `ValidatingAdmissionPolicy` objects, set `EnableValidationPolicy=false` (the default is true) when installing the chart so the Helm release does not attempt to create unsupported resources.
