@@ -4,7 +4,7 @@ metadata:
   labels:
     app.kubernetes.io/name: launcher-populator
     app.kubernetes.io/component: controller
-  name: launcher-population-policy-controller
+  name: launcher-populator
 spec:
   replicas: {{ .Values.replicaCount | default 1 }}
   selector:
@@ -17,7 +17,7 @@ spec:
         app.kubernetes.io/name: launcher-populator
         app.kubernetes.io/component: controller
     spec:
-      serviceAccountName: launcher-population-policy-controller
+      serviceAccountName: launcher-populator
       containers:
         - name: launcher-populator
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"

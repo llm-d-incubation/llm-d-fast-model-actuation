@@ -1,6 +1,6 @@
 # Image configuration
 image:
-  repository: ghcr.io/llm-d-incubation/llm-d-fast-model-actuation-lpp-controller
+  repository: ghcr.io/llm-d-incubation/llm-d-fast-model-actuation-launcher-populator
   tag: latest
   pullPolicy: IfNotPresent
 

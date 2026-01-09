@@ -4,7 +4,7 @@ metadata:
   labels:
     app.kubernetes.io/name: launcher-populator
     app.kubernetes.io/component: controller
-  name: launcher-population-policy-controller-role
+  name: launcher-populator-role
 rules:
   # LauncherPopulationPolicy resource permissions
   - apiGroups: ["fma.llm-d.ai"]

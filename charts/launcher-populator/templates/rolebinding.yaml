@@ -4,14 +4,14 @@ metadata:
   labels:
     app.kubernetes.io/name: launcher-populator
     app.kubernetes.io/component: controller
-  name: launcher-population-policy-controller-rolebinding
+  name: launcher-populator-rolebinding
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: launcher-population-policy-controller-role
+  name: launcher-populator-role
 subjects:
   - kind: ServiceAccount
-    name: launcher-population-policy-controller
+    name: launcher-populator
     namespace: {{ .Values.namespace }}
 {{if .Values.NodeViewClusterRole}}
 ---
@@ -21,7 +21,7 @@ metadata:
   labels:
     app.kubernetes.io/name: launcher-populator
     app.kubernetes.io/component: controller
-  name: launcher-population-policy-controller-node-view
+  name: launcher-populator-node-view
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -29,5 +29,5 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     namespace: "{{ .Release.Namespace }}"
-    name: launcher-population-policy-controller
+    name: launcher-populator
 {{end}}
