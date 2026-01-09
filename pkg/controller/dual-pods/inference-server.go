@@ -34,13 +34,13 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/utils"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	k8sserializer "k8s.io/apimachinery/pkg/runtime/serializer"
-	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
 	"k8s.io/klog/v2"
@@ -196,7 +196,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	if (requestingPod == nil || requestingPod.DeletionTimestamp != nil) && providingPod != nil {
 		// Time to unbind.
 		// As a special favor, delete providingPod if it is in trouble.
-		if podIsInTrouble(providingPod) {
+		if utils.PodIsInTrouble(providingPod) {
 			err := podOps.Delete(ctx, providingPod.Name, metav1.DeleteOptions{
 				Preconditions:     &metav1.Preconditions{UID: &providingPod.UID, ResourceVersion: &providingPod.ResourceVersion},
 				PropagationPolicy: ptr.To(metav1.DeletePropagationBackground),
@@ -288,7 +288,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	// If there is already a server-providing Pod then ensure that it is awake,
 	// ensure status reported, and relay readiness if needed.
 	if providingPod != nil {
-		_, serverPort, err := getInferenceServerPort(providingPod)
+		_, serverPort, err := utils.GetInferenceServerPort(providingPod)
 		if err != nil { // Impossible, because such a providingPod would never be created by this controller
 			return fmt.Errorf("unable to wake up server because port not known: %w", err), true
 		}
@@ -315,7 +315,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 			return err, true
 		}
 		// Relay readiness if not already done
-		ready := isPodReady(providingPod)
+		ready := utils.IsPodReady(providingPod)
 		if serverDat.ReadinessRelayed == nil || ready != *serverDat.ReadinessRelayed {
 			url, readiness := fmt.Sprintf("http://%s:%s", requestingPod.Status.PodIP, adminPort), ""
 			if ready {
@@ -417,28 +417,7 @@ func (ctl *controller) ensureSleepingLabel(ctx context.Context, providingPod *co
 	return nil
 }
 
-// Trouble is both (a) some container restarts and (b) Pod not ready
-func podIsInTrouble(pod *corev1.Pod) bool {
-	var sumRestarts int32
-	for _, ctrStat := range pod.Status.ContainerStatuses {
-		sumRestarts += ctrStat.RestartCount
-	}
-	if sumRestarts == 0 {
-		return false
-	}
-	condIdx := slices.IndexFunc(pod.Status.Conditions, func(cond corev1.PodCondition) bool {
-		return cond.Type == "Ready"
-	})
-	if condIdx >= 0 {
-		if pod.Status.Conditions[condIdx].Status == corev1.ConditionTrue {
-			return false
-		}
-	}
-	return true
-}
-
 var invalidPodRE = regexp.MustCompile(`^Pod "[a-z0-9.-]*" is invalid`)
-var apiAccessRE = regexp.MustCompile(`^kube-api-access-[a-z0-9]+$`)
 
 func (ctl *controller) enforceSleeperBudget(ctx context.Context, serverDat *serverData, requestingPod *corev1.Pod) (error, bool) {
 	logger := klog.FromContext(ctx)
@@ -529,7 +508,7 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 	}
 	serverDat.ProvidingPodName = providingPod.Name
 	logger.V(2).Info("Bound server-providing Pod", "name", providingPod.Name, "node", requestingPod.Spec.NodeName, "gpus", serverDat.GPUIndicesStr, "newResourceVersion", echo.ResourceVersion)
-	_, serverPort, err := getInferenceServerPort(providingPod)
+	_, serverPort, err := utils.GetInferenceServerPort(providingPod)
 	if err != nil { // Impossible, because such a providingPod would never be created by this controller
 		return fmt.Errorf("unable to wake up server because port not known: %w", err), true
 	}
@@ -567,7 +546,7 @@ func (ctl *controller) maybeRemoveRequesterFinalizer(ctx context.Context, reques
 	// First, determine whether finalizer should be present
 	var wantFinalizer bool
 	if providingPod != nil {
-		isIdx, _, err := getInferenceServerPort(providingPod)
+		isIdx, _, err := utils.GetInferenceServerPort(providingPod)
 		if err == nil {
 			isCtr := &providingPod.Spec.Containers[isIdx]
 			statIdx := slices.IndexFunc(providingPod.Status.ContainerStatuses,
@@ -648,7 +627,7 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 		serverPort := serverDat.ServerPort
 		if serverDat.NominalProvidingPod == nil {
 			var err error
-			_, serverPort, err = getInferenceServerPort(providingPod)
+			_, serverPort, err = utils.GetInferenceServerPort(providingPod)
 			if err != nil { // Impossible, because such a providingPod would never be created by this controller
 				return fmt.Errorf("unable to put server to sleep because port not known: %w", err)
 			}
@@ -726,7 +705,7 @@ func (serverDat *serverData) getNominalServerProvidingPod(ctx context.Context, r
 				Labels:    reqPod.Labels,
 				Namespace: reqPod.Namespace,
 			},
-			Spec: *deIndividualize(reqPod.Spec.DeepCopy()),
+			Spec: *utils.DeIndividualize(reqPod.Spec.DeepCopy()),
 		}
 		// marshal into json
 		baseJSON, err := json.Marshal(basePod)
@@ -767,7 +746,7 @@ func (serverDat *serverData) getNominalServerProvidingPod(ctx context.Context, r
 		}
 		nodeSelector["kubernetes.io/hostname"] = reqPod.Spec.NodeName
 
-		cIdx, serverPort, err := getInferenceServerPort(pod)
+		cIdx, serverPort, err := utils.GetInferenceServerPort(pod)
 		if err != nil {
 			return nil, "", err
 		}
@@ -810,36 +789,6 @@ func (serverDat *serverData) getNominalServerProvidingPod(ctx context.Context, r
 	return serverDat.NominalProvidingPod, serverDat.NominalProvidingPodHash, nil
 }
 
-// deIndividualize removes the parts of a PodSpec that are specific to an individual.
-// This func side-effects the given `*PodSpec` and returns it.
-func deIndividualize(podSpec *corev1.PodSpec) *corev1.PodSpec {
-	podSpec.EphemeralContainers = nil // these may not be given in Create
-	// The api-access Volume is individualized
-	volIdx := slices.IndexFunc(podSpec.Volumes, func(vol corev1.Volume) bool {
-		return apiAccessRE.MatchString(vol.Name)
-	})
-	if volIdx >= 0 {
-		volName := podSpec.Volumes[volIdx].Name
-		podSpec.Volumes = slices.Delete(podSpec.Volumes, volIdx, volIdx+1)
-		for ctrIdx := range podSpec.Containers {
-			removeVolumeMount(&podSpec.Containers[ctrIdx], volName)
-		}
-		for ctrIdx := range podSpec.InitContainers {
-			removeVolumeMount(&podSpec.InitContainers[ctrIdx], volName)
-		}
-	}
-	return podSpec
-}
-
-func removeVolumeMount(ctr *corev1.Container, volumeName string) {
-	mntIdx := slices.IndexFunc(ctr.VolumeMounts, func(mnt corev1.VolumeMount) bool {
-		return mnt.Name == volumeName
-	})
-	if mntIdx >= 0 {
-		ctr.VolumeMounts = slices.Delete(ctr.VolumeMounts, mntIdx, mntIdx+1)
-	}
-}
-
 // reducedContainerState is the subset of `corev1.ContainerState` that we want to log
 type reducedContainerState struct {
 	State                corev1.ContainerState
@@ -870,37 +819,6 @@ func getReducedInferenceContainerState(from *corev1.Pod) *reducedContainerState 
 	var ans reducedContainerState
 	ans.set(from.Status.ContainerStatuses[idx])
 	return &ans
-}
-
-// getInferenceServerPort, given a server-providing Pod,
-// returns (containerIndex int, port int16, err error)
-func getInferenceServerPort(pod *corev1.Pod) (int, int16, error) {
-	// identify the inference server container
-	cIdx := slices.IndexFunc(pod.Spec.Containers, func(c corev1.Container) bool {
-		return c.Name == api.InferenceServerContainerName
-	})
-	if cIdx == -1 {
-		return 0, 0, fmt.Errorf("container %q not found", api.InferenceServerContainerName)
-	}
-	isCtr := &pod.Spec.Containers[cIdx]
-	if isCtr.ReadinessProbe == nil {
-		return 0, 0, errors.New("the inference server container has no readinessProbe")
-	} else if isCtr.ReadinessProbe.HTTPGet == nil {
-		return 0, 0, fmt.Errorf("the readinessProbe is not an HTTPGet")
-	}
-	portIOS := isCtr.ReadinessProbe.HTTPGet.Port
-	switch portIOS.Type {
-	case intstr.Int:
-		return cIdx, int16(portIOS.IntVal), nil
-	case intstr.String:
-		if portIOS.StrVal == "http" || portIOS.StrVal == "HTTP" {
-			return cIdx, 80, nil
-		} else {
-			return 0, 0, fmt.Errorf("unsupported readinessProbe port %q", portIOS.StrVal)
-		}
-	default:
-		return 0, 0, fmt.Errorf("the readinessProbe port has unexpected type %q", portIOS.Type)
-	}
 }
 
 func (ctl *controller) querySleeping(ctx context.Context, providingPod *corev1.Pod, serverPort int16) (bool, error) {
@@ -1016,15 +934,6 @@ func doPost(url string) error {
 	}
 
 	return nil
-}
-
-func isPodReady(pod *corev1.Pod) bool {
-	for _, cond := range pod.Status.Conditions {
-		if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
-			return true
-		}
-	}
-	return false
 }
 
 var coreScheme *k8sruntime.Scheme
