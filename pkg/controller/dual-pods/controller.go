@@ -82,9 +82,6 @@ import (
 // of the server-requesting Pod.
 // An inference server's UID is the UID of the server-requesting Pod.
 
-const requesterAnnotationKey = "dual-pods.llm-d.ai/requester"
-const nominalHashAnnotationKey = "dual-pods.llm-d.ai/nominal"
-
 const providerFinalizer = "dual-pods.llm-d.ai/provider"
 const requesterFinalizer = "dual-pods.llm-d.ai/requester"
 
@@ -100,7 +97,7 @@ const GPUIndexName = "gpu"
 
 func GPUIndexFunc(obj any) ([]string, error) {
 	pod := obj.(*corev1.Pod)
-	if len(pod.Annotations[nominalHashAnnotationKey]) == 0 || pod.Spec.NodeName == "" {
+	if len(pod.Annotations[api.NominalHashAnnotationName]) == 0 || pod.Spec.NodeName == "" {
 		return []string{}, nil
 	}
 	isIdx, _, err := utils.GetInferenceServerPort(pod)
@@ -125,7 +122,7 @@ const nominalHashIndexName = "nominal"
 
 func nominalHashIndexFunc(obj any) ([]string, error) {
 	pod := obj.(*corev1.Pod)
-	nominalHash := pod.Annotations[nominalHashAnnotationKey]
+	nominalHash := pod.Annotations[api.NominalHashAnnotationName]
 	if len(nominalHash) == 0 {
 		return []string{}, nil
 	}
@@ -352,7 +349,7 @@ func careAbout(pod *corev1.Pod) (item infSvrItem, it infSvrItemType) {
 	if len(pod.Annotations[api.ServerPatchAnnotationName]) > 0 || len(pod.Annotations[api.InferenceServerConfigAnnotationName]) > 0 {
 		return infSvrItem{pod.UID, pod.Name}, infSvrItemRequester
 	}
-	requesterStr := pod.Annotations[requesterAnnotationKey]
+	requesterStr := pod.Annotations[api.RequesterAnnotationName]
 	requesterParts := strings.Split(requesterStr, " ")
 	if len(requesterParts) != 2 {
 		return infSvrItem{}, infSvrItemDontCare

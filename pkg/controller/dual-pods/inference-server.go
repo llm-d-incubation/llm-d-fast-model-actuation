@@ -496,7 +496,7 @@ func (ctl *controller) enforceSleeperBudget(ctx context.Context, serverDat *serv
 func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requestingPod, providingPod *corev1.Pod) (error, bool) {
 	logger := klog.FromContext(ctx)
 	providingPod = providingPod.DeepCopy()
-	providingPod.Annotations[requesterAnnotationKey] = string(requestingPod.UID) + " " + requestingPod.Name
+	providingPod.Annotations[api.RequesterAnnotationName] = string(requestingPod.UID) + " " + requestingPod.Name
 	if !slices.Contains(providingPod.Finalizers, providerFinalizer) {
 		providingPod.Finalizers = append(providingPod.Finalizers, providerFinalizer)
 	}
@@ -652,8 +652,8 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 		providingPod.Labels = MapSet(providingPod.Labels, api.SleepingLabelName, "true")
 	}
 	// Ensure requester annotation is absent
-	if _, have := providingPod.Annotations[requesterAnnotationKey]; have {
-		delete(providingPod.Annotations, requesterAnnotationKey)
+	if _, have := providingPod.Annotations[api.RequesterAnnotationName]; have {
+		delete(providingPod.Annotations, api.RequesterAnnotationName)
 		aChange = true
 	}
 	// Ensure finalizer is absent
@@ -778,8 +778,8 @@ func (serverDat *serverData) getNominalServerProvidingPod(ctx context.Context, r
 
 		pod.GenerateName = reqPod.Name + "-dual-"
 		pod.Finalizers = append(pod.Finalizers, providerFinalizer)
-		pod.Annotations = MapSet(pod.Annotations, nominalHashAnnotationKey, nominalHash)
-		pod.Annotations[requesterAnnotationKey] = string(reqPod.UID) + " " + reqPod.Name
+		pod.Annotations = MapSet(pod.Annotations, api.NominalHashAnnotationName, nominalHash)
+		pod.Annotations[api.RequesterAnnotationName] = string(reqPod.UID) + " " + reqPod.Name
 		pod.Annotations[api.AcceleratorsAnnotationName] = *serverDat.GPUIDsStr
 		pod.Labels = MapSet(pod.Labels, api.DualLabelName, reqPod.Name)
 		pod.Labels[api.SleepingLabelName] = "false"
