@@ -1,0 +1,14 @@
+# Image configuration
+image:
+  repository: ghcr.io/llm-d-incubation/llm-d-fast-model-actuation-lpp-controller
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# Resource configuration
+resources:
+  limits:
+    cpu: 2
+    memory: 2Gi
+  requests:
+    cpu: 100m
+    memory: 128Mi

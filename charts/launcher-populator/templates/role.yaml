@@ -1,0 +1,27 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    app.kubernetes.io/name: launcher-populator
+    app.kubernetes.io/component: controller
+  name: launcher-population-policy-controller-role
+rules:
+  # LauncherPopulationPolicy resource permissions
+  - apiGroups: ["fma.llm-d.ai"]
+    resources: ["launcherpopulationpolicies"]
+    verbs: ["get", "list", "watch"]
+
+  # LauncherConfig resource permissions
+  - apiGroups: ["fma.llm-d.ai"]
+    resources: ["launcherconfigs"]
+    verbs: ["get", "list", "watch"]
+
+  # InferenceServerConfig resource permissions
+  - apiGroups: ["fma.llm-d.ai"]
+    resources: ["inferenceserverconfigs"]
+    verbs: ["get", "list", "watch"]
+
+  # Pod resource permissions (full CRUD)
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
