@@ -4,6 +4,11 @@ image:
   tag: latest
   pullPolicy: IfNotPresent
 
+# Name of the ClusterRole to bind to controller to authorize it to
+# get/list/watch Node objects.
+# Empty string means no new binding is needed.
+NodeViewClusterRole: ""
+
 # Resource configuration
 resources:
   limits:

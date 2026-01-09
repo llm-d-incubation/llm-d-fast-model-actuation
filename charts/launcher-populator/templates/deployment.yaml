@@ -22,6 +22,9 @@ spec:
         - name: launcher-populator
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy | default "IfNotPresent" }}
+          command:
+            - /launcher-populator
+            - --namespace=$(CONTROLLER_NAMESPACE)
           env:
             - name: CONTROLLER_NAMESPACE
               valueFrom:
@@ -38,15 +41,3 @@ spec:
             requests:
               cpu: {{ .Values.resources.requests.cpu | default "100m" }}
               memory: {{ .Values.resources.requests.memory | default "128Mi" }}
-          livenessProbe:
-            httpGet:
-              path: /healthz
-              port: 8081
-            initialDelaySeconds: {{ if .Values.livenessProbe }}{{ .Values.livenessProbe.initialDelaySeconds | default 15 }}{{ else }}15{{ end }}
-            periodSeconds: {{ if .Values.livenessProbe }}{{ .Values.livenessProbe.periodSeconds | default 20 }}{{ else }}20{{ end }}
-          readinessProbe:
-            httpGet:
-              path: /readyz
-              port: 8081
-            initialDelaySeconds: {{ if .Values.readinessProbe }}{{ .Values.readinessProbe.initialDelaySeconds | default 5 }}{{ else }}5{{ end }}
-            periodSeconds: {{ if .Values.readinessProbe }}{{ .Values.readinessProbe.periodSeconds | default 10 }}{{ else }}10{{ end }}
