@@ -12,7 +12,7 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: launcher-populator
-    namespace: {{ .Release.namespace }}
+    namespace: {{ .Release.Namespace }}
 {{if .Values.NodeViewClusterRole}}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
