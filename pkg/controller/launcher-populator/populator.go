@@ -18,12 +18,21 @@ package launcherpopulator
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"os"
 
+	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/api"
+	dualpods "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/dual-pods"
+	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/utils"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
 
 	corev1preinformers "k8s.io/client-go/informers/core/v1"
@@ -383,7 +392,7 @@ func (ctl *controller) deleteExcessLaunchers(ctx context.Context, launchers []co
 func (ctl *controller) buildPodFromTemplate(template corev1.PodTemplateSpec, key NodeLauncherKey) *corev1.Pod {
 	pod := &corev1.Pod{
 		ObjectMeta: template.ObjectMeta,
-		Spec:       template.Spec,
+		Spec:       *utils.DeIndividualize(template.Spec.DeepCopy()),
 	}
 	pod.Namespace = ctl.namespace
 	// Ensure labels are set
@@ -394,7 +403,139 @@ func (ctl *controller) buildPodFromTemplate(template corev1.PodTemplateSpec, key
 	pod.Labels[LauncherGeneratedByLabelKey] = LauncherGeneratedByLabelValue
 	pod.Labels[LauncherConfigNameLabelKey] = key.LauncherConfigName
 	pod.Labels[NodeNameLabelKey] = key.NodeName
+	pod.Labels[api.SleepingLabelName] = "false"
+
+	hasher := sha256.New()
+	modifiedJSON, _ := json.Marshal(pod)
+	hasher.Write(modifiedJSON)
+	hasher.Write([]byte(";gpus="))
+	hasher.Write([]byte("all")) //@TODO will be refined
+	hasher.Write([]byte(";node="))
+	hasher.Write([]byte(key.NodeName))
+	var modifiedHash [sha256.Size]byte
+	modifiedHashSl := hasher.Sum(modifiedHash[:0])
+	nominalHash := base64.RawStdEncoding.EncodeToString(modifiedHashSl)
+
+	if pod.Annotations == nil {
+		pod.Annotations = make(map[string]string)
+	}
+	pod.Annotations = dualpods.MapSet(pod.Annotations, api.NominalHashAnnotationKey, nominalHash)
+
+	pod.Annotations[PortDiscoveryAnnotationKey] = PortDiscoveryAnnotationEmptyValue
+
+	pod.Spec.RestartPolicy = corev1.RestartPolicyNever
+
+	// Process container list, keep only one container and apply fixed configuration
+	if len(pod.Spec.Containers) == 0 {
+		// If there are no containers in the template, create a default container
+		pod.Spec.Containers = []corev1.Container{
+			{
+				Name: api.InferenceServerContainerName,
+			},
+		}
+	} else {
+		// If there are multiple containers in the template, keep only the first one and rename it to engine-pilot
+		container := &pod.Spec.Containers[0]
+		container.Name = api.InferenceServerContainerName
+	}
+
+	container := &pod.Spec.Containers[0]
+	// @TODO Should set to specified Launcher image, replacing the default image
+	launcherImage := os.Getenv("LAUNCHER_IMAGE")
+	if launcherImage != "" {
+		container.Image = launcherImage
+	}
+
+	// Ensure port configuration includes port 8001
+	ensurePortExists(container, 8001, "health", corev1.ProtocolTCP)
+
+	// Configure required environment variables
+	configureRequiredEnvVars(container)
+
+	// Set fixed liveness probe
+	container.LivenessProbe = &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{
+				Path:   "/health",
+				Port:   intstr.FromInt(8001),
+				Scheme: corev1.URISchemeHTTP,
+			},
+		},
+		InitialDelaySeconds: 10,
+		PeriodSeconds:       20,
+		TimeoutSeconds:      1,
+		SuccessThreshold:    1,
+		FailureThreshold:    3,
+	}
+
+	// Remove nvidia.com/gpu from resource limits
+	removeGPUResourceLimits(container)
+
+	// Remove nvidia.com/gpu from Pod-level resource overhead
+	if pod.Spec.Overhead != nil {
+		delete(pod.Spec.Overhead, corev1.ResourceName("nvidia.com/gpu"))
+	}
+
 	// Assign to specific node
 	pod.Spec.NodeName = key.NodeName
 	return pod
+}
+
+// ensurePortExists adds the specified port if it doesn't already exist
+func ensurePortExists(container *corev1.Container, port int32, name string, protocol corev1.Protocol) {
+	portExists := false
+	for _, existingPort := range container.Ports {
+		if existingPort.ContainerPort == port {
+			portExists = true
+			break
+		}
+	}
+	if !portExists {
+		container.Ports = append(container.Ports, corev1.ContainerPort{
+			Name:          name,
+			ContainerPort: port,
+			Protocol:      protocol,
+		})
+	}
+}
+
+// configureRequiredEnvVars adds or updates required environment variables
+func configureRequiredEnvVars(container *corev1.Container) {
+	envVars := map[string]string{
+		"PYTHONPATH":                 "/app",
+		"NVIDIA_VISIBLE_DEVICES":     "all",
+		"NVIDIA_DRIVER_CAPABILITIES": "compute,utility",
+		"VLLM_SERVER_DEV_MODE":       "1",
+	}
+
+	// Create a mapping of existing environment variables for easy lookup
+	existingEnv := make(map[string]*corev1.EnvVar)
+	for i := range container.Env {
+		envVar := &container.Env[i]
+		existingEnv[envVar.Name] = envVar
+	}
+
+	// Add or update required environment variables
+	for envName, envValue := range envVars {
+		if envVar, exists := existingEnv[envName]; exists {
+			// If it already exists, update its value
+			envVar.Value = envValue
+		} else {
+			// If it doesn't exist, add a new environment variable
+			container.Env = append(container.Env, corev1.EnvVar{
+				Name:  envName,
+				Value: envValue,
+			})
+		}
+	}
+}
+
+// removeGPUResourceLimits removes nvidia.com/gpu from container resource limits and requests
+func removeGPUResourceLimits(container *corev1.Container) {
+	if container.Resources.Limits != nil {
+		container.Resources.Limits[corev1.ResourceName("nvidia.com/gpu")] = resource.MustParse("0")
+	}
+	if container.Resources.Requests != nil {
+		container.Resources.Requests[corev1.ResourceName("nvidia.com/gpu")] = resource.MustParse("0")
+	}
 }
