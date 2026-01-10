@@ -29,6 +29,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/utils"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -102,7 +103,7 @@ func GPUIndexFunc(obj any) ([]string, error) {
 	if len(pod.Annotations[nominalHashAnnotationKey]) == 0 || pod.Spec.NodeName == "" {
 		return []string{}, nil
 	}
-	isIdx, _, err := getInferenceServerPort(pod)
+	isIdx, _, err := utils.GetInferenceServerPort(pod)
 	if err != nil {
 		return []string{}, nil
 	}
