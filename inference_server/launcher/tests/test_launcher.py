@@ -99,15 +99,18 @@ class TestVllmConfig:
         """Test VllmConfig creation with environment variables"""
         config = VllmConfig(
             options="--model test --port 8000",
+            gpu_uuids=["uuid1", "uuid2"],
             env_vars={"KEY1": "value1", "KEY2": "value2"},
         )
         assert config.options == "--model test --port 8000"
+        assert config.gpu_uuids == ["uuid1", "uuid2"]
         assert config.env_vars == {"KEY1": "value1", "KEY2": "value2"}
 
     def test_vllm_config_without_env_vars(self):
         """Test VllmConfig creation without environment variables"""
         config = VllmConfig(options="--model test --port 8000")
         assert config.options == "--model test --port 8000"
+        assert config.gpu_uuids is None
         assert config.env_vars is None
 
 

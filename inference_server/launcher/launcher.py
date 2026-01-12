@@ -57,12 +57,8 @@ class VllmInstance:
             gpu_translator = GpuTranslator()
             cuda_indices = []
             for uuid_str in config.gpu_uuids:
-                try:
-                    index = gpu_translator.uuid_to_index(uuid_str)
-                    cuda_indices.append(str(index))
-                except ValueError as e:
-                    logger.error(f"Error translating UUID {uuid_str}: {e}")
-                    raise
+                index = gpu_translator.uuid_to_index(uuid_str)
+                cuda_indices.append(str(index))
 
             config.env_vars["CUDA_VISIBLE_DEVICES"] = ",".join(cuda_indices)
             logger.info(
