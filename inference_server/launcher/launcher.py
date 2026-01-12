@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional
 import uvloop
 from fastapi import FastAPI, HTTPException, Path
 from fastapi.responses import JSONResponse
+from gputranslator import GpuTranslator
 from pydantic import BaseModel
 from vllm.entrypoints.openai.api_server import run_server
 from vllm.entrypoints.openai.cli_args import make_arg_parser, validate_parsed_serve_args
@@ -359,6 +360,27 @@ def set_env_vars(env_vars: Dict[str, Any]):
     Set environment variables from a dictionary
     :param env_vars: Dict with environment var name as keys and value as values
     """
+
+    # Check for CUDA device UUIDs and set CUDA_VISIBLE_DEVICES accordingly
+    if "CUDA_VISIBLE_DEVICES" in env_vars:
+        cuda_uuids = env_vars["CUDA_VISIBLE_DEVICES"].split(",")
+
+        gpu_translator = GpuTranslator()
+        cuda_indices = []
+        for uuid_str in cuda_uuids:
+            try:
+                index = gpu_translator.uuid_to_index(uuid_str)
+                cuda_indices.append(str(index))
+            except ValueError as e:
+                logger.error(f"Error translating UUID {uuid_str}: {e}")
+                raise
+
+        env_vars["CUDA_VISIBLE_DEVICES"] = ",".join(cuda_indices)
+        logger.info(
+            f"Set CUDA_VISIBLE_DEVICES to \
+                {env_vars['CUDA_VISIBLE_DEVICES']} based on UUIDs."
+        )
+
     # Set environment variables from a dictionary
     for key, value in env_vars.items():
         os.environ[key] = str(value)
