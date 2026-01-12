@@ -116,6 +116,8 @@ const SleepingLabelName string = "dual-pods.llm-d.ai/sleeping"
 
 const NominalHashAnnotationKey = "dual-pods.llm-d.ai/nominal"
 
+const RequesterAnnotationKey = "dual-pods.llm-d.ai/requester"
+
 // SleepState is what HTTP GET /is_sleeping on an inference server
 // returns (as JSON).
 type SleepState struct {

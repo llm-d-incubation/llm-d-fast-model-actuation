@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/api"
 	dualpods "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/dual-pods"
@@ -377,15 +378,60 @@ func (ctl *controller) createLaunchers(ctx context.Context, node corev1.Node, ke
 // deleteExcessLaunchers deletes the specified number of launcher pods
 func (ctl *controller) deleteExcessLaunchers(ctx context.Context, launchers []corev1.Pod, count int) error {
 	logger := klog.FromContext(ctx)
-	// Delete the specified number of launcher pods (starting from the end)
-	for i := 0; i < count && i < len(launchers); i++ {
-		pod := launchers[len(launchers)-1-i]
+
+	// Filter out pods that are bound to server-requesting pods
+	// Only delete unbound launcher pods
+	var unboundLaunchers []corev1.Pod
+	for _, pod := range launchers {
+		if !ctl.isLauncherBoundToServerRequestingPod(pod) {
+			unboundLaunchers = append(unboundLaunchers, pod)
+		} else {
+			logger.Info("Skipping deletion of launcher pod as it is bound to a server-requesting pod",
+				"pod", pod.Name)
+		}
+	}
+
+	// Delete the specified number of unbound launcher pods (starting from the end)
+	actualDeleteCount := len(unboundLaunchers)
+	if count < actualDeleteCount {
+		actualDeleteCount = count
+	}
+	for i := 0; i < actualDeleteCount && i < len(unboundLaunchers); i++ {
+		pod := unboundLaunchers[len(unboundLaunchers)-1-i]
 		if err := ctl.coreclient.Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{}); err != nil {
 			return fmt.Errorf("failed to delete launcher pod %s: %w", pod.Name, err)
 		}
 		logger.Info("Deleted launcher pod", "pod", pod.Name)
 	}
+
+	if actualDeleteCount < count {
+		logger.Info("Fewer launcher pods were deleted than requested due to bound pods",
+			"requested", count,
+			"deleted", actualDeleteCount,
+			"skipped", len(unboundLaunchers)-actualDeleteCount)
+	}
+
 	return nil
+}
+
+// isLauncherBoundToServerRequestingPod checks if the launcher pod is bound to any server-requesting pod
+func (ctl *controller) isLauncherBoundToServerRequestingPod(launcherPod corev1.Pod) bool {
+	// Check if the launcher pod has annotations indicating assignment to a server-requesting pod
+	requesterAnnotationValue, exists := launcherPod.Annotations[api.RequesterAnnotationKey]
+	if !exists {
+		return false
+	}
+
+	// Verify the format of the annotation value: should be "UID name"
+	parts := strings.Split(requesterAnnotationValue, " ")
+	if len(parts) != 2 {
+		return false // Invalid format
+	}
+
+	// Optionally verify that the referenced pod actually exists
+	// @TODO if need, we can append the check logic in further PR
+
+	return true
 }
 
 // buildPodFromTemplate creates a pod from a template and assigns it to a node
