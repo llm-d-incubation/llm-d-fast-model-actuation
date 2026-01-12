@@ -25,7 +25,7 @@ const (
 
 	LauncherConfigNameLabelKey = "dual-pods.llm-d.ai/launcher-config-name"
 
-	NodeNameLabelKey = "node.kubernetes.io/node-name"
+	NodeNameLabelKey = "dual-pods.llm-d.ai/node-name"
 
 	PortDiscoveryAnnotationKey = "inference.networking.x-k8s.io/port-discovery"
 
