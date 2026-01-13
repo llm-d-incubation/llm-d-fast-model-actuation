@@ -13,6 +13,8 @@ TEST_REQUESTER_IMG_TAG ?= $(shell git rev-parse --short HEAD)
 TEST_REQUESTER_IMG ?= $(CONTAINER_IMG_REG)/test-requester:$(TEST_REQUESTER_IMG_TAG)
 TEST_SERVER_IMG_TAG ?= $(shell git rev-parse --short HEAD)
 TEST_SERVER_IMG ?= $(CONTAINER_IMG_REG)/test-server:$(TEST_SERVER_IMG_TAG)
+POPULATOR_IMG_TAG ?= $(shell git rev-parse --short HEAD)
+POPULATOR_IMG ?= $(CONTAINER_IMG_REG)/launcher-populator:$(POPULATOR_IMG_TAG)
 
 TARGETARCH ?= $(shell go env GOARCH)
 
@@ -72,6 +74,19 @@ build-test-server-local:
 .PHONY: load-test-server-local
 load-test-server-local:
 	kind load docker-image ${TEST_SERVER_IMG} --name ${CLUSTER_NAME}
+
+.PHONY: build-populator-local
+build-populator-local:
+	KO_DOCKER_REPO=ko.local ko build -B ./cmd/launcher-populator -t ${POPULATOR_IMG_TAG} --platform linux/$(shell go env GOARCH)
+	docker tag ko.local/launcher-populator:${POPULATOR_IMG_TAG} ${POPULATOR_IMG}
+
+.PHONY: load-populator-local
+load-populator-local:
+	kind load docker-image ${POPULATOR_IMG} --name ${CLUSTER_NAME}
+
+.PHONY: build-populator
+build-populator:
+	KO_DOCKER_REPO=$(CONTAINER_IMG_REG) ko build -B ./cmd/launcher-populator -t ${POPULATOR_IMG_TAG} --platform all
 
 .PHONY: echo-var
 echo-var:
