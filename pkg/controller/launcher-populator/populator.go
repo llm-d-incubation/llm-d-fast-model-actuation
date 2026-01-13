@@ -434,7 +434,7 @@ func (ctl *controller) buildPodFromTemplate(template corev1.PodTemplateSpec, key
 			},
 		}
 	} else {
-		// If there are multiple containers in the template, keep only the first one and rename it to engine-pilot
+		// If there are multiple containers in the template, keep only the first one and rename it to inference-server
 		container := &pod.Spec.Containers[0]
 		container.Name = api.InferenceServerContainerName
 	}
