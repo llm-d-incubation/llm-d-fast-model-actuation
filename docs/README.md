@@ -16,4 +16,5 @@
 - [Test build of dual-pods controller image](../.github/workflows/build-controller-image.yml)
 - [Test build of launcher image](../.github/workflows/build-launcher-image.yml)
 - [Test build of requester image](../.github/workflows/build-requester-image.yml)
+- [Test build of launcher populator image](../.github/workflows/build-populator-image.yml)
 - [End-to-end testing in CI using a `kind` cluster](../.github/workflows/pr-test-in-kind.yml)
