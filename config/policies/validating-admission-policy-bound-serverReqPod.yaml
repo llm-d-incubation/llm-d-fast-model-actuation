@@ -1,0 +1,37 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: fma-bound-serverreqpod
+  annotations:
+    description: "Deny changes to annotations for bound Server Requesting Pods unless performed by an FMA controller service account."
+spec:
+  failurePolicy: Fail
+  match:
+    resources:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        kinds: ["Pod"]
+        operations: ["Update"]
+  validation:
+    # Deny changes from users to controller-maintained annotations/labels
+    #once a server-requesting Pod is bound to a server-providing Pod.
+    #
+    # Logic:
+    # 1) If the old object is a server requesting pod (`inference-server-config`),
+    # 2) AND the `dual` label is present and non-empty (bound state),
+    # 3) AND any of the immutable fields change
+    # 4) THEN deny unless the request originates from an FMA controller SA.
+    expression: |
+      (
+        (
+          oldObject.metadata.annotations['dual-pods.llm-d.ai/inference-server-config'] != null
+        ) &&
+        oldObject.metadata.labels['dual-pods.llm-d.ai/dual'] != null && oldObject.metadata.labels['dual-pods.llm-d.ai/dual'] != "" &&
+        (
+          oldObject.metadata.annotations['dual-pods.llm-d.ai/inference-server-config'] != object.metadata.annotations['dual-pods.llm-d.ai/inference-server-config'] ||
+          oldObject.metadata.annotations['dual-pods.llm-d.ai/admin-port'] != object.metadata.annotations['dual-pods.llm-d.ai/admin-port'] ||
+          oldObject.metadata.annotations['dual-pods.llm-d.ai/accelerators'] != object.metadata.annotations['dual-pods.llm-d.ai/accelerators'] ||
+          oldObject.metadata.labels['dual-pods.llm-d.ai/dual'] != object.metadata.labels['dual-pods.llm-d.ai/dual']
+        )
+      ) && !request.userInfo.username.matches("system:serviceaccount:[^:]+:(launcher-populator|dual-pods-controller)$")
+    message: "One or more annotations/labels are managed by FMA controllers and cannot be changed once the server requesting pod is bound to a providing pod."

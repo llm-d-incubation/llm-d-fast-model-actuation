@@ -14,6 +14,7 @@ Run the script to populate the `gpu-map` ConfigMap.
 scripts/ensure-nodes-mapped.sh
 ```
 
+
 Set the shell variable `CONTAINER_IMG_REG` to the registry that you
 intend to use. For example, the following might work for you.
 
@@ -101,6 +102,39 @@ Following are some things to keep in mind about these definitions.
   to fit into requested memory, or `--kv-cache-memory=40974729216` to
   fully utilize gpu memory. Current kv cache memory in use is
   32786058444 bytes".
+
+### Admission policies (CEL)
+
+This project provides Kubernetes `ValidatingAdmissionPolicy` resources
+that protect controller-managed annotations and labels used by the
+dual-pods controllers and the launcher-populator.
+
+Prerequisite: a Kuberntes cluster/API server that supports `ValidatingAdmissionPolicy` with CEL.
+
+Apply the policies and their bindings:
+
+```shell
+kubectl apply -f config/policies/validating-admission-policy-immutable-fields.yaml
+kubectl apply -f config/policies/validating-admission-policy-bound-serverReqPod.yaml
+kubectl apply -f config/policies/validating-admission-policy-binding-fields.yaml
+kubectl apply -f config/policies/validating-admission-policy-bindings-serverReqPod.yaml
+```
+
+Verify the resources are present:
+
+```shell
+kubectl get validatingadmissionpolicies
+kubectl get validatingadmissionpolicybindings
+```
+
+Test example: pick a bound server-requesting Pod (one with a
+non-empty `dual-pods.llm-d.ai/dual` label) and attempt to patch a
+immutable annotation; the API server should reject the change for a
+non-controller user.
+
+```shell
+kubectl patch pod <pod-name> -p '{"metadata":{"annotations":{"dual-pods.llm-d.ai/admin-port":"9999"}}}' --type=merge
+```
 
 ### Simple ReplicaSet
 
