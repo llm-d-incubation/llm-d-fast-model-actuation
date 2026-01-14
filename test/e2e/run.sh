@@ -127,6 +127,11 @@ make load-controller-local
 ctlr_img=$(make echo-var VAR=CONTROLLER_IMG)
 helm upgrade --install dpctlr charts/dpctlr --set Image="$ctlr_img" --set NodeViewClusterRole=node-viewer --set SleeperLimit=2 --set Local=true --set DebugAcceleratorMemory=false
 
+: Test CEL policy verification
+
+test/e2e/validate.sh || { echo "CEL policy tests failed" >&2; exit 1; }
+cheer "CEL policy checks passed"
+
 : Test Pod creation
 
 rs=$(test/e2e/mkrs.sh)

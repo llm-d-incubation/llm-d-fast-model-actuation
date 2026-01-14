@@ -102,6 +102,20 @@ Following are some things to keep in mind about these definitions.
   fully utilize gpu memory. Current kv cache memory in use is
   32786058444 bytes".
 
+### Admission policies (CEL)
+
+Kubernetes `ValidatingAdmissionPolicy` (CEL) resources are used to
+protect controller-managed annotations and labels that are
+managed by the controllers (dual-pods controller and
+launcher-populator). The policy manifests and their
+bindings are managed as Helm chart templates under `charts/dpctlr/templates/policies/` and are installed by the chart when `policies.enabled` is `true`.
+
+#### Prerequisites
+- A Kubernetes API server that supports `ValidatingAdmissionPolicy` with CEL (`admissionregistration.k8s.io/v1`).
+
+`./test/e2e/run.sh` invokes the validation checker (`./test/e2e/validate.sh`) as part of the project's e2e suite; GitHub Actions run the suite when the target kind cluster supports the admission APIs.
+
+
 ### Simple ReplicaSet
 
 ```shell

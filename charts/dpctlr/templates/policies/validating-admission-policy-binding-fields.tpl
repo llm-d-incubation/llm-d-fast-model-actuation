@@ -1,0 +1,18 @@
+---
+{{- if .Values.policies.enabled }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: bind-fma-immutable-fields
+spec:
+  policyName: fma-immutable-fields
+  matchResources:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: ["pods"]
+        operations: ["UPDATE"]
+  validationActions:
+    - Deny
+
+{{- end }}

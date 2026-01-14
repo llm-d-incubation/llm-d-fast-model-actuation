@@ -18,3 +18,9 @@ SleeperLimit: 2
 # This involves querying the requester;
 # the test-requester does not support the query.
 DebugAcceleratorMemory: true
+
+# Whether to install ValidatingAdmissionPolicy + bindings from this chart.
+# Policies are considered required for safe operation of the FMA controllers.
+# The chart will install them by default; set to false otherwise.
+policies:
+  enabled: true

@@ -97,15 +97,6 @@ const AcceleratorsAnnotationName string = "dual-pods.llm-d.ai/accelerators"
 // a server-providing Pod is launcher-based.
 const LauncherBasedAnnotationName string = "dual-pods.llm-d.ai/launcher-based"
 
-// RequesterAnnotationName is the name of an annotation that the dual-pods
-// controller uses on server-providing Pods to record the identity of the
-// corresponding server-requesting Pod. The value is `requestingPod.UID + " " + requestingPod.Name`.
-const RequesterAnnotationName = "dual-pods.llm-d.ai/requester"
-
-// NominalHashAnnotationName is the name of an annotation that the dual-pods
-// controller uses to record the nominal-hash of an unbound server-providing Pod.
-const NominalHashAnnotationName = "dual-pods.llm-d.ai/nominal"
-
 // DualLabelName is the name of a label that the dual-pods controller
 // maintains on the server-requesting and server-providing Pods.
 // While bound, this label is present and its value is the name of the
