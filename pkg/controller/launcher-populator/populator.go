@@ -419,7 +419,7 @@ func (ctl *controller) buildPodFromTemplate(template corev1.PodTemplateSpec, key
 	if pod.Annotations == nil {
 		pod.Annotations = make(map[string]string)
 	}
-	pod.Annotations = dualpods.MapSet(pod.Annotations, api.NominalHashAnnotationKey, nominalHash)
+	pod.Annotations = dualpods.MapSet(pod.Annotations, genctlr.NominalHashAnnotationKey, nominalHash)
 
 	pod.Annotations[PortDiscoveryAnnotationKey] = PortDiscoveryAnnotationEmptyValue
 

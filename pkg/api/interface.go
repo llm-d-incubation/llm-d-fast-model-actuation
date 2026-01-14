@@ -114,8 +114,6 @@ const DualLabelName string = "dual-pods.llm-d.ai/dual"
 // (it does not rely on this label for anything).
 const SleepingLabelName string = "dual-pods.llm-d.ai/sleeping"
 
-const NominalHashAnnotationKey = "dual-pods.llm-d.ai/nominal"
-
 // SleepState is what HTTP GET /is_sleeping on an inference server
 // returns (as JSON).
 type SleepState struct {
