@@ -22,7 +22,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"os"
 
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/api"
 	dualpods "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/dual-pods"
@@ -357,7 +356,10 @@ func (ctl *controller) createLaunchers(ctx context.Context, node corev1.Node, ke
 
 	// Create the specified number of launcher pods
 	for i := 0; i < count; i++ {
-		pod := ctl.buildPodFromTemplate(launcherConfig.Spec.PodTemplate, key)
+		pod, err := ctl.buildPodFromTemplate(launcherConfig.Spec.PodTemplate, key)
+		if err != nil {
+			return fmt.Errorf("failed to build launcher pod: %w", err)
+		}
 		pod.GenerateName = fmt.Sprintf("launcher-%s-", launcherConfig.Name)
 		// Set owner reference pointing to LauncherConfig
 		ownerRef := *metav1.NewControllerRef(launcherConfig, fmav1alpha1.SchemeGroupVersion.WithKind("LauncherConfig"))
@@ -389,7 +391,7 @@ func (ctl *controller) deleteExcessLaunchers(ctx context.Context, launchers []co
 }
 
 // buildPodFromTemplate creates a pod from a template and assigns it to a node
-func (ctl *controller) buildPodFromTemplate(template corev1.PodTemplateSpec, key NodeLauncherKey) *corev1.Pod {
+func (ctl *controller) buildPodFromTemplate(template corev1.PodTemplateSpec, key NodeLauncherKey) (*corev1.Pod, error) {
 	pod := &corev1.Pod{
 		ObjectMeta: template.ObjectMeta,
 		Spec:       *utils.DeIndividualize(template.Spec.DeepCopy()),
@@ -421,33 +423,11 @@ func (ctl *controller) buildPodFromTemplate(template corev1.PodTemplateSpec, key
 	}
 	pod.Annotations = dualpods.MapSet(pod.Annotations, genctlr.NominalHashAnnotationKey, nominalHash)
 
-	pod.Annotations[PortDiscoveryAnnotationKey] = PortDiscoveryAnnotationEmptyValue
-
-	pod.Spec.RestartPolicy = corev1.RestartPolicyNever
-
-	// Process container list, keep only one container and apply fixed configuration
-	if len(pod.Spec.Containers) == 0 {
-		// If there are no containers in the template, create a default container
-		pod.Spec.Containers = []corev1.Container{
-			{
-				Name: api.InferenceServerContainerName,
-			},
-		}
-	} else {
-		// If there are multiple containers in the template, keep only the first one and rename it to inference-server
-		container := &pod.Spec.Containers[0]
-		container.Name = api.InferenceServerContainerName
+	cIdx, serverPort, err := utils.GetInferenceServerPort(pod)
+	if err != nil {
+		return nil, err
 	}
-
-	container := &pod.Spec.Containers[0]
-	// @TODO Should set to specified Launcher image, replacing the default image
-	launcherImage := os.Getenv("LAUNCHER_IMAGE")
-	if launcherImage != "" {
-		container.Image = launcherImage
-	}
-
-	// Ensure port configuration includes port 8001
-	ensurePortExists(container, 8001, "health", corev1.ProtocolTCP)
+	container := &pod.Spec.Containers[cIdx]
 
 	// Configure required environment variables
 	configureRequiredEnvVars(container)
@@ -457,7 +437,7 @@ func (ctl *controller) buildPodFromTemplate(template corev1.PodTemplateSpec, key
 		ProbeHandler: corev1.ProbeHandler{
 			HTTPGet: &corev1.HTTPGetAction{
 				Path:   "/health",
-				Port:   intstr.FromInt(8001),
+				Port:   intstr.FromInt(int(serverPort)),
 				Scheme: corev1.URISchemeHTTP,
 			},
 		},
@@ -478,25 +458,7 @@ func (ctl *controller) buildPodFromTemplate(template corev1.PodTemplateSpec, key
 
 	// Assign to specific node
 	pod.Spec.NodeName = key.NodeName
-	return pod
-}
-
-// ensurePortExists adds the specified port if it doesn't already exist
-func ensurePortExists(container *corev1.Container, port int32, name string, protocol corev1.Protocol) {
-	portExists := false
-	for _, existingPort := range container.Ports {
-		if existingPort.ContainerPort == port {
-			portExists = true
-			break
-		}
-	}
-	if !portExists {
-		container.Ports = append(container.Ports, corev1.ContainerPort{
-			Name:          name,
-			ContainerPort: port,
-			Protocol:      protocol,
-		})
-	}
+	return pod, nil
 }
 
 // configureRequiredEnvVars adds or updates required environment variables
