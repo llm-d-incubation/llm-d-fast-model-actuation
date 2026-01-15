@@ -105,9 +105,9 @@ Following are some things to keep in mind about these definitions.
 
 ### Admission policies (CEL)
 
-This project provides Kubernetes `ValidatingAdmissionPolicy` resources
+There are Kubernetes `ValidatingAdmissionPolicy` resources
 that protect controller-managed annotations and labels used by the
-dual-pods controllers and the launcher-populator.
+dual-pods controller and the launcher-populator.
 
 Prerequisite: a Kuberntes cluster/API server that supports `ValidatingAdmissionPolicy` with CEL.
 
@@ -134,6 +134,13 @@ non-controller user.
 
 ```shell
 kubectl patch pod <pod-name> -p '{"metadata":{"annotations":{"dual-pods.llm-d.ai/admin-port":"9999"}}}' --type=merge
+```
+
+Alternatively, run the test script that applies
+the policies, creates test Pods and attempts patch operations:
+
+```shell
+./test/e2e/test-validating-admission-policies.sh
 ```
 
 ### Simple ReplicaSet

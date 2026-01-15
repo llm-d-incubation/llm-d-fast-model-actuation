@@ -9,4 +9,6 @@ spec:
       - apiGroups: [""]
         apiVersions: ["v1"]
         kinds: ["Pod"]
-        operations: ["Update"]
+        operations: ["UPDATE"]
+  validationActions:
+    - Deny

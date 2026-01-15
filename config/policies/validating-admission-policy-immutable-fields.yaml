@@ -6,27 +6,36 @@ metadata:
     description: "Deny mutation of controller-managed annotations and labels unless performed by an FMA controller service account."
 spec:
   failurePolicy: Fail
-  match:
-    resources:
+  matchConstraints:
+    resourceRules:
       - apiGroups: [""]
         apiVersions: ["v1"]
-        kinds: ["Pod"]
-        operations: ["Update"]
-  validation:
+        resources: ["pods"]
+        operations: ["UPDATE"]
+  validations:
     # The expression below denies update operations that attempt to change
     # annotations/labels that are managed by FMA controllers. It permits
     # such changes only when the requester is an FMA controller service
     # account (launcher-populator or dual-pods-controller).
-    expression: |
-      (
-        (oldObject.metadata.annotations['dual-pods.llm-d.ai/requester'] != object.metadata.annotations['dual-pods.llm-d.ai/requester']) ||
-        (oldObject.metadata.annotations['dual-pods.llm-d.ai/nominal'] != object.metadata.annotations['dual-pods.llm-d.ai/nominal']) ||
-        (oldObject.metadata.annotations['dual-pods.llm-d.ai/inference-server-config'] != object.metadata.annotations['dual-pods.llm-d.ai/inference-server-config']) ||
-        (oldObject.metadata.annotations['dual-pods.llm-d.ai/status'] != object.metadata.annotations['dual-pods.llm-d.ai/status']) ||
-        (oldObject.metadata.annotations['dual-pods.llm-d.ai/accelerators'] != object.metadata.annotations['dual-pods.llm-d.ai/accelerators']) ||
-        (oldObject.metadata.annotations['dual-pods.llm-d.ai/launcher-based'] != object.metadata.annotations['dual-pods.llm-d.ai/launcher-based']) ||
-        (oldObject.metadata.annotations['dual-pods.llm-d.ai/admin-port'] != object.metadata.annotations['dual-pods.llm-d.ai/admin-port']) ||
-        (oldObject.metadata.labels['dual-pods.llm-d.ai/dual'] != object.metadata.labels['dual-pods.llm-d.ai/dual']) ||
-        (oldObject.metadata.labels['dual-pods.llm-d.ai/sleeping'] != object.metadata.labels['dual-pods.llm-d.ai/sleeping'])
-      ) && !request.userInfo.username.matches("system:serviceaccount:[^:]+:(launcher-populator|dual-pods-controller)$")
-    message: "One or more annotations/labels are managed by FMA controllers and cannot be modified directly; see documentation for immutable fields."
+    - expression: |
+        (
+          (
+            (
+              ('dual-pods.llm-d.ai/requester' in oldObject.metadata.annotations) != ('dual-pods.llm-d.ai/requester' in object.metadata.annotations) ||
+              ('dual-pods.llm-d.ai/nominal' in oldObject.metadata.annotations) != ('dual-pods.llm-d.ai/nominal' in object.metadata.annotations) ||
+              ('dual-pods.llm-d.ai/inference-server-config' in oldObject.metadata.annotations) != ('dual-pods.llm-d.ai/inference-server-config' in object.metadata.annotations) ||
+              ('dual-pods.llm-d.ai/status' in oldObject.metadata.annotations) != ('dual-pods.llm-d.ai/status' in object.metadata.annotations) ||
+              ('dual-pods.llm-d.ai/accelerators' in oldObject.metadata.annotations) != ('dual-pods.llm-d.ai/accelerators' in object.metadata.annotations) ||
+              ('dual-pods.llm-d.ai/launcher-based' in oldObject.metadata.annotations) != ('dual-pods.llm-d.ai/launcher-based' in object.metadata.annotations) ||
+              ('dual-pods.llm-d.ai/admin-port' in oldObject.metadata.annotations) != ('dual-pods.llm-d.ai/admin-port' in object.metadata.annotations)
+            )
+          ) ||
+          (
+            (
+              ('dual-pods.llm-d.ai/dual' in oldObject.metadata.labels) != ('dual-pods.llm-d.ai/dual' in object.metadata.labels) ||
+              ('dual-pods.llm-d.ai/sleeping' in oldObject.metadata.labels) != ('dual-pods.llm-d.ai/sleeping' in object.metadata.labels)
+            )
+          )
+        ) && !request.userInfo.username.matches("system:serviceaccount:[^:]+:(launcher-populator|dual-pods-controller)$")
+
+      message: "One or more annotations/labels are managed by FMA controllers and cannot be modified directly; see documentation for immutable fields."
