@@ -446,7 +446,7 @@ func (ctl *controller) deleteExcessLaunchers(ctx context.Context, launchers []co
 // isLauncherBoundToServerRequestingPod checks if the launcher pod is bound to any server-requesting pod
 func (ctl *controller) isLauncherBoundToServerRequestingPod(launcherPod corev1.Pod) bool {
 	// Check if the launcher pod has annotations indicating assignment to a server-requesting pod
-	requesterAnnotationValue, exists := launcherPod.Annotations[genctlr.RequesterAnnotationKey]
+	requesterAnnotationValue, exists := launcherPod.Annotations[RequesterAnnotationKey]
 	if !exists {
 		return false
 	}
@@ -494,7 +494,7 @@ func (ctl *controller) buildPodFromTemplate(template corev1.PodTemplateSpec, key
 	if pod.Annotations == nil {
 		pod.Annotations = make(map[string]string)
 	}
-	pod.Annotations = dualpods.MapSet(pod.Annotations, genctlr.NominalHashAnnotationKey, nominalHash)
+	pod.Annotations = dualpods.MapSet(pod.Annotations, NominalHashAnnotationKey, nominalHash)
 
 	cIdx, serverPort, err := utils.GetInferenceServerPort(pod)
 	if err != nil {
