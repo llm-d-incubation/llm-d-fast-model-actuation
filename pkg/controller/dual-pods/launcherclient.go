@@ -33,13 +33,13 @@ type LauncherClient struct {
 }
 
 func NewLauncherClient(baseURL string) (*LauncherClient, error) {
-	u, err := url.Parse(baseURL)
+	parsedURL, err := url.Parse(baseURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid base URL: %w", err)
 	}
 
 	c := &LauncherClient{
-		baseURL: u,
+		baseURL: parsedURL,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
