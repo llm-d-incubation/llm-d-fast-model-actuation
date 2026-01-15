@@ -394,28 +394,52 @@ func (ctl *controller) deleteExcessLaunchers(ctx context.Context, launchers []co
 	}
 
 	// Delete the specified number of unbound launcher pods (starting from the end)
-	actualDeleteCount := len(unboundLaunchers)
-	if count < actualDeleteCount {
-		actualDeleteCount = count
+	expectedDeleteCount := len(unboundLaunchers)
+	if count < expectedDeleteCount {
+		expectedDeleteCount = count
 	}
 
-	for i := 0; i < actualDeleteCount && i < len(unboundLaunchers); i++ {
+	deletedCount := 0
+	for i := 0; i < expectedDeleteCount && i < len(unboundLaunchers); i++ {
 		pod := unboundLaunchers[len(unboundLaunchers)-1-i]
+
+		// Re-check whether the Pod is still unbound
+		refreshedPod, err := ctl.podLister.Pods(pod.Namespace).Get(pod.Name)
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				logger.Info("Launcher pod already deleted", "pod", pod.Name)
+				continue
+			}
+			return fmt.Errorf("failed to get refreshed pod %s: %w", pod.Name, err)
+		}
+
+		if ctl.isLauncherBoundToServerRequestingPod(*refreshedPod) {
+			logger.Info("Skipping deletion of launcher pod as it became bound since initial check",
+				"pod", pod.Name)
+			continue
+		}
+
 		if err := ctl.coreclient.Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{}); err != nil {
+			if apierrors.IsNotFound(err) {
+				logger.Info("Launcher pod already deleted", "pod", pod.Name)
+				continue
+			}
 			return fmt.Errorf("failed to delete launcher pod %s: %w", pod.Name, err)
 		}
 		logger.Info("Deleted launcher pod", "pod", pod.Name)
+		deletedCount++
 	}
 
-	if actualDeleteCount < count {
-		logger.Info("Fewer launcher pods were deleted than requested due to bound pods",
+	if deletedCount < count {
+		logger.Info("Fewer launcher pods were deleted than requested due to bound pods or concurrent changes",
 			"requested", count,
-			"deleted", actualDeleteCount,
-			"skipped", len(unboundLaunchers)-actualDeleteCount)
+			"deleted", deletedCount,
+			"skipped", count-deletedCount)
 	} else {
 		logger.Info("Deleted unbound launcher pods",
-			"deleted", actualDeleteCount)
+			"deleted", deletedCount)
 	}
+
 	return nil
 }
 
