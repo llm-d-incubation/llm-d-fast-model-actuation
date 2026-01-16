@@ -22,6 +22,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from gputranslator import GpuTranslator
 
 # Mock vllm before importing launcher
 sys.modules["vllm"] = MagicMock()
@@ -48,6 +49,12 @@ def vllm_config():
     return VllmConfig(
         options="--model test-model --port 8000", env_vars={"TEST_VAR": "test_value"}
     )
+
+
+@pytest.fixture
+def gpu_translator():
+    """Create a GPUTraslator for testing"""
+    return GpuTranslator()
 
 
 @pytest.fixture
@@ -99,47 +106,52 @@ class TestVllmConfig:
         """Test VllmConfig creation with environment variables"""
         config = VllmConfig(
             options="--model test --port 8000",
+            gpu_uuids=["uuid1", "uuid2"],
             env_vars={"KEY1": "value1", "KEY2": "value2"},
         )
         assert config.options == "--model test --port 8000"
+        assert config.gpu_uuids == ["uuid1", "uuid2"]
         assert config.env_vars == {"KEY1": "value1", "KEY2": "value2"}
 
     def test_vllm_config_without_env_vars(self):
         """Test VllmConfig creation without environment variables"""
         config = VllmConfig(options="--model test --port 8000")
         assert config.options == "--model test --port 8000"
+        assert config.gpu_uuids is None
         assert config.env_vars is None
 
 
 # Tests for VllmInstance
 class TestVllmInstance:
     @patch("launcher.multiprocessing.Process")
-    def test_instance_creation(self, vllm_config):
+    def test_instance_creation(self, vllm_config, gpu_translator):
         """Test creating a VllmInstance"""
-        instance = VllmInstance("test-id", vllm_config)
+        instance = VllmInstance("test-id", vllm_config, gpu_translator)
         assert instance.instance_id == "test-id"
         assert instance.config == vllm_config
         assert instance.process is None
 
     @patch("launcher.multiprocessing.Process")
-    def test_instance_start(self, mock_process_class, vllm_config):
+    def test_instance_start(self, mock_process_class, vllm_config, gpu_translator):
         """Test starting a vLLM instance"""
         mock_process = MockProcess()
         mock_process_class.return_value = mock_process
 
-        instance = VllmInstance("test-id", vllm_config)
+        instance = VllmInstance("test-id", vllm_config, gpu_translator)
         result = instance.start()
 
         assert result["status"] == "started"
         assert result["instance_id"] == "test-id"
 
     @patch("launcher.multiprocessing.Process")
-    def test_instance_start_already_running(self, mock_process_class, vllm_config):
+    def test_instance_start_already_running(
+        self, mock_process_class, vllm_config, gpu_translator
+    ):
         """Test starting an instance that's already running"""
         mock_process = MockProcess()
         mock_process_class.return_value = mock_process
 
-        instance = VllmInstance("test-id", vllm_config)
+        instance = VllmInstance("test-id", vllm_config, gpu_translator)
         instance.start()
         result = instance.start()  # Try to start again
 
@@ -147,12 +159,12 @@ class TestVllmInstance:
         assert result["instance_id"] == "test-id"
 
     @patch("launcher.multiprocessing.Process")
-    def test_instance_stop(self, mock_process_class, vllm_config):
+    def test_instance_stop(self, mock_process_class, vllm_config, gpu_translator):
         """Test stopping a running instance"""
         mock_process = MockProcess()
         mock_process_class.return_value = mock_process
 
-        instance = VllmInstance("test-id", vllm_config)
+        instance = VllmInstance("test-id", vllm_config, gpu_translator)
         instance.start()
         result = instance.stop()
 
@@ -161,16 +173,16 @@ class TestVllmInstance:
         assert mock_process.terminated is True
 
     @patch("launcher.multiprocessing.Process")
-    def test_instance_stop_not_running(self, vllm_config):
+    def test_instance_stop_not_running(self, vllm_config, gpu_translator):
         """Test stopping an instance that's not running"""
-        instance = VllmInstance("test-id", vllm_config)
+        instance = VllmInstance("test-id", vllm_config, gpu_translator)
         result = instance.stop()
 
         assert result["status"] == "not_running"
         assert result["instance_id"] == "test-id"
 
     @patch("launcher.multiprocessing.Process")
-    def test_instance_force_kill(self, mock_process_class, vllm_config):
+    def test_instance_force_kill(self, mock_process_class, vllm_config, gpu_translator):
         """Test force killing an instance that won't terminate"""
         mock_process = MockProcess()
 
@@ -181,19 +193,19 @@ class TestVllmInstance:
         mock_process.terminate = stay_alive_on_terminate
         mock_process_class.return_value = mock_process
 
-        instance = VllmInstance("test-id", vllm_config)
+        instance = VllmInstance("test-id", vllm_config, gpu_translator)
         instance.start()
         _ = instance.stop(timeout=0.1)
 
         assert mock_process.killed is True
 
     @patch("launcher.multiprocessing.Process")
-    def test_instance_get_status(self, mock_process_class, vllm_config):
+    def test_instance_get_status(self, mock_process_class, vllm_config, gpu_translator):
         """Test getting instance status"""
         mock_process = MockProcess()
         mock_process_class.return_value = mock_process
 
-        instance = VllmInstance("test-id", vllm_config)
+        instance = VllmInstance("test-id", vllm_config, gpu_translator)
 
         # Running
         instance.start()
