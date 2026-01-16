@@ -102,6 +102,46 @@ Following are some things to keep in mind about these definitions.
   fully utilize gpu memory. Current kv cache memory in use is
   32786058444 bytes".
 
+### Admission policies (CEL)
+
+There are Kubernetes `ValidatingAdmissionPolicy` resources
+that protect controller-managed annotations and labels used by the
+dual-pods controller and the launcher-populator.
+
+Prerequisite: a Kubernetes cluster/API server that supports `ValidatingAdmissionPolicy` with CEL.
+
+Apply the policies and their bindings:
+
+```shell
+kubectl apply -f config/policies/validating-admission-policy-immutable-fields.yaml
+kubectl apply -f config/policies/validating-admission-policy-bound-serverReqPod.yaml
+kubectl apply -f config/policies/validating-admission-policy-binding-fields.yaml
+kubectl apply -f config/policies/validating-admission-policy-bindings-serverReqPod.yaml
+```
+
+Verify the resources are present:
+
+```shell
+kubectl get validatingadmissionpolicies
+kubectl get validatingadmissionpolicybindings
+```
+
+Test example: pick a bound server-requesting Pod (one with a
+non-empty `dual-pods.llm-d.ai/dual` label) and attempt to patch an
+immutable annotation; the API server should reject the change for a
+non-controller user.
+
+```shell
+kubectl patch pod <pod-name> -p '{"metadata":{"annotations":{"dual-pods.llm-d.ai/admin-port":"9999"}}}' --type=merge
+```
+
+Alternatively, run the test script that applies
+the policies, creates test Pods and attempts patch operations:
+
+```shell
+./test/e2e/test-validating-admission-policies.sh
+```
+
 ### Simple ReplicaSet
 
 ```shell
