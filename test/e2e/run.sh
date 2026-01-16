@@ -125,12 +125,25 @@ make load-controller-local
 : Deploy the dual-pods controller in the cluster
 
 ctlr_img=$(make echo-var VAR=CONTROLLER_IMG)
-helm upgrade --install dpctlr charts/dpctlr --set Image="$ctlr_img" --set NodeViewClusterRole=node-viewer --set SleeperLimit=2 --set Local=true --set DebugAcceleratorMemory=false
 
-: Test CEL policy verification
+: Detect whether API server supports ValidatingAdmissionPolicy
 
-test/e2e/validate.sh || { echo "CEL policy tests failed" >&2; exit 1; }
-cheer "CEL policy checks passed"
+POLICIES_ENABLED=false
+if kubectl api-resources --api-group=admissionregistration.k8s.io -o name | grep -q 'validatingadmissionpolicies'; then
+  POLICIES_ENABLED=true
+fi
+
+helm upgrade --install dpctlr charts/dpctlr --set Image="$ctlr_img" --set NodeViewClusterRole=node-viewer --set SleeperLimit=2 --set Local=true --set DebugAcceleratorMemory=false --set EnableValidationPolicy=${POLICIES_ENABLED}
+
+: Test CEL policy verification if enabled
+
+if [ "${POLICIES_ENABLED}" = true ]; then
+  if ! ./test/e2e/validate.sh; then
+    echo "ERROR: CEL policy tests failed!" >&2
+    exit 1
+  fi
+  cheer CEL policy checks passed
+fi
 
 : Test Pod creation
 

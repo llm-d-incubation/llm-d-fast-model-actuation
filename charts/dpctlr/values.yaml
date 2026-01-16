@@ -22,5 +22,4 @@ DebugAcceleratorMemory: true
 # Whether to install ValidatingAdmissionPolicy + bindings from this chart.
 # Policies are considered required for safe operation of the FMA controllers.
 # The chart will install them by default; set to false otherwise.
-policies:
-  enabled: true
+EnableValidationPolicy: true

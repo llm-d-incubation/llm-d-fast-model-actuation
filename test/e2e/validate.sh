@@ -14,19 +14,14 @@ trap 'rc=$?; cleanup; exit $rc' EXIT
 POD_NAME=${POD_NAME:-my-request-test}
 BOUND_POD_NAME=${BOUND_POD_NAME:-my-bound-request-test}
 
-if kubectl api-resources --api-group=admissionregistration.k8s.io -o name | grep -q 'validatingadmissionpolicies'; then
-  echo "Cluster supports ValidatingAdmissionPolicy (CEL)"
-  if command -v helm >/dev/null 2>&1 && [ -d "charts/dpctlr" ]; then
-    helm template dpctlr charts/dpctlr --set policies.enabled=true | kubectl apply -f -
-    # wait for policies to be registered
-    sleep 30
-  else
-    echo "Helm not available or 'charts/dpctlr' missing; cannot install policies automatically."
-    exit 1
-  fi
-else
-  echo "Cluster does not support ValidatingAdmissionPolicy (CEL). Skipping tests."
+if ! kubectl api-resources --api-group=admissionregistration.k8s.io -o name | grep -q 'validatingadmissionpolicies'; then
+  echo "Cluster does not support ValidatingAdmissionPolicy. Skipping."
   exit 0
+fi
+
+if ! kubectl get validatingadmissionpolicy fma-immutable-fields fma-bound-serverreqpod >/dev/null 2>&1; then
+  echo "ERROR: Required validating admission policies not found. Ensure run.sh installed them correctly."
+  exit 1
 fi
 
 cat <<EOF | kubectl apply -f -
@@ -51,7 +46,12 @@ spec:
     command: ["/bin/sh","-c","sleep 3600"]
 EOF
 
-echo "Created launcher pod ${POD_NAME}"
+echo "Created launcher pod ${POD_NAME} and waiting for it to become Ready"
+
+if ! kubectl wait --for=condition=Ready pod/"${POD_NAME}" --timeout=60s >/dev/null 2>&1; then
+  echo "ERROR: pod ${POD_NAME} did not become Ready within 60s"
+  exit 2
+fi
 
 echo "Attempting to change immutable annotation 'dual-pods.llm-d.ai/requester' as a regular user — expect rejection"
 if output=$(kubectl patch pod "${POD_NAME}" -p '{"metadata":{"annotations":{"dual-pods.llm-d.ai/requester":"xyz patched-requester"}}}' --type=merge 2>&1); then
@@ -71,6 +71,15 @@ else
   echo "SUCCESS: label patch was rejected, as expected. kubectl output: ${output}"
 fi
 
+echo "Attempting to delete immutable label 'dual-pods.llm-d.ai/dual' — expect rejection"
+if output=$(kubectl patch pod "${POD_NAME}" -p '{"metadata":{"labels":{"dual-pods.llm-d.ai/dual":null}}}' --type=merge 2>&1); then
+  echo "ERROR: label deletion succeeded but should have been rejected"
+  echo "kubectl output: ${output}"
+  exit 5
+else
+  echo "SUCCESS: label deletion was rejected, as expected. kubectl output: ${output}"
+fi
+
 cat <<EOF | kubectl apply -f -
 apiVersion: v1
 kind: Pod
@@ -88,15 +97,29 @@ spec:
     command: ["/bin/sh","-c","sleep 3600"]
 EOF
 
-echo "Created bound server requesting pod ${BOUND_POD_NAME}"
+echo "Created bound server requesting pod ${BOUND_POD_NAME} and waiting for it to become Ready"
+
+if ! kubectl wait --for=condition=Ready pod/"${BOUND_POD_NAME}" --timeout=60s >/dev/null 2>&1; then
+  echo "ERROR: pod ${BOUND_POD_NAME} did not become Ready within 60s"
+  exit 2
+fi
 
 echo "Attempting to change immutable annotation 'dual-pods.llm-d.ai/inference-server-config' on bound pod as regular user — expect rejection"
 if output=$(kubectl patch pod "${BOUND_POD_NAME}" -p '{"metadata":{"annotations":{"dual-pods.llm-d.ai/inference-server-config":"{\"model\":\"patched\"}"}}}' --type=merge 2>&1); then
   echo "ERROR: bound pod patch succeeded as regular user but should have been rejected"
   echo "kubectl output: ${output}"
-  exit 5
+  exit 6
 else
   echo "SUCCESS: bound pod patch was rejected, as expected. kubectl output: ${output}"
+fi
+
+echo "Attempting to delete 'dual-pods.llm-d.ai/inference-server-config' annotation"
+if output=$(kubectl patch pod "${BOUND_POD_NAME}" --type=json -p='[{"op": "remove", "path": "/metadata/annotations/dual-pods.llm-d.ai~1inference-server-config"}]' 2>&1); then
+  echo "ERROR: deletion of protected annotation succeeded but should have been rejected"
+  echo "kubectl output: ${output}"
+  exit 7
+else
+  echo "SUCCESS: deletion of critical annotation was rejected, as expected. kubectl output: ${output}"
 fi
 
 echo "Test completed successfully"

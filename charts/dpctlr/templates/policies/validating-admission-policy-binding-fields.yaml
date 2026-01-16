@@ -1,5 +1,4 @@
----
-{{- if .Values.policies.enabled }}
+{{- if .Values.EnableValidationPolicy }}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
 metadata:
@@ -14,5 +13,4 @@ spec:
         operations: ["UPDATE"]
   validationActions:
     - Deny
-
 {{- end }}
