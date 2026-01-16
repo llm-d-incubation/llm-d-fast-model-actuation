@@ -19,23 +19,20 @@ spec:
     # account (launcher-populator or dual-pods-controller).
     - expression: |
         (
-          (
+          !request.userInfo.username.matches("system:serviceaccount:[^:]+:(launcher-populator|dual-pods-controller)$") && (
             (
-              ('dual-pods.llm-d.ai/requester' in oldObject.metadata.annotations) != ('dual-pods.llm-d.ai/requester' in object.metadata.annotations) ||
-              ('dual-pods.llm-d.ai/nominal' in oldObject.metadata.annotations) != ('dual-pods.llm-d.ai/nominal' in object.metadata.annotations) ||
-              ('dual-pods.llm-d.ai/inference-server-config' in oldObject.metadata.annotations) != ('dual-pods.llm-d.ai/inference-server-config' in object.metadata.annotations) ||
-              ('dual-pods.llm-d.ai/status' in oldObject.metadata.annotations) != ('dual-pods.llm-d.ai/status' in object.metadata.annotations) ||
-              ('dual-pods.llm-d.ai/accelerators' in oldObject.metadata.annotations) != ('dual-pods.llm-d.ai/accelerators' in object.metadata.annotations) ||
-              ('dual-pods.llm-d.ai/launcher-based' in oldObject.metadata.annotations) != ('dual-pods.llm-d.ai/launcher-based' in object.metadata.annotations) ||
-              ('dual-pods.llm-d.ai/admin-port' in oldObject.metadata.annotations) != ('dual-pods.llm-d.ai/admin-port' in object.metadata.annotations)
-            )
-          ) ||
-          (
-            (
-              ('dual-pods.llm-d.ai/dual' in oldObject.metadata.labels) != ('dual-pods.llm-d.ai/dual' in object.metadata.labels) ||
-              ('dual-pods.llm-d.ai/sleeping' in oldObject.metadata.labels) != ('dual-pods.llm-d.ai/sleeping' in object.metadata.labels)
+              ((has(oldObject.metadata.annotations) && ('dual-pods.llm-d.ai/requester' in oldObject.metadata.annotations)) ? oldObject.metadata.annotations['dual-pods.llm-d.ai/requester'] : '') != ((has(object.metadata.annotations) && ('dual-pods.llm-d.ai/requester' in object.metadata.annotations)) ? object.metadata.annotations['dual-pods.llm-d.ai/requester'] : '') ||
+              ((has(oldObject.metadata.annotations) && ('dual-pods.llm-d.ai/nominal' in oldObject.metadata.annotations)) ? oldObject.metadata.annotations['dual-pods.llm-d.ai/nominal'] : '') != ((has(object.metadata.annotations) && ('dual-pods.llm-d.ai/nominal' in object.metadata.annotations)) ? object.metadata.annotations['dual-pods.llm-d.ai/nominal'] : '') ||
+              ((has(oldObject.metadata.annotations) && ('dual-pods.llm-d.ai/inference-server-config' in oldObject.metadata.annotations)) ? oldObject.metadata.annotations['dual-pods.llm-d.ai/inference-server-config'] : '') != ((has(object.metadata.annotations) && ('dual-pods.llm-d.ai/inference-server-config' in object.metadata.annotations)) ? object.metadata.annotations['dual-pods.llm-d.ai/inference-server-config'] : '') ||
+              ((has(oldObject.metadata.annotations) && ('dual-pods.llm-d.ai/status' in oldObject.metadata.annotations)) ? oldObject.metadata.annotations['dual-pods.llm-d.ai/status'] : '') != ((has(object.metadata.annotations) && ('dual-pods.llm-d.ai/status' in object.metadata.annotations)) ? object.metadata.annotations['dual-pods.llm-d.ai/status'] : '') ||
+              ((has(oldObject.metadata.annotations) && ('dual-pods.llm-d.ai/accelerators' in oldObject.metadata.annotations)) ? oldObject.metadata.annotations['dual-pods.llm-d.ai/accelerators'] : '') != ((has(object.metadata.annotations) && ('dual-pods.llm-d.ai/accelerators' in object.metadata.annotations)) ? object.metadata.annotations['dual-pods.llm-d.ai/accelerators'] : '') ||
+              ((has(oldObject.metadata.annotations) && ('dual-pods.llm-d.ai/launcher-based' in oldObject.metadata.annotations)) ? oldObject.metadata.annotations['dual-pods.llm-d.ai/launcher-based'] : '') != ((has(object.metadata.annotations) && ('dual-pods.llm-d.ai/launcher-based' in object.metadata.annotations)) ? object.metadata.annotations['dual-pods.llm-d.ai/launcher-based'] : '') ||
+              ((has(oldObject.metadata.annotations) && ('dual-pods.llm-d.ai/admin-port' in oldObject.metadata.annotations)) ? oldObject.metadata.annotations['dual-pods.llm-d.ai/admin-port'] : '') != ((has(object.metadata.annotations) && ('dual-pods.llm-d.ai/admin-port' in object.metadata.annotations)) ? object.metadata.annotations['dual-pods.llm-d.ai/admin-port'] : '')
+            ) || (
+              ((has(oldObject.metadata.labels) && ('dual-pods.llm-d.ai/dual' in oldObject.metadata.labels)) ? oldObject.metadata.labels['dual-pods.llm-d.ai/dual'] : '') != ((has(object.metadata.labels) && ('dual-pods.llm-d.ai/dual' in object.metadata.labels)) ? object.metadata.labels['dual-pods.llm-d.ai/dual'] : '') ||
+              ((has(oldObject.metadata.labels) && ('dual-pods.llm-d.ai/sleeping' in oldObject.metadata.labels)) ? oldObject.metadata.labels['dual-pods.llm-d.ai/sleeping'] : '') != ((has(object.metadata.labels) && ('dual-pods.llm-d.ai/sleeping' in object.metadata.labels)) ? object.metadata.labels['dual-pods.llm-d.ai/sleeping'] : '')
             )
           )
-        ) && !request.userInfo.username.matches("system:serviceaccount:[^:]+:(launcher-populator|dual-pods-controller)$")
+        )
 
       message: "One or more annotations/labels are managed by FMA controllers and cannot be modified directly; see documentation for immutable fields."

@@ -14,16 +14,16 @@ kubectl create namespace ${NS} --dry-run=client -o yaml | kubectl apply -f -
 
 if kubectl api-resources --api-group=admissionregistration.k8s.io -o name | grep -q 'validatingadmissionpolicies'; then
   echo "Removing any existing policies and bindings"
-  kubectl delete -f config/policies/validating-admission-policy-binding-fields.yaml --ignore-not-found --wait=false || true
-  kubectl delete -f config/policies/validating-admission-policy-bindings-serverReqPod.yaml --ignore-not-found --wait=false || true
-  kubectl delete -f config/policies/validating-admission-policy-immutable-fields.yaml --ignore-not-found --wait=false || true
-  kubectl delete -f config/policies/validating-admission-policy-bound-serverReqPod.yaml --ignore-not-found --wait=false || true
+  kubectl delete -f config/policies/validating-admission-policy-binding-fields.yaml --ignore-not-found --wait=true || true
+  kubectl delete -f config/policies/validating-admission-policy-bindings-serverReqPod.yaml --ignore-not-found --wait=true || true
+  kubectl delete -f config/policies/validating-admission-policy-immutable-fields.yaml --ignore-not-found --wait=true || true
+  kubectl delete -f config/policies/validating-admission-policy-bound-serverReqPod.yaml --ignore-not-found --wait=true || true
 
   echo "Applying CEL policies and bindings"
-  kubectl apply -f config/policies/validating-admission-policy-immutable-fields.yaml --validate=false
-  kubectl apply -f config/policies/validating-admission-policy-bound-serverReqPod.yaml --validate=false
-  kubectl apply -f config/policies/validating-admission-policy-binding-fields.yaml --validate=false
-  kubectl apply -f config/policies/validating-admission-policy-bindings-serverReqPod.yaml --validate=false
+  kubectl apply -f config/policies/validating-admission-policy-immutable-fields.yaml
+  kubectl apply -f config/policies/validating-admission-policy-bound-serverReqPod.yaml
+  kubectl apply -f config/policies/validating-admission-policy-binding-fields.yaml
+  kubectl apply -f config/policies/validating-admission-policy-bindings-serverReqPod.yaml
 
   echo "Checking policies presence"
   kubectl get validatingadmissionpolicy fma-immutable-fields fma-bound-serverreqpod >/dev/null 2>&1 && echo "policies present" || (echo "policy missing"; exit 1)

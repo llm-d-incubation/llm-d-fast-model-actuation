@@ -14,7 +14,7 @@ spec:
         operations: ["UPDATE"]
   validations:
     # Deny changes from users to controller-maintained annotations/labels
-    #once a server-requesting Pod is bound to a server-providing Pod.
+    # once a server-requesting Pod is bound to a server-providing Pod.
     #
     # Logic:
     # 1) If the old object is a server requesting pod (`inference-server-config`),
@@ -23,13 +23,15 @@ spec:
     # 4) THEN deny unless the request originates from an FMA controller SA.
     - expression: |
         (
-          (( 'dual-pods.llm-d.ai/inference-server-config' in oldObject.metadata.annotations ? oldObject.metadata.annotations['dual-pods.llm-d.ai/inference-server-config'] : "") != "") &&
-          (( 'dual-pods.llm-d.ai/dual' in oldObject.metadata.labels ? oldObject.metadata.labels['dual-pods.llm-d.ai/dual'] : "") != "") &&
-          (
-              (('dual-pods.llm-d.ai/inference-server-config' in oldObject.metadata.annotations) != ('dual-pods.llm-d.ai/inference-server-config' in object.metadata.annotations)) ||
-              (('dual-pods.llm-d.ai/admin-port' in oldObject.metadata.annotations) != ('dual-pods.llm-d.ai/admin-port' in object.metadata.annotations)) ||
-              (('dual-pods.llm-d.ai/accelerators' in oldObject.metadata.annotations) != ('dual-pods.llm-d.ai/accelerators' in object.metadata.annotations)) ||
-              (('dual-pods.llm-d.ai/dual' in oldObject.metadata.labels) != ('dual-pods.llm-d.ai/dual' in object.metadata.labels))
+          !request.userInfo.username.matches("system:serviceaccount:[^:]+:(launcher-populator|dual-pods-controller)$") && (
+            ((has(oldObject.metadata.annotations) && ('dual-pods.llm-d.ai/inference-server-config' in oldObject.metadata.annotations) ? oldObject.metadata.annotations['dual-pods.llm-d.ai/inference-server-config'] : "") != "") &&
+            ((has(oldObject.metadata.labels) && ('dual-pods.llm-d.ai/dual' in oldObject.metadata.labels) ? oldObject.metadata.labels['dual-pods.llm-d.ai/dual'] : "") != "") &&
+            (
+                ((has(oldObject.metadata.annotations) && ('dual-pods.llm-d.ai/inference-server-config' in oldObject.metadata.annotations)) != (has(object.metadata.annotations) && ('dual-pods.llm-d.ai/inference-server-config' in object.metadata.annotations))) ||
+                ((has(oldObject.metadata.annotations) && ('dual-pods.llm-d.ai/admin-port' in oldObject.metadata.annotations)) != (has(object.metadata.annotations) && ('dual-pods.llm-d.ai/admin-port' in object.metadata.annotations))) ||
+                ((has(oldObject.metadata.annotations) && ('dual-pods.llm-d.ai/accelerators' in oldObject.metadata.annotations)) != (has(object.metadata.annotations) && ('dual-pods.llm-d.ai/accelerators' in object.metadata.annotations))) ||
+                ((has(oldObject.metadata.labels) && ('dual-pods.llm-d.ai/dual' in oldObject.metadata.labels)) != (has(object.metadata.labels) && ('dual-pods.llm-d.ai/dual' in object.metadata.labels)))
+            )
           )
-        ) && !request.userInfo.username.matches("system:serviceaccount:[^:]+:(launcher-populator|dual-pods-controller)$")
+        )
       message: "One or more annotations/labels are managed by FMA controllers and cannot be changed once the server requesting pod is bound to a providing pod."

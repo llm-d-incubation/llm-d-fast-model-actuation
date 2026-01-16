@@ -5,10 +5,10 @@ metadata:
 spec:
   policyName: fma-bound-serverreqpod
   matchResources:
-    resources:
+    resourceRules:
       - apiGroups: [""]
         apiVersions: ["v1"]
-        kinds: ["Pod"]
+        resources: ["pods"]
         operations: ["UPDATE"]
   validationActions:
     - Deny

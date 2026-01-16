@@ -14,7 +14,6 @@ Run the script to populate the `gpu-map` ConfigMap.
 scripts/ensure-nodes-mapped.sh
 ```
 
-
 Set the shell variable `CONTAINER_IMG_REG` to the registry that you
 intend to use. For example, the following might work for you.
 
@@ -109,7 +108,7 @@ There are Kubernetes `ValidatingAdmissionPolicy` resources
 that protect controller-managed annotations and labels used by the
 dual-pods controller and the launcher-populator.
 
-Prerequisite: a Kuberntes cluster/API server that supports `ValidatingAdmissionPolicy` with CEL.
+Prerequisite: a Kubernetes cluster/API server that supports `ValidatingAdmissionPolicy` with CEL.
 
 Apply the policies and their bindings:
 
@@ -128,7 +127,7 @@ kubectl get validatingadmissionpolicybindings
 ```
 
 Test example: pick a bound server-requesting Pod (one with a
-non-empty `dual-pods.llm-d.ai/dual` label) and attempt to patch a
+non-empty `dual-pods.llm-d.ai/dual` label) and attempt to patch an
 immutable annotation; the API server should reject the change for a
 non-controller user.
 
