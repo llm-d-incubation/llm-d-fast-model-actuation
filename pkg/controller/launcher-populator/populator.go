@@ -381,47 +381,43 @@ func (ctl *controller) createLaunchers(ctx context.Context, node corev1.Node, ke
 func (ctl *controller) deleteExcessLaunchers(ctx context.Context, launchers []corev1.Pod, count int) error {
 	logger := klog.FromContext(ctx)
 
-	// Filter out pods that are bound to server-requesting pods
-	// Only delete unbound launcher pods
-	var unboundLaunchers []corev1.Pod
-	for _, pod := range launchers {
-		if !ctl.isLauncherBoundToServerRequestingPod(pod) {
-			unboundLaunchers = append(unboundLaunchers, pod)
-		} else {
-			logger.Info("Skipping deletion of launcher pod as it is bound to a server-requesting pod",
-				"pod", pod.Name)
-		}
-	}
-
-	// Delete the specified number of unbound launcher pods (starting from the end)
-	expectedDeleteCount := len(unboundLaunchers)
-	if count < expectedDeleteCount {
-		expectedDeleteCount = count
-	}
+	expectedDeleteCount := min(len(launchers), count)
 
 	deletedCount := 0
-	for i := 0; i < expectedDeleteCount && i < len(unboundLaunchers); i++ {
-		pod := unboundLaunchers[len(unboundLaunchers)-1-i]
+	for i := 0; i < expectedDeleteCount && i < len(launchers); i++ {
+		pod := launchers[len(launchers)-1-i]
 
-		// Re-check whether the Pod is still unbound
+		// 检查 Pod 是否仍处于未绑定状态
 		refreshedPod, err := ctl.podLister.Pods(pod.Namespace).Get(pod.Name)
 		if err != nil {
 			if apierrors.IsNotFound(err) {
 				logger.Info("Launcher pod already deleted", "pod", pod.Name)
+				deletedCount++ // Count as deletion target achieved
 				continue
 			}
 			return fmt.Errorf("failed to get refreshed pod %s: %w", pod.Name, err)
 		}
 
-		if ctl.isLauncherBoundToServerRequestingPod(*refreshedPod) {
-			logger.Info("Skipping deletion of launcher pod as it became bound since initial check",
-				"pod", pod.Name)
+		isBound, requesterPodName := ctl.isLauncherBoundToServerRequestingPod(refreshedPod)
+		if isBound {
+			logger.Info("Skipping deletion of launcher pod as it is bound to a server-requesting pod",
+				"pod", pod.Name, "server-requesting pod", requesterPodName)
 			continue
 		}
 
-		if err := ctl.coreclient.Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{}); err != nil {
+		if err := ctl.coreclient.Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{
+			Preconditions: &metav1.Preconditions{
+				ResourceVersion: &refreshedPod.ResourceVersion,
+			},
+		}); err != nil {
 			if apierrors.IsNotFound(err) {
 				logger.Info("Launcher pod already deleted", "pod", pod.Name)
+				deletedCount++ // Count as deletion target achieved
+				continue
+			}
+			if apierrors.IsConflict(err) {
+				logger.Info("Launcher pod version conflict, skipping deletion",
+					"pod", pod.Name, "error", err)
 				continue
 			}
 			return fmt.Errorf("failed to delete launcher pod %s: %w", pod.Name, err)
@@ -444,23 +440,23 @@ func (ctl *controller) deleteExcessLaunchers(ctx context.Context, launchers []co
 }
 
 // isLauncherBoundToServerRequestingPod checks if the launcher pod is bound to any server-requesting pod
-func (ctl *controller) isLauncherBoundToServerRequestingPod(launcherPod corev1.Pod) bool {
+func (ctl *controller) isLauncherBoundToServerRequestingPod(launcherPod *corev1.Pod) (bool, string) {
 	// Check if the launcher pod has annotations indicating assignment to a server-requesting pod
 	requesterAnnotationValue, exists := launcherPod.Annotations[RequesterAnnotationKey]
 	if !exists {
-		return false
+		return false, ""
 	}
 
 	// Verify the format of the annotation value: should be "UID name"
 	parts := strings.Split(requesterAnnotationValue, " ")
 	if len(parts) != 2 {
-		return false // Invalid format
+		return false, "" // Invalid format
 	}
 
 	// Optionally verify that the referenced pod actually exists
 	// @TODO if need, we can append the check logic in further PR
 
-	return true
+	return true, parts[1]
 }
 
 // buildPodFromTemplate creates a pod from a template and assigns it to a node
