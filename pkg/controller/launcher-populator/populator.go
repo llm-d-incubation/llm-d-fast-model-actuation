@@ -22,10 +22,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strings"
 
-	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/api"
-	dualpods "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/dual-pods"
-	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/utils"
+	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/common"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -41,7 +40,10 @@ import (
 	"k8s.io/klog/v2"
 
 	fmav1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
+	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/api"
+	dualpods "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/dual-pods"
 	genctlr "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/generic"
+	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/utils"
 	fmainformers "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/generated/informers/externalversions"
 	fmalisters "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/generated/listers/fma/v1alpha1"
 )
@@ -379,15 +381,83 @@ func (ctl *controller) createLaunchers(ctx context.Context, node corev1.Node, ke
 // deleteExcessLaunchers deletes the specified number of launcher pods
 func (ctl *controller) deleteExcessLaunchers(ctx context.Context, launchers []corev1.Pod, count int) error {
 	logger := klog.FromContext(ctx)
-	// Delete the specified number of launcher pods (starting from the end)
-	for i := 0; i < count && i < len(launchers); i++ {
+
+	expectedDeleteCount := min(len(launchers), count)
+
+	deletedCount := 0
+	for i := 0; i < expectedDeleteCount && i < len(launchers); i++ {
 		pod := launchers[len(launchers)-1-i]
-		if err := ctl.coreclient.Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{}); err != nil {
+
+		// 检查 Pod 是否仍处于未绑定状态
+		refreshedPod, err := ctl.podLister.Pods(pod.Namespace).Get(pod.Name)
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				logger.Info("Launcher pod already deleted", "pod", pod.Name)
+				deletedCount++ // Count as deletion target achieved
+				continue
+			}
+			return fmt.Errorf("failed to get refreshed pod %s: %w", pod.Name, err)
+		}
+
+		isBound, requesterPodName := ctl.isLauncherBoundToServerRequestingPod(refreshedPod)
+		if isBound {
+			logger.Info("Skipping deletion of launcher pod as it is bound to a server-requesting pod",
+				"pod", pod.Name, "server-requesting pod", requesterPodName)
+			continue
+		}
+
+		if err := ctl.coreclient.Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{
+			Preconditions: &metav1.Preconditions{
+				ResourceVersion: &refreshedPod.ResourceVersion,
+			},
+		}); err != nil {
+			if apierrors.IsNotFound(err) {
+				logger.Info("Launcher pod already deleted", "pod", pod.Name)
+				deletedCount++ // Count as deletion target achieved
+				continue
+			}
+			if apierrors.IsConflict(err) {
+				logger.Info("Launcher pod version conflict, skipping deletion",
+					"pod", pod.Name, "error", err)
+				continue
+			}
 			return fmt.Errorf("failed to delete launcher pod %s: %w", pod.Name, err)
 		}
 		logger.Info("Deleted launcher pod", "pod", pod.Name)
+		deletedCount++
 	}
+
+	if deletedCount < count {
+		logger.Info("Fewer launcher pods were deleted than requested due to bound pods or concurrent changes",
+			"requested", count,
+			"deleted", deletedCount,
+			"skipped", count-deletedCount)
+	} else {
+		logger.Info("Deleted unbound launcher pods",
+			"deleted", deletedCount)
+	}
+
 	return nil
+}
+
+// isLauncherBoundToServerRequestingPod checks if the launcher pod is bound to any server-requesting pod
+func (ctl *controller) isLauncherBoundToServerRequestingPod(launcherPod *corev1.Pod) (bool, string) {
+	// Check if the launcher pod has annotations indicating assignment to a server-requesting pod
+	requesterAnnotationValue, exists := launcherPod.Annotations[common.RequesterAnnotationKey]
+	if !exists {
+		return false, ""
+	}
+
+	// Verify the format of the annotation value: should be "UID name"
+	parts := strings.Split(requesterAnnotationValue, " ")
+	if len(parts) != 2 {
+		return false, "" // Invalid format
+	}
+
+	// Optionally verify that the referenced pod actually exists
+	// @TODO if need, we can append the check logic in further PR
+
+	return true, parts[1]
 }
 
 // buildPodFromTemplate creates a pod from a template and assigns it to a node
@@ -421,7 +491,7 @@ func (ctl *controller) buildPodFromTemplate(template corev1.PodTemplateSpec, key
 	if pod.Annotations == nil {
 		pod.Annotations = make(map[string]string)
 	}
-	pod.Annotations = dualpods.MapSet(pod.Annotations, genctlr.NominalHashAnnotationKey, nominalHash)
+	pod.Annotations = dualpods.MapSet(pod.Annotations, NominalHashAnnotationKey, nominalHash)
 
 	cIdx, serverPort, err := utils.GetInferenceServerPort(pod)
 	if err != nil {

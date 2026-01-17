@@ -29,7 +29,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/utils"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -44,6 +43,7 @@ import (
 	fmav1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/api"
 	genctlr "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/generic"
+	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/utils"
 	fmainformers "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/generated/informers/externalversions"
 	fmalisters "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/generated/listers/fma/v1alpha1"
 )
