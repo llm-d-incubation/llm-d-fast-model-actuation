@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/common"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -442,7 +443,7 @@ func (ctl *controller) deleteExcessLaunchers(ctx context.Context, launchers []co
 // isLauncherBoundToServerRequestingPod checks if the launcher pod is bound to any server-requesting pod
 func (ctl *controller) isLauncherBoundToServerRequestingPod(launcherPod *corev1.Pod) (bool, string) {
 	// Check if the launcher pod has annotations indicating assignment to a server-requesting pod
-	requesterAnnotationValue, exists := launcherPod.Annotations[RequesterAnnotationKey]
+	requesterAnnotationValue, exists := launcherPod.Annotations[common.RequesterAnnotationKey]
 	if !exists {
 		return false, ""
 	}

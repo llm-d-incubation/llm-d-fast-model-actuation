@@ -28,6 +28,4 @@ const (
 	NodeNameLabelKey = "dual-pods.llm-d.ai/node-name"
 
 	NominalHashAnnotationKey = "dual-pods.llm-d.ai/nominal"
-
-	RequesterAnnotationKey = "dual-pods.llm-d.ai/requester"
 )
