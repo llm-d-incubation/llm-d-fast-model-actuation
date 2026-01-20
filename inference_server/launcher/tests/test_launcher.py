@@ -53,7 +53,7 @@ def vllm_config():
 
 @pytest.fixture
 def gpu_translator():
-    """Create a GPUTraslator for testing"""
+    """Create a GPUTranslator for testing"""
     return GpuTranslator()
 
 
@@ -216,6 +216,127 @@ class TestVllmInstance:
         mock_process._is_alive = False
         status = instance.get_status()
         assert status["status"] == "stopped"
+
+    @patch("launcher.multiprocessing.Process")
+    def test_instance_uuid_to_index_translation(
+        self, mock_process_class, gpu_translator
+    ):
+        """Test that GPU UUIDs are correctly translated to
+        indices and CUDA_VISIBLE_DEVICES is set"""
+        mock_process = MockProcess()
+        mock_process_class.return_value = mock_process
+
+        # Mock the uuid_to_index method to return predictable indices
+        test_uuids = ["GPU-uuid-1234", "GPU-uuid-5678", "GPU-uuid-9abc"]
+        expected_indices = [0, 2, 3]
+
+        # Create a mock that returns indices based on the UUID
+        uuid_to_index_map = dict(zip(test_uuids, expected_indices))
+        gpu_translator.uuid_to_index = MagicMock(
+            side_effect=lambda uuid: uuid_to_index_map[uuid]
+        )
+
+        # Create config with GPU UUIDs
+        config = VllmConfig(
+            options="--model test-model --port 8000", gpu_uuids=test_uuids
+        )
+
+        # Create instance (this triggers UUID translation in __init__)
+        instance = VllmInstance("test-id", config, gpu_translator)
+
+        # Verify uuid_to_index was called for each UUID
+        assert gpu_translator.uuid_to_index.call_count == len(test_uuids)
+        for uuid_str in test_uuids:
+            gpu_translator.uuid_to_index.assert_any_call(uuid_str)
+
+        # Verify CUDA_VISIBLE_DEVICES was set correctly
+        assert "CUDA_VISIBLE_DEVICES" in instance.config.env_vars
+        assert instance.config.env_vars["CUDA_VISIBLE_DEVICES"] == "0,2,3"
+
+        # Verify the instance can be started with the translated indices
+        result = instance.start()
+        assert result["status"] == "started"
+
+    @patch("launcher.multiprocessing.Process")
+    def test_instance_uuid_translation_creates_env_vars_if_none(
+        self, mock_process_class, gpu_translator
+    ):
+        """Test that env_vars dict is created when
+        gpu_uuids provided but env_vars is None"""
+        mock_process = MockProcess()
+        mock_process_class.return_value = mock_process
+
+        # Mock uuid_to_index
+        gpu_translator.uuid_to_index = MagicMock(side_effect=[1, 3])
+
+        # Create config WITHOUT env_vars but WITH gpu_uuids
+        config = VllmConfig(
+            options="--model test-model --port 8000",
+            gpu_uuids=["GPU-uuid-aaa", "GPU-uuid-bbb"],
+        )
+
+        # Verify env_vars is None initially
+        assert config.env_vars is None
+
+        # Create instance
+        instance = VllmInstance("test-id", config, gpu_translator)
+
+        # Verify env_vars was created and CUDA_VISIBLE_DEVICES was set
+        assert instance.config.env_vars is not None
+        assert instance.config.env_vars["CUDA_VISIBLE_DEVICES"] == "1,3"
+
+    @patch("launcher.multiprocessing.Process")
+    def test_instance_uuid_translation_preserves_existing_env_vars(
+        self, mock_process_class, gpu_translator
+    ):
+        """Test that existing env_vars are preserved when adding CUDA_VISIBLE_DEVICES"""
+        mock_process = MockProcess()
+        mock_process_class.return_value = mock_process
+
+        # Mock uuid_to_index
+        gpu_translator.uuid_to_index = MagicMock(return_value=0)
+
+        # Create config with existing env_vars
+        existing_env_vars = {"CUSTOM_VAR": "custom_value", "ANOTHER_VAR": "123"}
+        config = VllmConfig(
+            options="--model test-model --port 8000",
+            gpu_uuids=["GPU-uuid-xyz"],
+            env_vars=existing_env_vars.copy(),
+        )
+
+        # Create instance
+        instance = VllmInstance("test-id", config, gpu_translator)
+
+        # Verify existing env_vars are preserved
+        assert instance.config.env_vars["CUSTOM_VAR"] == "custom_value"
+        assert instance.config.env_vars["ANOTHER_VAR"] == "123"
+        # And CUDA_VISIBLE_DEVICES was added
+        assert instance.config.env_vars["CUDA_VISIBLE_DEVICES"] == "0"
+
+    @patch("launcher.multiprocessing.Process")
+    def test_instance_no_uuid_translation_when_gpu_uuids_none(
+        self, mock_process_class, gpu_translator
+    ):
+        """Test that uuid_to_index is not called when gpu_uuids is None"""
+        mock_process = MockProcess()
+        mock_process_class.return_value = mock_process
+
+        # Mock uuid_to_index to track calls
+        gpu_translator.uuid_to_index = MagicMock()
+
+        # Create config WITHOUT gpu_uuids
+        config = VllmConfig(
+            options="--model test-model --port 8000", env_vars={"SOME_VAR": "value"}
+        )
+
+        # Create instance
+        instance = VllmInstance("test-id", config, gpu_translator)
+
+        # Verify uuid_to_index was NOT called
+        gpu_translator.uuid_to_index.assert_not_called()
+
+        # Verify CUDA_VISIBLE_DEVICES was NOT added
+        assert "CUDA_VISIBLE_DEVICES" not in instance.config.env_vars
 
 
 # Tests for VllmMultiProcessManager
