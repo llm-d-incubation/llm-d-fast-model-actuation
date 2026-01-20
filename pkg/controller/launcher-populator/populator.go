@@ -388,7 +388,7 @@ func (ctl *controller) deleteExcessLaunchers(ctx context.Context, launchers []co
 	for i := 0; i < expectedDeleteCount && i < len(launchers); i++ {
 		pod := launchers[len(launchers)-1-i]
 
-		// 检查 Pod 是否仍处于未绑定状态
+		// Check if the Pod is still in an unbound state
 		refreshedPod, err := ctl.podLister.Pods(pod.Namespace).Get(pod.Name)
 		if err != nil {
 			if apierrors.IsNotFound(err) {
@@ -401,7 +401,7 @@ func (ctl *controller) deleteExcessLaunchers(ctx context.Context, launchers []co
 
 		isBound, requesterPodName := ctl.isLauncherBoundToServerRequestingPod(refreshedPod)
 		if isBound {
-			logger.Info("Skipping deletion of launcher pod as it is bound to a server-requesting pod",
+			logger.V(5).Info("Skipping deletion of launcher pod as it is bound to a server-requesting pod",
 				"pod", pod.Name, "server-requesting pod", requesterPodName)
 			continue
 		}
