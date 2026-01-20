@@ -382,10 +382,8 @@ func (ctl *controller) createLaunchers(ctx context.Context, node corev1.Node, ke
 func (ctl *controller) deleteExcessLaunchers(ctx context.Context, launchers []corev1.Pod, count int) error {
 	logger := klog.FromContext(ctx)
 
-	expectedDeleteCount := min(len(launchers), count)
-
 	deletedCount := 0
-	for i := 0; i < expectedDeleteCount && i < len(launchers); i++ {
+	for i := 0; i < count && i < len(launchers); i++ {
 		pod := launchers[len(launchers)-1-i]
 
 		// Check if the Pod is still in an unbound state
