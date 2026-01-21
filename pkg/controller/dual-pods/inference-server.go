@@ -47,6 +47,7 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/yaml"
 
+	fmav1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/api"
 	stubapi "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/spi"
 )
@@ -64,7 +65,14 @@ func (ni nodeItem) process(ctx context.Context, ctl *controller) (error, bool) {
 	logger.V(4).Info("Processing items for node", "count", len(items))
 	for localItem := range items {
 		logger.V(4).Info("Processing node-local item", "item", localItem)
-		err, retry := localItem.process(ctx, ctl, nodeDat)
+		launcherbased := false // TODO(waltforme): externalize this switch
+		var err error
+		var retry bool
+		if launcherbased {
+			err, retry = localItem.processLauncherBased(ctx, ctl, nodeDat)
+		} else {
+			err, retry = localItem.process(ctx, ctl, nodeDat)
+		}
 		if err != nil {
 			if retry {
 				logger.Info("Processing node local item suffered transient error, will retry", "item", localItem, "err", err)
@@ -399,6 +407,168 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	logger.V(2).Info("Created server-providing pod", "name", echo.Name, "gpus", serverDat.GPUIndicesStr, "annotations", echo.Annotations, "labels", echo.Labels, "resourceVersion", echo.ResourceVersion)
 
 	return ctl.ensureReqStatus(ctx, requestingPod, serverDat)
+}
+
+func (item infSvrItem) processLauncherBased(urCtx context.Context, ctl *controller, nodeDat *nodeData) (error, bool) {
+	logger := klog.FromContext(urCtx).WithValues("serverUID", item.UID, "requesterName", item.RequesterName)
+	ctx := klog.NewContext(urCtx, logger)
+
+	requestingPod, err := ctl.podLister.Pods(ctl.namespace).Get(item.RequesterName)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			requestingPod = nil
+		} else {
+			logger.Error(err, "Failed to get Pod")
+			return err, true
+		}
+	} else {
+		logger = logger.WithValues("requesterRV", requestingPod.ResourceVersion)
+	}
+
+	// from the requestingPod's annotations, get the InferenceServerConfig object
+	iscName, have := requestingPod.Annotations[api.InferenceServerConfigAnnotationName]
+	if !have {
+		// TODO(waltforme): report error in the status annotation
+		// It is safe not to retry here because once the user update the annotation of requestingPod, another processing is triggered
+		return fmt.Errorf("requesting Pod %q is missing annotation %q", requestingPod.Name, api.InferenceServerConfigAnnotationName), false
+	}
+	isc, err := ctl.iscLister.InferenceServerConfigs(ctl.namespace).Get(iscName)
+	if err != nil {
+		// TODO(waltforme): report error in the status annotation
+		// It is safe not to retry here because once an event from InferenceServerConfig occurs, another processing is triggered
+		return fmt.Errorf("failed to get InferenceServerConfig %q: %w", iscName, err), false
+	}
+
+	// from the InferenceServerConfig object, get the launcherConfig object
+	lcName := isc.Spec.LauncherConfigName
+	lc, err := ctl.lcLister.LauncherConfigs(ctl.namespace).Get(lcName)
+	if err != nil {
+		// TODO(waltforme): report error in the status annotation
+		// TODO(waltforme): introduce the 'enqueue requesters by launcherconfigs' logic to the controller
+		// It is safe not to retry here because once an event from LauncherConfig occurs, another processing is triggered
+		return fmt.Errorf("failed to get LauncherConfig %q: %w", lcName, err), false
+	}
+
+	// find which launcher Pod is using this launcherConfig, then find its IP
+	lcTemplateHash, err := ctl.parseLauncherConfig(lc)
+	if err != nil {
+		return fmt.Errorf("parse LauncherConfig %q: %w", lcName, err), true
+	}
+	logger.V(5).Info("LauncherConfig's PodTemplate hash", "hash", lcTemplateHash)
+	launcherPodAnys, err := ctl.podInformer.GetIndexer().ByIndex(launcherConfigHashIndexName, lcTemplateHash)
+	if err != nil {
+		return err, false
+	}
+	if len(launcherPodAnys) == 0 {
+		// TODO(waltforme): report error in the status annotation
+		// TODO(waltforme): introduce the 'enqueue requesters by launcher Pods' logic to the controller
+		// It will be safe not to retry here because once the launcher Pod exists, another processing is triggered
+		return fmt.Errorf("no launcher Pod found for LauncherConfig %q with PodTemplate hash %q", lcName, lcTemplateHash), false
+	}
+	// Should multiple launcher Pods exist for the same LauncherConfig on one node? The answer is no.
+	// TODO(waltforme): Should we report error if multiple launcher Pods are found? Should we delete the extra ones?
+	launcherPod := launcherPodAnys[0].(*corev1.Pod)
+	logger.V(5).Info("Found launcher Pod", "name", launcherPod.Name)
+	launcherIP := launcherPod.Status.PodIP
+	if launcherIP == "" {
+		return fmt.Errorf("launcher Pod %q has no IP assigned yet", launcherPod.Name), true
+	}
+
+	// Create launcher client
+	launcherBaseURL := fmt.Sprintf("http://%s:%d", launcherIP, api.LauncherServicePort)
+	lClient, err := NewLauncherClient(launcherBaseURL)
+	if err != nil {
+		return err, true
+	}
+
+	// List vLLM instances
+	statuses, err := lClient.ListInstances(ctx)
+	if err != nil {
+		return err, true
+	}
+	logger.V(5).Info("vLLM instance counts",
+		"total_instances", statuses.TotalInstances,
+		"running_instances", statuses.RunningInstances,
+	)
+
+	// TODO(waltforme): complete the following logic:
+	// - if no instances are fulfilling the requester, create an instance to do so;
+	// - if an existing instance is already fulfilling the requester, no-op;
+	// - if some instances are fulfilling obsolete/non-existing requesters, delete the instances.
+	// In other words, empty the symmetric difference between the set of instances and the set of requesters.
+
+	// First, ensure an instance exists for the inferenceserverconfig object.
+	cfg, iscHash, err := ctl.parseInferenceServerConfig(isc)
+	if err != nil {
+		return fmt.Errorf("parse inference server config: %w", err), true
+	}
+	logger.V(5).Info("Nominal hash of InferenceServerConfig", "hash", iscHash)
+	InstExists := false
+	if nodeDat.Launchers == nil {
+		nodeDat.Launchers = make(map[string]*launcherData)
+	}
+	if _, haveLC := nodeDat.Launchers[lcName]; !haveLC {
+		nodeDat.Launchers[lcName] = &launcherData{
+			Instances: make(map[string]*InstanceData),
+			Accurate:  true,
+		}
+	}
+	launcherDat := nodeDat.Launchers[lcName]
+	for hash, inst := range launcherDat.Instances {
+		if hash == iscHash {
+			InstExists = true
+			inst.LastUsed = time.Now()
+			break
+		}
+	}
+	if !InstExists {
+		result, err := lClient.CreateInstance(ctx, *cfg)
+		if err != nil {
+			return fmt.Errorf("create vLLM instance: %w", err), true
+		}
+		logger.V(5).Info("Created new vLLM instance",
+			"instance_id", result.InstanceID,
+			"status", result.Status,
+		)
+		launcherDat.Instances[iscHash] = &InstanceData{ID: result.InstanceID, LastUsed: time.Now()}
+		nodeDat.Launchers[lcName] = launcherDat
+	}
+
+	return nil, false
+}
+
+func (ctl *controller) parseInferenceServerConfig(isc *fmav1alpha1.InferenceServerConfig) (*VllmConfig, string, error) {
+	vllmCfg := VllmConfig{ // TODO(waltforme): update this when type VllmConfig is updated
+		Options: isc.Spec.ModelServerConfig.Options,
+		EnvVars: make(map[string]interface{}, len(isc.Spec.ModelServerConfig.EnvVars)),
+	}
+	for k, v := range isc.Spec.ModelServerConfig.EnvVars {
+		vllmCfg.EnvVars[k] = v
+	}
+
+	iscBytes, err := yaml.Marshal(isc.Spec.ModelServerConfig)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to marshal InferenceServerConfig %q: %w", isc.Name, err)
+	}
+	hasher := sha256.New()
+	hasher.Write(iscBytes)
+	var hash [sha256.Size]byte
+	hashSl := hasher.Sum(hash[:0])
+	nominalHash := base64.RawStdEncoding.EncodeToString(hashSl)
+
+	return &vllmCfg, nominalHash, nil
+}
+
+func (ctl *controller) parseLauncherConfig(lc *fmav1alpha1.LauncherConfig) (string, error) {
+	podTemplateBytes, err := yaml.Marshal(lc.Spec.PodTemplate)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal LauncherConfig %q: %w", lc.Name, err)
+	}
+	hasher := sha256.New()
+	hasher.Write(podTemplateBytes)
+	var hash [sha256.Size]byte
+	hashSl := hasher.Sum(hash[:0])
+	return base64.RawStdEncoding.EncodeToString(hashSl), nil
 }
 
 func (ctl *controller) ensureSleepingLabel(ctx context.Context, providingPod *corev1.Pod, desired bool) error {
