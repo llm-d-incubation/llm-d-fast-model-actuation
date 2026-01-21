@@ -336,13 +336,7 @@ func (ctl *controller) getCurrentLaunchersOnNode(ctx context.Context, key NodeLa
 		return nil, fmt.Errorf("failed to list pods with launcher labels: %w", err)
 	}
 
-	// Filter pods that are on the specified node
-	var filteredPods []*corev1.Pod
-	for _, pod := range pods {
-		filteredPods = append(filteredPods, pod)
-	}
-
-	return filteredPods, nil
+	return pods, nil
 }
 
 // createLaunchers creates the specified number of launcher pods on a node
