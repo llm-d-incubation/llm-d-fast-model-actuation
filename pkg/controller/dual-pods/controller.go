@@ -269,10 +269,9 @@ type nodeData struct {
 }
 
 type itemOnNode interface {
-	// process and processLauncherBased return (err error, retry bool).
+	// process returns (err error, retry bool).
 	// There will be a retry iff `retry`.
 	process(ctx context.Context, ctl *controller, nodeDat *nodeData) (error, bool)
-	processLauncherBased(ctx context.Context, ctl *controller, nodeDat *nodeData) (error, bool)
 }
 
 // Internal state about an inference server
@@ -306,19 +305,14 @@ type serverData struct {
 }
 
 type launcherData struct {
-	// Instances is a map, where a key is an instance's nominal hash.
-	Instances map[string]*InstanceData
+	// Instances is a map,
+	// where key is an instance's ID which is the instance' nominal hash,
+	// and value is the last used time of the instance.
+	Instances map[string]time.Time
 
 	// Accurate indicates whether the set of nominal hash in Instances is accurate.
 	Accurate bool
 }
-
-type InstanceData struct {
-	// ID is the instance's UUID as assigned by the launcher.
-	ID       string
-	LastUsed time.Time
-}
-
 type queueItem interface {
 	// process returns (err error, retry bool).
 	// There will be a retry iff `retry`, error logged if `err != nil`.
@@ -643,6 +637,7 @@ func (ctl *controller) getNodeData(nodeName string) *nodeData {
 		ans = &nodeData{
 			Items:            sets.New[itemOnNode](),
 			InferenceServers: make(map[apitypes.UID]*serverData),
+			Launchers:        make(map[string]*launcherData),
 		}
 		ctl.nodeNameToData[nodeName] = ans
 	}
@@ -672,6 +667,19 @@ func (ctl *controller) getServerData(nodeDat *nodeData, reqName string, reqUID a
 	if ans == nil {
 		ans = &serverData{RequestingPodName: reqName}
 		nodeDat.InferenceServers[reqUID] = ans
+	}
+	return ans
+}
+
+func (ctl *controller) getLauncherData(nodeDat *nodeData, launcherPodName string) *launcherData {
+	ctl.mutex.Lock()
+	defer ctl.mutex.Unlock()
+	ans := nodeDat.Launchers[launcherPodName]
+	if ans == nil {
+		ans = &launcherData{
+			Instances: make(map[string]time.Time),
+		}
+		nodeDat.Launchers[launcherPodName] = ans
 	}
 	return ans
 }

@@ -65,14 +65,7 @@ func (ni nodeItem) process(ctx context.Context, ctl *controller) (error, bool) {
 	logger.V(4).Info("Processing items for node", "count", len(items))
 	for localItem := range items {
 		logger.V(4).Info("Processing node-local item", "item", localItem)
-		launcherbased := false // TODO(waltforme): externalize this switch
-		var err error
-		var retry bool
-		if launcherbased {
-			err, retry = localItem.processLauncherBased(ctx, ctl, nodeDat)
-		} else {
-			err, retry = localItem.process(ctx, ctl, nodeDat)
-		}
+		err, retry := localItem.process(ctx, ctl, nodeDat)
 		if err != nil {
 			if retry {
 				logger.Info("Processing node local item suffered transient error, will retry", "item", localItem, "err", err)
@@ -293,12 +286,26 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		serverDat.GPUIndicesStr = &gpuIndicesStr
 	}
 
+	launcherBased := false
+	if requestingPod.Annotations != nil {
+		_, launcherBased = requestingPod.Annotations[api.InferenceServerConfigAnnotationName]
+	}
+	if launcherBased {
+		logger.V(5).Info("Server requesting Pod is asking for launcher-based server providing Pod")
+	}
+
 	// If there is already a server-providing Pod then ensure that it is awake,
 	// ensure status reported, and relay readiness if needed.
 	if providingPod != nil {
-		_, serverPort, err := utils.GetInferenceServerPort(providingPod)
-		if err != nil { // Impossible, because such a providingPod would never be created by this controller
-			return fmt.Errorf("unable to wake up server because port not known: %w", err), true
+		var serverPort int16
+		if launcherBased {
+			// TODO(waltforme): currently the port number of an instance is written in the vLLMConfig. Need to parse it out.
+			serverPort = 8005
+		} else {
+			_, serverPort, err = utils.GetInferenceServerPort(providingPod)
+			if err != nil { // Impossible, because such a providingPod would never be created by this controller
+				return fmt.Errorf("unable to wake up server because port not known: %w", err), true
+			}
 		}
 		if serverDat.Sleeping == nil {
 			sleeping, err := ctl.querySleeping(ctx, providingPod, serverPort)
@@ -357,73 +364,59 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	}
 	// What remains to be done is to wake or create a server-providing Pod
 
-	serverPatch := requestingPod.Annotations[api.ServerPatchAnnotationName]
-	if serverPatch == "" { // this is bad, somebody has hacked important data
-		return ctl.ensureReqStatus(ctx, requestingPod, serverDat, "the "+api.ServerPatchAnnotationName+" annotation is missing")
-	}
-	// use the server patch to build the server-providing pod, if not already done.
-	desiredProvidingPod, nominalHash, err := serverDat.getNominalServerProvidingPod(ctx, requestingPod, serverPatch, api.ProviderData{
-		NodeName: requestingPod.Spec.NodeName,
-	})
-	if err != nil {
-		return ctl.ensureReqStatus(ctx, requestingPod, serverDat, fmt.Sprintf("failed to construct the nominal server-providing Pod: %s", err.Error()))
-	}
-
-	sleepingAnys, err := ctl.podInformer.GetIndexer().ByIndex(nominalHashIndexName, nominalHash)
-	if err != nil { // impossible
-		return err, false
-	}
-	if len(sleepingAnys) > 0 {
-		// They have to be sleeping, the Kube scheduler and kubelet would not have assigned the same
-		// node/gpus to the requester if there was another one awake.
-		if len(sleepingAnys) > 1 {
-			logger.V(2).Info("Unexpected: multiple sleeping Pods match; using the first", "requesterName", requestingPod.Name)
+	if !launcherBased {
+		serverPatch := requestingPod.Annotations[api.ServerPatchAnnotationName]
+		if serverPatch == "" { // this is bad, somebody has hacked important data
+			return ctl.ensureReqStatus(ctx, requestingPod, serverDat, "the "+api.ServerPatchAnnotationName+" annotation is missing")
 		}
-		providingPod = sleepingAnys[0].(*corev1.Pod)
-		return ctl.bind(ctx, serverDat, requestingPod, providingPod)
-	}
-	// What remains is to make a new server-providing Pod --- if the sleeper budget allows.
-
-	err, retry := ctl.enforceSleeperBudget(ctx, serverDat, requestingPod)
-	if err != nil || retry {
-		return err, retry
-	}
-	// Sleeper budget is met. Make the new Pod.
-
-	logger.V(3).Info("Creating server-providing pod", "node", requestingPod.Spec.NodeName, "gpus", serverDat.GPUIndicesStr, "labels", desiredProvidingPod.Labels)
-	echo, err := podOps.Create(ctx, desiredProvidingPod, metav1.CreateOptions{})
-	if err != nil {
-		errMsg := err.Error()
-		if invalidPodRE.MatchString(errMsg) {
-			return ctl.ensureReqStatus(ctx, requestingPod, serverDat, "the nominal server-providing "+errMsg)
+		// use the server patch to build the server-providing pod, if not already done.
+		desiredProvidingPod, nominalHash, err := serverDat.getNominalServerProvidingPod(ctx, requestingPod, serverPatch, api.ProviderData{
+			NodeName: requestingPod.Spec.NodeName,
+		})
+		if err != nil {
+			return ctl.ensureReqStatus(ctx, requestingPod, serverDat, fmt.Sprintf("failed to construct the nominal server-providing Pod: %s", err.Error()))
 		}
-		innerErr, _ := ctl.ensureReqStatus(ctx, requestingPod, serverDat, fmt.Sprintf("failed to create server-providing Pod: %s", errMsg))
-		if innerErr != nil {
-			return errors.Join(err, innerErr), true
+
+		sleepingAnys, err := ctl.podInformer.GetIndexer().ByIndex(nominalHashIndexName, nominalHash)
+		if err != nil { // impossible
+			return err, false
 		}
-		return err, true
-	}
-	serverDat.Sleeping = ptr.To(false)
-	logger.V(2).Info("Created server-providing pod", "name", echo.Name, "gpus", serverDat.GPUIndicesStr, "annotations", echo.Annotations, "labels", echo.Labels, "resourceVersion", echo.ResourceVersion)
+		if len(sleepingAnys) > 0 {
+			// They have to be sleeping, the Kube scheduler and kubelet would not have assigned the same
+			// node/gpus to the requester if there was another one awake.
+			if len(sleepingAnys) > 1 {
+				logger.V(2).Info("Unexpected: multiple sleeping Pods match; using the first", "requesterName", requestingPod.Name)
+			}
+			providingPod = sleepingAnys[0].(*corev1.Pod)
+			return ctl.bind(ctx, serverDat, requestingPod, providingPod)
+		}
+		// What remains is to make a new server-providing Pod --- if the sleeper budget allows.
 
-	return ctl.ensureReqStatus(ctx, requestingPod, serverDat)
-}
+		err, retry := ctl.enforceSleeperBudget(ctx, serverDat, requestingPod, ctl.sleeperLimit)
+		if err != nil || retry {
+			return err, retry
+		}
+		// Sleeper budget is met. Make the new Pod.
 
-func (item infSvrItem) processLauncherBased(urCtx context.Context, ctl *controller, nodeDat *nodeData) (error, bool) {
-	logger := klog.FromContext(urCtx).WithValues("serverUID", item.UID, "requesterName", item.RequesterName)
-	ctx := klog.NewContext(urCtx, logger)
-
-	requestingPod, err := ctl.podLister.Pods(ctl.namespace).Get(item.RequesterName)
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			requestingPod = nil
-		} else {
-			logger.Error(err, "Failed to get Pod")
+		logger.V(3).Info("Creating server-providing pod", "node", requestingPod.Spec.NodeName, "gpus", serverDat.GPUIndicesStr, "labels", desiredProvidingPod.Labels)
+		echo, err := podOps.Create(ctx, desiredProvidingPod, metav1.CreateOptions{})
+		if err != nil {
+			errMsg := err.Error()
+			if invalidPodRE.MatchString(errMsg) {
+				return ctl.ensureReqStatus(ctx, requestingPod, serverDat, "the nominal server-providing "+errMsg)
+			}
+			innerErr, _ := ctl.ensureReqStatus(ctx, requestingPod, serverDat, fmt.Sprintf("failed to create server-providing Pod: %s", errMsg))
+			if innerErr != nil {
+				return errors.Join(err, innerErr), true
+			}
 			return err, true
 		}
-	} else {
-		logger = logger.WithValues("requesterRV", requestingPod.ResourceVersion)
+		serverDat.Sleeping = ptr.To(false)
+		logger.V(2).Info("Created server-providing pod", "name", echo.Name, "gpus", serverDat.GPUIndicesStr, "annotations", echo.Annotations, "labels", echo.Labels, "resourceVersion", echo.ResourceVersion)
+
+		return ctl.ensureReqStatus(ctx, requestingPod, serverDat)
 	}
+	// What remains to be done is to wake or create a launcher-based server-providing Pod
 
 	// from the requestingPod's annotations, get the InferenceServerConfig object
 	iscName, have := requestingPod.Annotations[api.InferenceServerConfigAnnotationName]
@@ -449,7 +442,6 @@ func (item infSvrItem) processLauncherBased(urCtx context.Context, ctl *controll
 		return fmt.Errorf("failed to get LauncherConfig %q: %w", lcName, err), false
 	}
 
-	// find which launcher Pod is using this launcherConfig, then find its IP
 	lcTemplateHash, err := ctl.parseLauncherConfig(lc)
 	if err != nil {
 		return fmt.Errorf("parse LauncherConfig %q: %w", lcName, err), true
@@ -459,80 +451,81 @@ func (item infSvrItem) processLauncherBased(urCtx context.Context, ctl *controll
 	if err != nil {
 		return err, false
 	}
-	if len(launcherPodAnys) == 0 {
-		// TODO(waltforme): report error in the status annotation
-		// TODO(waltforme): introduce the 'enqueue requesters by launcher Pods' logic to the controller
-		// It will be safe not to retry here because once the launcher Pod exists, another processing is triggered
-		return fmt.Errorf("no launcher Pod found for LauncherConfig %q with PodTemplate hash %q", lcName, lcTemplateHash), false
-	}
-	// Should multiple launcher Pods exist for the same LauncherConfig on one node? The answer is no.
-	// TODO(waltforme): Should we report error if multiple launcher Pods are found? Should we delete the extra ones?
-	launcherPod := launcherPodAnys[0].(*corev1.Pod)
-	logger.V(5).Info("Found launcher Pod", "name", launcherPod.Name)
-	launcherIP := launcherPod.Status.PodIP
-	if launcherIP == "" {
-		return fmt.Errorf("launcher Pod %q has no IP assigned yet", launcherPod.Name), true
-	}
 
-	// Create launcher client
-	launcherBaseURL := fmt.Sprintf("http://%s:%d", launcherIP, api.LauncherServicePort)
-	lClient, err := NewLauncherClient(launcherBaseURL)
-	if err != nil {
-		return err, true
-	}
+	if len(launcherPodAnys) > 0 {
+		// Multiple launcher Pods could exist for one LauncherConfig object on one node.
+		// TODO(waltforme): The controller currently picks the first Pod but should consider all of them, this should be revised.
 
-	// List vLLM instances
-	statuses, err := lClient.ListInstances(ctx)
-	if err != nil {
-		return err, true
-	}
-	logger.V(5).Info("vLLM instance counts",
-		"total_instances", statuses.TotalInstances,
-		"running_instances", statuses.RunningInstances,
-	)
+		// Note: Multiple vLLM instances could exist in one launcher Pod, but at most one instance
+		// could be awake at a time.
+		// TODO(waltforme): Revise accordingly.
 
-	// TODO(waltforme): complete the following logic:
-	// - if no instances are fulfilling the requester, create an instance to do so;
-	// - if an existing instance is already fulfilling the requester, no-op;
-	// - if some instances are fulfilling obsolete/non-existing requesters, delete the instances.
-	// In other words, empty the symmetric difference between the set of instances and the set of requesters.
-
-	// First, ensure an instance exists for the inferenceserverconfig object.
-	cfg, iscHash, err := ctl.parseInferenceServerConfig(isc)
-	if err != nil {
-		return fmt.Errorf("parse inference server config: %w", err), true
-	}
-	logger.V(5).Info("Nominal hash of InferenceServerConfig", "hash", iscHash)
-	InstExists := false
-	if nodeDat.Launchers == nil {
-		nodeDat.Launchers = make(map[string]*launcherData)
-	}
-	if _, haveLC := nodeDat.Launchers[lcName]; !haveLC {
-		nodeDat.Launchers[lcName] = &launcherData{
-			Instances: make(map[string]*InstanceData),
-			Accurate:  true,
+		launcherPod := launcherPodAnys[0].(*corev1.Pod)
+		logger.V(5).Info("Found launcher Pod", "name", launcherPod.Name)
+		launcherIP := launcherPod.Status.PodIP
+		if launcherIP == "" {
+			return fmt.Errorf("launcher Pod %q has no IP assigned yet", launcherPod.Name), true
 		}
-	}
-	launcherDat := nodeDat.Launchers[lcName]
-	for hash, inst := range launcherDat.Instances {
-		if hash == iscHash {
-			InstExists = true
-			inst.LastUsed = time.Now()
-			break
-		}
-	}
-	if !InstExists {
-		result, err := lClient.CreateInstance(ctx, *cfg)
+
+		launcherBaseURL := fmt.Sprintf("http://%s:%d", launcherIP, api.LauncherServicePort)
+		lClient, err := NewLauncherClient(launcherBaseURL)
 		if err != nil {
-			return fmt.Errorf("create vLLM instance: %w", err), true
+			return err, true
 		}
-		logger.V(5).Info("Created new vLLM instance",
-			"instance_id", result.InstanceID,
-			"status", result.Status,
+
+		insts, err := lClient.ListInstances(ctx)
+		if err != nil {
+			return err, true
+		}
+		logger.V(5).Info("vLLM instance counts",
+			"total_instances", insts.TotalInstances,
+			"running_instances", insts.RunningInstances,
 		)
-		launcherDat.Instances[iscHash] = &InstanceData{ID: result.InstanceID, LastUsed: time.Now()}
-		nodeDat.Launchers[lcName] = launcherDat
+
+		cfg, iscHash, err := ctl.parseInferenceServerConfig(isc)
+		if err != nil {
+			return fmt.Errorf("parse inference server config: %w", err), true
+		}
+		logger.V(5).Info("Nominal hash of InferenceServerConfig", "hash", iscHash)
+
+		launcherDat := ctl.getLauncherData(nodeDat, launcherPod.Name)
+		_, instExists := launcherDat.Instances[iscHash]
+
+		// if the matching launcher Pod hosts a matching instance, make sure that instance is awake, then bound the launcher Pod to the requester.
+		// if the matching launcher Pod hosts zero instances, create an instance and bind the launcher Pod to the requester.
+		if instExists {
+			logger.V(5).Info("vLLM instance for InferenceServerConfig already exists", "iscHash", iscHash)
+			err := ctl.wakeupInstance(ctx, lClient, iscHash)
+			if err != nil {
+				return fmt.Errorf("wake up vLLM instance: %w", err), true
+			}
+			launcherDat.Instances[iscHash] = time.Now()
+			return ctl.bind(ctx, serverDat, requestingPod, launcherPod)
+		} else if insts.TotalInstances == 0 {
+			result, err := lClient.CreateNamedInstance(ctx, iscHash, *cfg)
+			if err != nil {
+				return fmt.Errorf("create vLLM instance: %w", err), true
+			}
+			logger.V(5).Info("Created new vLLM instance",
+				"instance_id", result.InstanceID,
+				"status", result.Status,
+			)
+			launcherDat.Instances[iscHash] = time.Now()
+			return ctl.bind(ctx, serverDat, requestingPod, launcherPod)
+		}
+
 	}
+	// Remains: Zero matching launcher Pods, or the matching launcher Pod cannot host more instances to fulfill the request.
+
+	// TODO(waltforme): should enforceSleeperBudget be revised for launcher-based server providing Pods?
+	err, retry := ctl.enforceSleeperBudget(ctx, serverDat, requestingPod, int(lc.Spec.MaxSleepingInstances))
+	if err != nil || retry {
+		return err, retry
+	}
+	// Sleeper budget is met. Make a new launcher Pod.
+
+	// TODO(waltforme): introduce the 'enqueue requesters by launcher pods' logic to the controller
+	// TODO(waltforme): do not repeat the existing Pod-composing logic in launcher-populator.
 
 	return nil, false
 }
@@ -554,7 +547,8 @@ func (ctl *controller) parseInferenceServerConfig(isc *fmav1alpha1.InferenceServ
 	hasher.Write(iscBytes)
 	var hash [sha256.Size]byte
 	hashSl := hasher.Sum(hash[:0])
-	nominalHash := base64.RawStdEncoding.EncodeToString(hashSl)
+	// using Raw_URL_Encoding because this hash will be used in URLs to the launcher.
+	nominalHash := base64.RawURLEncoding.EncodeToString(hashSl)
 
 	return &vllmCfg, nominalHash, nil
 }
@@ -569,6 +563,17 @@ func (ctl *controller) parseLauncherConfig(lc *fmav1alpha1.LauncherConfig) (stri
 	var hash [sha256.Size]byte
 	hashSl := hasher.Sum(hash[:0])
 	return base64.RawStdEncoding.EncodeToString(hashSl), nil
+}
+
+func (ctl *controller) wakeupInstance(ctx context.Context, lClient *LauncherClient, instanceID string) error {
+	logger := klog.FromContext(ctx)
+	// TODO(waltforme): currently the port number of an instance is written in the vLLMConfig. Need to parse it out.
+	err := doPost("http://" + lClient.baseURL.Hostname() + ":8005" + "/wake_up")
+	if err != nil {
+		return fmt.Errorf("failed to wake up vLLM instance %q: %w", instanceID, err)
+	}
+	logger.V(2).Info("Woke up vLLM instance", "instanceID", instanceID)
+	return nil
 }
 
 func (ctl *controller) ensureSleepingLabel(ctx context.Context, providingPod *corev1.Pod, desired bool) error {
@@ -589,7 +594,7 @@ func (ctl *controller) ensureSleepingLabel(ctx context.Context, providingPod *co
 
 var invalidPodRE = regexp.MustCompile(`^Pod "[a-z0-9.-]*" is invalid`)
 
-func (ctl *controller) enforceSleeperBudget(ctx context.Context, serverDat *serverData, requestingPod *corev1.Pod) (error, bool) {
+func (ctl *controller) enforceSleeperBudget(ctx context.Context, serverDat *serverData, requestingPod *corev1.Pod, sleeperLimit int) (error, bool) {
 	logger := klog.FromContext(ctx)
 	podOps := ctl.coreclient.Pods(ctl.namespace)
 	gonerNames := sets.New[string]() // names of deleted server-providing Pods
@@ -640,7 +645,7 @@ func (ctl *controller) enforceSleeperBudget(ctx context.Context, serverDat *serv
 		})
 		// Every existing server-providing Pod on this GPU must have a sleeping inference server,
 		// otherwise the scheduler and kubelet would not have assigned this GPU to the server-requesting Pod.
-		toGo := len(sleepingPods) - ctl.sleeperLimit
+		toGo := len(sleepingPods) - sleeperLimit
 		if toGo <= 0 {
 			continue
 		}
@@ -652,7 +657,7 @@ func (ctl *controller) enforceSleeperBudget(ctx context.Context, serverDat *serv
 				PropagationPolicy: ptr.To(metav1.DeletePropagationBackground),
 			})
 			if err == nil {
-				logger.V(2).Info("Deleted server-providing Pod with sleeping server, to respect sleeper-limit", "idx", idx, "total", len(sleepingPods), "limit", ctl.sleeperLimit, "name", goner.Name, "resourceVersion", goner.ResourceVersion)
+				logger.V(2).Info("Deleted server-providing Pod with sleeping server, to respect sleeper-limit", "idx", idx, "total", len(sleepingPods), "limit", sleeperLimit, "name", goner.Name, "resourceVersion", goner.ResourceVersion)
 			} else if apierrors.IsNotFound(err) || apierrors.IsGone(err) {
 				logger.V(5).Info("Server-providing Pod was concurrently deleted", "name", goner.Name)
 			} else {
