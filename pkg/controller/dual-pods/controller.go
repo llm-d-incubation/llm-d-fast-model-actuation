@@ -175,6 +175,7 @@ func (config ControllerConfig) NewController(
 	ctl.gpuMap.Store(&map[string]GpuLocation{})
 	err := ctl.podInformer.AddIndexers(cache.Indexers{
 		inferenceServerConfigIndexName: inferenceServerConfigIndexFunc,
+		launcherConfigHashIndexName:    launcherConfigHashIndexFunc,
 		requesterIndexName:             requesterIndexFunc,
 		nominalHashIndexName:           nominalHashIndexFunc,
 		GPUIndexName:                   GPUIndexFunc})
@@ -268,9 +269,10 @@ type nodeData struct {
 }
 
 type itemOnNode interface {
-	// process returns (err error, retry bool).
+	// process and processLauncherBased return (err error, retry bool).
 	// There will be a retry iff `retry`.
 	process(ctx context.Context, ctl *controller, nodeDat *nodeData) (error, bool)
+	processLauncherBased(ctx context.Context, ctl *controller, nodeDat *nodeData) (error, bool)
 }
 
 // Internal state about an inference server
@@ -303,15 +305,18 @@ type serverData struct {
 	RequesterDeleteRequested bool
 }
 
-// nolint
 type launcherData struct {
-	// Instances is a map,
-	// where key is an instance's ID which is the instance' nominal hash,
-	// and value is the last used time of the instance.
-	Instances map[string]time.Time
+	// Instances is a map, where a key is an instance's nominal hash.
+	Instances map[string]*InstanceData
 
 	// Accurate indicates whether the set of nominal hash in Instances is accurate.
 	Accurate bool
+}
+
+type InstanceData struct {
+	// ID is the instance's UUID as assigned by the launcher.
+	ID       string
+	LastUsed time.Time
 }
 
 type queueItem interface {
@@ -369,6 +374,17 @@ func inferenceServerConfigIndexFunc(obj any) ([]string, error) {
 		return []string{}, nil
 	}
 	return []string{inferenceServerConfigName}, nil
+}
+
+const launcherConfigHashIndexName = "launcherconfighash"
+
+func launcherConfigHashIndexFunc(obj any) ([]string, error) {
+	pod := obj.(*corev1.Pod)
+	launcherConfigHash := pod.Annotations[api.LauncherConfigHashAnnotationName]
+	if len(launcherConfigHash) == 0 {
+		return []string{}, nil
+	}
+	return []string{launcherConfigHash}, nil
 }
 
 const requesterIndexName = "requester"

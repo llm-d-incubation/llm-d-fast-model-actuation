@@ -52,6 +52,16 @@ const ServerPatchAnnotationName = "dual-pods.llm-d.ai/server-patch"
 // This annotation is mutually exclusive with the 'ServerPatchAnnotationName' annotation.
 const InferenceServerConfigAnnotationName = "dual-pods.llm-d.ai/inference-server-config"
 
+// LauncherConfigHashAnnotationName is the name of an annotation on the
+// launcher-based server-providing Pod. The value of the annotation is the hash of the
+// LauncherConfig object's PodTemplate that the server-providing Pod uses.
+const LauncherConfigHashAnnotationName = "dual-pods.llm-d.ai/launcher-config-hash"
+
+// LauncherServicePort is the port number on which the launcher exposes its HTTP service
+// for the management of vLLM instances.
+// This is a contract between the dual-pods controller and the launcher implementation.
+const LauncherServicePort = 8001
+
 // StatusAnnotationName is the name of an annotation that the dual-pods controller
 // maintains reporting the ServerRequestingPodStatus. The value of this annotation is the
 // JSON rendering of the status.
