@@ -324,7 +324,7 @@ func (ctl *controller) reconcileLaunchersOnNode(ctx context.Context, key NodeLau
 }
 
 // getCurrentLaunchersOnNode returns launcher pods for a specific config on a specific node
-func (ctl *controller) getCurrentLaunchersOnNode(ctx context.Context, key NodeLauncherKey) ([]corev1.Pod, error) {
+func (ctl *controller) getCurrentLaunchersOnNode(ctx context.Context, key NodeLauncherKey) ([]*corev1.Pod, error) {
 	launcherLabels := map[string]string{
 		ComponentLabelKey:          LauncherComponentLabelValue,
 		LauncherConfigNameLabelKey: key.LauncherConfigName,
@@ -337,9 +337,9 @@ func (ctl *controller) getCurrentLaunchersOnNode(ctx context.Context, key NodeLa
 	}
 
 	// Filter pods that are on the specified node
-	var filteredPods []corev1.Pod
+	var filteredPods []*corev1.Pod
 	for _, pod := range pods {
-		filteredPods = append(filteredPods, *pod)
+		filteredPods = append(filteredPods, pod)
 	}
 
 	return filteredPods, nil
@@ -379,25 +379,13 @@ func (ctl *controller) createLaunchers(ctx context.Context, node corev1.Node, ke
 }
 
 // deleteExcessLaunchers deletes the specified number of launcher pods
-func (ctl *controller) deleteExcessLaunchers(ctx context.Context, launchers []corev1.Pod, count int) error {
+func (ctl *controller) deleteExcessLaunchers(ctx context.Context, launchers []*corev1.Pod, count int) error {
 	logger := klog.FromContext(ctx)
 
 	deletedCount := 0
 	for i := 0; i < count && i < len(launchers); i++ {
 		pod := launchers[len(launchers)-1-i]
-
-		// Check if the Pod is still in an unbound state
-		refreshedPod, err := ctl.podLister.Pods(pod.Namespace).Get(pod.Name)
-		if err != nil {
-			if apierrors.IsNotFound(err) {
-				logger.Info("Launcher pod already deleted", "pod", pod.Name)
-				deletedCount++ // Count as deletion target achieved
-				continue
-			}
-			return fmt.Errorf("failed to get refreshed pod %s: %w", pod.Name, err)
-		}
-
-		isBound, requesterPodName := ctl.isLauncherBoundToServerRequestingPod(refreshedPod)
+		isBound, requesterPodName := ctl.isLauncherBoundToServerRequestingPod(pod)
 		if isBound {
 			logger.V(5).Info("Skipping deletion of launcher pod as it is bound to a server-requesting pod",
 				"pod", pod.Name, "server-requesting pod", requesterPodName)
@@ -406,7 +394,7 @@ func (ctl *controller) deleteExcessLaunchers(ctx context.Context, launchers []co
 
 		if err := ctl.coreclient.Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{
 			Preconditions: &metav1.Preconditions{
-				ResourceVersion: &refreshedPod.ResourceVersion,
+				ResourceVersion: &pod.ResourceVersion,
 			},
 		}); err != nil {
 			if apierrors.IsNotFound(err) {
