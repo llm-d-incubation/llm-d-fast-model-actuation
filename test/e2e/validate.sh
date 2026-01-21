@@ -18,7 +18,9 @@ if kubectl api-resources --api-group=admissionregistration.k8s.io -o name | grep
   echo "Cluster supports ValidatingAdmissionPolicy (CEL)"
   if command -v helm >/dev/null 2>&1 && [ -d "charts/dpctlr" ]; then
     helm template dpctlr charts/dpctlr --set policies.enabled=true | kubectl apply -f -
-    sleep 5 # wait for policies to be registered
+    #sleep 5 # wait for policies to be registered
+    # Add: Wait for policies to be active
+    kubectl wait --for=condition=Ready validatingadmissionpolicy/fma-bound-serverreqpod --timeout=30s
   else
     echo "Helm not available or 'charts/dpctlr' missing; cannot install policies automatically."
     exit 1
