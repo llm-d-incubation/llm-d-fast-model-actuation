@@ -1,0 +1,43 @@
+name: Publish Helm Charts
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - charts/**
+  workflow_dispatch:
+
+jobs:
+  publish_helm_charts:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+            # Checks out the main branch
+            ref: main
+            fetch-depth: 0
+
+      - name: Install Helm
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: azure/setup-helm@v3
+
+      - name: Login to Github Container Registry
+        run: |
+            echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io \
+                --username ${{ github.actor }} \
+                --password-stdin
+
+      - name: Package and push helm charts
+        run: |
+            for DIR in $(ls -d charts/*/); do
+                CHART_NAME=$(helm show chart "$DIR" | grep '^name:' | awk '{print $2}')
+                CHART_VERSION=$(helm show chart "$DIR" | grep '^version:' | awk '{print $2}')
+                helm package "$DIR" --destination .
+                helm push "$CHART_NAME-$CHART_VERSION.tgz" oci://ghcr.io/${{ github.repository }}/charts
+            done
