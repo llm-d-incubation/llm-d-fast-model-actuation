@@ -62,10 +62,10 @@ Instantiate the Helm chart for the dual-pods controller. Specify the
 tag produced by the build above. Specify the name of the ClusterRole
 to use for Node get/list/watch authorization, or omit if not
 needed. Adjust the SleeperLimit setting to your liking (the default is
-2).
+2). Set EnableValidationPolicy as needed (the default is true).
 
-If your cluster does not support `ValidatingAdmissionPolicy` objects with CEL (`admissionregistration.k8s.io/v1`), set EnableValidationPolicy to false (the default is
-true) so that the install does not attempt to create unsupported resources. More about validation admission policies [here](#validating-admission-policies-cel).
+**Note:** Validating Admission Policy became Generally Available (GA) and enabled by default in Kubernetes release 1.30. In the event that your cluster does not support these policies, set `EnableValidationPolicy` to `false`. More about validating admission policies [here](#example-9-exercise-protection-against-unwanted-label-and-annotation-modifications).
+
 
 ```shell
 POLICIES_ENABLED=false # SET TO WHAT FITS YOUR CLUSTER
@@ -490,13 +490,70 @@ that causes the oldest runner to be re-used. Then delete that
 requester. Then force a deletion; observe that the deled one is the
 least recently used.
 
-## Validating admission policies (CEL)
+## Example 9: Exercise protection against unwanted label and annotation modifications
 
-Kubernetes `ValidatingAdmissionPolicy` (CEL) resources are used to
+Kubernetes `ValidatingAdmissionPolicy` (using CEL) objects are used to
 protect a subset of annotations and labels that are critical to FMA
 controller operations (dual-pods controller and
-launcher-populator). The policy manifests and their
-bindings are managed as Helm chart templates under `charts/dpctlr/templates/policies/` and can be installed by the chart when
-`EnableValidationPolicy` is `true`.
+launcher-populator).
 
-For admission policy support, it is required to have a Kubernetes API server that supports `ValidatingAdmissionPolicy` with CEL (`admissionregistration.k8s.io/v1`). If your cluster does not support `ValidatingAdmissionPolicy` objects, set `EnableValidationPolicy=false` (the default is true) when installing the chart so the Helm release does not attempt to create unsupported resources.
+Ensure the Helm chart has installed the policy objects:
+
+```shell
+kubectl get validatingadmissionpolicy fma-immutable-fields fma-bound-serverreqpod
+```
+
+Create an example launcher Pod:
+
+```shell
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: my-launcher-test
+  labels:
+    app: dp-example
+    dual-pods.llm-d.ai/dual: "test-requester"
+  annotations:
+    dual-pods.llm-d.ai/requester: "abcd test-requester"
+    dual-pods.llm-d.ai/status: "ok"
+spec:
+  containers:
+  - name: launcher
+    image: busybox
+    command: ["/bin/sh","-c","sleep 3600"]
+EOF
+```
+
+Verify user-initiated annotation changes are rejected:
+
+```shell
+kubectl annotate pod my-launcher-test dual-pods.llm-d.ai/requester="patched" --overwrite
+```
+
+Create a bound server-requesting Pod:
+
+```shell
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: my-requester-test
+  labels:
+    app: dp-example
+    dual-pods.llm-d.ai/dual: "test-launcher"
+  annotations:
+    dual-pods.llm-d.ai/inference-server-config: "test-config"
+spec:
+  containers:
+  - name: requester
+    image: busybox
+    command: ["/bin/sh","-c","sleep 3600"]
+EOF
+```
+
+Verify user-initiated annotation changes are rejected:
+
+```shell
+kubectl annotate pod my-requester-test "dual-pods.llm-d.ai/inference-server-config=patched-config" --overwrite
+```

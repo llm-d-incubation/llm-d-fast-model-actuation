@@ -26,13 +26,13 @@ spec:
     # THEN deny unless the request originates from an FMA controller SA.
     - expression: |
         request.userInfo.username.matches("^system:serviceaccount:[^:]+:(launcher-populator|dual-pods-controller)$") ||
-        (
+        !(
           oldObject.metadata.?annotations['dual-pods.llm-d.ai/inference-server-config'].orValue('') != "" &&
-          oldObject.metadata.?labels['dual-pods.llm-d.ai/dual'].orValue('') != "" &&
-          (
-            oldObject.metadata.?annotations['dual-pods.llm-d.ai/inference-server-config'].orValue('') == object.metadata.?annotations['dual-pods.llm-d.ai/inference-server-config'].orValue('') &&
-            oldObject.metadata.?labels['dual-pods.llm-d.ai/dual'].orValue('') == object.metadata.?labels['dual-pods.llm-d.ai/dual'].orValue('')
-          )
+          oldObject.metadata.?labels['dual-pods.llm-d.ai/dual'].orValue('') != ""
+        ) ||
+        (
+          oldObject.metadata.?annotations['dual-pods.llm-d.ai/inference-server-config'].orValue('') == object.metadata.?annotations['dual-pods.llm-d.ai/inference-server-config'].orValue('') &&
+          oldObject.metadata.?labels['dual-pods.llm-d.ai/dual'].orValue('') == object.metadata.?labels['dual-pods.llm-d.ai/dual'].orValue('')
         )
       message: "One or more annotations/labels are managed by FMA controllers and cannot be modified once the server-requesting pod is bound to a providing pod."
 {{- end }}

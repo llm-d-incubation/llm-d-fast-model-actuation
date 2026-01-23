@@ -2,7 +2,8 @@
 
 # Usage: $0
 # Current working directory must be the root of the Git repository.
-# The reasons for this are the `make` commands and the location of CRDs.
+# The reasons for this are the `make` commands, the location of CRDs,
+# and the location of the validating admission policy files.
 
 set -euo pipefail
 
@@ -122,10 +123,6 @@ make load-test-requester-local
 make load-test-server-local
 make load-controller-local
 
-: Deploy the dual-pods controller in the cluster
-
-ctlr_img=$(make echo-var VAR=CONTROLLER_IMG)
-
 : Detect whether API server supports ValidatingAdmissionPolicy
 
 POLICIES_ENABLED=false
@@ -133,12 +130,16 @@ if kubectl api-resources --api-group=admissionregistration.k8s.io -o name | grep
   POLICIES_ENABLED=true
 fi
 
+: Deploy the dual-pods controller in the cluster
+
+ctlr_img=$(make echo-var VAR=CONTROLLER_IMG)
+
 helm upgrade --install dpctlr charts/dpctlr --set Image="$ctlr_img" --set NodeViewClusterRole=node-viewer --set SleeperLimit=2 --set Local=true --set DebugAcceleratorMemory=false --set EnableValidationPolicy=${POLICIES_ENABLED}
 
 : Test CEL policy verification if enabled
 
 if [ "${POLICIES_ENABLED}" = true ]; then
-  if ! ./test/e2e/validate.sh; then
+  if ! test/e2e/validate.sh; then
     echo "ERROR: CEL policy tests failed!" >&2
     exit 1
   fi
