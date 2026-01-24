@@ -139,6 +139,7 @@ helm upgrade --install dpctlr charts/dpctlr --set Image="$ctlr_img" --set NodeVi
 : Test CEL policy verification if enabled
 
 if [ "${POLICIES_ENABLED}" = true ]; then
+  sleep 15 # A short sleep to wait for the bindings to exist before running the validation tests
   if ! test/e2e/validate.sh; then
     echo "ERROR: CEL policy tests failed!" >&2
     exit 1

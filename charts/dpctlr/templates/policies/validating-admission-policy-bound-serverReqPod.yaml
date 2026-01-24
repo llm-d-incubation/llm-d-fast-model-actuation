@@ -20,10 +20,8 @@ spec:
     # account (launcher-populator or dual-pods-controller).
     #
     # Logic:
-    # If the old object is a server requesting pod (`inference-server-config`),
-    # AND the `dual` label is present and non-empty (bound state),
-    # AND any of the immutable fields change
-    # THEN deny unless the request originates from an FMA controller SA.
+    # If the old object is a bound server-requesting pod (has both inference-server-config and dual label),
+    # Then deny field changes unless from FMA controller OR the protected fields haven't changed.
     - expression: |
         request.userInfo.username.matches("^system:serviceaccount:[^:]+:(launcher-populator|dual-pods-controller)$") ||
         !(

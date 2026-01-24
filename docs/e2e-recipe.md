@@ -503,35 +503,7 @@ Ensure the Helm chart has installed the policy objects:
 kubectl get validatingadmissionpolicy fma-immutable-fields fma-bound-serverreqpod
 ```
 
-Create an example launcher Pod:
-
-```shell
-kubectl apply -f - <<EOF
-apiVersion: v1
-kind: Pod
-metadata:
-  name: my-launcher-test
-  labels:
-    app: dp-example
-    dual-pods.llm-d.ai/dual: "test-requester"
-  annotations:
-    dual-pods.llm-d.ai/requester: "abcd test-requester"
-    dual-pods.llm-d.ai/status: "ok"
-spec:
-  containers:
-  - name: launcher
-    image: busybox
-    command: ["/bin/sh","-c","sleep 3600"]
-EOF
-```
-
-Verify user-initiated annotation changes are rejected:
-
-```shell
-kubectl annotate pod my-launcher-test dual-pods.llm-d.ai/requester="patched" --overwrite
-```
-
-Create a bound server-requesting Pod:
+Create an example server-requesting Pod:
 
 ```shell
 kubectl apply -f - <<EOF
@@ -541,7 +513,7 @@ metadata:
   name: my-requester-test
   labels:
     app: dp-example
-    dual-pods.llm-d.ai/dual: "test-launcher"
+    dual-pods.llm-d.ai/dual: "my-launcher-test"
   annotations:
     dual-pods.llm-d.ai/inference-server-config: "test-config"
 spec:
@@ -552,7 +524,40 @@ spec:
 EOF
 ```
 
-Verify user-initiated annotation changes are rejected:
+Get the UID of the server-requesting Pod:
+
+```shell
+REQUESTER_UID=$(kubectl get pod my-requester-test -o jsonpath='{.metadata.uid}')
+```
+
+Create an example launcher Pod bound to the server-requesting Pod:
+
+```shell
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: my-launcher-test
+  labels:
+    app: dp-example
+    dual-pods.llm-d.ai/dual: "my-requester-test"
+  annotations:
+    dual-pods.llm-d.ai/requester: "${REQUESTER_UID} my-requester-test"
+spec:
+  containers:
+  - name: launcher
+    image: busybox
+    command: ["/bin/sh","-c","sleep 3600"]
+EOF
+```
+
+Verify user-initiated annotation changes on the launcher are rejected with an error:
+
+```shell
+kubectl annotate pod my-launcher-test "dual-pods.llm-d.ai/requester=patched" --overwrite
+```
+
+Verify user-initiated annotation changes on the server-requesting Pod are rejected with an error:
 
 ```shell
 kubectl annotate pod my-requester-test "dual-pods.llm-d.ai/inference-server-config=patched-config" --overwrite
