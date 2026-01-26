@@ -487,7 +487,7 @@ server-running Pods gets delete --- the oldest one.
 
 Or, for more fun, before going past N+1, make a server-requesting Pod
 that causes the oldest runner to be re-used. Then delete that
-requester. Then force a deletion; observe that the deled one is the
+requester. Then force a deletion; observe that the deleted one is the
 least recently used.
 
 ## Example 9: Exercise protection against unwanted label and annotation modifications
@@ -503,7 +503,7 @@ Ensure the Helm chart has installed the policy objects:
 kubectl get validatingadmissionpolicy fma-immutable-fields fma-bound-serverreqpod
 ```
 
-Create an example server-requesting Pod:
+Create an example server-requesting Pod (without the `dual` label - the controller will set it):
 
 ```shell
 kubectl apply -f - <<EOF
@@ -513,7 +513,6 @@ metadata:
   name: my-requester-test
   labels:
     app: dp-example
-    dual-pods.llm-d.ai/dual: "my-launcher-test"
   annotations:
     dual-pods.llm-d.ai/inference-server-config: "test-config"
 spec:
@@ -550,6 +549,8 @@ spec:
     command: ["/bin/sh","-c","sleep 3600"]
 EOF
 ```
+
+Wait for the controller to set the `dual` label on the requester pod.
 
 Verify user-initiated annotation changes on the launcher are rejected with an error:
 
