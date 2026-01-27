@@ -62,13 +62,20 @@ Instantiate the Helm chart for the dual-pods controller. Specify the
 tag produced by the build above. Specify the name of the ClusterRole
 to use for Node get/list/watch authorization, or omit if not
 needed. Adjust the SleeperLimit setting to your liking (the default is
-2).
+2). Set EnableValidationPolicy as needed (the default is true).
+
+**Note:** Validating Admission Policy became Generally Available (GA) and enabled by default in Kubernetes release 1.30. In the event that your cluster does not support these policies, set `EnableValidationPolicy` to `false`. More about validating admission policies [here](#example-9-exercise-protection-against-unwanted-label-and-annotation-modifications).
+
+
+```shell
+POLICIES_ENABLED=false # SET TO WHAT FITS YOUR CLUSTER
+```
 
 NOTE: if you have done this before then you will need to delete the
 old Helm chart instance before re-making it.
 
 ```shell
-helm upgrade --install dpctlr charts/dpctlr --set Image="${CONTAINER_IMG_REG}/dual-pods-controller:${CONTROLLER_IMG_TAG}" --set NodeViewClusterRole=vcp-node-viewer --set SleeperLimit=1
+helm upgrade --install dpctlr charts/dpctlr --set Image="${CONTAINER_IMG_REG}/dual-pods-controller:${CONTROLLER_IMG_TAG}" --set NodeViewClusterRole=vcp-node-viewer --set SleeperLimit=1 --set EnableValidationPolicy=${POLICIES_ENABLED}
 ```
 
 Finally, define a shell function that creates a new ReplicaSet whose
@@ -480,5 +487,79 @@ server-running Pods gets delete --- the oldest one.
 
 Or, for more fun, before going past N+1, make a server-requesting Pod
 that causes the oldest runner to be re-used. Then delete that
-requester. Then force a deletion; observe that the deled one is the
+requester. Then force a deletion; observe that the deleted one is the
 least recently used.
+
+## Example 9: Exercise protection against unwanted label and annotation modifications
+
+Kubernetes `ValidatingAdmissionPolicy` (using CEL) objects are used to
+protect a subset of annotations and labels that are critical to FMA
+controller operations (dual-pods controller and
+launcher-populator).
+
+Ensure the Helm chart has installed the policy objects:
+
+```shell
+kubectl get validatingadmissionpolicy fma-immutable-fields fma-bound-serverreqpod
+```
+
+Create an example server-requesting Pod (without the `dual` label - the controller will set it):
+
+```shell
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: my-requester-test
+  labels:
+    app: dp-example
+  annotations:
+    dual-pods.llm-d.ai/inference-server-config: "test-config"
+spec:
+  containers:
+  - name: requester
+    image: busybox
+    command: ["/bin/sh","-c","sleep 3600"]
+EOF
+```
+
+Get the UID of the server-requesting Pod:
+
+```shell
+REQUESTER_UID=$(kubectl get pod my-requester-test -o jsonpath='{.metadata.uid}')
+```
+
+Create an example launcher Pod bound to the server-requesting Pod:
+
+```shell
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: my-launcher-test
+  labels:
+    app: dp-example
+    dual-pods.llm-d.ai/dual: "my-requester-test"
+  annotations:
+    dual-pods.llm-d.ai/requester: "${REQUESTER_UID} my-requester-test"
+spec:
+  containers:
+  - name: launcher
+    image: busybox
+    command: ["/bin/sh","-c","sleep 3600"]
+EOF
+```
+
+Wait for the controller to set the `dual` label on the requester pod.
+
+Verify user-initiated annotation changes on the launcher are rejected with an error:
+
+```shell
+kubectl annotate pod my-launcher-test "dual-pods.llm-d.ai/requester=patched" --overwrite
+```
+
+Verify user-initiated annotation changes on the server-requesting Pod are rejected with an error:
+
+```shell
+kubectl annotate pod my-requester-test "dual-pods.llm-d.ai/inference-server-config=patched-config" --overwrite
+```
