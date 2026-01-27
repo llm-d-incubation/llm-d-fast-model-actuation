@@ -34,4 +34,9 @@ const (
 	// that is relevant to identify the launcher-based server-providing Pod, mainly the
 	// corresponding LauncherConfig object's PodTemplate that the server-providing Pod uses.
 	LauncherConfigHashAnnotationKey = "dual-pods.llm-d.ai/launcher-config-hash"
+
+	// LauncherServicePort is the port number on which the launcher exposes its HTTP service
+	// for the management of vLLM instances.
+	// This is a contract between the controllers and the launcher implementation.
+	LauncherServicePort = 8001
 )
