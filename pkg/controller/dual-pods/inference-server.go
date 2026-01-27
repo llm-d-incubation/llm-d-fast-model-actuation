@@ -49,6 +49,7 @@ import (
 
 	fmav1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/api"
+	ctlrcommon "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/common"
 	stubapi "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/spi"
 )
 
@@ -467,7 +468,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 			return fmt.Errorf("launcher Pod %q has no IP assigned yet", launcherPod.Name), true
 		}
 
-		launcherBaseURL := fmt.Sprintf("http://%s:%d", launcherIP, api.LauncherServicePort)
+		launcherBaseURL := fmt.Sprintf("http://%s:%d", launcherIP, ctlrcommon.LauncherServicePort)
 		lClient, err := NewLauncherClient(launcherBaseURL)
 		if err != nil {
 			return err, true

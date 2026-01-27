@@ -42,6 +42,7 @@ import (
 
 	fmav1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/api"
+	ctlrcommon "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/common"
 	genctlr "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/generic"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/utils"
 	fmainformers "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/generated/informers/externalversions"
@@ -374,7 +375,7 @@ const launcherConfigHashIndexName = "launcherconfighash"
 
 func launcherConfigHashIndexFunc(obj any) ([]string, error) {
 	pod := obj.(*corev1.Pod)
-	launcherConfigHash := pod.Annotations[api.LauncherConfigHashAnnotationName]
+	launcherConfigHash := pod.Annotations[ctlrcommon.LauncherConfigHashAnnotationKey]
 	if len(launcherConfigHash) == 0 {
 		return []string{}, nil
 	}
