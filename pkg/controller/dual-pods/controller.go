@@ -115,7 +115,7 @@ func GPUIndexFunc(obj any) ([]string, error) {
 		return []string{}, nil
 	}
 	visibleParts := strings.Split(isCtr.Env[eIdx].Value, ",")
-	keys, _ := SliceMap(visibleParts, func(gpu string) (string, error) {
+	keys, _ := utils.SliceMap(visibleParts, func(gpu string) (string, error) {
 		return pod.Spec.NodeName + " " + strings.Trim(gpu, " "), nil
 	})
 	return keys, nil

@@ -1,4 +1,4 @@
-package dualpods
+package utils
 
 import "slices"
 

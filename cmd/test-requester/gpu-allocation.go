@@ -33,6 +33,7 @@ import (
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 
 	dpctlr "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/dual-pods"
+	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/utils"
 
 	"k8s.io/klog/v2"
 )
@@ -204,7 +205,7 @@ func getPodUIDs(ctx context.Context, podClient corev1client.PodInterface) (sets.
 	if err != nil {
 		return nil, err
 	}
-	uids, _ := dpctlr.SliceMap(podList.Items, func(pod corev1.Pod) (apitypes.UID, error) {
+	uids, _ := utils.SliceMap(podList.Items, func(pod corev1.Pod) (apitypes.UID, error) {
 		return pod.UID, nil
 	})
 	return sets.New(uids...), nil

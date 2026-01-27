@@ -1,15 +1,20 @@
 package utils
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
 	"slices"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/api"
+	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/common"
 )
 
 var apiAccessRE = regexp.MustCompile(`^kube-api-access-[a-z0-9]+$`)
@@ -102,4 +107,116 @@ func IsPodReady(pod *corev1.Pod) bool {
 		}
 	}
 	return false
+}
+
+// BuildPodFromTemplate creates a pod from a template and assigns it to a node
+func BuildPodFromTemplate(template corev1.PodTemplateSpec, ns, nodeName, launcherConfigName string) (*corev1.Pod, error) {
+	pod := &corev1.Pod{
+		ObjectMeta: template.ObjectMeta,
+		Spec:       *DeIndividualize(template.Spec.DeepCopy()),
+	}
+	pod.Namespace = ns
+	// Ensure labels are set
+	if pod.Labels == nil {
+		pod.Labels = make(map[string]string)
+	}
+	pod.Labels[common.ComponentLabelKey] = common.LauncherComponentLabelValue
+	pod.Labels[common.LauncherGeneratedByLabelKey] = common.LauncherGeneratedByLabelValue
+	pod.Labels[common.LauncherConfigNameLabelKey] = launcherConfigName
+	pod.Labels[common.NodeNameLabelKey] = nodeName
+	pod.Labels[api.SleepingLabelName] = "false"
+
+	hasher := sha256.New()
+	modifiedJSON, _ := json.Marshal(pod)
+	hasher.Write(modifiedJSON)
+	hasher.Write([]byte(";gpus="))
+	hasher.Write([]byte("all")) //@TODO will be refined
+	hasher.Write([]byte(";node="))
+	hasher.Write([]byte(nodeName))
+	var modifiedHash [sha256.Size]byte
+	modifiedHashSl := hasher.Sum(modifiedHash[:0])
+	nominalHash := base64.RawStdEncoding.EncodeToString(modifiedHashSl)
+
+	if pod.Annotations == nil {
+		pod.Annotations = make(map[string]string)
+	}
+	pod.Annotations = MapSet(pod.Annotations, string(common.LauncherConfigHashAnnotationKey), nominalHash)
+
+	cIdx, serverPort, err := GetInferenceServerPort(pod)
+	if err != nil {
+		return nil, err
+	}
+	container := &pod.Spec.Containers[cIdx]
+
+	// Configure required environment variables
+	configureRequiredEnvVars(container)
+
+	// Set fixed liveness probe
+	container.LivenessProbe = &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{
+				Path:   "/health",
+				Port:   intstr.FromInt(int(serverPort)),
+				Scheme: corev1.URISchemeHTTP,
+			},
+		},
+		InitialDelaySeconds: 10,
+		PeriodSeconds:       20,
+		TimeoutSeconds:      1,
+		SuccessThreshold:    1,
+		FailureThreshold:    3,
+	}
+
+	// Remove nvidia.com/gpu from resource limits
+	removeGPUResourceLimits(container)
+
+	// Remove nvidia.com/gpu from Pod-level resource overhead
+	if pod.Spec.Overhead != nil {
+		delete(pod.Spec.Overhead, corev1.ResourceName("nvidia.com/gpu"))
+	}
+
+	// Assign to specific node
+	pod.Spec.NodeName = nodeName
+	return pod, nil
+}
+
+// configureRequiredEnvVars adds or updates required environment variables
+func configureRequiredEnvVars(container *corev1.Container) {
+	envVars := map[string]string{
+		"PYTHONPATH":                 "/app",
+		"NVIDIA_VISIBLE_DEVICES":     "all",
+		"NVIDIA_DRIVER_CAPABILITIES": "compute,utility",
+		"VLLM_SERVER_DEV_MODE":       "1",
+	}
+
+	// Create a mapping of existing environment variables for easy lookup
+	existingEnv := make(map[string]*corev1.EnvVar)
+	for i := range container.Env {
+		envVar := &container.Env[i]
+		existingEnv[envVar.Name] = envVar
+	}
+
+	// Add or update required environment variables
+	for envName, envValue := range envVars {
+		if envVar, exists := existingEnv[envName]; exists {
+			// If it already exists, update its value
+			envVar.Value = envValue
+		} else {
+			// If it doesn't exist, add a new environment variable
+			container.Env = append(container.Env, corev1.EnvVar{
+				Name:  envName,
+				Value: envValue,
+			})
+		}
+	}
+}
+
+// removeGPUResourceLimits removes nvidia.com/gpu from container resource limits and requests
+func removeGPUResourceLimits(container *corev1.Container) {
+	if container.Resources.Limits != nil {
+		container.Resources.Limits[corev1.ResourceName("nvidia.com/gpu")] = resource.MustParse("0")
+	}
+	if container.Resources.Requests != nil {
+		container.Resources.Requests[corev1.ResourceName("nvidia.com/gpu")] = resource.MustParse("0")
+	}
 }

@@ -17,15 +17,5 @@ limitations under the License.
 package launcherpopulator
 
 const (
-	ComponentLabelKey           = "app.kubernetes.io/component"
-	LauncherComponentLabelValue = "launcher"
-
-	LauncherGeneratedByLabelKey   = "dual-pods.llm-d.ai/generated-by"
-	LauncherGeneratedByLabelValue = "launcher-populator"
-
-	LauncherConfigNameLabelKey = "dual-pods.llm-d.ai/launcher-config-name"
-
-	NodeNameLabelKey = "dual-pods.llm-d.ai/node-name"
-
 	NominalHashAnnotationKey = "dual-pods.llm-d.ai/nominal"
 )
