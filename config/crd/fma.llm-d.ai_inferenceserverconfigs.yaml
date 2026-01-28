@@ -66,8 +66,16 @@ spec:
                       type: string
                     type: object
                   options:
-                    description: Options are the vLLM startup options
+                    description: Options are the vLLM startup options, excluding Port
                     type: string
+                  port:
+                    description: |-
+                      Port is the port on which the vLLM server will listen
+                      Particularly, management of vLLM instances' sleep state is done through this port
+                    format: int32
+                    type: integer
+                required:
+                - port
                 type: object
             required:
             - launcherConfigName
