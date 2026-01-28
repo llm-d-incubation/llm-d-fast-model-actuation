@@ -7,6 +7,8 @@ cleanup() {
   kubectl delete pod "${LAUNCHER_POD_NAME}" --ignore-not-found || true
   kubectl delete pod "${REQUESTER_POD_NAME}" --ignore-not-found || true
   kubectl delete pod "${UNBOUND_REQUESTER_POD_NAME}" --ignore-not-found || true
+  kubectl delete inferenceserverconfig "${INFERENCE_SERVER_CONFIG_NAME}" --ignore-not-found || true
+  kubectl delete launcherconfig "${LAUNCHER_CONFIG_NAME}" --ignore-not-found || true
 }
 
 # Trap EXIT to run cleanup
@@ -17,6 +19,8 @@ POD_NAME=${POD_NAME:-my-regular-test}
 LAUNCHER_POD_NAME=${LAUNCHER_POD_NAME:-my-launcher-test}
 REQUESTER_POD_NAME=${REQUESTER_POD_NAME:-my-requester-test}
 UNBOUND_REQUESTER_POD_NAME=${UNBOUND_REQUESTER_POD_NAME:-my-unbound-requester-test}
+LAUNCHER_CONFIG_NAME=${LAUNCHER_CONFIG_NAME:-test-launcher-config}
+INFERENCE_SERVER_CONFIG_NAME=${INFERENCE_SERVER_CONFIG_NAME:-test-config}
 
 if ! kubectl get validatingadmissionpolicy fma-immutable-fields fma-bound-serverreqpod >/dev/null 2>&1; then
   echo "ERROR: Required validating admission policies not found. Ensure run.sh installed them correctly."
@@ -27,6 +31,30 @@ requester_img=$(make echo-var VAR=TEST_REQUESTER_IMG)
 server_img=$(make echo-var VAR=TEST_SERVER_IMG)
 
 cat <<EOF | kubectl apply -f -
+apiVersion: fma.llm-d.ai/v1alpha1
+kind: LauncherConfig
+metadata:
+  name: ${LAUNCHER_CONFIG_NAME}
+spec:
+  maxSleepingInstances: 2
+  podTemplate:
+    spec:
+      containers:
+      - name: launcher
+        image: ${server_img}
+        imagePullPolicy: Never
+---
+apiVersion: fma.llm-d.ai/v1alpha1
+kind: InferenceServerConfig
+metadata:
+  name: ${INFERENCE_SERVER_CONFIG_NAME}
+spec:
+  launcherConfigName: ${LAUNCHER_CONFIG_NAME}
+  modelServerConfig:
+    options: "--model test-model"
+EOF
+
+cat <<EOF | kubectl apply -f -
 apiVersion: v1
 kind: Pod
 metadata:
@@ -34,7 +62,7 @@ metadata:
   labels:
     app: dp-example
   annotations:
-    dual-pods.llm-d.ai/inference-server-config: "test-config"
+    dual-pods.llm-d.ai/inference-server-config: "${INFERENCE_SERVER_CONFIG_NAME}"
 spec:
   containers:
   - name: inference-server
@@ -78,7 +106,7 @@ metadata:
     app: dp-example
     app.kubernetes.io/component: launcher
     dual-pods.llm-d.ai/generated-by: launcher-populator
-    dual-pods.llm-d.ai/launcher-config-name: test-launcher-config
+    dual-pods.llm-d.ai/launcher-config-name: "${LAUNCHER_CONFIG_NAME}"
     dual-pods.llm-d.ai/node-name: test-node
     dual-pods.llm-d.ai/dual: "${REQUESTER_POD_NAME}"
   annotations:
@@ -98,7 +126,7 @@ echo "Created launcher pod ${LAUNCHER_POD_NAME}"
 for i in {1..15}; do
   REQUESTER_DUAL=$(kubectl get pod "${REQUESTER_POD_NAME}" -o jsonpath='{.metadata.labels.dual-pods\.llm-d\.ai/dual}' 2>/dev/null || echo "")
   if [ "${REQUESTER_DUAL}" = "${LAUNCHER_POD_NAME}" ]; then
-    echo "Binding established: server-requesting pod has dual label pointing to ${LAUNCHER_POD_NAME}"
+    echo "Binding established: ${REQUESTER_POD_NAME} pod has dual label pointing to ${LAUNCHER_POD_NAME}"
     break
   fi
   sleep 1
