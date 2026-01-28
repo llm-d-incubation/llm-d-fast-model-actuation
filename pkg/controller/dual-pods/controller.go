@@ -104,7 +104,7 @@ func GPUIndexFunc(obj any) ([]string, error) {
 	if len(pod.Annotations[nominalHashAnnotationKey]) == 0 || pod.Spec.NodeName == "" {
 		return []string{}, nil
 	}
-	isIdx, _, err := utils.GetInferenceServerPort(pod)
+	isIdx, _, err := utils.GetInferenceServerPort(pod, false)
 	if err != nil {
 		return []string{}, nil
 	}
