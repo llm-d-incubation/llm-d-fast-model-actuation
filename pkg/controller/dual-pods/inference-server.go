@@ -122,7 +122,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		ctx = klog.NewContext(urCtx, logger)
 		serverDat.ProvidingPodName = providingPod.Name
 	default:
-		providerNames, _ := SliceMap(providingPodAnys, func(podAny any) (string, error) {
+		providerNames, _ := utils.SliceMap(providingPodAnys, func(podAny any) (string, error) {
 			pod := podAny.(*corev1.Pod)
 			return pod.Name, nil
 		})
@@ -406,7 +406,7 @@ func (ctl *controller) ensureSleepingLabel(ctx context.Context, providingPod *co
 	desiredStr := strconv.FormatBool(desired)
 	if providingPod.Labels[api.SleepingLabelName] != desiredStr {
 		providingPod = providingPod.DeepCopy()
-		providingPod.Labels = MapSet(providingPod.Labels, api.SleepingLabelName, desiredStr)
+		providingPod.Labels = utils.MapSet(providingPod.Labels, api.SleepingLabelName, desiredStr)
 		echo, err := ctl.coreclient.Pods(ctl.namespace).Update(ctx, providingPod, metav1.UpdateOptions{
 			FieldManager: ControllerName})
 		if err != nil {
@@ -461,7 +461,7 @@ func (ctl *controller) enforceSleeperBudget(ctx context.Context, serverDat *serv
 		if err != nil { // impossible
 			return err, false
 		}
-		sleepingPods, _ := SliceMap(sleepingAnys, func(sleepingAny any) (*corev1.Pod, error) {
+		sleepingPods, _ := utils.SliceMap(sleepingAnys, func(sleepingAny any) (*corev1.Pod, error) {
 			pod := sleepingAny.(*corev1.Pod)
 			if gonerNames.Has(pod.Name) {
 				return nil, io.EOF
@@ -500,7 +500,7 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 	if !slices.Contains(providingPod.Finalizers, providerFinalizer) {
 		providingPod.Finalizers = append(providingPod.Finalizers, providerFinalizer)
 	}
-	providingPod.Labels = MapSet(providingPod.Labels, api.DualLabelName, requestingPod.Name)
+	providingPod.Labels = utils.MapSet(providingPod.Labels, api.DualLabelName, requestingPod.Name)
 	serverDat.Sleeping = nil
 	echo, err := ctl.coreclient.Pods(ctl.namespace).Update(ctx, providingPod, metav1.UpdateOptions{FieldManager: ControllerName})
 	if err != nil {
@@ -587,7 +587,7 @@ func (ctl *controller) addRequesterFinalizer(ctx context.Context, requestingPod 
 	podOps := ctl.coreclient.Pods(ctl.namespace)
 	requestingPod = requestingPod.DeepCopy()
 	if requestingPod.Labels[api.DualLabelName] != providingPodName {
-		requestingPod.Labels = MapSet(requestingPod.Labels, api.DualLabelName, providingPodName)
+		requestingPod.Labels = utils.MapSet(requestingPod.Labels, api.DualLabelName, providingPodName)
 	}
 	requestingPod.Finalizers = append(requestingPod.Finalizers, requesterFinalizer)
 	echo, err := podOps.Update(ctx, requestingPod, metav1.UpdateOptions{FieldManager: ControllerName})
@@ -605,7 +605,7 @@ func (ctl *controller) removeProviderFinalizer(ctx context.Context, providingPod
 	logger := klog.FromContext(ctx)
 	podOps := ctl.coreclient.Pods(ctl.namespace)
 	// Ensure finalizer is absent from server-providing Pod so that its deletion can complete
-	if newFinalizers, changed := SliceRemoveOnce(providingPod.Finalizers, providerFinalizer); changed {
+	if newFinalizers, changed := utils.SliceRemoveOnce(providingPod.Finalizers, providerFinalizer); changed {
 		providingPod = providingPod.DeepCopy()
 		providingPod.Finalizers = newFinalizers
 		echo, err := podOps.Update(ctx, providingPod, metav1.UpdateOptions{FieldManager: ctl.ControllerName})
@@ -649,7 +649,7 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 	sleepLabelValue := providingPod.Labels[api.SleepingLabelName]
 	lChange := sleepLabelValue != "true"
 	if lChange {
-		providingPod.Labels = MapSet(providingPod.Labels, api.SleepingLabelName, "true")
+		providingPod.Labels = utils.MapSet(providingPod.Labels, api.SleepingLabelName, "true")
 	}
 	// Ensure requester annotation is absent
 	if _, have := providingPod.Annotations[requesterAnnotationKey]; have {
@@ -657,7 +657,7 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 		aChange = true
 	}
 	// Ensure finalizer is absent
-	providingPod.Finalizers, fChange = SliceRemoveOnce(providingPod.Finalizers, providerFinalizer)
+	providingPod.Finalizers, fChange = utils.SliceRemoveOnce(providingPod.Finalizers, providerFinalizer)
 	if aChange || fChange || lChange {
 		if providingPod.Labels != nil {
 			delete(providingPod.Labels, api.DualLabelName)
@@ -778,10 +778,10 @@ func (serverDat *serverData) getNominalServerProvidingPod(ctx context.Context, r
 
 		pod.GenerateName = reqPod.Name + "-dual-"
 		pod.Finalizers = append(pod.Finalizers, providerFinalizer)
-		pod.Annotations = MapSet(pod.Annotations, nominalHashAnnotationKey, nominalHash)
+		pod.Annotations = utils.MapSet(pod.Annotations, nominalHashAnnotationKey, nominalHash)
 		pod.Annotations[requesterAnnotationKey] = string(reqPod.UID) + " " + reqPod.Name
 		pod.Annotations[api.AcceleratorsAnnotationName] = *serverDat.GPUIDsStr
-		pod.Labels = MapSet(pod.Labels, api.DualLabelName, reqPod.Name)
+		pod.Labels = utils.MapSet(pod.Labels, api.DualLabelName, reqPod.Name)
 		pod.Labels[api.SleepingLabelName] = "false"
 		serverDat.NominalProvidingPod = pod
 		serverDat.NominalProvidingPodHash = nominalHash
@@ -888,7 +888,7 @@ func (ctl *controller) ensureReqState(ctx context.Context, requestingPod *corev1
 	oldStatusStr := requestingPod.Annotations[api.StatusAnnotationName]
 	newFinalizers := requestingPod.Finalizers
 	if removeFinalizer {
-		newFinalizers, _ = SliceRemoveOnce(newFinalizers, requesterFinalizer)
+		newFinalizers, _ = utils.SliceRemoveOnce(newFinalizers, requesterFinalizer)
 	} else if addFinalizer {
 		newFinalizers = append(newFinalizers, requesterFinalizer)
 	}
@@ -899,11 +899,11 @@ func (ctl *controller) ensureReqState(ctx context.Context, requestingPod *corev1
 		return nil, false
 	}
 	requestingPod = requestingPod.DeepCopy()
-	requestingPod.Annotations = MapSet(requestingPod.Annotations, api.StatusAnnotationName, newStatusStr)
+	requestingPod.Annotations = utils.MapSet(requestingPod.Annotations, api.StatusAnnotationName, newStatusStr)
 	requestingPod.Annotations[api.AcceleratorsAnnotationName] = desiredAccelerators
 	requestingPod.Finalizers = newFinalizers
 	if serverDat.ProvidingPodName != "" {
-		requestingPod.Labels = MapSet(requestingPod.Labels, api.DualLabelName, serverDat.ProvidingPodName)
+		requestingPod.Labels = utils.MapSet(requestingPod.Labels, api.DualLabelName, serverDat.ProvidingPodName)
 	} else if requestingPod.Labels != nil {
 		delete(requestingPod.Labels, api.DualLabelName)
 	}
@@ -990,7 +990,7 @@ func getGPUUUIDs(url string) ([]string, error) {
 // This func will be moved into the launcher in milestone 3
 func (ctl *controller) mapToGPUIndices(nodeName string, gpuUUIDs []string) ([]string, error) {
 	gpuMap := *ctl.gpuMap.Load()
-	indices, errs := SliceMap(gpuUUIDs, func(uuid string) (string, error) {
+	indices, errs := utils.SliceMap(gpuUUIDs, func(uuid string) (string, error) {
 		loc, have := gpuMap[uuid]
 		if !have {
 			return "", fmt.Errorf("UUID %s is not known", uuid)
