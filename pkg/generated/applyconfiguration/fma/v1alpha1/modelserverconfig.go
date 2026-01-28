@@ -20,6 +20,7 @@ package v1alpha1
 // ModelServerConfigApplyConfiguration represents a declarative configuration of the ModelServerConfig type for use
 // with apply.
 type ModelServerConfigApplyConfiguration struct {
+	Port        *int32            `json:"port,omitempty"`
 	Options     *string           `json:"options,omitempty"`
 	EnvVars     map[string]string `json:"env_vars,omitempty"`
 	Labels      map[string]string `json:"labels,omitempty"`
@@ -30,6 +31,14 @@ type ModelServerConfigApplyConfiguration struct {
 // apply.
 func ModelServerConfig() *ModelServerConfigApplyConfiguration {
 	return &ModelServerConfigApplyConfiguration{}
+}
+
+// WithPort sets the Port field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Port field is set to the value of the last call.
+func (b *ModelServerConfigApplyConfiguration) WithPort(value int32) *ModelServerConfigApplyConfiguration {
+	b.Port = &value
+	return b
 }
 
 // WithOptions sets the Options field in the declarative configuration to the given value
