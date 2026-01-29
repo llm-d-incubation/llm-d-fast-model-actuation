@@ -306,7 +306,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	if providingPod != nil {
 		var serverPort int16
 		if launcherBased {
-			// TODO(waltforme): currently the port number of an instance is written in the vLLMConfig. Need to parse it out.
+			// TODO(waltforme): use port number in the updated InferenceServerConfig spec
 			serverPort = 8005
 		} else {
 			_, serverPort, err = utils.GetInferenceServerPort(providingPod, false)
@@ -449,19 +449,20 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		return fmt.Errorf("failed to get LauncherConfig %q: %w", lcName, err), false
 	}
 
-	lcTemplateHash, err := ctl.parseLauncherConfig(lc)
+	desiredLauncherPod, err := utils.BuildLauncherPodFromTemplate(lc.Spec.PodTemplate, ctl.namespace, requestingPod.Spec.NodeName, lcName)
 	if err != nil {
-		return fmt.Errorf("parse LauncherConfig %q: %w", lcName, err), true
+		return fmt.Errorf("failed to build launcher Pod from LauncherConfig %q: %w", lcName, err), true
 	}
-	logger.V(5).Info("LauncherConfig's PodTemplate hash", "hash", lcTemplateHash)
-	launcherPodAnys, err := ctl.podInformer.GetIndexer().ByIndex(launcherConfigHashIndexName, lcTemplateHash)
+	lcHash := desiredLauncherPod.Annotations[ctlrcommon.LauncherConfigHashAnnotationKey]
+	logger.V(5).Info("LauncherConfig's hash", "hash", lcHash)
+	launcherPodAnys, err := ctl.podInformer.GetIndexer().ByIndex(launcherConfigHashIndexName, lcHash)
 	if err != nil {
 		return err, false
 	}
 
 	if len(launcherPodAnys) > 0 {
 		// Multiple launcher Pods could exist for one LauncherConfig object on one node.
-		// TODO(waltforme): The controller currently picks the first Pod but should consider all of them, this should be revised.
+		// TODO(waltforme): The logic currently picks the first Pod but should consider all of them
 
 		// Note: Multiple vLLM instances could exist in one launcher Pod, but at most one instance
 		// could be awake at a time.
@@ -507,7 +508,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				return fmt.Errorf("wake up vLLM instance: %w", err), true
 			}
 			launcherDat.Instances[iscHash] = time.Now()
-			// TODO(waltforme): the bind method needs to be revised to handle launcher-based server providing Pods
+			// TODO(waltforme): the bind method may need more revision to fully handle launcher-based server providing Pods
 			return ctl.bind(ctx, serverDat, requestingPod, launcherPod, true)
 		} else if insts.TotalInstances == 0 {
 			result, err := lClient.CreateNamedInstance(ctx, iscHash, *cfg)
@@ -519,14 +520,14 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				"status", result.Status,
 			)
 			launcherDat.Instances[iscHash] = time.Now()
-			// TODO(waltforme): the bind method needs to be revised to handle launcher-based server providing Pods
+			// TODO(waltforme): the bind method may need more revision to fully handle launcher-based server providing Pods
 			return ctl.bind(ctx, serverDat, requestingPod, launcherPod, true)
 		}
 
 	}
 	// Remains: Zero matching launcher Pods, or the matching launcher Pod cannot host more instances to fulfill the request.
 
-	// TODO(waltforme): should enforceSleeperBudget be revised for launcher-based server providing Pods?
+	// TODO(waltforme): enforceSleeperBudget should be revised for launcher-based server-providing Pods
 	err, retry := ctl.enforceSleeperBudget(ctx, serverDat, requestingPod, int(lc.Spec.MaxSleepingInstances))
 	if err != nil || retry {
 		return err, retry
@@ -534,11 +535,6 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	// Sleeper budget is met. Make a new launcher Pod.
 
 	// TODO(waltforme): introduce the 'enqueue requesters by launcher pods' logic to the controller.
-	desiredLauncherPod, err := utils.BuildLauncherPodFromTemplate(lc.Spec.PodTemplate, ctl.namespace, requestingPod.Spec.NodeName, lcName)
-	if err != nil {
-		return fmt.Errorf("failed to build launcher Pod from LauncherConfig %q: %w", lcName, err), true
-	}
-
 	echo, err := podOps.Create(ctx, desiredLauncherPod, metav1.CreateOptions{})
 	if err != nil {
 		errMsg := err.Error()
@@ -552,14 +548,15 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		return err, true
 	}
 	serverDat.Sleeping = ptr.To(false)
-	logger.V(2).Info("Created server-providing pod", "name", echo.Name, "gpus", serverDat.GPUIndicesStr, "annotations", echo.Annotations, "labels", echo.Labels, "resourceVersion", echo.ResourceVersion)
+	logger.V(2).Info("Created launcher-based server-providing pod", "name", echo.Name, "gpus", serverDat.GPUIndicesStr, "annotations", echo.Annotations, "labels", echo.Labels, "resourceVersion", echo.ResourceVersion)
 
 	return ctl.ensureReqStatus(ctx, requestingPod, serverDat)
 }
 
 func (ctl *controller) parseInferenceServerConfig(isc *fmav1alpha1.InferenceServerConfig) (*VllmConfig, string, error) {
+	options := isc.Spec.ModelServerConfig.Options + " --port " + strconv.Itoa(int(isc.Spec.ModelServerConfig.Port))
 	vllmCfg := VllmConfig{ // TODO(waltforme): update this when type VllmConfig is updated
-		Options: isc.Spec.ModelServerConfig.Options,
+		Options: options,
 		EnvVars: make(map[string]interface{}, len(isc.Spec.ModelServerConfig.EnvVars)),
 	}
 	for k, v := range isc.Spec.ModelServerConfig.EnvVars {
@@ -580,21 +577,9 @@ func (ctl *controller) parseInferenceServerConfig(isc *fmav1alpha1.InferenceServ
 	return &vllmCfg, nominalHash, nil
 }
 
-func (ctl *controller) parseLauncherConfig(lc *fmav1alpha1.LauncherConfig) (string, error) {
-	podTemplateBytes, err := yaml.Marshal(lc.Spec.PodTemplate)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal LauncherConfig %q: %w", lc.Name, err)
-	}
-	hasher := sha256.New()
-	hasher.Write(podTemplateBytes)
-	var hash [sha256.Size]byte
-	hashSl := hasher.Sum(hash[:0])
-	return base64.RawStdEncoding.EncodeToString(hashSl), nil
-}
-
 func (ctl *controller) wakeupInstance(ctx context.Context, lClient *LauncherClient, instanceID string) error {
 	logger := klog.FromContext(ctx)
-	// TODO(waltforme): currently the port number of an instance is written in the vLLMConfig. Need to parse it out.
+	// TODO(waltforme): use port number in the updated InferenceServerConfig spec
 	err := doPost("http://" + lClient.baseURL.Hostname() + ":8005" + "/wake_up")
 	if err != nil {
 		return fmt.Errorf("failed to wake up vLLM instance %q: %w", instanceID, err)
