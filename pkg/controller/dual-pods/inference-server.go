@@ -293,21 +293,35 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		serverDat.GPUIndicesStr = &gpuIndicesStr
 	}
 
-	launcherBased := false
+	var launcherBased bool
+	var isc *fmav1alpha1.InferenceServerConfig
 	if requestingPod.Annotations != nil {
 		_, launcherBased = requestingPod.Annotations[api.InferenceServerConfigAnnotationName]
 	}
 	if launcherBased {
 		logger.V(5).Info("Server requesting Pod is asking for launcher-based server providing Pod")
+
+		// from the requestingPod's annotations, get the InferenceServerConfig object
+		iscName, ok := requestingPod.Annotations[api.InferenceServerConfigAnnotationName]
+		if !ok {
+			// TODO(waltforme): report error in the status annotation
+			// It is safe not to retry here because once the user update the annotation of requestingPod, another processing is triggered
+			return fmt.Errorf("requesting Pod %q is missing annotation %q", requestingPod.Name, api.InferenceServerConfigAnnotationName), false
+		}
+		isc, err = ctl.iscLister.InferenceServerConfigs(ctl.namespace).Get(iscName)
+		if err != nil {
+			// TODO(waltforme): report error in the status annotation
+			// It is safe not to retry here because once an event from InferenceServerConfig occurs, another processing is triggered
+			return fmt.Errorf("failed to get InferenceServerConfig %q: %w", iscName, err), false
+		}
 	}
 
-	// If there is already a server-providing Pod then ensure that it is awake,
+	// If there is already a bound server-providing Pod then ensure that it is awake,
 	// ensure status reported, and relay readiness if needed.
 	if providingPod != nil {
 		var serverPort int16
 		if launcherBased {
-			// TODO(waltforme): use port number in the updated InferenceServerConfig spec
-			serverPort = 8005
+			serverPort = int16(isc.Spec.ModelServerConfig.Port)
 		} else {
 			_, serverPort, err = utils.GetInferenceServerPort(providingPod, false)
 			if err != nil { // Impossible, because such a providingPod would never be created by this controller
@@ -425,20 +439,6 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	}
 	// What remains to be done is to wake or create a launcher-based server-providing Pod
 
-	// from the requestingPod's annotations, get the InferenceServerConfig object
-	iscName, have := requestingPod.Annotations[api.InferenceServerConfigAnnotationName]
-	if !have {
-		// TODO(waltforme): report error in the status annotation
-		// It is safe not to retry here because once the user update the annotation of requestingPod, another processing is triggered
-		return fmt.Errorf("requesting Pod %q is missing annotation %q", requestingPod.Name, api.InferenceServerConfigAnnotationName), false
-	}
-	isc, err := ctl.iscLister.InferenceServerConfigs(ctl.namespace).Get(iscName)
-	if err != nil {
-		// TODO(waltforme): report error in the status annotation
-		// It is safe not to retry here because once an event from InferenceServerConfig occurs, another processing is triggered
-		return fmt.Errorf("failed to get InferenceServerConfig %q: %w", iscName, err), false
-	}
-
 	// from the InferenceServerConfig object, get the launcherConfig object
 	lcName := isc.Spec.LauncherConfigName
 	lc, err := ctl.lcLister.LauncherConfigs(ctl.namespace).Get(lcName)
@@ -503,7 +503,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		// if the matching launcher Pod hosts zero instances, create an instance and bind the launcher Pod to the requester.
 		if instExists {
 			logger.V(5).Info("vLLM instance for InferenceServerConfig already exists", "iscHash", iscHash)
-			err := ctl.wakeupInstance(ctx, lClient, iscHash)
+			err := ctl.wakeupInstance(ctx, lClient, iscHash, isc.Spec.ModelServerConfig.Port)
 			if err != nil {
 				return fmt.Errorf("wake up vLLM instance: %w", err), true
 			}
@@ -577,10 +577,9 @@ func (ctl *controller) parseInferenceServerConfig(isc *fmav1alpha1.InferenceServ
 	return &vllmCfg, nominalHash, nil
 }
 
-func (ctl *controller) wakeupInstance(ctx context.Context, lClient *LauncherClient, instanceID string) error {
+func (ctl *controller) wakeupInstance(ctx context.Context, lClient *LauncherClient, instanceID string, instancePort int32) error {
 	logger := klog.FromContext(ctx)
-	// TODO(waltforme): use port number in the updated InferenceServerConfig spec
-	err := doPost("http://" + lClient.baseURL.Hostname() + ":8005" + "/wake_up")
+	err := doPost("http://" + lClient.baseURL.Hostname() + ":" + strconv.Itoa(int(instancePort)) + "/wake_up")
 	if err != nil {
 		return fmt.Errorf("failed to wake up vLLM instance %q: %w", instanceID, err)
 	}
