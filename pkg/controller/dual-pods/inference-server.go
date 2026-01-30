@@ -304,15 +304,15 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		// from the requestingPod's annotations, get the InferenceServerConfig object
 		iscName, ok := requestingPod.Annotations[api.InferenceServerConfigAnnotationName]
 		if !ok {
-			// TODO(waltforme): report error in the status annotation
-			// It is safe not to retry here because once the user update the annotation of requestingPod, another processing is triggered
-			return fmt.Errorf("requesting Pod %q is missing annotation %q", requestingPod.Name, api.InferenceServerConfigAnnotationName), false
+			return ctl.ensureReqStatus(ctx, requestingPod, serverDat,
+				fmt.Sprintf("requesting Pod %q is missing annotation %q", requestingPod.Name, api.InferenceServerConfigAnnotationName),
+			)
 		}
 		isc, err = ctl.iscLister.InferenceServerConfigs(ctl.namespace).Get(iscName)
 		if err != nil {
-			// TODO(waltforme): report error in the status annotation
-			// It is safe not to retry here because once an event from InferenceServerConfig occurs, another processing is triggered
-			return fmt.Errorf("failed to get InferenceServerConfig %q: %w", iscName, err), false
+			return ctl.ensureReqStatus(ctx, requestingPod, serverDat,
+				fmt.Sprintf("failed to get InferenceServerConfig %q: %v", iscName, err),
+			)
 		}
 	}
 
@@ -443,10 +443,10 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	lcName := isc.Spec.LauncherConfigName
 	lc, err := ctl.lcLister.LauncherConfigs(ctl.namespace).Get(lcName)
 	if err != nil {
-		// TODO(waltforme): report error in the status annotation
 		// TODO(waltforme): introduce the 'enqueue requesters by launcherconfigs' logic to the controller
-		// It is safe not to retry here because once an event from LauncherConfig occurs, another processing is triggered
-		return fmt.Errorf("failed to get LauncherConfig %q: %w", lcName, err), false
+		return ctl.ensureReqStatus(ctx, requestingPod, serverDat,
+			fmt.Sprintf("failed to get LauncherConfig %q: %v", lcName, err),
+		)
 	}
 
 	desiredLauncherPod, err := utils.BuildLauncherPodFromTemplate(lc.Spec.PodTemplate, ctl.namespace, requestingPod.Spec.NodeName, lcName)
