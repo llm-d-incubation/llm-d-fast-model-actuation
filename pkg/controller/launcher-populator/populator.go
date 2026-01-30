@@ -345,7 +345,7 @@ func (ctl *controller) createLaunchers(ctx context.Context, node corev1.Node, ke
 
 	// Create the specified number of launcher pods
 	for i := 0; i < count; i++ {
-		pod, err := utils.BuildPodFromTemplate(launcherConfig.Spec.PodTemplate, ctl.namespace, key.NodeName, key.LauncherConfigName)
+		pod, err := utils.BuildLauncherPodFromTemplate(launcherConfig.Spec.PodTemplate, ctl.namespace, key.NodeName, key.LauncherConfigName)
 		if err != nil {
 			return fmt.Errorf("failed to build launcher pod: %w", err)
 		}

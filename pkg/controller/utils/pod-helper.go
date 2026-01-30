@@ -85,9 +85,9 @@ func removeVolumeMount(ctr *corev1.Container, volumeName string) {
 	}
 }
 
-// GetInferenceServerPort, given a server-providing Pod,
+// GetInferenceServerPort, given a server-providing Pod and whether it is launcher-based,
 // returns (containerIndex int, port int16, err error)
-func GetInferenceServerPort(pod *corev1.Pod) (int, int16, error) {
+func GetInferenceServerPort(pod *corev1.Pod, launcherBased bool) (int, int16, error) {
 	// identify the inference server container
 	cIdx := slices.IndexFunc(pod.Spec.Containers, func(c corev1.Container) bool {
 		return c.Name == api.InferenceServerContainerName
@@ -95,6 +95,13 @@ func GetInferenceServerPort(pod *corev1.Pod) (int, int16, error) {
 	if cIdx == -1 {
 		return 0, 0, fmt.Errorf("container %q not found", api.InferenceServerContainerName)
 	}
+
+	// for launcher-based server-providing pod, the port is predefined
+	if launcherBased {
+		return cIdx, common.LauncherServicePort, nil
+	}
+
+	// for direct server-providing pod, identify the port from readinessProbe
 	isCtr := &pod.Spec.Containers[cIdx]
 	if isCtr.ReadinessProbe == nil {
 		return 0, 0, errors.New("the inference server container has no readinessProbe")
@@ -125,13 +132,15 @@ func IsPodReady(pod *corev1.Pod) bool {
 	return false
 }
 
-// BuildPodFromTemplate creates a pod from a template and assigns it to a node
-func BuildPodFromTemplate(template corev1.PodTemplateSpec, ns, nodeName, launcherConfigName string) (*corev1.Pod, error) {
+// BuildLauncherPodFromTemplate creates a launcher pod from a LauncherConfig object's
+// Spec.PodTemplate and assigns the built launcher pod to a node
+func BuildLauncherPodFromTemplate(template corev1.PodTemplateSpec, ns, nodeName, launcherConfigName string) (*corev1.Pod, error) {
 	pod := &corev1.Pod{
 		ObjectMeta: template.ObjectMeta,
 		Spec:       *DeIndividualize(template.Spec.DeepCopy()),
 	}
 	pod.Namespace = ns
+	pod.GenerateName = "launcher-"
 	// Ensure labels are set
 	if pod.Labels == nil {
 		pod.Labels = make(map[string]string)
@@ -158,7 +167,7 @@ func BuildPodFromTemplate(template corev1.PodTemplateSpec, ns, nodeName, launche
 	}
 	pod.Annotations = MapSet(pod.Annotations, string(common.LauncherConfigHashAnnotationKey), nominalHash)
 
-	cIdx, serverPort, err := GetInferenceServerPort(pod)
+	cIdx, serverPort, err := GetInferenceServerPort(pod, true)
 	if err != nil {
 		return nil, err
 	}

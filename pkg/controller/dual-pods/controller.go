@@ -42,6 +42,7 @@ import (
 
 	fmav1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/api"
+	ctlrcommon "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/common"
 	genctlr "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/generic"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/utils"
 	fmainformers "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/generated/informers/externalversions"
@@ -103,7 +104,7 @@ func GPUIndexFunc(obj any) ([]string, error) {
 	if len(pod.Annotations[nominalHashAnnotationKey]) == 0 || pod.Spec.NodeName == "" {
 		return []string{}, nil
 	}
-	isIdx, _, err := utils.GetInferenceServerPort(pod)
+	isIdx, _, err := utils.GetInferenceServerPort(pod, false)
 	if err != nil {
 		return []string{}, nil
 	}
@@ -175,6 +176,7 @@ func (config ControllerConfig) NewController(
 	ctl.gpuMap.Store(&map[string]GpuLocation{})
 	err := ctl.podInformer.AddIndexers(cache.Indexers{
 		inferenceServerConfigIndexName: inferenceServerConfigIndexFunc,
+		launcherConfigHashIndexName:    launcherConfigHashIndexFunc,
 		requesterIndexName:             requesterIndexFunc,
 		nominalHashIndexName:           nominalHashIndexFunc,
 		GPUIndexName:                   GPUIndexFunc})
@@ -303,7 +305,6 @@ type serverData struct {
 	RequesterDeleteRequested bool
 }
 
-// nolint
 type launcherData struct {
 	// Instances is a map,
 	// where key is an instance's ID which is the instance' nominal hash,
@@ -313,7 +314,6 @@ type launcherData struct {
 	// Accurate indicates whether the set of nominal hash in Instances is accurate.
 	Accurate bool
 }
-
 type queueItem interface {
 	// process returns (err error, retry bool).
 	// There will be a retry iff `retry`, error logged if `err != nil`.
@@ -369,6 +369,17 @@ func inferenceServerConfigIndexFunc(obj any) ([]string, error) {
 		return []string{}, nil
 	}
 	return []string{inferenceServerConfigName}, nil
+}
+
+const launcherConfigHashIndexName = "launcherconfighash"
+
+func launcherConfigHashIndexFunc(obj any) ([]string, error) {
+	pod := obj.(*corev1.Pod)
+	launcherConfigHash := pod.Annotations[ctlrcommon.LauncherConfigHashAnnotationKey]
+	if len(launcherConfigHash) == 0 {
+		return []string{}, nil
+	}
+	return []string{launcherConfigHash}, nil
 }
 
 const requesterIndexName = "requester"
@@ -627,6 +638,7 @@ func (ctl *controller) getNodeData(nodeName string) *nodeData {
 		ans = &nodeData{
 			Items:            sets.New[itemOnNode](),
 			InferenceServers: make(map[apitypes.UID]*serverData),
+			Launchers:        make(map[string]*launcherData),
 		}
 		ctl.nodeNameToData[nodeName] = ans
 	}
@@ -656,6 +668,19 @@ func (ctl *controller) getServerData(nodeDat *nodeData, reqName string, reqUID a
 	if ans == nil {
 		ans = &serverData{RequestingPodName: reqName}
 		nodeDat.InferenceServers[reqUID] = ans
+	}
+	return ans
+}
+
+func (ctl *controller) getLauncherData(nodeDat *nodeData, launcherPodName string) *launcherData {
+	ctl.mutex.Lock()
+	defer ctl.mutex.Unlock()
+	ans := nodeDat.Launchers[launcherPodName]
+	if ans == nil {
+		ans = &launcherData{
+			Instances: make(map[string]time.Time),
+		}
+		nodeDat.Launchers[launcherPodName] = ans
 	}
 	return ans
 }
