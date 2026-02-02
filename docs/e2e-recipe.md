@@ -527,6 +527,7 @@ metadata:
 spec:
   launcherConfigName: my-launcher-config
   modelServerConfig:
+    port: 8000
     options: "--model test-model"
 EOF
 ```

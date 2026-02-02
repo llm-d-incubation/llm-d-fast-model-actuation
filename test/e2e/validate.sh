@@ -51,6 +51,7 @@ metadata:
 spec:
   launcherConfigName: ${LAUNCHER_CONFIG_NAME}
   modelServerConfig:
+    port: 8000
     options: "--model test-model"
 EOF
 
@@ -60,7 +61,7 @@ kind: Pod
 metadata:
   name: ${REQUESTER_POD_NAME}
   labels:
-    app: dp-example
+    app: validation-example
   annotations:
     dual-pods.llm-d.ai/inference-server-config: "${INFERENCE_SERVER_CONFIG_NAME}"
 spec:
@@ -103,7 +104,7 @@ kind: Pod
 metadata:
   name: ${LAUNCHER_POD_NAME}
   labels:
-    app: dp-example
+    app: validation-example
     app.kubernetes.io/component: launcher
     dual-pods.llm-d.ai/generated-by: launcher-populator
     dual-pods.llm-d.ai/launcher-config-name: "${LAUNCHER_CONFIG_NAME}"
