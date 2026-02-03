@@ -1,0 +1,141 @@
+name: Publish Helm Charts
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - charts/**
+    tags:
+      - 'v*'
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g., v0.3.1) - for testing without creating a release'
+        required: false
+        type: string
+
+jobs:
+  publish_helm_charts:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
+          token: ${{ github.token }}
+          persist-credentials: true
+          fetch-depth: 0
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "release" ]] || [[ "${{ github.ref }}" == refs/tags/v* ]] || [[ -n "${{ github.event.inputs.tag }}" ]]; then
+            # Release: Get version from tag
+            if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+              RAW_TAG="${{ github.event.inputs.tag }}"
+            elif [[ "${{ github.event_name }}" == "release" ]]; then
+              RAW_TAG="${GITHUB_REF#refs/tags/}"
+            else
+              RAW_TAG="${GITHUB_REF#refs/tags/}"
+            fi
+            VERSION="${RAW_TAG#v}"
+            echo "strategy=release" >> $GITHUB_OUTPUT
+            echo "tag=$RAW_TAG" >> $GITHUB_OUTPUT
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+          else
+            # Continuous: Get version from git hash
+            GIT_HASH=$(git rev-parse --short HEAD)
+            echo "strategy=continuous" >> $GITHUB_OUTPUT
+            echo "git_hash=$GIT_HASH" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: 'v3.16.3'
+
+      - name: Update chart versions and values
+        run: |
+          STRATEGY="${{ steps.version.outputs.strategy }}"
+
+          for dir in $(ls -d charts/*/); do
+            CHART_FILE="${dir}Chart.yaml"
+            VALUES_FILE="${dir}values.yaml"
+
+            if [ -f "$CHART_FILE" ]; then
+              CURRENT_VERSION=$(grep '^version:' "$CHART_FILE" | awk '{print $2}')
+              CHART_NAME=$(grep '^name:' "$CHART_FILE" | awk '{print $2}')
+
+              if [ "$STRATEGY" == "release" ]; then
+                # Release: Use version from tag
+                VERSION="${{ steps.version.outputs.version }}"
+                TAG="${{ steps.version.outputs.tag }}"
+
+                # Update Chart.yaml
+                sed -i "s/^version:.*/version: ${VERSION}/" "$CHART_FILE"
+                sed -i "s/^appVersion:.*/appVersion: \"${TAG}\"/" "$CHART_FILE"
+
+                echo "Updated $CHART_FILE (RELEASE):"
+                cat "$CHART_FILE"
+              else
+                # Continuous: Use git hash
+                GIT_HASH="${{ steps.version.outputs.git_hash }}"
+                NEW_VERSION="${CURRENT_VERSION}-${GIT_HASH}"
+
+                sed -i "s/^version:.*/version: ${NEW_VERSION}/" "$CHART_FILE"
+                sed -i "s/^appVersion:.*/appVersion: \"$GIT_HASH\"/" "$CHART_FILE"
+
+                echo "Updated $CHART_FILE (CONTINUOUS):"
+                cat "$CHART_FILE"
+              fi
+            fi
+          done
+
+      - name: Login to Github Container Registry
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io \
+            --username ${{ github.actor }} \
+            --password-stdin
+
+      - name: Package and push helm charts
+        run: |
+          for DIR in $(ls -d charts/*/); do
+            CHART_NAME=$(helm show chart "$DIR" | grep '^name:' | awk '{print $2}')
+            CHART_VERSION=$(helm show chart "$DIR" | grep '^version:' | awk '{print $2}')
+            helm package "$DIR" --destination .
+            helm push "$CHART_NAME-$CHART_VERSION.tgz" oci://ghcr.io/${{ github.repository }}/charts
+          done
+
+      - name: Commit updated chart files
+        if: steps.version.outputs.strategy == 'release'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "${{ github.actor }}"
+          git config user.email "${{ github.actor }}@users.noreply.github.com"
+
+          git remote set-url origin https://${{ github.token }}@github.com/${{ github.repository }}.git
+
+          git stash
+
+          git fetch origin
+          DEFAULT_BRANCH=$(git remote show origin | grep "HEAD branch" | cut -d' ' -f5 || echo "main")
+          git checkout $DEFAULT_BRANCH
+          git pull origin $DEFAULT_BRANCH
+
+          git stash pop
+          git add charts/*/Chart.yaml
+
+          TAG="${{ steps.version.outputs.tag }}"
+          if ! git diff --cached --quiet; then
+            git commit -m "Release $TAG: update Chart.yaml"
+            git push origin $DEFAULT_BRANCH
+          else
+            echo "No changes to commit"
+          fi
