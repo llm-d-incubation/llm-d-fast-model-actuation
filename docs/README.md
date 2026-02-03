@@ -18,3 +18,8 @@
 - [Test build of requester image](../.github/workflows/build-requester-image.yml)
 - [Test build of launcher populator image](../.github/workflows/build-populator-image.yml)
 - [End-to-end testing in CI using a `kind` cluster](../.github/workflows/pr-test-in-kind.yml)
+- [Helm chart publishing to GHCR](../.github/workflows/helm-release.yaml)
+
+# Helm charts
+
+- [Helm chart installation](helm-install.md)
