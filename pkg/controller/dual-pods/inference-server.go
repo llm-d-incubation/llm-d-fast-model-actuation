@@ -460,70 +460,69 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		return err, false
 	}
 
+	cfg, iscHash, err := ctl.parseInferenceServerConfig(isc)
+	if err != nil {
+		return fmt.Errorf("parse inference server config: %w", err), true
+	}
+	logger.V(5).Info("Nominal hash of InferenceServerConfig", "hash", iscHash)
+
 	if len(launcherPodAnys) > 0 {
 		// Multiple launcher Pods could exist for one LauncherConfig object on one node.
-		// TODO(waltforme): The logic currently picks the first Pod but should consider all of them
+		// Select the best launcher Pod: prioritize those with sleeping instances (fast wake-up),
+		// then those with capacity for new instances.
+		// Note that multiple vLLM instances could exist in one launcher Pod, but at most one instance could be awake at a time.
 
-		// Note: Multiple vLLM instances could exist in one launcher Pod, but at most one instance
-		// could be awake at a time.
-		// TODO(waltforme): Revise accordingly.
-
-		launcherPod := launcherPodAnys[0].(*corev1.Pod)
-		logger.V(5).Info("Found launcher Pod", "name", launcherPod.Name)
-		launcherIP := launcherPod.Status.PodIP
-		if launcherIP == "" {
-			return fmt.Errorf("launcher Pod %q has no IP assigned yet", launcherPod.Name), true
-		}
-
-		launcherBaseURL := fmt.Sprintf("http://%s:%d", launcherIP, ctlrcommon.LauncherServicePort)
-		lClient, err := NewLauncherClient(launcherBaseURL)
+		launcherPod, hasSleepingInstance, someNotReady, err := ctl.selectBestLauncherPod(ctx, launcherPodAnys, iscHash, nodeDat)
 		if err != nil {
 			return err, true
 		}
-
-		insts, err := lClient.ListInstances(ctx)
-		if err != nil {
-			return err, true
+		if someNotReady {
+			logger.V(4).Info("Launcher Pods exist but some are not ready yet, will retry later")
+			return nil, true
 		}
-		logger.V(5).Info("vLLM instance counts",
-			"total_instances", insts.TotalInstances,
-			"running_instances", insts.RunningInstances,
-		)
-
-		cfg, iscHash, err := ctl.parseInferenceServerConfig(isc)
-		if err != nil {
-			return fmt.Errorf("parse inference server config: %w", err), true
-		}
-		logger.V(5).Info("Nominal hash of InferenceServerConfig", "hash", iscHash)
-
-		launcherDat := ctl.getLauncherData(nodeDat, launcherPod.Name)
-		_, instExists := launcherDat.Instances[iscHash]
-
-		// if the matching launcher Pod hosts a matching instance, make sure that instance is awake, then bound the launcher Pod to the requester.
-		// if the matching launcher Pod hosts zero instances, create an instance and bind the launcher Pod to the requester.
-		if instExists {
-			logger.V(5).Info("vLLM instance for InferenceServerConfig already exists", "iscHash", iscHash)
-			err := ctl.wakeupInstance(ctx, lClient, iscHash, isc.Spec.ModelServerConfig.Port)
-			if err != nil {
-				return fmt.Errorf("wake up vLLM instance: %w", err), true
+		if launcherPod == nil {
+			logger.V(5).Info("No suitable launcher Pod found with sleeping instance or necessary capacity")
+			// Fall through to create new launcher Pod
+		} else {
+			logger.V(5).Info("Selected launcher Pod", "name", launcherPod.Name, "hasSleepingInstance", hasSleepingInstance)
+			launcherIP := launcherPod.Status.PodIP
+			if launcherIP == "" {
+				return fmt.Errorf("launcher Pod %q has no IP assigned yet", launcherPod.Name), true
 			}
-			launcherDat.Instances[iscHash] = time.Now()
-			// TODO(waltforme): the bind method may need more revision to fully handle launcher-based server providing Pods
-			return ctl.bind(ctx, serverDat, requestingPod, launcherPod, true)
-		} else if insts.TotalInstances == 0 {
-			result, err := lClient.CreateNamedInstance(ctx, iscHash, *cfg)
-			if err != nil {
-				return fmt.Errorf("create vLLM instance: %w", err), true
-			}
-			logger.V(5).Info("Created new vLLM instance",
-				"instance_id", result.InstanceID,
-				"status", result.Status,
-			)
-			launcherDat.Instances[iscHash] = time.Now()
-			// TODO(waltforme): the bind method may need more revision to fully handle launcher-based server providing Pods
-			return ctl.bind(ctx, serverDat, requestingPod, launcherPod, true)
-		}
 
+			launcherBaseURL := fmt.Sprintf("http://%s:%d", launcherIP, ctlrcommon.LauncherServicePort)
+			lClient, err := NewLauncherClient(launcherBaseURL)
+			if err != nil {
+				return err, true
+			}
+
+			launcherDat := ctl.getLauncherData(nodeDat, launcherPod.Name)
+
+			if hasSleepingInstance {
+				// Fast path: wake up existing sleeping instance
+				logger.V(5).Info("Waking up existing vLLM instance", "iscHash", iscHash)
+				err := ctl.wakeupInstance(ctx, lClient, iscHash, isc.Spec.ModelServerConfig.Port)
+				if err != nil {
+					return fmt.Errorf("wake up vLLM instance: %w", err), true
+				}
+				launcherDat.Instances[iscHash] = time.Now()
+				// TODO(waltforme): the bind method may need more revision to fully handle launcher-based server providing Pods
+				return ctl.bind(ctx, serverDat, requestingPod, launcherPod, true)
+			} else {
+				// Slower path: create new instance in launcher with capacity
+				result, err := lClient.CreateNamedInstance(ctx, iscHash, *cfg)
+				if err != nil {
+					return fmt.Errorf("create vLLM instance: %w", err), true
+				}
+				logger.V(5).Info("Created new vLLM instance",
+					"instance_id", result.InstanceID,
+					"status", result.Status,
+				)
+				launcherDat.Instances[iscHash] = time.Now()
+				// TODO(waltforme): the bind method may need more revision to fully handle launcher-based server providing Pods
+				return ctl.bind(ctx, serverDat, requestingPod, launcherPod, true)
+			}
+		}
 	}
 	// Remains: Zero matching launcher Pods, or the matching launcher Pod cannot host more instances to fulfill the request.
 
@@ -551,6 +550,96 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	logger.V(2).Info("Created launcher-based server-providing pod", "name", echo.Name, "gpus", serverDat.GPUIndicesStr, "annotations", echo.Annotations, "labels", echo.Labels, "resourceVersion", echo.ResourceVersion)
 
 	return ctl.ensureReqStatus(ctx, requestingPod, serverDat)
+}
+
+// selectBestLauncherPod evaluates all matching launcher Pods and selects the 'best' one for fulfilling a request.
+// Currently the definition of 'best' is radically simple:
+// Priority 1: Launcher with a sleeping instance matching iscHash (fastest - just wake up);
+// Priority 2: Launcher with capacity for a new instance (slower - need to create);
+// Otherwise, no launcher Pod is selected.
+// Returns (selectedPod, hasSleepingInstance, somePodsNotReady, error).
+// Returns (nil, false, false, nil) if no suitable launcher found and all pods are ready or failed.
+// Returns (nil, false, true, nil) if there are pods not ready yet - caller should retry later.
+func (ctl *controller) selectBestLauncherPod(
+	ctx context.Context,
+	launcherPodAnys []interface{},
+	iscHash string,
+	nodeDat *nodeData,
+) (*corev1.Pod, bool, bool, error) {
+	logger := klog.FromContext(ctx)
+
+	var candidateWithCapacity *corev1.Pod
+	var somePodsNotReady bool
+
+	for _, podAny := range launcherPodAnys {
+		launcherPod := podAny.(*corev1.Pod)
+
+		if launcherPod.Status.Phase == corev1.PodFailed || launcherPod.DeletionTimestamp != nil {
+			continue
+		}
+
+		// Track pods that are not ready yet - we should give them time instead of
+		// failing and creating new launcher Pods immediately.
+		if launcherPod.Status.PodIP == "" || !utils.IsPodReady(launcherPod) {
+			logger.V(5).Info("Launcher Pod not ready yet", "name", launcherPod.Name, "hasIP", launcherPod.Status.PodIP != "")
+			somePodsNotReady = true
+			continue
+		}
+
+		launcherBaseURL := fmt.Sprintf("http://%s:%d", launcherPod.Status.PodIP, ctlrcommon.LauncherServicePort)
+		lClient, err := NewLauncherClient(launcherBaseURL)
+		if err != nil {
+			logger.V(5).Info("Failed to create launcher client, skipping Pod", "name", launcherPod.Name, "err", err)
+			continue
+		}
+
+		// Query instances from this launcher
+		insts, err := lClient.ListInstances(ctx)
+		if err != nil {
+			logger.V(5).Info("Failed to list instances from launcher, skipping Pod", "name", launcherPod.Name, "err", err)
+			continue
+		}
+
+		launcherDat := ctl.getLauncherData(nodeDat, launcherPod.Name)
+
+		// Check if this launcher has a sleeping instance matching the iscHash
+		if _, instExists := launcherDat.Instances[iscHash]; instExists {
+			// Priority 1: Found a sleeping instance
+			logger.V(5).Info("Found launcher with sleeping instance (fastest path)",
+				"name", launcherPod.Name,
+				"iscHash", iscHash,
+				"totalInstances", insts.TotalInstances,
+				"runningInstances", insts.RunningInstances)
+			return launcherPod, true, false, nil
+		}
+
+		// Check if this launcher has capacity for a new instance
+		// A launcher has capacity if it has zero instances (can host at least one)
+		if insts.TotalInstances == 0 && candidateWithCapacity == nil {
+			// Priority 2: Has capacity for new instance
+			logger.V(5).Info("Found launcher with capacity for new instance",
+				"name", launcherPod.Name,
+				"totalInstances", insts.TotalInstances)
+			candidateWithCapacity = launcherPod
+			// Don't return yet - keep looking for sleeping instances (higher priority)
+		}
+	}
+
+	// No sleeper but we found a launcher with capacity, use it
+	if candidateWithCapacity != nil {
+		logger.V(4).Info("Selected launcher with capacity (slower path)", "name", candidateWithCapacity.Name)
+		return candidateWithCapacity, false, false, nil
+	}
+
+	// Found sleeper nor capable ones, but there are pods not ready yet, signal caller to retry later
+	if somePodsNotReady {
+		logger.V(4).Info("Found launcher Pods not ready yet, will retry later")
+		return nil, false, true, nil
+	}
+
+	// No suitable launchers found
+	logger.V(4).Info("No suitable launcher Pod found with sleeping instance or necessary capacity")
+	return nil, false, false, nil
 }
 
 func (ctl *controller) parseInferenceServerConfig(isc *fmav1alpha1.InferenceServerConfig) (*VllmConfig, string, error) {

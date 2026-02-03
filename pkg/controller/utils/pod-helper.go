@@ -192,6 +192,24 @@ func BuildLauncherPodFromTemplate(template corev1.PodTemplateSpec, ns, nodeName,
 		FailureThreshold:    3,
 	}
 
+	// Set readiness probe to check if launcher can list instances.
+	// This is necessary because otherwise the dual-pod controller will be confused when
+	// the launcher Pod is said to be ready but got refused when listing its vLLM instances.
+	container.ReadinessProbe = &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{
+				Path:   "/v2/vllm/instances",
+				Port:   intstr.FromInt(int(serverPort)),
+				Scheme: corev1.URISchemeHTTP,
+			},
+		},
+		InitialDelaySeconds: 2,
+		PeriodSeconds:       5,
+		TimeoutSeconds:      2,
+		SuccessThreshold:    1,
+		FailureThreshold:    3,
+	}
+
 	// Remove nvidia.com/gpu from resource limits
 	removeGPUResourceLimits(container)
 
