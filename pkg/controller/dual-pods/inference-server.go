@@ -409,7 +409,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				logger.V(2).Info("Unexpected: multiple sleeping Pods match; using the first", "requesterName", requestingPod.Name)
 			}
 			providingPod = sleepingAnys[0].(*corev1.Pod)
-			return ctl.bind(ctx, serverDat, requestingPod, providingPod, false)
+			return ctl.bind(ctx, serverDat, requestingPod, providingPod, false, -1)
 		}
 		// What remains is to make a new server-providing Pod --- if the sleeper budget allows.
 
@@ -507,7 +507,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				}
 				launcherDat.Instances[iscHash] = time.Now()
 				// TODO(waltforme): the bind method may need more revision to fully handle launcher-based server providing Pods
-				return ctl.bind(ctx, serverDat, requestingPod, launcherPod, true)
+				return ctl.bind(ctx, serverDat, requestingPod, launcherPod, true, int16(isc.Spec.ModelServerConfig.Port))
 			} else {
 				// Slower path: create new instance in launcher with capacity
 				result, err := lClient.CreateNamedInstance(ctx, iscHash, *cfg)
@@ -520,7 +520,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				)
 				launcherDat.Instances[iscHash] = time.Now()
 				// TODO(waltforme): the bind method may need more revision to fully handle launcher-based server providing Pods
-				return ctl.bind(ctx, serverDat, requestingPod, launcherPod, true)
+				return ctl.bind(ctx, serverDat, requestingPod, launcherPod, true, int16(isc.Spec.ModelServerConfig.Port))
 			}
 		}
 	}
@@ -768,7 +768,8 @@ func (ctl *controller) enforceSleeperBudget(ctx context.Context, serverDat *serv
 	return nil, len(gonerNames) > 0
 }
 
-func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requestingPod, providingPod *corev1.Pod, launcherBased bool) (error, bool) {
+// Note: instPort is used only for launcher-based server-providing Pods.
+func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requestingPod, providingPod *corev1.Pod, launcherBased bool, instPort int16) (error, bool) {
 	logger := klog.FromContext(ctx)
 	providingPod = providingPod.DeepCopy()
 	providingPod.Annotations[requesterAnnotationKey] = string(requestingPod.UID) + " " + requestingPod.Name
@@ -783,9 +784,20 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 	}
 	serverDat.ProvidingPodName = providingPod.Name
 	logger.V(2).Info("Bound server-providing Pod", "name", providingPod.Name, "node", requestingPod.Spec.NodeName, "gpus", serverDat.GPUIndicesStr, "newResourceVersion", echo.ResourceVersion)
-	_, serverPort, err := utils.GetInferenceServerPort(providingPod, launcherBased)
-	if err != nil { // Impossible, because such a providingPod would never be created by this controller
-		return fmt.Errorf("unable to wake up server because port not known: %w", err), true
+	var serverPort int16
+	if launcherBased {
+		serverPort = instPort
+	} else {
+		_, serverPort, err = utils.GetInferenceServerPort(providingPod, false)
+		if err != nil { // Impossible, because such a providingPod would never be created by this controller
+			return fmt.Errorf("unable to wake up server because port not known: %w", err), true
+		}
+	}
+	// For launcher-based server-providing Pods, ServerPort is written when binding.
+	// For direct server-providing Pods, ServerPort is written (earlier) when
+	// constructingthe server-providing Pod's spec in getNominalServerProvidingPod.
+	if launcherBased {
+		serverDat.ServerPort = serverPort
 	}
 	err = ctl.wakeSleeper(ctx, serverDat, requestingPod, providingPod, serverPort)
 	if err != nil {
@@ -900,11 +912,16 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 	// If providingPod is stale then the update will fail.
 	if (serverDat.Sleeping == nil || !*(serverDat.Sleeping)) && providingPod.Status.PodIP != "" { // need to put to sleep
 		serverPort := serverDat.ServerPort
-		if serverDat.NominalProvidingPod == nil {
-			var err error
-			_, serverPort, err = utils.GetInferenceServerPort(providingPod, launcherBased)
-			if err != nil { // Impossible, because such a providingPod would never be created by this controller
-				return fmt.Errorf("unable to put server to sleep because port not known: %w", err)
+		// TODO(waltforme): Is serverPort always set correctly for launcher-based server-providing Pods upon unbinding?
+		// E.g. What if requestingPod is deleted during a crash and restart of the dual-pods controller?
+		// In order to find the port in this case, I think the best effort is to recompute hash for all InferenceServerConfig objects and try to match.
+		if !launcherBased {
+			if serverDat.NominalProvidingPod == nil {
+				var err error
+				_, serverPort, err = utils.GetInferenceServerPort(providingPod, false)
+				if err != nil { // Impossible, because such a providingPod would never be created by this controller
+					return fmt.Errorf("unable to put server to sleep because port not known: %w", err)
+				}
 			}
 		}
 		sleepURL := fmt.Sprintf("http://%s:%d/sleep", providingPod.Status.PodIP, serverPort)
@@ -947,6 +964,7 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 		logger.V(3).Info("Server-providing Pod remains unbound", "name", providingPod.Name, "resourceVersion", providingPod.ResourceVersion)
 	}
 	serverDat.ProvidingPodName = ""
+	serverDat.ServerPort = -1
 	return nil
 }
 

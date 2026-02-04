@@ -86,7 +86,10 @@ func removeVolumeMount(ctr *corev1.Container, volumeName string) {
 }
 
 // GetInferenceServerPort, given a server-providing Pod and whether it is launcher-based,
-// returns (containerIndex int, port int16, err error)
+// returns (containerIndex int, inferenceServerPort int16, err error)
+// For direct server-providing pods, the inference server port is identified from readinessProbe.
+// For launcher-based server-providing pods, the inference server port can't be identified from the launcher pod,
+// so we return a dummy value -1.
 func GetInferenceServerPort(pod *corev1.Pod, launcherBased bool) (int, int16, error) {
 	// identify the inference server container
 	cIdx := slices.IndexFunc(pod.Spec.Containers, func(c corev1.Container) bool {
@@ -96,9 +99,9 @@ func GetInferenceServerPort(pod *corev1.Pod, launcherBased bool) (int, int16, er
 		return 0, 0, fmt.Errorf("container %q not found", api.InferenceServerContainerName)
 	}
 
-	// for launcher-based server-providing pod, the port is predefined
+	// for launcher-based server-providing pod, return a dummy value
 	if launcherBased {
-		return cIdx, common.LauncherServicePort, nil
+		return cIdx, -1, nil
 	}
 
 	// for direct server-providing pod, identify the port from readinessProbe
@@ -167,7 +170,7 @@ func BuildLauncherPodFromTemplate(template corev1.PodTemplateSpec, ns, nodeName,
 	}
 	pod.Annotations = MapSet(pod.Annotations, string(common.LauncherConfigHashAnnotationKey), nominalHash)
 
-	cIdx, serverPort, err := GetInferenceServerPort(pod, true)
+	cIdx, _, err := GetInferenceServerPort(pod, true)
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +184,7 @@ func BuildLauncherPodFromTemplate(template corev1.PodTemplateSpec, ns, nodeName,
 		ProbeHandler: corev1.ProbeHandler{
 			HTTPGet: &corev1.HTTPGetAction{
 				Path:   "/health",
-				Port:   intstr.FromInt(int(serverPort)),
+				Port:   intstr.FromInt(common.LauncherServicePort),
 				Scheme: corev1.URISchemeHTTP,
 			},
 		},
@@ -199,7 +202,7 @@ func BuildLauncherPodFromTemplate(template corev1.PodTemplateSpec, ns, nodeName,
 		ProbeHandler: corev1.ProbeHandler{
 			HTTPGet: &corev1.HTTPGetAction{
 				Path:   "/v2/vllm/instances",
-				Port:   intstr.FromInt(int(serverPort)),
+				Port:   intstr.FromInt(common.LauncherServicePort),
 				Scheme: corev1.URISchemeHTTP,
 			},
 		},
