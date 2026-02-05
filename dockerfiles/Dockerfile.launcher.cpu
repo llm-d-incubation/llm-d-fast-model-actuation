@@ -1,0 +1,25 @@
+# Dockerfile for launcher using vLLM CPU images (for tests without GPU)
+# Supports both arm64 and x86_64 architectures
+
+ARG TARGETARCH
+ARG VLLM_VERSION=v0.15.0
+
+# Define base images for each architecture
+FROM public.ecr.aws/q9t5s3a7/vllm-arm64-cpu-release-repo:${VLLM_VERSION} AS base-arm64
+FROM public.ecr.aws/q9t5s3a7/vllm-cpu-release-repo:${VLLM_VERSION} AS base-amd64
+
+# Select the appropriate base image based on TARGETARCH
+# Docker will only pull and use the stage that matches TARGETARCH
+FROM base-${TARGETARCH} AS final
+
+WORKDIR /app
+
+COPY inference_server/launcher/launcher.py .
+COPY inference_server/launcher/gputranslator.py .
+
+# Install uvicorn for serving the launcher API
+RUN pip install --root-user-action=ignore --no-cache-dir uvicorn
+# Install pynvml for gputranslator
+RUN pip install --root-user-action=ignore --no-cache-dir pynvml
+
+ENTRYPOINT ["uvicorn", "--app-dir", "/app", "launcher:app"]

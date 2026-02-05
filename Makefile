@@ -13,6 +13,8 @@ TEST_REQUESTER_IMG_TAG ?= $(shell git rev-parse --short HEAD)
 TEST_REQUESTER_IMG ?= $(CONTAINER_IMG_REG)/test-requester:$(TEST_REQUESTER_IMG_TAG)
 TEST_SERVER_IMG_TAG ?= $(shell git rev-parse --short HEAD)
 TEST_SERVER_IMG ?= $(CONTAINER_IMG_REG)/test-server:$(TEST_SERVER_IMG_TAG)
+TEST_LAUNCHER_IMG_TAG ?= $(shell git rev-parse --short HEAD)
+TEST_LAUNCHER_IMG ?= $(CONTAINER_IMG_REG)/test-launcher:$(TEST_LAUNCHER_IMG_TAG)
 POPULATOR_IMG_TAG ?= $(shell git rev-parse --short HEAD)
 POPULATOR_IMG ?= $(CONTAINER_IMG_REG)/launcher-populator:$(POPULATOR_IMG_TAG)
 
@@ -74,6 +76,14 @@ build-test-server-local:
 .PHONY: load-test-server-local
 load-test-server-local:
 	kind load docker-image ${TEST_SERVER_IMG} --name ${CLUSTER_NAME}
+
+.PHONY: build-test-launcher-local
+build-test-launcher-local:
+	docker build -t ${TEST_LAUNCHER_IMG} -f dockerfiles/Dockerfile.launcher.cpu . --progress=plain --platform linux/$(TARGETARCH) --build-arg TARGETARCH=$(TARGETARCH)
+
+.PHONY: load-test-launcher-local
+load-test-launcher-local:
+	kind load docker-image ${TEST_LAUNCHER_IMG} --name ${CLUSTER_NAME}
 
 .PHONY: build-populator-local
 build-populator-local:
