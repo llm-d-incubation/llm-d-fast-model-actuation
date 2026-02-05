@@ -1,5 +1,5 @@
 # Dockerfile for launcher using vLLM CPU images (for tests without GPU)
-# Supports both arm64 and x86_64 architectures
+# Supports both arm64 and amd64 architectures
 
 ARG TARGETARCH
 ARG VLLM_VERSION=v0.15.0

@@ -79,7 +79,7 @@ load-test-server-local:
 
 .PHONY: build-test-launcher-local
 build-test-launcher-local:
-	docker build -t ${TEST_LAUNCHER_IMG} -f dockerfiles/Dockerfile.launcher.cpu . --progress=plain --platform linux/$(TARGETARCH) --build-arg TARGETARCH=$(TARGETARCH)
+	docker build -t ${TEST_LAUNCHER_IMG} -f dockerfiles/Dockerfile.launcher.cpu . --progress=plain --platform linux/$(shell go env GOARCH)
 
 .PHONY: load-test-launcher-local
 load-test-launcher-local:
