@@ -148,6 +148,17 @@ kubectl get nodes -o name | sed 's%^node/%%' | while read node; do
     let gi=gi1+1
 done
 
+: Test CEL policy verification if enabled
+
+if [ "${POLICIES_ENABLED}" = true ]; then
+  sleep 15 # A short sleep to wait for the bindings to exist before running the validation tests
+  if ! test/e2e/validate.sh; then
+    echo "ERROR: CEL policy tests failed!" >&2
+    exit 1
+  fi
+  cheer CEL policy checks passed
+fi
+
 : Test launcher-based server-providing pods
 
 : Basic Launcher Pod Creation

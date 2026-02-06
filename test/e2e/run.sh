@@ -136,17 +136,6 @@ ctlr_img=$(make echo-var VAR=CONTROLLER_IMG)
 
 helm upgrade --install dpctlr charts/dual-pods-controller --set Image="$ctlr_img" --set NodeViewClusterRole=node-viewer --set SleeperLimit=2 --set Local=true --set DebugAcceleratorMemory=false --set EnableValidationPolicy=${POLICIES_ENABLED}
 
-: Test CEL policy verification if enabled
-
-if [ "${POLICIES_ENABLED}" = true ]; then
-  sleep 15 # A short sleep to wait for the bindings to exist before running the validation tests
-  if ! test/e2e/validate.sh; then
-    echo "ERROR: CEL policy tests failed!" >&2
-    exit 1
-  fi
-  cheer CEL policy checks passed
-fi
-
 : Test Pod creation
 
 rs=$(test/e2e/mkrs.sh)
