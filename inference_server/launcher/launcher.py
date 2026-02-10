@@ -20,6 +20,7 @@ vLLM Launcher
 import logging
 import multiprocessing
 import os
+import queue
 import sys
 import uuid
 from http import HTTPStatus  # HTTP Status Codes
@@ -34,6 +35,8 @@ from vllm.entrypoints.openai.api_server import run_server
 from vllm.entrypoints.openai.cli_args import make_arg_parser, validate_parsed_serve_args
 from vllm.entrypoints.utils import cli_env_setup
 from vllm.utils.argparse_utils import FlexibleArgumentParser
+
+MAX_QUEUE_SIZE = 5000
 
 
 # Define a the expected JSON structure in dataclass
@@ -84,7 +87,7 @@ class VllmInstance:
         if self.process and self.process.is_alive():
             return {"status": "already_running", "instance_id": self.instance_id}
 
-        self.output_queue = multiprocessing.Queue()
+        self.output_queue = multiprocessing.Queue(maxsize=MAX_QUEUE_SIZE)
         self.process = multiprocessing.Process(
             target=vllm_kickoff, args=(self.config, self.output_queue)
         )
@@ -408,8 +411,13 @@ class QueueWriter:
         if msg.strip():  # Only send non-empty messages
             try:
                 self.queue.put(msg)
-            except Exception:
-                pass  # Silently ignore queue errors
+            except queue.Full:
+                # Drop oldest message and add new one
+                try:
+                    self.queue.get_nowait()
+                    self.queue.put_nowait(msg)
+                except Exception:
+                    pass
 
     def flush(self):
         pass
