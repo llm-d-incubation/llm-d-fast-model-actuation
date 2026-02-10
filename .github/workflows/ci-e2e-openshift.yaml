@@ -280,7 +280,6 @@ jobs:
           # Build image with git ref tag for this PR
           # Use first 8 chars of the git ref (POSIX-compliant)
           IMAGE_TAG="ref-$(printf '%s' "$GIT_REF" | cut -c1-8)"
-          # ko requires KO_DOCKER_REPO; the Makefile sets it via CONTAINER_IMG_REG
           # GHCR requires lowercase registry path
           reg="ghcr.io/${{ github.repository }}"
           REGISTRY="${reg,,}"
@@ -289,7 +288,10 @@ jobs:
           echo "  Registry: $REGISTRY"
           echo "  Tag: $IMAGE_TAG"
 
-          make build-controller CONTAINER_IMG_REG="$REGISTRY" CONTROLLER_IMG_TAG="$IMAGE_TAG"
+          # Use ko directly (not make) to add --sbom=none flag.
+          # GITHUB_TOKEN doesn't have OCI artifact write permissions for SBOM push.
+          KO_DOCKER_REPO="$REGISTRY" ko build -B ./cmd/dual-pods-controller \
+            -t "$IMAGE_TAG" --platform all --sbom=none
 
           echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
           echo "Image built and pushed: ${REGISTRY}/dual-pods-controller:${IMAGE_TAG}"
