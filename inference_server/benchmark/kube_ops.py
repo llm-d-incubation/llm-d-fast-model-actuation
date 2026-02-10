@@ -389,7 +389,7 @@ class KindKubernetesOps(KubernetesOps):
                     "upgrade",
                     "--install",
                     "dpctlr",
-                    "charts/dpctlr",
+                    "charts/dual-pods-controller",
                     "--set",
                     f"Image={full_registry}",
                     "--set",

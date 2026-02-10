@@ -1,0 +1,209 @@
+name: publish release # Publish a release's container images and Helm chart
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g., v0.3.1) - for testing without creating a release'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      # -----------------------------------------
+      # 1. Checkout repo
+      # -----------------------------------------
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
+          token: ${{ github.token }}
+          persist-credentials: true
+
+      # -----------------------------------------
+      # 2. Determine version from tag
+      # -----------------------------------------
+      - name: Determine version from tag
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            RAW_TAG="${{ github.event.inputs.tag }}"
+          else
+            RAW_TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          VERSION="${RAW_TAG#v}"
+          echo "tag=$RAW_TAG" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      # -----------------------------------------
+      # 3. Set up build tools
+      # -----------------------------------------
+      - name: Install ko
+        uses: ko-build/setup-ko@3aebd0597dc1e9d1a26bcfdb7cbeb19c131d3037 # v0.7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349 # v3.7.1
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@49b3bc8e6bdd4a60e6116a5414239cba5943d3cf # v3.2.0
+
+      # -----------------------------------------
+      # 4. Log in to GHCR
+      # -----------------------------------------
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # -----------------------------------------
+      # 5. Build and push dual-pods controller image
+      # -----------------------------------------
+      - name: Build and push dual-pods controller image
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          reg="${{ github.repository }}"
+
+          KO_DOCKER_REPO=ghcr.io/${reg@L} \
+          make build-controller \
+            CONTAINER_IMG_REG=ghcr.io/${reg@L} \
+            CONTROLLER_IMG_TAG=$TAG
+
+          echo "Dual-pods controller image published: ghcr.io/${reg@L}/dual-pods-controller:$TAG"
+
+      # -----------------------------------------
+      # 6. Build and push launcher population controller image
+      # -----------------------------------------
+      - name: Build and push launcher population controller image
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          reg="${{ github.repository }}"
+
+          KO_DOCKER_REPO=ghcr.io/${reg@L} \
+          make build-populator \
+            CONTAINER_IMG_REG=ghcr.io/${reg@L} \
+            POPULATOR_IMG_TAG=$TAG
+
+          echo "Launcher population controller image published: ghcr.io/${reg@L}/launcher-populator:$TAG"
+
+      # -----------------------------------------
+      # 7. Build and push requester image
+      # -----------------------------------------
+      - name: Build and push requester image
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          reg="${{ github.repository }}"
+
+          make build-and-push-requester \
+            CONTAINER_IMG_REG=ghcr.io/${reg@L} \
+            REQUESTER_IMG_TAG=$TAG
+
+          echo "Requester image published: ghcr.io/${reg@L}/requester:$TAG"
+
+      # -----------------------------------------
+      # 8. Build and push launcher image
+      # -----------------------------------------
+      - name: Build and push launcher image
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          reg="${{ github.repository }}"
+
+          make build-and-push-launcher \
+            CONTAINER_IMG_REG=ghcr.io/${reg@L} \
+            LAUNCHER_IMG_TAG=$TAG
+
+          echo "Launcher image published: ghcr.io/${reg@L}/launcher:$TAG"
+
+      # -----------------------------------------
+      # 9. Update Helm chart values with release images
+      # -----------------------------------------
+      - name: Update Helm chart values with release images
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          reg="${{ github.repository }}"
+
+          # Update dual-pods-controller chart values
+          DPCTLR_CHART="charts/dual-pods-controller"
+          yq eval -i ".Image = \"ghcr.io/${reg@L}/dual-pods-controller:${TAG}\"" $DPCTLR_CHART/values.yaml
+
+          echo "Updated $DPCTLR_CHART/values.yaml:"
+          yq eval '.Image' $DPCTLR_CHART/values.yaml
+
+          # Update launcher-populator chart values
+          POPULATOR_CHART="charts/launcher-populator"
+          yq eval -i ".image.repository = \"ghcr.io/${reg@L}/launcher-populator\"" $POPULATOR_CHART/values.yaml
+          yq eval -i ".image.tag = \"${TAG}\"" $POPULATOR_CHART/values.yaml
+
+          echo "Updated $POPULATOR_CHART/values.yaml:"
+          yq eval '.image' $POPULATOR_CHART/values.yaml
+
+      # -----------------------------------------
+      # 10. Login to GHCR for Helm
+      # -----------------------------------------
+      - name: Login to GHCR for Helm
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io \
+            --username ${{ github.actor }} \
+            --password-stdin
+
+      # -----------------------------------------
+      # 11. Package and push Helm charts
+      # -----------------------------------------
+      - name: Package and push Helm charts
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="${{ steps.version.outputs.tag }}"
+          reg="${{ github.repository }}"
+
+          for DIR in charts/*/; do
+            CHART_NAME=$(basename "$DIR")
+
+            echo "Packaging $CHART_NAME with version $VERSION and appVersion $TAG..."
+            helm package "$DIR" \
+              --version "$VERSION" \
+              --app-version "$TAG" \
+              --destination .
+
+            echo "Pushing $CHART_NAME-$VERSION.tgz to GHCR..."
+            helm push "$CHART_NAME-$VERSION.tgz" oci://ghcr.io/${reg@L}/charts
+
+            echo "✓ Published $CHART_NAME:$VERSION (appVersion: $TAG)"
+          done
+
+      # -----------------------------------------
+      # 12. Summary
+      # -----------------------------------------
+      - name: Release summary
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          VERSION="${{ steps.version.outputs.version }}"
+          reg="${{ github.repository }}"
+
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Release $TAG completed successfully!"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "Container Images:"
+          echo "  • ghcr.io/${reg@L}/dual-pods-controller:$TAG"
+          echo "  • ghcr.io/${reg@L}/launcher-populator:$TAG"
+          echo "  • ghcr.io/${reg@L}/launcher:$TAG"
+          echo "  • ghcr.io/${reg@L}/requester:$TAG"
+          echo ""
+          echo "Helm Charts (version $VERSION):"
+          echo "  • oci://ghcr.io/${reg@L}/charts/dual-pods-controller"
+          echo "  • oci://ghcr.io/${reg@L}/charts/launcher-populator"
+          echo ""
+          echo "Install with:"
+          echo "  helm install dpctlr oci://ghcr.io/${reg@L}/charts/dual-pods-controller --version $VERSION"
+          echo "  helm install launcher-populator oci://ghcr.io/${reg@L}/charts/launcher-populator --version $VERSION"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
