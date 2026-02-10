@@ -78,6 +78,7 @@ class VllmInstance:
         self.instance_id = instance_id
         self.config = config
         self.process: Optional[multiprocessing.Process] = None
+        self.output_queue: Optional[multiprocessing.Queue] = None
 
     def start(self) -> dict:
         """

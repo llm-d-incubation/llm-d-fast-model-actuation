@@ -34,6 +34,8 @@ sys.modules["vllm.entrypoints.utils"] = MagicMock()
 
 # Import the application and classes
 from launcher import (  # noqa: E402
+    MAX_QUEUE_SIZE,
+    QueueWriter,
     VllmConfig,
     VllmInstance,
     VllmMultiProcessManager,
@@ -463,6 +465,61 @@ class TestVllmMultiProcessManager:
         assert "id-1" in instances
         assert "id-2" in instances
 
+    @patch("launcher.multiprocessing.Process")
+    @patch("launcher.multiprocessing.Queue")
+    def test_get_instance_logs(
+        self, mock_queue_class, mock_process_class, manager, vllm_config
+    ):
+        """Test getting logs from a specific instance"""
+        mock_process = MockProcess()
+        mock_process_class.return_value = mock_process
+
+        # Create a mock queue with some log messages
+        mock_queue = MagicMock()
+        mock_queue.empty.side_effect = [
+            False,
+            False,
+            False,
+            True,
+        ]  # 3 messages then empty
+        mock_queue.get_nowait.side_effect = ["Log line 1", "Log line 2", "Log line 3"]
+        mock_queue_class.return_value = mock_queue
+
+        manager.create_instance(vllm_config, "test-id")
+        logs = manager.get_instance_logs("test-id", max_lines=10)
+
+        assert len(logs) == 3
+        assert logs[0] == "Log line 1"
+        assert logs[1] == "Log line 2"
+        assert logs[2] == "Log line 3"
+
+    @patch("launcher.multiprocessing.Process")
+    def test_get_instance_logs_nonexistent(self, mock_process_class, manager):
+        """Test getting logs from nonexistent instance raises KeyError"""
+        with pytest.raises(KeyError, match="not found"):
+            manager.get_instance_logs("nonexistent-id")
+
+    @patch("launcher.multiprocessing.Process")
+    @patch("launcher.multiprocessing.Queue")
+    def test_get_instance_logs_respects_max_lines(
+        self, mock_queue_class, mock_process_class, manager, vllm_config
+    ):
+        """Test that get_logs respects max_lines parameter"""
+        mock_process = MockProcess()
+        mock_process_class.return_value = mock_process
+
+        # Create a mock queue with many messages
+        mock_queue = MagicMock()
+        mock_queue.empty.return_value = False  # Always has messages
+        mock_queue.get_nowait.side_effect = [f"Log line {i}" for i in range(100)]
+        mock_queue_class.return_value = mock_queue
+
+        manager.create_instance(vllm_config, "test-id")
+        logs = manager.get_instance_logs("test-id", max_lines=5)
+
+        # Should only get 5 lines even though more are available
+        assert len(logs) == 5
+
 
 # Tests for API Endpoints
 class TestAPIEndpoints:
@@ -480,7 +537,7 @@ class TestAPIEndpoints:
         assert data["name"] == "Multi-Instance vLLM Management API"
         assert data["version"] == "2.0"
         assert "endpoints" in data
-        assert len(data["endpoints"]) == 8
+        assert len(data["endpoints"]) == 9
 
     @patch("launcher.vllm_manager")
     def test_create_vllm_instance(self, mock_manager, client, vllm_config):
@@ -615,6 +672,204 @@ class TestAPIEndpoints:
 
         assert response.status_code == 404
 
+    @patch("launcher.vllm_manager")
+    def test_get_instance_logs_endpoint(self, mock_manager, client):
+        """Test getting instance logs via API"""
+        mock_manager.get_instance_logs.return_value = [
+            "Log line 1",
+            "Log line 2",
+            "Log line 3",
+        ]
+
+        response = client.get("/v2/vllm/instances/test-id/logs")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["instance_id"] == "test-id"
+        assert data["count"] == 3
+        assert len(data["logs"]) == 3
+        assert data["logs"][0] == "Log line 1"
+
+    @patch("launcher.vllm_manager")
+    def test_get_instance_logs_with_max_lines(self, mock_manager, client):
+        """Test getting instance logs with max_lines parameter"""
+        mock_manager.get_instance_logs.return_value = ["Log 1", "Log 2"]
+
+        response = client.get("/v2/vllm/instances/test-id/logs?max_lines=50")
+
+        assert response.status_code == 200
+        mock_manager.get_instance_logs.assert_called_once_with("test-id", 50)
+
+    @patch("launcher.vllm_manager")
+    def test_get_instance_logs_nonexistent_endpoint(self, mock_manager, client):
+        """Test getting logs from nonexistent instance returns 404"""
+        mock_manager.get_instance_logs.side_effect = KeyError("not found")
+
+        response = client.get("/v2/vllm/instances/nonexistent-id/logs")
+
+        assert response.status_code == 404
+
+
+# Tests for QueueWriter
+class TestQueueWriter:
+    def test_queue_writer_write_non_empty(self):
+        """Test QueueWriter writes non-empty messages to queue"""
+        from unittest.mock import MagicMock
+
+        mock_queue = MagicMock()
+        writer = QueueWriter(mock_queue)
+
+        writer.write("Test message")
+
+        # Verify put was called with the message
+        mock_queue.put.assert_called_once_with("Test message")
+
+    def test_queue_writer_ignores_empty_messages(self):
+        """Test QueueWriter ignores empty/whitespace messages"""
+        import multiprocessing
+
+        queue = multiprocessing.Queue()
+        writer = QueueWriter(queue)
+
+        writer.write("")
+        writer.write("   ")
+        writer.write("\n")
+
+        assert queue.empty()
+
+    def test_queue_writer_handles_full_queue(self):
+        """Test QueueWriter handles full queue gracefully"""
+        import queue
+        from unittest.mock import MagicMock
+
+        mock_queue = MagicMock()
+        # Simulate queue.Full exception on third put
+        mock_queue.put.side_effect = [None, None, queue.Full()]
+        mock_queue.get_nowait.return_value = "Message 1"
+
+        writer = QueueWriter(mock_queue)
+
+        writer.write("Message 1")
+        writer.write("Message 2")
+        writer.write("Message 3")  # Triggers queue.Full, should handle gracefully
+
+        # Verify the circular buffer behavior was attempted
+        assert mock_queue.put.call_count == 3
+        mock_queue.get_nowait.assert_called_once()  # Tried to drop oldest
+        mock_queue.put_nowait.assert_called_once_with(
+            "Message 3"
+        )  # Tried to add newest
+
+    def test_queue_writer_flush(self):
+        """Test QueueWriter flush method (should do nothing)"""
+        import multiprocessing
+
+        queue = multiprocessing.Queue()
+        writer = QueueWriter(queue)
+
+        # Should not raise any exception
+        writer.flush()
+
+
+# Tests for VllmInstance log functionality
+class TestVllmInstanceLogs:
+    @patch("launcher.multiprocessing.Process")
+    @patch("launcher.multiprocessing.Queue")
+    def test_get_logs_empty_queue(
+        self, mock_queue_class, mock_process_class, vllm_config, gpu_translator
+    ):
+        """Test get_logs returns empty list when queue is empty"""
+        mock_process = MockProcess()
+        mock_process_class.return_value = mock_process
+
+        mock_queue = MagicMock()
+        mock_queue.empty.return_value = True
+        mock_queue_class.return_value = mock_queue
+
+        instance = VllmInstance("test-id", vllm_config, gpu_translator)
+        instance.start()
+
+        logs = instance.get_logs()
+
+        assert logs == []
+
+    @patch("launcher.multiprocessing.Process")
+    @patch("launcher.multiprocessing.Queue")
+    def test_get_logs_with_messages(
+        self, mock_queue_class, mock_process_class, vllm_config, gpu_translator
+    ):
+        """Test get_logs retrieves messages from queue"""
+        mock_process = MockProcess()
+        mock_process_class.return_value = mock_process
+
+        mock_queue = MagicMock()
+        mock_queue.empty.side_effect = [False, False, True]
+        mock_queue.get_nowait.side_effect = ["Log 1", "Log 2"]
+        mock_queue_class.return_value = mock_queue
+
+        instance = VllmInstance("test-id", vllm_config, gpu_translator)
+        instance.start()
+
+        logs = instance.get_logs()
+
+        assert len(logs) == 2
+        assert logs[0] == "Log 1"
+        assert logs[1] == "Log 2"
+
+    @patch("launcher.multiprocessing.Process")
+    @patch("launcher.multiprocessing.Queue")
+    def test_get_logs_respects_max_lines(
+        self, mock_queue_class, mock_process_class, vllm_config, gpu_translator
+    ):
+        """Test get_logs respects max_lines parameter"""
+        mock_process = MockProcess()
+        mock_process_class.return_value = mock_process
+
+        mock_queue = MagicMock()
+        mock_queue.empty.return_value = False  # Always has messages
+        mock_queue.get_nowait.side_effect = [f"Log {i}" for i in range(100)]
+        mock_queue_class.return_value = mock_queue
+
+        instance = VllmInstance("test-id", vllm_config, gpu_translator)
+        instance.start()
+
+        logs = instance.get_logs(max_lines=5)
+
+        assert len(logs) == 5
+
+    @patch("launcher.multiprocessing.Process")
+    def test_get_logs_no_queue(self, mock_process_class, vllm_config, gpu_translator):
+        """Test get_logs returns empty list when queue doesn't exist"""
+        instance = VllmInstance("test-id", vllm_config, gpu_translator)
+        # Don't start the instance, so output_queue is None
+
+        logs = instance.get_logs()
+
+        assert logs == []
+
+    @patch("launcher.multiprocessing.Process")
+    @patch("launcher.multiprocessing.Queue")
+    def test_get_logs_handles_exception(
+        self, mock_queue_class, mock_process_class, vllm_config, gpu_translator
+    ):
+        """Test get_logs handles exceptions gracefully"""
+        mock_process = MockProcess()
+        mock_process_class.return_value = mock_process
+
+        mock_queue = MagicMock()
+        mock_queue.empty.side_effect = [False, False]
+        mock_queue.get_nowait.side_effect = ["Log 1", Exception("Queue error")]
+        mock_queue_class.return_value = mock_queue
+
+        instance = VllmInstance("test-id", vllm_config, gpu_translator)
+        instance.start()
+
+        logs = instance.get_logs()
+
+        # Should get first log before exception
+        assert len(logs) == 1
+        assert logs[0] == "Log 1"
+
 
 # Tests for Helper Functions
 class TestHelperFunctions:
@@ -633,6 +888,10 @@ class TestHelperFunctions:
         # Cleanup
         for key in test_vars.keys():
             del os.environ[key]
+
+    def test_max_queue_size_constant(self):
+        """Test that MAX_QUEUE_SIZE constant is defined"""
+        assert MAX_QUEUE_SIZE == 5000
 
 
 if __name__ == "__main__":
