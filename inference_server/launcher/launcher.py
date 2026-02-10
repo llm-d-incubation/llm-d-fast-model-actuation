@@ -20,12 +20,13 @@ vLLM Launcher
 import logging
 import multiprocessing
 import os
+import sys
 import uuid
 from http import HTTPStatus  # HTTP Status Codes
 from typing import Any, Dict, List, Optional
 
 import uvloop
-from fastapi import FastAPI, HTTPException, Path
+from fastapi import FastAPI, HTTPException, Path, Query
 from fastapi.responses import JSONResponse
 from gputranslator import GpuTranslator
 from pydantic import BaseModel
@@ -83,7 +84,10 @@ class VllmInstance:
         if self.process and self.process.is_alive():
             return {"status": "already_running", "instance_id": self.instance_id}
 
-        self.process = multiprocessing.Process(target=vllm_kickoff, args=(self.config,))
+        self.output_queue = multiprocessing.Queue()
+        self.process = multiprocessing.Process(
+            target=vllm_kickoff, args=(self.config, self.output_queue)
+        )
         self.process.start()
 
         return {
@@ -127,6 +131,21 @@ class VllmInstance:
             "status": "running" if self.process.is_alive() else "stopped",
             "instance_id": self.instance_id,
         }
+
+    def get_logs(self, max_lines: int = 100) -> List[str]:
+        """
+        Retrieve logs from the child process
+        :param max_lines: Maximum number of log lines to retrieve
+        :return: List of log messages
+        """
+        logs = []
+        if self.output_queue:
+            while not self.output_queue.empty() and len(logs) < max_lines:
+                try:
+                    logs.append(self.output_queue.get_nowait())
+                except Exception:
+                    break
+        return logs
 
 
 # Multi-instance vLLM process manager
@@ -209,6 +228,12 @@ class VllmMultiProcessManager:
         """List all instance IDs"""
         return list(self.instances.keys())
 
+    def get_instance_logs(self, instance_id: str, max_lines: int = 100) -> List[str]:
+        """Get logs from a specific instance"""
+        if instance_id not in self.instances:
+            raise KeyError(f"Instance {instance_id} not found")
+        return self.instances[instance_id].get_logs(max_lines)
+
 
 # Create global manager instance
 vllm_manager = VllmMultiProcessManager()
@@ -252,6 +277,7 @@ async def index():
                 "delete_all_instances": "DELETE /v2/vllm/instances",
                 "get_instance_status": "GET /v2/vllm/instances/{instance_id}",
                 "get_all_instances": "GET /v2/vllm/instances",
+                "get_instance_logs": "GET /v2/vllm/instances/{instance_id}/logs",
             },
         },
         status_code=HTTPStatus.OK,
@@ -345,17 +371,61 @@ async def get_vllm_instance_status(
         raise HTTPException(status_code=404, detail=f"Instance {instance_id} not found")
 
 
+@app.get("/v2/vllm/instances/{instance_id}/logs")
+async def get_vllm_instance_logs(
+    instance_id: str = Path(..., description="Instance ID"),
+    max_lines: int = Query(
+        100, description="Maximum number of log lines to retrieve", ge=1, le=10000
+    ),
+):
+    """Get recent logs from a specific vLLM instance"""
+    try:
+        logs = vllm_manager.get_instance_logs(instance_id, max_lines)
+        return JSONResponse(
+            content={"instance_id": instance_id, "logs": logs, "count": len(logs)},
+            status_code=HTTPStatus.OK,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Instance {instance_id} not found")
+    except Exception as e:
+        logger.error(f"Failed to get logs for instance {instance_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 ######################################################################
 # HELPER FUNCTIONS
 ######################################################################
 
 
+# Helper class to redirect stdout/stderr to queue
+class QueueWriter:
+    """Custom writer that sends output to a multiprocessing Queue"""
+
+    def __init__(self, queue: multiprocessing.Queue):
+        self.queue = queue
+
+    def write(self, msg: str):
+        if msg.strip():  # Only send non-empty messages
+            try:
+                self.queue.put(msg)
+            except Exception:
+                pass  # Silently ignore queue errors
+
+    def flush(self):
+        pass
+
+
 # Function to be executed by the child process
-def vllm_kickoff(vllm_config: VllmConfig):
+def vllm_kickoff(vllm_config: VllmConfig, output_queue: multiprocessing.Queue):
     """
     Child function to kickoff vllm instance
     :param vllm_config: vLLM configuration parameters and env variables
+    :param output_queue: Queue for capturing stdout/stderr
     """
+
+    # Redirect stdout and stderr to queue
+    sys.stdout = QueueWriter(output_queue)
+    sys.stderr = QueueWriter(output_queue)
 
     logger.info(f"VLLM process (PID: {os.getpid()}) started.")
     # Set env vars in the current process
