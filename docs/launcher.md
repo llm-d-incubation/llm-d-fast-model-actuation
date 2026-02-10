@@ -28,6 +28,7 @@ The launcher preloads vLLM’s Python modules to accelerate the initialization o
 - **Environment Variable Support**: Set custom environment variables per instance
 - **Graceful Shutdown**: Proper termination with configurable timeout and force-kill fallback
 - **Status Monitoring**: Query status of individual instances or all instances at once
+- **Log Capture**: Retrieve stdout/stderr logs from running instances via REST API
 - **Health Checks**: Built-in health endpoint for monitoring service availability
 
 > [!NOTE]
@@ -209,6 +210,7 @@ Get service information and available endpoints.
     "delete_all_instances": "DELETE /v2/vllm/instances",
     "get_instance_status": "GET /v2/vllm/instances/{instance_id}",
     "get_all_instances": "GET /v2/vllm/instances",
+    "get_instance_logs": "GET /v2/vllm/instances/{instance_id}/logs"
   }
 }
 ```
@@ -311,6 +313,41 @@ Stop and delete a specific vLLM instance.
 **Error Responses:**
 
 - `404 Not Found`: Instance not found
+
+---
+
+#### Get Instance Logs
+
+**GET** `/v2/vllm/instances/{instance_id}/logs`
+
+Retrieve recent stdout/stderr logs from a specific vLLM instance.
+
+**Path Parameters:**
+
+- `instance_id`: ID of the instance
+
+**Query Parameters:**
+
+- `max_lines` (optional): Maximum number of log lines to retrieve (default: 100, range: 1-10000)
+
+**Response (200 OK):**
+
+```json
+{
+  "instance_id": "instance-id",
+  "logs": [
+    "INFO: Started server process",
+    "INFO: Waiting for application startup",
+    "INFO: Application startup complete"
+  ],
+  "count": 3
+}
+```
+
+**Error Responses:**
+
+- `404 Not Found`: Instance not found
+- `500 Internal Server Error`: Failed to retrieve logs
 
 ---
 
@@ -485,6 +522,19 @@ curl -X POST http://localhost:8001/v2/vllm/instances \
 curl http://localhost:8001/v2/vllm/instances
 ```
 
+### Example 5: Retrieve Instance Logs
+
+```bash
+# Get last 100 lines (default)
+curl http://localhost:8001/v2/vllm/instances/abc123.../logs
+
+# Get last 50 lines
+curl "http://localhost:8001/v2/vllm/instances/abc123.../logs?max_lines=50"
+
+# Get up to 1000 lines for debugging
+curl "http://localhost:8001/v2/vllm/instances/abc123.../logs?max_lines=1000"
+```
+
 ## Configuration
 
 ### vLLM Options
@@ -557,6 +607,7 @@ Represents a single vLLM instance with its process and configuration.
 - `start()`: Start the vLLM process
 - `stop(timeout=10)`: Stop the vLLM process gracefully (or force kill after timeout)
 - `get_status()`: Get detailed status information
+- `get_logs(max_lines=100)`: Retrieve recent logs from the instance
 
 #### `VllmMultiProcessManager`
 
@@ -569,6 +620,7 @@ Manages multiple VllmInstance objects.
 - `stop_all_instances(timeout=10)`: Stop all running instances
 - `get_instance_status(instance_id)`: Get status of a specific instance
 - `get_all_instances_status()`: Get status of all instances
+- `get_instance_logs(instance_id, max_lines=100)`: Retrieve logs from a specific instance
 
 ## Best Practices
 
@@ -622,7 +674,23 @@ Be mindful of system resources:
 - **CPU**: vLLM uses CPU for pre/post-processing
 - **Disk**: Models are cached in the container's filesystem
 
-### 5. Testing
+### 5. Log Management
+
+The launcher captures stdout/stderr from each vLLM instance in memory:
+
+- **Queue Size**: Limited to 5000 messages per instance (configurable via `MAX_QUEUE_SIZE`)
+- **Circular Buffer**: When full, oldest messages are automatically dropped
+- **Memory Protection**: Prevents unbounded memory growth from excessive logging
+- **Non-blocking**: Log capture doesn't slow down the vLLM process
+
+**Best Practices:**
+
+- Retrieve logs periodically if you need to monitor instance behavior
+- Use `max_lines` parameter to limit response size
+- Logs are lost when an instance is deleted
+- For production, consider external logging solutions for long-term storage
+
+### 6. Testing
 
 Test with small models first:
 
