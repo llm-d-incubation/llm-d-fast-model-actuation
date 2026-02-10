@@ -75,7 +75,7 @@ NOTE: if you have done this before then you will need to delete the
 old Helm chart instance before re-making it.
 
 ```shell
-helm upgrade --install dpctlr charts/dpctlr --set Image="${CONTAINER_IMG_REG}/dual-pods-controller:${CONTROLLER_IMG_TAG}" --set NodeViewClusterRole=vcp-node-viewer --set SleeperLimit=1 --set EnableValidationPolicy=${POLICIES_ENABLED}
+helm upgrade --install dpctlr charts/dual-pods-controller --set Image="${CONTAINER_IMG_REG}/dual-pods-controller:${CONTROLLER_IMG_TAG}" --set NodeViewClusterRole=vcp-node-viewer --set SleeperLimit=1 --set EnableValidationPolicy=${POLICIES_ENABLED}
 ```
 
 Finally, define a shell function that creates a new ReplicaSet whose

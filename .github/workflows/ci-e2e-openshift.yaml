@@ -419,7 +419,7 @@ jobs:
           echo "  Image: $CONTROLLER_IMAGE"
           echo "  EnableValidationPolicy: $POLICIES_ENABLED"
 
-          helm upgrade --install "$FMA_RELEASE_NAME" charts/dpctlr \
+          helm upgrade --install "$FMA_RELEASE_NAME" charts/dual-pods-controller \
             -n "$FMA_NAMESPACE" \
             --set Image="$CONTROLLER_IMAGE" \
             --set NodeViewClusterRole=fma-node-viewer \

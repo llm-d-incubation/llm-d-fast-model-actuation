@@ -134,7 +134,7 @@ fi
 
 ctlr_img=$(make echo-var VAR=CONTROLLER_IMG)
 
-helm upgrade --install dpctlr charts/dpctlr --set Image="$ctlr_img" --set NodeViewClusterRole=node-viewer --set SleeperLimit=2 --set Local=true --set DebugAcceleratorMemory=false --set EnableValidationPolicy=${POLICIES_ENABLED}
+helm upgrade --install dpctlr charts/dual-pods-controller --set Image="$ctlr_img" --set NodeViewClusterRole=node-viewer --set SleeperLimit=2 --set Local=true --set DebugAcceleratorMemory=false --set EnableValidationPolicy=${POLICIES_ENABLED}
 
 : Test CEL policy verification if enabled
 
