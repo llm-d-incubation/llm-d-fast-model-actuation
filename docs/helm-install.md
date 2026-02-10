@@ -39,20 +39,19 @@ Or with a values file:
 helm install dpctlr \
   oci://ghcr.io/llm-d-incubation/llm-d-fast-model-actuation/charts/dual-pods-controller \
   --version 0.3.0 \
-  -f values.yaml
+  -f custom-values.yaml
 ```
 
-## Chart Versions
+## Release Process
 
-### Development Versions
+For tag `v0.3.1`, the workflow publishes:
 
-Continuous builds from main branch:
-- Format: `0.3.0-d1a7c8f` (version + git hash)
-- Published automatically on every push to main that modifies charts
+**Container Images:**
+- `ghcr.io/llm-d-incubation/llm-d-fast-model-actuation/dual-pods-controller:v0.3.1`
+- `ghcr.io/llm-d-incubation/llm-d-fast-model-actuation/launcher-populator:v0.3.1`
+- `ghcr.io/llm-d-incubation/llm-d-fast-model-actuation/launcher:v0.3.1`
+- `ghcr.io/llm-d-incubation/llm-d-fast-model-actuation/requester:v0.3.1`
 
-### Release Versions
-
-Official releases:
-- Format: `0.3.0`
-- Published when a GitHub release is created or tag matching `v*` is pushed
-- Updates Chart.yaml with release version
+**Helm Charts:**
+- `dual-pods-controller:0.3.1` (references controller image `v0.3.1`)
+- `launcher-populator:0.3.1` (references populator image `v0.3.1`)
