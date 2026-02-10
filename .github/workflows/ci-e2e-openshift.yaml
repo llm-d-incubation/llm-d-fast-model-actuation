@@ -1,0 +1,575 @@
+name: CI - OpenShift E2E Tests
+
+# Permissions needed for various jobs
+permissions:
+  contents: read
+  packages: write
+  pull-requests: write  # For posting comments on PRs
+  statuses: write  # For reporting status on fork PR commits
+
+# Cancel previous runs on the same PR to avoid resource conflicts
+# Only group by PR number for legitimate triggers (pull_request, workflow_dispatch, /ok-to-test, or /retest comments)
+# Regular comments get a unique group (run_id) so they don't cancel in-progress test runs
+#
+# Logic:
+# - Regular comments (not /ok-to-test or /retest): unique group prevents cancellation of real tests
+# - Valid triggers: group 'fma-e2e-openshift-{pr_number}' (can cancel previous runs for same PR)
+# - Fallback chain for ID: pull_request.number -> issue.number -> run_id
+#
+# NOTE: Valid command list (/ok-to-test, /retest) must stay in sync with gate job validation
+concurrency:
+  group: >-
+    ${{
+      github.event_name == 'issue_comment' &&
+      !contains(github.event.comment.body, '/ok-to-test') &&
+      !contains(github.event.comment.body, '/retest')
+      && format('comment-isolated-{0}', github.run_id)
+      || format('fma-e2e-openshift-{0}',
+           github.event.pull_request.number
+           || github.event.issue.number
+           || github.run_id)
+    }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+    branches:
+      - main
+  # Allow maintainers to trigger tests on fork PRs via /ok-to-test comment
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      skip_cleanup:
+        description: 'Skip cleanup after tests'
+        required: false
+        default: 'false'
+
+jobs:
+  # Gate: Check permissions and handle /ok-to-test for fork PRs
+  # - Maintainers (write access): Tests run automatically
+  # - External contributors: Must wait for maintainer to comment /ok-to-test
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+      pr_number: ${{ steps.check.outputs.pr_number }}
+      pr_head_sha: ${{ steps.check.outputs.pr_head_sha }}
+      is_fork_pr: ${{ steps.check.outputs.is_fork_pr }}
+    steps:
+      - name: Check permissions and /ok-to-test
+        id: check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Helper to check if user has write access
+            async function hasWriteAccess(username) {
+              try {
+                const { data: permission } = await github.rest.repos.getCollaboratorPermissionLevel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  username: username
+                });
+                const privilegedRoles = ['admin', 'maintain', 'write'];
+                return privilegedRoles.includes(permission.permission);
+              } catch (e) {
+                console.log(`Could not get permissions for ${username}: ${e.message}`);
+                return false;
+              }
+            }
+
+            // Always run for workflow_dispatch
+            if (context.eventName === 'workflow_dispatch') {
+              core.setOutput('should_run', 'true');
+              core.setOutput('pr_number', '');
+              core.setOutput('pr_head_sha', context.sha);
+              core.setOutput('is_fork_pr', 'false');
+              return;
+            }
+
+            // Handle issue_comment event (/ok-to-test or /retest)
+            if (context.eventName === 'issue_comment') {
+              const comment = context.payload.comment.body.trim();
+              const issue = context.payload.issue;
+
+              // Only process /ok-to-test or /retest comments on PRs
+              if (!issue.pull_request) {
+                console.log('Comment is not on a PR, skipping');
+                core.setOutput('should_run', 'false');
+                return;
+              }
+
+              // NOTE: This list must stay in sync with concurrency group logic
+              const validCommands = ['/ok-to-test', '/retest'];
+              if (!validCommands.includes(comment)) {
+                console.log(`Comment "${comment}" is not a valid trigger command, skipping`);
+                core.setOutput('should_run', 'false');
+                return;
+              }
+
+              // Check if commenter has write access
+              const commenter = context.payload.comment.user.login;
+              const hasAccess = await hasWriteAccess(commenter);
+              if (!hasAccess) {
+                console.log(`User ${commenter} does not have write access, ignoring ${comment}`);
+                core.setOutput('should_run', 'false');
+                return;
+              }
+
+              // Get PR details to get head SHA
+              const { data: pr } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: issue.number
+              });
+
+              // Check if PR is from a fork
+              const baseRepo = `${context.repo.owner}/${context.repo.repo}`;
+              const headRepo = pr.head.repo ? pr.head.repo.full_name : baseRepo;
+              const isFork = headRepo !== baseRepo;
+
+              console.log(`${comment} approved by ${commenter} for PR #${issue.number}`);
+              console.log(`PR head SHA: ${pr.head.sha}`);
+              console.log(`Is fork PR: ${isFork} (head: ${headRepo}, base: ${baseRepo})`);
+              core.setOutput('should_run', 'true');
+              core.setOutput('pr_number', issue.number.toString());
+              core.setOutput('pr_head_sha', pr.head.sha);
+              core.setOutput('is_fork_pr', isFork ? 'true' : 'false');
+
+              // Add reaction to acknowledge
+              await github.rest.reactions.createForIssueComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: context.payload.comment.id,
+                content: 'rocket'
+              });
+
+              // Post comment with link to the e2e workflow run
+              const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `🚀 **E2E tests triggered by ${comment}**\n\n[View the OpenShift E2E workflow run](${runUrl})`
+              });
+              return;
+            }
+
+            // Handle pull_request event
+            const pr = context.payload.pull_request;
+            const prAuthor = pr.user.login;
+            const prNumber = pr.number;
+            const prHeadSha = pr.head.sha;
+
+            // Check if PR is from a fork
+            const baseRepo = `${context.repo.owner}/${context.repo.repo}`;
+            const headRepo = pr.head.repo ? pr.head.repo.full_name : baseRepo;
+            const isFork = headRepo !== baseRepo;
+            console.log(`PR #${prNumber} is from fork: ${isFork} (head: ${headRepo}, base: ${baseRepo})`);
+
+            core.setOutput('pr_number', prNumber.toString());
+            core.setOutput('pr_head_sha', prHeadSha);
+            core.setOutput('is_fork_pr', isFork ? 'true' : 'false');
+
+            // Check if PR author has write access
+            const isPrivileged = await hasWriteAccess(prAuthor);
+            console.log(`PR #${prNumber} author ${prAuthor}: privileged=${isPrivileged}`);
+
+            // Check if we already posted a bot comment
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber
+            });
+
+            const botComment = comments.data.find(c =>
+              c.user.type === 'Bot' &&
+              c.body.includes('ok-to-test')
+            );
+
+            // Helper to safely post a comment (may fail on fork PRs due to permissions)
+            async function tryPostComment(body) {
+              try {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: prNumber,
+                  body: body
+                });
+                return true;
+              } catch (e) {
+                // Fork PRs can't post comments on pull_request event (GitHub security restriction)
+                console.log(`Could not post comment (expected for fork PRs): ${e.message}`);
+                return false;
+              }
+            }
+
+            if (isPrivileged) {
+              // For maintainer/admin fork PRs, we need to trigger via /ok-to-test
+              // because fork PRs don't have access to secrets on pull_request event
+              if (isFork) {
+                console.log(`Maintainer fork PR detected - auto-triggering /ok-to-test for ${prAuthor}`);
+                core.setOutput('should_run', 'false'); // Don't run on pull_request event
+
+                // Auto-post /ok-to-test to trigger issue_comment workflow
+                if (!botComment) {
+                  const posted = await tryPostComment(`/ok-to-test`);
+                  if (!posted) {
+                    console.log('Note: Maintainer will need to manually comment /ok-to-test');
+                  }
+                }
+                return;
+              }
+              // Non-fork PR from maintainer - run directly
+              core.setOutput('should_run', 'true');
+              return;
+            }
+
+            // External contributor - post instructions and skip
+            console.log('External contributor PR - posting instructions');
+            core.setOutput('should_run', 'false');
+
+            if (!botComment) {
+              const posted = await tryPostComment(`👋 Thanks for your contribution!\n\nThis PR is from a fork, so the e2e tests require approval to run (they use cluster resources).\n\n**For maintainers/admins:** Comment \`/ok-to-test\` to trigger the e2e tests after reviewing the code.\n\n**For contributors:** Please wait for a maintainer or admin to approve running the tests.`);
+              if (!posted) {
+                console.log('Note: Could not post instructions comment on fork PR');
+              }
+            }
+
+  # Build the FMA controller image on GitHub-hosted runner
+  # Note: Skip for fork PRs on pull_request event (no secrets access).
+  # For fork PRs, build-image runs via issue_comment trigger (/ok-to-test).
+  build-image:
+    needs: gate
+    if: |
+      needs.gate.outputs.should_run == 'true' &&
+      (needs.gate.outputs.is_fork_pr != 'true' || github.event_name != 'pull_request')
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.build.outputs.image_tag }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.gate.outputs.pr_head_sha }}
+
+      - name: Extract Go version from go.mod
+        run: sed -En 's/^go (.*)$/GO_VERSION=\1/p' go.mod >> $GITHUB_ENV
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "${{ env.GO_VERSION }}"
+          cache-dependency-path: ./go.sum
+
+      - name: Install ko
+        uses: ko-build/setup-ko@d006021bd0c28d1ce33a07e7943d48b079944c8d
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ secrets.CR_USER }}
+          password: ${{ secrets.CR_TOKEN }}
+
+      - name: Build and push controller image
+        id: build
+        env:
+          GIT_REF: ${{ needs.gate.outputs.pr_head_sha }}
+        run: |
+          # Build image with git ref tag for this PR
+          # Use first 8 chars of the git ref (POSIX-compliant)
+          IMAGE_TAG="ref-$(printf '%s' "$GIT_REF" | cut -c1-8)"
+          # ko requires KO_DOCKER_REPO; the Makefile sets it via CONTAINER_IMG_REG
+          # GHCR requires lowercase registry path
+          reg="ghcr.io/${{ github.repository }}"
+          REGISTRY="${reg,,}"
+
+          echo "Building controller image..."
+          echo "  Registry: $REGISTRY"
+          echo "  Tag: $IMAGE_TAG"
+
+          make build-controller CONTAINER_IMG_REG="$REGISTRY" CONTROLLER_IMG_TAG="$IMAGE_TAG"
+
+          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          echo "Image built and pushed: ${REGISTRY}/dual-pods-controller:${IMAGE_TAG}"
+
+  # Run e2e tests on OpenShift self-hosted runner
+  e2e-openshift:
+    runs-on: [self-hosted, openshift]
+    needs: [gate, build-image]
+    if: needs.gate.outputs.should_run == 'true'
+    env:
+      SKIP_CLEANUP: ${{ github.event.inputs.skip_cleanup || 'false' }}
+      # PR-specific namespace for isolation between concurrent PR tests
+      FMA_NAMESPACE: fma-e2e-pr-${{ needs.gate.outputs.pr_number || github.run_id }}
+      # Unique release name per run to avoid conflicts
+      FMA_RELEASE_NAME: fma-e2e-${{ github.run_id }}
+      # Use the image built in the previous job
+      FMA_IMAGE_TAG: ${{ needs.build-image.outputs.image_tag }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.gate.outputs.pr_head_sha }}
+
+      - name: Install tools (kubectl, oc, helm)
+        run: |
+          # Install kubectl - pinned version for reproducible CI builds
+          KUBECTL_VERSION="v1.31.0"
+          echo "Installing kubectl version: $KUBECTL_VERSION"
+          curl -fsSL --retry 3 --retry-delay 5 -o kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          curl -fsSL --retry 3 --retry-delay 5 -o kubectl.sha256 "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl.sha256"
+          echo "$(cat kubectl.sha256)  kubectl" | sha256sum --check
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
+          rm -f kubectl.sha256
+          # Install oc (OpenShift CLI)
+          curl -fsSL --retry 3 --retry-delay 5 -O "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux.tar.gz"
+          tar -xzf openshift-client-linux.tar.gz
+          sudo mv oc /usr/local/bin/
+          rm -f openshift-client-linux.tar.gz kubectl README.md
+          # Install helm
+          curl -fsSL --retry 3 --retry-delay 5 https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+      - name: Verify cluster access
+        run: |
+          echo "Verifying cluster access..."
+          kubectl cluster-info
+          kubectl get nodes
+
+      - name: Clean up resources for this PR
+        run: |
+          echo "Cleaning up FMA resources for this PR..."
+          echo "  FMA_NAMESPACE: $FMA_NAMESPACE"
+
+          if kubectl get namespace "$FMA_NAMESPACE" &>/dev/null; then
+            echo "=== Cleaning up namespace: $FMA_NAMESPACE ==="
+            # Uninstall all helm releases in the namespace
+            for release in $(helm list -n "$FMA_NAMESPACE" -q 2>/dev/null); do
+              echo "  Uninstalling helm release: $release"
+              helm uninstall "$release" -n "$FMA_NAMESPACE" --ignore-not-found --wait --timeout 60s || true
+            done
+            echo "  Deleting namespace: $FMA_NAMESPACE"
+            kubectl delete namespace "$FMA_NAMESPACE" --ignore-not-found --timeout=120s || true
+          else
+            echo "Namespace $FMA_NAMESPACE does not exist, skipping cleanup"
+          fi
+
+          # Clean up cluster-scoped resources from previous runs for this PR
+          # ClusterRoleBinding names use release name pattern: fma-e2e-*-node-view
+          echo "Cleaning up cluster-scoped resources..."
+          kubectl delete clusterrolebinding -l app.kubernetes.io/name=dual-pods --ignore-not-found 2>/dev/null || true
+          kubectl delete clusterrole fma-node-viewer --ignore-not-found || true
+
+          echo "Cleanup complete"
+
+      - name: Create namespace
+        run: |
+          echo "Creating namespace $FMA_NAMESPACE..."
+          kubectl create namespace "$FMA_NAMESPACE"
+
+      - name: Apply FMA CRDs
+        run: |
+          echo "Applying FMA CRDs..."
+          kubectl apply -f config/crd/
+
+          # Verify CRDs are registered
+          echo "Verifying CRDs..."
+          kubectl get crd inferenceserverconfigs.fma.llm-d.ai
+          kubectl get crd launcherconfigs.fma.llm-d.ai
+          kubectl get crd launcherpopulationpolicies.fma.llm-d.ai
+          echo "All CRDs registered successfully"
+
+      - name: Create ConfigMaps
+        run: |
+          echo "Creating gpu-map and gpu-allocs ConfigMaps in $FMA_NAMESPACE..."
+          # The controller requires these ConfigMaps to exist.
+          # Empty maps are sufficient for install verification; the controller starts
+          # but cannot schedule dual pods without real GPU data.
+          kubectl create configmap gpu-map -n "$FMA_NAMESPACE"
+          kubectl create configmap gpu-allocs -n "$FMA_NAMESPACE"
+          echo "ConfigMaps created"
+
+      - name: Create node-viewer ClusterRole
+        run: |
+          echo "Creating node-viewer ClusterRole..."
+          kubectl create clusterrole fma-node-viewer --verb=get,list,watch --resource=nodes
+          echo "ClusterRole created"
+
+      - name: Detect ValidatingAdmissionPolicy support
+        id: detect-vap
+        run: |
+          POLICIES_ENABLED=false
+          if kubectl api-resources --api-group=admissionregistration.k8s.io -o name 2>/dev/null \
+             | grep -q 'validatingadmissionpolicies'; then
+            POLICIES_ENABLED=true
+          fi
+          echo "ValidatingAdmissionPolicy support: $POLICIES_ENABLED"
+          echo "policies_enabled=$POLICIES_ENABLED" >> $GITHUB_OUTPUT
+
+      - name: Deploy FMA controller
+        env:
+          POLICIES_ENABLED: ${{ steps.detect-vap.outputs.policies_enabled }}
+        run: |
+          # Construct the image reference
+          reg="ghcr.io/${{ github.repository }}"
+          CONTROLLER_IMAGE="${reg,,}/dual-pods-controller:${FMA_IMAGE_TAG}"
+
+          echo "Deploying FMA controller..."
+          echo "  Release: $FMA_RELEASE_NAME"
+          echo "  Namespace: $FMA_NAMESPACE"
+          echo "  Image: $CONTROLLER_IMAGE"
+          echo "  EnableValidationPolicy: $POLICIES_ENABLED"
+
+          helm upgrade --install "$FMA_RELEASE_NAME" charts/dpctlr \
+            -n "$FMA_NAMESPACE" \
+            --set Image="$CONTROLLER_IMAGE" \
+            --set NodeViewClusterRole=fma-node-viewer \
+            --set SleeperLimit=2 \
+            --set Local=false \
+            --set DebugAcceleratorMemory=false \
+            --set EnableValidationPolicy="$POLICIES_ENABLED"
+
+      - name: Wait for controller to be ready
+        run: |
+          echo "Waiting for FMA controller deployment to be ready..."
+          kubectl wait --for=condition=available --timeout=120s \
+            deployment "$FMA_RELEASE_NAME" -n "$FMA_NAMESPACE"
+
+          echo ""
+          echo "=== Controller Pod Status ==="
+          kubectl get pods -n "$FMA_NAMESPACE" -l app.kubernetes.io/name=dual-pods
+          echo ""
+          echo "=== Controller Deployment ==="
+          kubectl get deployment "$FMA_RELEASE_NAME" -n "$FMA_NAMESPACE"
+
+      - name: Verify controller health
+        run: |
+          echo "Checking controller pod for issues..."
+
+          # Get the controller pod name
+          POD_NAME=$(kubectl get pods -n "$FMA_NAMESPACE" \
+            -l app.kubernetes.io/name=dual-pods,app.kubernetes.io/component=controller \
+            -o jsonpath='{.items[0].metadata.name}')
+
+          if [ -z "$POD_NAME" ]; then
+            echo "::error::No controller pod found"
+            exit 1
+          fi
+
+          echo "Controller pod: $POD_NAME"
+
+          # Check pod is Running
+          PHASE=$(kubectl get pod "$POD_NAME" -n "$FMA_NAMESPACE" -o jsonpath='{.status.phase}')
+          if [ "$PHASE" != "Running" ]; then
+            echo "::error::Controller pod is in phase $PHASE, expected Running"
+            kubectl describe pod "$POD_NAME" -n "$FMA_NAMESPACE"
+            exit 1
+          fi
+
+          # Check for restarts
+          RESTARTS=$(kubectl get pod "$POD_NAME" -n "$FMA_NAMESPACE" \
+            -o jsonpath='{.status.containerStatuses[0].restartCount}')
+          if [ "$RESTARTS" -gt 0 ]; then
+            echo "::warning::Controller has restarted $RESTARTS time(s)"
+          fi
+
+          # Display recent logs
+          echo ""
+          echo "=== Controller Logs (last 50 lines) ==="
+          kubectl logs "$POD_NAME" -n "$FMA_NAMESPACE" --tail=50
+
+          # Check for fatal/panic in logs (klog FATAL lines start with F followed by digits)
+          if kubectl logs "$POD_NAME" -n "$FMA_NAMESPACE" 2>&1 | grep -iE "^F[0-9]|panic:" | head -5; then
+            echo "::error::Controller logs contain FATAL or panic messages"
+            exit 1
+          fi
+
+          echo ""
+          echo "Controller health check passed"
+
+      - name: Cleanup infrastructure
+        # Cleanup on success or cancellation, but NOT on failure (preserve for debugging)
+        if: (success() || cancelled()) && env.SKIP_CLEANUP != 'true'
+        run: |
+          echo "Cleaning up all FMA test infrastructure..."
+          echo "  FMA_NAMESPACE: $FMA_NAMESPACE"
+          echo "  FMA_RELEASE_NAME: $FMA_RELEASE_NAME"
+
+          # Uninstall Helm release
+          helm uninstall "$FMA_RELEASE_NAME" -n "$FMA_NAMESPACE" \
+            --ignore-not-found --wait --timeout 60s || true
+
+          # Delete namespace
+          kubectl delete namespace "$FMA_NAMESPACE" \
+            --ignore-not-found --timeout=120s || true
+
+          # Delete CRDs
+          kubectl delete -f config/crd/ --ignore-not-found || true
+
+          # Delete cluster-scoped resources
+          kubectl delete clusterrole fma-node-viewer --ignore-not-found || true
+          kubectl delete clusterrolebinding "$FMA_RELEASE_NAME-node-view" --ignore-not-found || true
+
+          echo "Cleanup complete"
+
+      - name: Scale down controller on failure
+        if: failure()
+        run: |
+          echo "Test failed - scaling down controller to free resources while preserving for debugging..."
+          kubectl scale deployment "$FMA_RELEASE_NAME" -n "$FMA_NAMESPACE" --replicas=0 || true
+
+          echo ""
+          echo "=== Remaining resources for debugging ==="
+          echo "Namespace: $FMA_NAMESPACE"
+          kubectl get all -n "$FMA_NAMESPACE" || true
+          echo ""
+          echo "=== Full controller logs ==="
+          kubectl logs deployment/"$FMA_RELEASE_NAME" -n "$FMA_NAMESPACE" --previous 2>/dev/null || true
+          kubectl logs deployment/"$FMA_RELEASE_NAME" -n "$FMA_NAMESPACE" 2>/dev/null || true
+
+  # Report status back to PR for issue_comment triggered runs
+  # This ensures fork PRs show the correct status after /ok-to-test runs complete
+  report-status:
+    runs-on: ubuntu-latest
+    needs: [gate, e2e-openshift]
+    # Run always (even on failure) but only for issue_comment events
+    if: always() && github.event_name == 'issue_comment' && needs.gate.outputs.should_run == 'true'
+    steps:
+      - name: Report status to PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prHeadSha = '${{ needs.gate.outputs.pr_head_sha }}';
+            const e2eResult = '${{ needs.e2e-openshift.result }}';
+
+            // Map job result to commit status
+            let state, description;
+            if (e2eResult === 'success') {
+              state = 'success';
+              description = 'E2E tests passed';
+            } else if (e2eResult === 'skipped') {
+              state = 'pending';
+              description = 'E2E tests skipped';
+            } else if (e2eResult === 'cancelled') {
+              state = 'failure';
+              description = 'E2E tests cancelled';
+            } else {
+              state = 'failure';
+              description = 'E2E tests failed';
+            }
+
+            console.log(`Reporting status to PR commit ${prHeadSha}: ${state} - ${description}`);
+
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: prHeadSha,
+              state: state,
+              target_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              description: description,
+              context: '${{ github.workflow }} / e2e (comment trigger)'
+            });
+
+            console.log('Status reported successfully');
