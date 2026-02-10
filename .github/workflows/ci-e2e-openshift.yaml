@@ -373,7 +373,7 @@ jobs:
       - name: Apply FMA CRDs
         run: |
           echo "Applying FMA CRDs..."
-          kubectl apply -f config/crd/
+          kubectl apply --server-side -f config/crd/
 
           # Verify CRDs are registered
           echo "Verifying CRDs..."
