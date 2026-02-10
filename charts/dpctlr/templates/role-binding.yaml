@@ -20,7 +20,7 @@ metadata:
   labels:
     app.kubernetes.io/name: dual-pods
     app.kubernetes.io/component: controller
-  name: dual-pods-controller-node-view
+  name: "{{ .Release.Name }}-node-view"
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
