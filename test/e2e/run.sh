@@ -37,8 +37,11 @@ function expect() {
 
 function clear_img_repo() (
     set +o pipefail
-    docker images $1 | fgrep -v '<none>' | grep -vw REPOSITORY | while read name tag rest; do
-	docker rmi $name:$tag
+    docker images --format "{{.Repository}}:{{.Tag}}" $1 | while read image; do
+        # Skip images with <none> tag
+        if [[ "$image" != *":<none>" ]]; then
+            docker rmi "$image" 2>/dev/null || true
+        fi
     done
 )
 
@@ -48,10 +51,13 @@ clear_img_repo ko.local/test-requester
 clear_img_repo my-registry/my-namespace/test-requester
 clear_img_repo ko.local/test-server
 clear_img_repo my-registry/my-namespace/test-server
+clear_img_repo ko.local/test-launcher
+clear_img_repo my-registry/my-namespace/test-launcher
 clear_img_repo ko.local/dual-pods-controller
 clear_img_repo my-registry/my-namespace/dual-pods-controller
 make build-test-requester-local
 make build-test-server-local
+make build-test-launcher-local
 make build-controller-local
 
 : Set up the kind cluster
@@ -121,6 +127,7 @@ done
 
 make load-test-requester-local
 make load-test-server-local
+make load-test-launcher-local
 make load-controller-local
 
 : Detect whether API server supports ValidatingAdmissionPolicy
@@ -135,6 +142,15 @@ fi
 ctlr_img=$(make echo-var VAR=CONTROLLER_IMG)
 
 helm upgrade --install dpctlr charts/dpctlr --set Image="$ctlr_img" --set NodeViewClusterRole=node-viewer --set SleeperLimit=2 --set Local=true --set DebugAcceleratorMemory=false --set EnableValidationPolicy=${POLICIES_ENABLED}
+
+: Populate gpu-map ConfigMap with GPU data for each node
+
+gi=0
+kubectl get nodes -o name | sed 's%^node/%%' | while read node; do
+    let gi1=gi+1
+    kubectl patch cm gpu-map -p "data:${nl} ${node}: '{\"GPU-$gi\": 0, \"GPU-$gi1\": 1 }'"
+    let gi=gi1+1
+done
 
 : Test CEL policy verification if enabled
 
@@ -157,13 +173,6 @@ expect "kubectl get pods -o name | grep -c '^pod/$rs' | grep -w 1"
 
 sleep 5
 kubectl get pods -o name | grep -c "^pod/$rs" | grep -w 1
-
-gi=0
-kubectl get nodes -o name | sed 's%^node/%%' | while read node; do
-    let gi1=gi+1
-    kubectl patch cm gpu-map -p "data:${nl} ${node}: '{\"GPU-$gi\": 0, \"GPU-$gi1\": 1 }'"
-    let gi=gi1+1
-done
 
 expect "kubectl get pods -o name | grep -c '^pod/$rs' | grep -w 2"
 
