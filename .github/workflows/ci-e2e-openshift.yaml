@@ -477,9 +477,14 @@ jobs:
           echo "=== Controller Logs (last 50 lines) ==="
           kubectl logs "$POD_NAME" -n "$FMA_NAMESPACE" --tail=50
 
-          # Check for fatal/panic in logs (klog FATAL lines start with F followed by digits)
-          if kubectl logs "$POD_NAME" -n "$FMA_NAMESPACE" 2>&1 | grep -iE "^F[0-9]|panic:" | head -5; then
-            echo "::error::Controller logs contain FATAL or panic messages"
+          # Check for fatal/panic in logs
+          # klog FATAL lines: F followed by 4 digits (MMDD), e.g. "F0210 19:21:..."
+          # Go panics: line starting with "panic:" (case sensitive)
+          FATAL_LINES=$(kubectl logs "$POD_NAME" -n "$FMA_NAMESPACE" 2>&1 \
+            | grep -E "^F[0-9]{4} |^panic:" | head -5) || true
+          if [ -n "$FATAL_LINES" ]; then
+            echo "::error::Controller logs contain FATAL or panic messages:"
+            echo "$FATAL_LINES"
             exit 1
           fi
 
