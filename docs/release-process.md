@@ -59,7 +59,7 @@ git push origin v0.3.1  # or your tag name
 
 ### 3. Automated Workflow Execution
 
-Once you publish the release, the `publish-release` workflow automatically:
+Once you publish the release, the `publish-release` workflow *will kick-off* automatically as follows:
 
 1. **Builds 4 container images**:
    - `ghcr.io/llm-d-incubation/llm-d-fast-model-actuation/dual-pods-controller:v0.3.1`
