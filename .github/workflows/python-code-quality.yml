@@ -34,7 +34,7 @@ jobs:
           # install black isort flake
           pip install black==24.4.2 isort==5.13.2 flake8==7.0.0
           # install pytest and its dependencies
-          pip install pytest==9.0.2 fastapi==0.116.1 pydantic==2.11.7 uvicorn==0.35.0 uvloop==0.21.0 httpx==0.28.1 pynvml==13.0.1
+          pip install pytest==9.0.2 fastapi==0.116.1 pydantic==2.11.7 uvicorn==0.35.0 uvloop==0.21.0 httpx==0.28.1 nvidia-ml-py==13.590.48
 
       - name: Check for trailing whitespace
         run: |

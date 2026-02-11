@@ -17,6 +17,7 @@
 GPU Translator
 """
 
+import importlib.metadata
 import logging
 from typing import Dict
 
@@ -27,13 +28,30 @@ logger = logging.getLogger(__name__)
 
 # VLLM process manager
 class GpuTranslator:
-
     def __init__(self):
         """
         Initialize GPU Translator
         """
         self.mapping = {}
+        self._check_library()
         self._populate_mapping()
+
+    def _check_library(self):
+        """
+        Makes sure that nvidia-ml-py is being used
+        """
+        package_name = "nvidia-ml-py"
+        try:
+            distribution = importlib.metadata.distribution(package_name)
+            logger.info(
+                "using package: %s version: %s",
+                distribution.name,
+                distribution.version,
+            )
+        except importlib.metadata.PackageNotFoundError:
+            raise ModuleNotFoundError(
+                f"package {package_name} not found. Please install it."
+            )
 
     def _populate_mapping(self):
         """
@@ -44,12 +62,12 @@ class GpuTranslator:
             self.device_count = pynvml.nvmlDeviceGetCount()
             for index in range(self.device_count):
                 handle = pynvml.nvmlDeviceGetHandleByIndex(index)
-                try:
-                    # this may not work for released standard vllms
-                    uuid = pynvml.nvmlDeviceGetUUID(handle).decode("utf-8")
-                except AttributeError:
-                    uuid = pynvml.nvmlDeviceGetUUID(handle)
-
+                uuid_value = pynvml.nvmlDeviceGetUUID(handle)
+                uuid = (
+                    uuid_value
+                    if isinstance(uuid_value, str)
+                    else uuid_value.decode("utf-8")
+                )
                 self.mapping[uuid] = index
             pynvml.nvmlShutdown()
 

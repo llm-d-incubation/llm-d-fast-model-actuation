@@ -5,7 +5,7 @@ WORKDIR /app
 
 COPY inference_server/launcher/launcher.py inference_server/launcher/gputranslator.py /app/
 
-# Install uvicorn for serving the launcher API and pynvml for gputranslator
-RUN pip install --root-user-action=ignore --no-cache-dir uvicorn pynvml
+# Install uvicorn for serving the launcher API and nvidia-ml-py for gputranslator
+RUN pip install --root-user-action=ignore --no-cache-dir uvicorn nvidia-ml-py
 
 ENTRYPOINT ["uvicorn", "--app-dir", "/app", "launcher:app"]

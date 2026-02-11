@@ -2,5 +2,6 @@ fastapi
 pydantic
 uvicorn
 uvloop
+nvidia-ml-py
 # WARNING: vllm must be built from source on a macOS Silicon
 vllm; sys_platform != "darwin" or platform_machine != "arm64"
