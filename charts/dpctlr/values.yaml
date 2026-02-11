@@ -1,5 +1,5 @@
 # Of course, you never really want to use `:latest`
-Image: ghcr.io/llm-d-incubation/llm-d-fast-model-actuation-controller:latest
+Image: ghcr.io/llm-d-incubation/llm-d-fast-model-actuation/dual-pods-controller:latest
 
 # Set this to true when deploying in a local cluster.
 # This suppresses image pulls.

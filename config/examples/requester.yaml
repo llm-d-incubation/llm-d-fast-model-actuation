@@ -5,7 +5,7 @@ metadata:
 spec:
   containers:
     - name: requester-container
-      image: ghcr.io/llm-d-incubation/llm-d-fast-model-actuation-requester:latest
+      image: ghcr.io/llm-d-incubation/llm-d-fast-model-actuation/requester:latest
       ports:
         - containerPort: 8080
         - containerPort: 8081
