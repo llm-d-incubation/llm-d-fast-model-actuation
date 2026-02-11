@@ -328,7 +328,7 @@ Retrieve recent stdout/stderr logs from a specific vLLM instance.
 
 **Query Parameters:**
 
-- `max_lines` (optional): Maximum number of log lines to retrieve (default: 100, range: 1-10000)
+- `max_bytes` (optional): Maximum bytes of log data to retrieve (default: 1048576 (1 MB), range: 1024-10485760 (10 MB))
 
 **Response (200 OK):**
 
@@ -340,7 +340,8 @@ Retrieve recent stdout/stderr logs from a specific vLLM instance.
     "INFO: Waiting for application startup",
     "INFO: Application startup complete"
   ],
-  "count": 3
+  "count": 3,
+  "total_bytes": 156
 }
 ```
 
@@ -525,14 +526,14 @@ curl http://localhost:8001/v2/vllm/instances
 ### Example 5: Retrieve Instance Logs
 
 ```bash
-# Get last 100 lines (default)
+# Get up to 1 MB of logs (default)
 curl http://localhost:8001/v2/vllm/instances/abc123.../logs
 
-# Get last 50 lines
-curl "http://localhost:8001/v2/vllm/instances/abc123.../logs?max_lines=50"
+# Get up to 500 KB of logs
+curl "http://localhost:8001/v2/vllm/instances/abc123.../logs?max_bytes=512000"
 
-# Get up to 1000 lines for debugging
-curl "http://localhost:8001/v2/vllm/instances/abc123.../logs?max_lines=1000"
+# Get up to 5 MB of logs for debugging
+curl "http://localhost:8001/v2/vllm/instances/abc123.../logs?max_bytes=5242880"
 ```
 
 ## Configuration
@@ -607,7 +608,7 @@ Represents a single vLLM instance with its process and configuration.
 - `start()`: Start the vLLM process
 - `stop(timeout=10)`: Stop the vLLM process gracefully (or force kill after timeout)
 - `get_status()`: Get detailed status information
-- `get_logs(max_lines=100)`: Retrieve recent logs from the instance
+- `get_logs(max_bytes=1048576)`: Retrieve recent logs from the instance (up to specified bytes)
 
 #### `VllmMultiProcessManager`
 
@@ -620,7 +621,7 @@ Manages multiple VllmInstance objects.
 - `stop_all_instances(timeout=10)`: Stop all running instances
 - `get_instance_status(instance_id)`: Get status of a specific instance
 - `get_all_instances_status()`: Get status of all instances
-- `get_instance_logs(instance_id, max_lines=100)`: Retrieve logs from a specific instance
+- `get_instance_logs(instance_id, max_bytes=1048576)`: Retrieve logs from a specific instance (up to specified bytes)
 
 ## Best Practices
 
@@ -676,19 +677,22 @@ Be mindful of system resources:
 
 ### 5. Log Management
 
-The launcher captures stdout/stderr from each vLLM instance in memory:
+The launcher captures stdout/stderr from each vLLM instance in memory using a byte-limited queue:
 
-- **Queue Size**: Limited to 5000 messages per instance (configurable via `MAX_QUEUE_SIZE`)
+- **Queue Size**: Limited to 10 MB per instance (configurable via `MAX_QUEUE_BYTES`)
+- **Byte-Based Limits**: Uses actual byte size instead of line count for more predictable memory usage
 - **Circular Buffer**: When full, oldest messages are automatically dropped
 - **Memory Protection**: Prevents unbounded memory growth from excessive logging
 - **Non-blocking**: Log capture doesn't slow down the vLLM process
+- **Unicode Support**: Properly handles multi-byte characters in logs
 
 **Best Practices:**
 
 - Retrieve logs periodically if you need to monitor instance behavior
-- Use `max_lines` parameter to limit response size
+- Use `max_bytes` parameter to limit response size (default: 1 MB, max: 10 MB)
 - Logs are lost when an instance is deleted
 - For production, consider external logging solutions for long-term storage
+- Byte-based limits provide more accurate memory control than line-based limits
 
 ### 6. Testing
 
