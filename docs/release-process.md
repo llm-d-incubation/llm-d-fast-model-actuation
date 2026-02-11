@@ -59,7 +59,7 @@ git push origin v0.3.1  # or your tag name
 
 ### 3. Automated Workflow Execution
 
-Once you publish the release, the `publish-release` workflow *will kick-off* automatically as follows:
+Once you publish the release, the `publish-release` workflow runs automatically and performs the following steps:
 
 1. **Builds 4 container images**:
    - `ghcr.io/llm-d-incubation/llm-d-fast-model-actuation/dual-pods-controller:v0.3.1`
@@ -86,5 +86,4 @@ Use the GitHub Actions UI to manually trigger the workflow with a specific tag
 
 ## Related Documentation
 
-- [Helm Chart Installation](helm-install.md) - How to install the published charts
 - [Workflow Source](../.github/workflows/publish-release.yaml) - The actual workflow implementation

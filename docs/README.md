@@ -3,7 +3,7 @@
 - [Launcher](launcher.md)
 - [Fast Model Actuation with Process Flexibility and Dual Pods](dual-pods.md)
 
-# Dev/test of dual-pods controller
+# Dev/test
 
 - [Local dev/test in a `kind` cluster](local-test.md)
 - [Manual end-to-end testing using a real cluster](e2e-recipe.md)
@@ -20,7 +20,6 @@
 - [End-to-end testing in CI using a `kind` cluster](../.github/workflows/pr-test-in-kind.yml)
 - [Release – Build Images & Publish Helm Charts to GHCR](../.github/workflows/publish-release.yaml)
 
-# Helm Charts
+# Release
 
-- [Helm chart installation](helm-install.md)
 - [Release process](release-process.md)

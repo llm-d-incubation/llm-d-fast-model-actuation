@@ -74,7 +74,6 @@ jobs:
           TAG="${{ steps.version.outputs.tag }}"
           reg="${{ github.repository }}"
 
-          KO_DOCKER_REPO=ghcr.io/${reg@L} \
           make build-controller \
             CONTAINER_IMG_REG=ghcr.io/${reg@L} \
             CONTROLLER_IMG_TAG=$TAG
@@ -89,7 +88,6 @@ jobs:
           TAG="${{ steps.version.outputs.tag }}"
           reg="${{ github.repository }}"
 
-          KO_DOCKER_REPO=ghcr.io/${reg@L} \
           make build-populator \
             CONTAINER_IMG_REG=ghcr.io/${reg@L} \
             POPULATOR_IMG_TAG=$TAG
