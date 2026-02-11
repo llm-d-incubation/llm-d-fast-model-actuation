@@ -44,7 +44,12 @@ class GpuTranslator:
             self.device_count = pynvml.nvmlDeviceGetCount()
             for index in range(self.device_count):
                 handle = pynvml.nvmlDeviceGetHandleByIndex(index)
-                uuid = pynvml.nvmlDeviceGetUUID(handle).decode("utf-8")
+                try:
+                    # this may not work for released standard vllms
+                    uuid = pynvml.nvmlDeviceGetUUID(handle).decode("utf-8")
+                except AttributeError:
+                    uuid = pynvml.nvmlDeviceGetUUID(handle)
+
                 self.mapping[uuid] = index
             pynvml.nvmlShutdown()
 
