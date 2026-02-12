@@ -336,12 +336,7 @@ Retrieve stdout/stderr logs from a specific vLLM instance starting from a specif
 ```json
 {
   "instance_id": "instance-id",
-  "logs": [
-    "INFO: Started server process",
-    "INFO: Waiting for application startup",
-    "INFO: Application startup complete"
-  ],
-  "count": 3,
+  "log": "INFO: Started server process\nINFO: Waiting for application startup\nINFO: Application startup complete\n",
   "start_byte": 0,
   "total_bytes": 156,
   "next_byte": 156
@@ -350,8 +345,7 @@ Retrieve stdout/stderr logs from a specific vLLM instance starting from a specif
 
 **Response Fields:**
 
-- `logs`: Array of log messages
-- `count`: Number of log messages returned
+- `log`: Log content as a single string
 - `start_byte`: The byte position where reading started
 - `total_bytes`: Total bytes of log data returned
 - `next_byte`: The byte position to use for the next request to continue reading. Use this value as `start_byte` in subsequent requests.
@@ -651,7 +645,7 @@ Represents a single vLLM instance with its process and configuration.
 - `start()`: Start the vLLM process
 - `stop(timeout=10)`: Stop the vLLM process gracefully (or force kill after timeout)
 - `get_status()`: Get detailed status information
-- `get_logs(start_byte=0, max_bytes=1048576)`: Retrieve logs from the instance starting from a byte position (returns tuple of logs and next_byte)
+- `get_logs(start_byte=0, max_bytes=1048576)`: Retrieve logs from the instance starting from a byte position (returns tuple of log content string and next_byte)
 
 #### `VllmMultiProcessManager`
 
@@ -664,7 +658,7 @@ Manages multiple VllmInstance objects.
 - `stop_all_instances(timeout=10)`: Stop all running instances
 - `get_instance_status(instance_id)`: Get status of a specific instance
 - `get_all_instances_status()`: Get status of all instances
-- `get_instance_logs(instance_id, start_byte=0, max_bytes=1048576)`: Retrieve logs from a specific instance starting from a byte position (returns tuple of logs and next_byte)
+- `get_instance_logs(instance_id, start_byte=0, max_bytes=1048576)`: Retrieve logs from a specific instance starting from a byte position (returns tuple of log content string and next_byte)
 
 ## Best Practices
 

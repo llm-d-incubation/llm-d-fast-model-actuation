@@ -46,16 +46,16 @@ def get_logs_from_queue(
     output_queue: multiprocessing.Queue,
     start_byte: int = 0,
     max_bytes: int = MAX_LOG_RESPONSE_BYTES,
-) -> tuple[List[str], int]:
+) -> tuple[str, int]:
     """
     Retrieve logs from queue starting from
     start_byte up to max_bytes (non-destructive read)
     :param output_queue: The multiprocessing queue containing log messages
     :param start_byte: Byte position to start reading from (0-based)
     :param max_bytes: Maximum bytes to retrieve from start_byte
-    :return: Tuple of (list of log messages, next_byte_position)
+    :return: Tuple of (log content as string, next_byte_position)
     """
-    logs = []
+    log_content = ""
     current_byte = 0
     bytes_read = 0
     temp_messages = []
@@ -78,7 +78,7 @@ def get_logs_from_queue(
         if msg_start_byte >= start_byte:
             # Check if adding this message would exceed max_bytes
             if bytes_read + msg_bytes <= max_bytes:
-                logs.append(msg)
+                log_content += msg
                 bytes_read += msg_bytes
 
         current_byte = msg_end_byte
@@ -95,7 +95,7 @@ def get_logs_from_queue(
     # Calculate next byte position for client to use
     next_byte = start_byte + bytes_read
 
-    return logs, next_byte
+    return log_content, next_byte
 
 
 # Define a the expected JSON structure in dataclass
@@ -197,20 +197,20 @@ class VllmInstance:
 
     def get_logs(
         self, start_byte: int = 0, max_bytes: int = MAX_LOG_RESPONSE_BYTES
-    ) -> tuple[List[str], int]:
+    ) -> tuple[str, int]:
         """
         Retrieve logs from the child process
         :param start_byte: Byte position to start reading from
         :param max_bytes: Maximum bytes of log data to retrieve
-        :return: Tuple of (list of log messages, next_byte_position)
+        :return: Tuple of (log content as string, next_byte_position)
         """
-        logs = []
+        log_content = ""
         next_byte = start_byte
         if self.output_queue:
-            logs, next_byte = get_logs_from_queue(
+            log_content, next_byte = get_logs_from_queue(
                 self.output_queue, start_byte, max_bytes
             )
-        return logs, next_byte
+        return log_content, next_byte
 
 
 # Multi-instance vLLM process manager
@@ -298,13 +298,13 @@ class VllmMultiProcessManager:
         instance_id: str,
         start_byte: int = 0,
         max_bytes: int = MAX_LOG_RESPONSE_BYTES,
-    ) -> tuple[List[str], int]:
+    ) -> tuple[str, int]:
         """
         Get logs from a specific instance
         :param instance_id: ID of the instance
         :param start_byte: Byte position to start reading from
         :param max_bytes: Maximum bytes of log data to retrieve
-        :return: Tuple of (list of log messages, next_byte_position)
+        :return: Tuple of (log content as string, next_byte_position)
         """
         if instance_id not in self.instances:
             raise KeyError(f"Instance {instance_id} not found")
@@ -469,15 +469,14 @@ async def get_vllm_instance_logs(
     Use the returned next_byte value in subsequent requests to continue reading.
     """
     try:
-        logs, next_byte = vllm_manager.get_instance_logs(
+        log_content, next_byte = vllm_manager.get_instance_logs(
             instance_id, start_byte, max_bytes
         )
-        total_bytes = sum(len(log.encode("utf-8")) for log in logs)
+        total_bytes = len(log_content.encode("utf-8"))
         return JSONResponse(
             content={
                 "instance_id": instance_id,
-                "logs": logs,
-                "count": len(logs),
+                "log": log_content,
                 "start_byte": start_byte,
                 "total_bytes": total_bytes,
                 "next_byte": next_byte,
