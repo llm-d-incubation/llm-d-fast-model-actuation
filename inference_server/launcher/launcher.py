@@ -21,8 +21,10 @@ import logging
 import multiprocessing
 import os
 import queue
+import signal
 import sys
 import uuid
+from contextlib import asynccontextmanager
 from http import HTTPStatus  # HTTP Status Codes
 from typing import Any, Dict, List, Optional
 
@@ -183,13 +185,19 @@ class VllmInstance:
                 "instance_id": self.instance_id,
             }
 
-        # Graceful termination
+        # Graceful termination — send SIGTERM to the vLLM process,
+        # which will propagate shutdown to the EngineCore via vLLM's
+        # own cleanup logic.
         self.process.terminate()
         self.process.join(timeout=timeout)
 
-        # Force kill if needed
+        # Force kill the entire process group (vLLM server + EngineCore)
+        # if graceful shutdown did not complete in time.
         if self.process.is_alive():
-            self.process.kill()
+            try:
+                os.killpg(self.process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
             self.process.join()
 
         return {
@@ -325,15 +333,25 @@ class VllmMultiProcessManager:
 # Create global manager instance
 vllm_manager = VllmMultiProcessManager()
 
+# Setup logging
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    """Manage application lifecycle: clean up all vLLM instances on shutdown."""
+    yield
+    logger.info("Launcher shutting down, stopping all vLLM instances...")
+    vllm_manager.stop_all_instances()
+
+
 # Create FastAPI application
 app = FastAPI(
     title="Multi-Instance vLLM Management API",
     version="2.0",
     description="REST API for managing multiple vLLM instances",
+    lifespan=lifespan,
 )
-
-# Setup logging
-logger = logging.getLogger(__name__)
 
 
 ############################################################
@@ -507,21 +525,37 @@ async def get_vllm_instance_logs(
 
 # Helper class to redirect stdout/stderr to queue
 class QueueWriter:
-    """Custom writer that sends output to a multiprocessing Queue"""
+    """Custom writer that sends output to a multiprocessing Queue.
 
-    def __init__(self, queue: multiprocessing.Queue):
-        self.queue = queue
+    Wraps the original stream so that libraries which inspect stream
+    attributes (e.g. uvicorn's logging config) continue to work.
+    """
+
+    def __init__(self, output_queue: multiprocessing.Queue, original_stream):
+        self._queue = output_queue
+        self._original = original_stream
+        # Expose attributes that logging/uvicorn may inspect
+        self.encoding = getattr(original_stream, "encoding", "utf-8")
+        self.name = getattr(original_stream, "name", "<queue>")
+        self.errors = getattr(original_stream, "errors", "strict")
 
     def write(self, msg: str):
         if msg.strip():  # Only send non-empty messages
             try:
-                self.queue.put_nowait(msg)
+                self._queue.put_nowait(msg)
             except queue.Full:
                 # Drop message if queue is full
                 pass
+        return len(msg)
 
     def flush(self):
         pass
+
+    def fileno(self):
+        return self._original.fileno()
+
+    def isatty(self):
+        return False
 
 
 # Function to be executed by the child process
@@ -532,9 +566,15 @@ def vllm_kickoff(vllm_config: VllmConfig, output_queue: multiprocessing.Queue):
     :param output_queue: multiprocessing Queue for capturing stdout/stderr
     """
 
-    # Redirect stdout and stderr to queue
-    sys.stdout = QueueWriter(output_queue)
-    sys.stderr = QueueWriter(output_queue)
+    # Isolate this process tree into its own process group so that
+    # signals (SIGINT/SIGTERM) sent to the launcher's group do not
+    # propagate to the vLLM server or its EngineCore child process.
+    os.setpgrp()
+
+    # Redirect stdout and stderr to queue while preserving original
+    # stream attributes needed by uvicorn's logging configuration.
+    sys.stdout = QueueWriter(output_queue, sys.stdout)
+    sys.stderr = QueueWriter(output_queue, sys.stderr)
 
     logger.info(f"VLLM process (PID: {os.getpid()}) started.")
     # Set env vars in the current process
