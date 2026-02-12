@@ -34,10 +34,15 @@ sys.modules["vllm.entrypoints.utils"] = MagicMock()
 
 # Import the application and classes
 from launcher import (  # noqa: E402
+    MAX_LOG_RESPONSE_BYTES,
+    MAX_QUEUE_BYTES,
+    MAX_QUEUE_SIZE,
+    QueueWriter,
     VllmConfig,
     VllmInstance,
     VllmMultiProcessManager,
     app,
+    get_logs_from_queue,
     set_env_vars,
 )
 
@@ -463,6 +468,65 @@ class TestVllmMultiProcessManager:
         assert "id-1" in instances
         assert "id-2" in instances
 
+    @patch("launcher.multiprocessing.Process")
+    @patch("launcher.get_logs_from_queue")
+    @patch("launcher.multiprocessing.Queue")
+    def test_get_instance_logs(
+        self, mock_queue_class, mock_get_logs, mock_process_class, manager, vllm_config
+    ):
+        """Test getting logs from a specific instance"""
+        mock_process = MockProcess()
+        mock_process_class.return_value = mock_process
+
+        # Mock the get_logs_from_queue function to return tuple
+        mock_get_logs.return_value = ("Log line 1Log line 2Log line 3", 100)
+
+        mock_queue = MagicMock()
+        mock_queue_class.return_value = mock_queue
+
+        manager.create_instance(vllm_config, "test-id")
+        log_content, next_byte = manager.get_instance_logs(
+            "test-id", start_byte=0, max_bytes=1000
+        )
+
+        assert isinstance(log_content, str)
+        assert "Log line 1" in log_content
+        assert "Log line 2" in log_content
+        assert "Log line 3" in log_content
+        assert next_byte == 100
+
+    @patch("launcher.multiprocessing.Process")
+    def test_get_instance_logs_nonexistent(self, mock_process_class, manager):
+        """Test getting logs from nonexistent instance raises KeyError"""
+        with pytest.raises(KeyError, match="not found"):
+            manager.get_instance_logs("nonexistent-id")
+
+    @patch("launcher.multiprocessing.Process")
+    @patch("launcher.get_logs_from_queue")
+    @patch("launcher.multiprocessing.Queue")
+    def test_get_instance_logs_respects_max_bytes(
+        self, mock_queue_class, mock_get_logs, mock_process_class, manager, vllm_config
+    ):
+        """Test that get_logs respects max_bytes parameter"""
+        mock_process = MockProcess()
+        mock_process_class.return_value = mock_process
+
+        # Mock the get_logs_from_queue function to return tuple
+        mock_get_logs.return_value = ("Log 1Log 2", 50)
+
+        mock_queue = MagicMock()
+        mock_queue_class.return_value = mock_queue
+
+        manager.create_instance(vllm_config, "test-id")
+        log_content, next_byte = manager.get_instance_logs(
+            "test-id", start_byte=0, max_bytes=100
+        )
+
+        # Should call get_logs_from_queue with start_byte and max_bytes
+        assert isinstance(log_content, str)
+        assert next_byte == 50
+        mock_get_logs.assert_called_once_with(mock_queue, 0, 100)
+
 
 # Tests for API Endpoints
 class TestAPIEndpoints:
@@ -480,7 +544,7 @@ class TestAPIEndpoints:
         assert data["name"] == "Multi-Instance vLLM Management API"
         assert data["version"] == "2.0"
         assert "endpoints" in data
-        assert len(data["endpoints"]) == 8
+        assert len(data["endpoints"]) == 9
 
     @patch("launcher.vllm_manager")
     def test_create_vllm_instance(self, mock_manager, client, vllm_config):
@@ -615,6 +679,182 @@ class TestAPIEndpoints:
 
         assert response.status_code == 404
 
+    @patch("launcher.vllm_manager")
+    def test_get_instance_logs_endpoint(self, mock_manager, client):
+        """Test getting instance logs via API"""
+        mock_manager.get_instance_logs.return_value = (
+            "Log line 1Log line 2Log line 3",
+            150,
+        )
+
+        response = client.get("/v2/vllm/instances/test-id/log")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["instance_id"] == "test-id"
+        assert "log" in data
+        assert isinstance(data["log"], str)
+        assert "Log line 1" in data["log"]
+        assert data["start_byte"] == 0
+        assert data["next_byte"] == 150
+
+    @patch("launcher.vllm_manager")
+    def test_get_instance_logs_with_max_bytes(self, mock_manager, client):
+        """Test getting instance logs with max_bytes parameter"""
+        mock_manager.get_instance_logs.return_value = ("Log 1Log 2", 50)
+
+        response = client.get("/v2/vllm/instances/test-id/log?max_bytes=5000")
+
+        assert response.status_code == 200
+        mock_manager.get_instance_logs.assert_called_once_with("test-id", 0, 5000)
+
+    @patch("launcher.vllm_manager")
+    def test_get_instance_logs_nonexistent_endpoint(self, mock_manager, client):
+        """Test getting logs from nonexistent instance returns 404"""
+        mock_manager.get_instance_logs.side_effect = KeyError("not found")
+
+        response = client.get("/v2/vllm/instances/nonexistent-id/log")
+
+        assert response.status_code == 404
+
+
+# Tests for QueueWriter
+class TestQueueWriter:
+    def test_queue_writer_write_non_empty(self):
+        """Test QueueWriter writes non-empty messages to queue"""
+        from unittest.mock import MagicMock
+
+        mock_queue = MagicMock()
+        mock_queue.put_nowait.side_effect = None  # Simulate successful put
+        writer = QueueWriter(mock_queue)
+
+        writer.write("Test message")
+
+        # Verify put_nowait was called with the message
+        mock_queue.put_nowait.assert_called_once_with("Test message")
+
+    def test_queue_writer_ignores_empty_messages(self):
+        """Test QueueWriter ignores empty/whitespace messages"""
+        from unittest.mock import MagicMock
+
+        mock_queue = MagicMock()
+        writer = QueueWriter(mock_queue)
+
+        writer.write("")
+        writer.write("   ")
+        writer.write("\n")
+
+        # put should not have been called for empty messages
+        mock_queue.put.assert_not_called()
+
+    def test_queue_writer_flush(self):
+        """Test QueueWriter flush method (should do nothing)"""
+        from unittest.mock import MagicMock
+
+        mock_queue = MagicMock()
+        writer = QueueWriter(mock_queue)
+
+        # Should not raise any exception
+        writer.flush()
+
+
+# Tests for VllmInstance log functionality
+class TestVllmInstanceLogs:
+    @patch("launcher.multiprocessing.Process")
+    @patch("launcher.get_logs_from_queue")
+    @patch("launcher.multiprocessing.Queue")
+    def test_get_logs_empty_queue(
+        self,
+        mock_queue_class,
+        mock_get_logs,
+        mock_process_class,
+        vllm_config,
+        gpu_translator,
+    ):
+        """Test get_logs returns empty string when queue is empty"""
+        mock_process = MockProcess()
+        mock_process_class.return_value = mock_process
+
+        mock_queue = MagicMock()
+        mock_queue_class.return_value = mock_queue
+        mock_get_logs.return_value = ("", 0)
+
+        instance = VllmInstance("test-id", vllm_config, gpu_translator)
+        instance.start()
+
+        log_content, next_byte = instance.get_logs()
+
+        assert log_content == ""
+        assert next_byte == 0
+
+    @patch("launcher.multiprocessing.Process")
+    @patch("launcher.get_logs_from_queue")
+    @patch("launcher.multiprocessing.Queue")
+    def test_get_logs_with_messages(
+        self,
+        mock_queue_class,
+        mock_get_logs,
+        mock_process_class,
+        vllm_config,
+        gpu_translator,
+    ):
+        """Test get_logs retrieves messages from queue"""
+        mock_process = MockProcess()
+        mock_process_class.return_value = mock_process
+
+        mock_queue = MagicMock()
+        mock_queue_class.return_value = mock_queue
+        mock_get_logs.return_value = ("Log 1Log 2", 50)
+
+        instance = VllmInstance("test-id", vllm_config, gpu_translator)
+        instance.start()
+
+        log_content, next_byte = instance.get_logs()
+
+        assert isinstance(log_content, str)
+        assert "Log 1" in log_content
+        assert "Log 2" in log_content
+        assert next_byte == 50
+
+    @patch("launcher.multiprocessing.Process")
+    @patch("launcher.get_logs_from_queue")
+    @patch("launcher.multiprocessing.Queue")
+    def test_get_logs_respects_max_bytes(
+        self,
+        mock_queue_class,
+        mock_get_logs,
+        mock_process_class,
+        vllm_config,
+        gpu_translator,
+    ):
+        """Test get_logs respects max_bytes parameter"""
+        mock_process = MockProcess()
+        mock_process_class.return_value = mock_process
+
+        mock_queue = MagicMock()
+        mock_queue_class.return_value = mock_queue
+        mock_get_logs.return_value = ("Log 1Log 2Log 3", 150)
+
+        instance = VllmInstance("test-id", vllm_config, gpu_translator)
+        instance.start()
+
+        log_content, next_byte = instance.get_logs(start_byte=0, max_bytes=100)
+
+        assert isinstance(log_content, str)
+        assert next_byte == 150
+        mock_get_logs.assert_called_once_with(mock_queue, 0, 100)
+
+    @patch("launcher.multiprocessing.Process")
+    def test_get_logs_no_queue(self, mock_process_class, vllm_config, gpu_translator):
+        """Test get_logs returns empty string when queue doesn't exist"""
+        instance = VllmInstance("test-id", vllm_config, gpu_translator)
+        # Don't start the instance, so output_queue is None
+
+        log_content, next_byte = instance.get_logs()
+
+        assert log_content == ""
+        assert next_byte == 0
+
 
 # Tests for Helper Functions
 class TestHelperFunctions:
@@ -633,6 +873,192 @@ class TestHelperFunctions:
         # Cleanup
         for key in test_vars.keys():
             del os.environ[key]
+
+    def test_max_queue_size_constant(self):
+        """Test that MAX_QUEUE_SIZE constant is defined"""
+        assert MAX_QUEUE_SIZE == 5000
+
+    def test_max_queue_bytes_constant(self):
+        """Test that MAX_QUEUE_BYTES constant is defined"""
+        assert MAX_QUEUE_BYTES == 10 * 1024 * 1024  # 10 MB
+
+    def test_max_log_response_bytes_constant(self):
+        """Test that MAX_LOG_RESPONSE_BYTES constant is defined"""
+        assert MAX_LOG_RESPONSE_BYTES == 1 * 1024 * 1024  # 1 MB
+
+
+# Tests for get_logs_from_queue function
+class TestGetLogsFromQueue:
+    """Test suite for get_logs_from_queue function"""
+
+    def test_basic_retrieval(self):
+        """Test basic log retrieval"""
+        from unittest.mock import MagicMock
+
+        mock_queue = MagicMock()
+        messages = ["Test message 1", "Test message 2"]
+        mock_queue.empty.side_effect = [False, False, True]
+        mock_queue.get_nowait.side_effect = messages
+        mock_queue.put_nowait.return_value = None
+
+        log_content, next_byte = get_logs_from_queue(
+            mock_queue, start_byte=0, max_bytes=1000
+        )
+        assert isinstance(log_content, str)
+        assert "Test message 1" in log_content
+        assert "Test message 2" in log_content
+        assert next_byte > 0
+
+    def test_empty_queue(self):
+        """Test getting logs from empty queue"""
+        from unittest.mock import MagicMock
+
+        mock_queue = MagicMock()
+        mock_queue.empty.return_value = True
+
+        log_content, next_byte = get_logs_from_queue(
+            mock_queue, start_byte=0, max_bytes=1000
+        )
+        assert log_content == ""
+        assert next_byte == 0
+
+    def test_byte_limit_enforcement(self):
+        """Test that byte limit is enforced"""
+        from unittest.mock import MagicMock
+
+        mock_queue = MagicMock()
+        messages = [f"Message {i}" for i in range(10)]
+        mock_queue.empty.side_effect = [False] * 10 + [True]
+        mock_queue.get_nowait.side_effect = messages
+        mock_queue.put_nowait.return_value = None
+
+        # Request only 50 bytes
+        log_content, next_byte = get_logs_from_queue(
+            mock_queue, start_byte=0, max_bytes=50
+        )
+        assert isinstance(log_content, str)
+        total_bytes = len(log_content.encode("utf-8"))
+        assert total_bytes <= 50
+        assert next_byte == total_bytes
+
+    def test_max_bytes_larger_than_queue(self):
+        """Test when max_bytes is larger than queue content"""
+        from unittest.mock import MagicMock
+
+        mock_queue = MagicMock()
+        messages = ["Short", "Message"]
+        mock_queue.empty.side_effect = [False, False, True]
+        mock_queue.get_nowait.side_effect = messages
+        mock_queue.put_nowait.return_value = None
+
+        log_content, next_byte = get_logs_from_queue(
+            mock_queue, start_byte=0, max_bytes=10000
+        )
+        assert isinstance(log_content, str)
+        assert "Short" in log_content
+        assert "Message" in log_content
+        assert next_byte > 0
+
+    def test_messages_returned_to_queue(self):
+        """Test that messages are returned to queue after retrieval"""
+        from unittest.mock import MagicMock
+
+        mock_queue = MagicMock()
+        messages = ["Message 1", "Message 2"]
+
+        # First call
+        mock_queue.empty.side_effect = [False, False, True]
+        mock_queue.get_nowait.side_effect = messages.copy()
+        mock_queue.put_nowait.return_value = None
+
+        log_content, next_byte = get_logs_from_queue(
+            mock_queue, start_byte=0, max_bytes=1000
+        )
+        assert isinstance(log_content, str)
+        assert next_byte > 0
+
+        # Verify put_nowait was called to return messages
+        assert mock_queue.put_nowait.call_count == 2
+
+    def test_unicode_handling(self):
+        """Test handling of unicode characters"""
+        from unittest.mock import MagicMock
+
+        mock_queue = MagicMock()
+        messages = ["Hello 世界", "Test émojis 🚀"]
+        mock_queue.empty.side_effect = [False, False, True]
+        mock_queue.get_nowait.side_effect = messages
+        mock_queue.put_nowait.return_value = None
+
+        log_content, next_byte = get_logs_from_queue(
+            mock_queue, start_byte=0, max_bytes=1000
+        )
+        assert isinstance(log_content, str)
+        assert "世界" in log_content
+        assert "🚀" in log_content
+        assert next_byte > 0
+
+    def test_partial_retrieval_with_byte_limit(self):
+        """Test that only messages within byte limit are returned"""
+        from unittest.mock import MagicMock
+
+        mock_queue = MagicMock()
+        messages = ["A" * 20, "B" * 20, "C" * 20]
+        mock_queue.empty.side_effect = [False, False, False, True]
+        mock_queue.get_nowait.side_effect = messages
+        mock_queue.put_nowait.return_value = None
+
+        # Request only 45 bytes - should get first 2 messages
+        log_content, next_byte = get_logs_from_queue(
+            mock_queue, start_byte=0, max_bytes=45
+        )
+        assert isinstance(log_content, str)
+        assert log_content == "A" * 20 + "B" * 20
+        assert next_byte == 40  # 2 messages * 20 bytes each
+
+        # Verify all messages were put back
+        assert mock_queue.put_nowait.call_count == 3
+
+    def test_start_byte_offset(self):
+        """Test that start_byte skips earlier messages"""
+        from unittest.mock import MagicMock
+
+        mock_queue = MagicMock()
+        messages = ["A" * 10, "B" * 10, "C" * 10]  # Each 10 bytes
+        # A: bytes 0-9, B: bytes 10-19, C: bytes 20-29
+        mock_queue.empty.side_effect = [False, False, False, True]
+        mock_queue.get_nowait.side_effect = messages
+        mock_queue.put_nowait.return_value = None
+
+        # Start from byte 15 (skip messages starting before byte 15)
+        log_content, next_byte = get_logs_from_queue(
+            mock_queue, start_byte=15, max_bytes=100
+        )
+
+        # Should get only message C (starts at byte 20, which is >= 15)
+        # Messages A (starts at 0) and B (starts at 10) are skipped
+        assert log_content == "C" * 10
+        assert next_byte == 25  # 15 + 10 bytes read
+
+    def test_start_byte_at_message_boundary(self):
+        """Test that start_byte at exact message boundary works correctly"""
+        from unittest.mock import MagicMock
+
+        mock_queue = MagicMock()
+        messages = ["A" * 10, "B" * 10, "C" * 10]  # Each 10 bytes
+        # A: bytes 0-9, B: bytes 10-19, C: bytes 20-29
+        mock_queue.empty.side_effect = [False, False, False, True]
+        mock_queue.get_nowait.side_effect = messages
+        mock_queue.put_nowait.return_value = None
+
+        # Start from byte 10 (exactly where B starts)
+        log_content, next_byte = get_logs_from_queue(
+            mock_queue, start_byte=10, max_bytes=100
+        )
+
+        # Should get messages B and C (both start at or after byte 10)
+        assert log_content == "B" * 10 + "C" * 10
+        assert next_byte == 30  # 10 + 20 bytes read
 
 
 if __name__ == "__main__":

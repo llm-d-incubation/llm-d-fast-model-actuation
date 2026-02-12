@@ -20,12 +20,14 @@ vLLM Launcher
 import logging
 import multiprocessing
 import os
+import queue
+import sys
 import uuid
 from http import HTTPStatus  # HTTP Status Codes
 from typing import Any, Dict, List, Optional
 
 import uvloop
-from fastapi import FastAPI, HTTPException, Path
+from fastapi import FastAPI, HTTPException, Path, Query
 from fastapi.responses import JSONResponse
 from gputranslator import GpuTranslator
 from pydantic import BaseModel
@@ -33,6 +35,67 @@ from vllm.entrypoints.openai.api_server import run_server
 from vllm.entrypoints.openai.cli_args import make_arg_parser, validate_parsed_serve_args
 from vllm.entrypoints.utils import cli_env_setup
 from vllm.utils.argparse_utils import FlexibleArgumentParser
+
+# Queue size limits
+MAX_QUEUE_SIZE = 5000  # Maximum number of log messages in queue
+MAX_QUEUE_BYTES = 10 * 1024 * 1024  # 10 MB default for queue buffer
+MAX_LOG_RESPONSE_BYTES = 1 * 1024 * 1024  # 1 MB default for API response
+
+
+def get_logs_from_queue(
+    output_queue: multiprocessing.Queue,
+    start_byte: int = 0,
+    max_bytes: int = MAX_LOG_RESPONSE_BYTES,
+) -> tuple[str, int]:
+    """
+    Retrieve logs from queue starting from
+    start_byte up to max_bytes (non-destructive read)
+    :param output_queue: The multiprocessing queue containing log messages
+    :param start_byte: Byte position to start reading from (0-based)
+    :param max_bytes: Maximum bytes to retrieve from start_byte
+    :return: Tuple of (log content as string, next_byte_position)
+    """
+    log_content = ""
+    current_byte = 0
+    bytes_read = 0
+    temp_messages = []
+
+    # Collect all messages from queue
+    while not output_queue.empty():
+        try:
+            msg = output_queue.get_nowait()
+            temp_messages.append(msg)
+        except queue.Empty:
+            break
+
+    # Process messages: skip until start_byte, then collect up to max_bytes
+    for msg in temp_messages:
+        msg_bytes = len(msg.encode("utf-8"))
+        msg_start_byte = current_byte
+        msg_end_byte = current_byte + msg_bytes
+
+        # Check if this message starts at or after our start position
+        if msg_start_byte >= start_byte:
+            # Check if adding this message would exceed max_bytes
+            if bytes_read + msg_bytes <= max_bytes:
+                log_content += msg
+                bytes_read += msg_bytes
+
+        current_byte = msg_end_byte
+
+    # Put ALL messages back into the queue for future reads
+    for msg in temp_messages:
+        try:
+            output_queue.put_nowait(msg)
+        except queue.Full:
+            # If queue is full, we've hit the size limit
+            # Drop oldest messages by not re-queuing them
+            break
+
+    # Calculate next byte position for client to use
+    next_byte = start_byte + bytes_read
+
+    return log_content, next_byte
 
 
 # Define a the expected JSON structure in dataclass
@@ -74,6 +137,7 @@ class VllmInstance:
         self.instance_id = instance_id
         self.config = config
         self.process: Optional[multiprocessing.Process] = None
+        self.output_queue: Optional[multiprocessing.Queue] = None
 
     def start(self) -> dict:
         """
@@ -83,7 +147,10 @@ class VllmInstance:
         if self.process and self.process.is_alive():
             return {"status": "already_running", "instance_id": self.instance_id}
 
-        self.process = multiprocessing.Process(target=vllm_kickoff, args=(self.config,))
+        self.output_queue = multiprocessing.Queue(maxsize=MAX_QUEUE_SIZE)
+        self.process = multiprocessing.Process(
+            target=vllm_kickoff, args=(self.config, self.output_queue)
+        )
         self.process.start()
 
         return {
@@ -127,6 +194,23 @@ class VllmInstance:
             "status": "running" if self.process.is_alive() else "stopped",
             "instance_id": self.instance_id,
         }
+
+    def get_logs(
+        self, start_byte: int = 0, max_bytes: int = MAX_LOG_RESPONSE_BYTES
+    ) -> tuple[str, int]:
+        """
+        Retrieve logs from the child process
+        :param start_byte: Byte position to start reading from
+        :param max_bytes: Maximum bytes of log data to retrieve
+        :return: Tuple of (log content as string, next_byte_position)
+        """
+        log_content = ""
+        next_byte = start_byte
+        if self.output_queue:
+            log_content, next_byte = get_logs_from_queue(
+                self.output_queue, start_byte, max_bytes
+            )
+        return log_content, next_byte
 
 
 # Multi-instance vLLM process manager
@@ -209,6 +293,23 @@ class VllmMultiProcessManager:
         """List all instance IDs"""
         return list(self.instances.keys())
 
+    def get_instance_logs(
+        self,
+        instance_id: str,
+        start_byte: int = 0,
+        max_bytes: int = MAX_LOG_RESPONSE_BYTES,
+    ) -> tuple[str, int]:
+        """
+        Get logs from a specific instance
+        :param instance_id: ID of the instance
+        :param start_byte: Byte position to start reading from
+        :param max_bytes: Maximum bytes of log data to retrieve
+        :return: Tuple of (log content as string, next_byte_position)
+        """
+        if instance_id not in self.instances:
+            raise KeyError(f"Instance {instance_id} not found")
+        return self.instances[instance_id].get_logs(start_byte, max_bytes)
+
 
 # Create global manager instance
 vllm_manager = VllmMultiProcessManager()
@@ -252,6 +353,7 @@ async def index():
                 "delete_all_instances": "DELETE /v2/vllm/instances",
                 "get_instance_status": "GET /v2/vllm/instances/{instance_id}",
                 "get_all_instances": "GET /v2/vllm/instances",
+                "get_instance_logs": "GET /v2/vllm/instances/{instance_id}/log",
             },
         },
         status_code=HTTPStatus.OK,
@@ -345,17 +447,84 @@ async def get_vllm_instance_status(
         raise HTTPException(status_code=404, detail=f"Instance {instance_id} not found")
 
 
+@app.get("/v2/vllm/instances/{instance_id}/log")
+async def get_vllm_instance_logs(
+    instance_id: str = Path(..., description="Instance ID"),
+    start_byte: int = Query(
+        0,
+        description="Byte position to start reading from (0-based)",
+        ge=0,
+    ),
+    max_bytes: int = Query(
+        MAX_LOG_RESPONSE_BYTES,
+        description="Maximum bytes of log data to retrieve",
+        ge=1024,
+        le=10 * 1024 * 1024,
+    ),
+):
+    """
+    Get logs from a specific vLLM instance starting from a byte position.
+
+    Use start_byte=0 to read from the beginning.
+    Use the returned next_byte value in subsequent requests to continue reading.
+    """
+    try:
+        log_content, next_byte = vllm_manager.get_instance_logs(
+            instance_id, start_byte, max_bytes
+        )
+        total_bytes = len(log_content.encode("utf-8"))
+        return JSONResponse(
+            content={
+                "instance_id": instance_id,
+                "log": log_content,
+                "start_byte": start_byte,
+                "total_bytes": total_bytes,
+                "next_byte": next_byte,
+            },
+            status_code=HTTPStatus.OK,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Instance {instance_id} not found")
+    except Exception as e:
+        logger.error(f"Failed to get logs for instance {instance_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 ######################################################################
 # HELPER FUNCTIONS
 ######################################################################
 
 
+# Helper class to redirect stdout/stderr to queue
+class QueueWriter:
+    """Custom writer that sends output to a multiprocessing Queue"""
+
+    def __init__(self, queue: multiprocessing.Queue):
+        self.queue = queue
+
+    def write(self, msg: str):
+        if msg.strip():  # Only send non-empty messages
+            try:
+                self.queue.put_nowait(msg)
+            except queue.Full:
+                # Drop message if queue is full
+                pass
+
+    def flush(self):
+        pass
+
+
 # Function to be executed by the child process
-def vllm_kickoff(vllm_config: VllmConfig):
+def vllm_kickoff(vllm_config: VllmConfig, output_queue: multiprocessing.Queue):
     """
     Child function to kickoff vllm instance
     :param vllm_config: vLLM configuration parameters and env variables
+    :param output_queue: multiprocessing Queue for capturing stdout/stderr
     """
+
+    # Redirect stdout and stderr to queue
+    sys.stdout = QueueWriter(output_queue)
+    sys.stderr = QueueWriter(output_queue)
 
     logger.info(f"VLLM process (PID: {os.getpid()}) started.")
     # Set env vars in the current process
