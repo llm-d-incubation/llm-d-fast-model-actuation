@@ -36,83 +36,53 @@ from vllm.entrypoints.openai.cli_args import make_arg_parser, validate_parsed_se
 from vllm.entrypoints.utils import cli_env_setup
 from vllm.utils.argparse_utils import FlexibleArgumentParser
 
-# Queue size limits (in bytes)
+# Queue size limits
+MAX_QUEUE_SIZE = 5000  # Maximum number of log messages in queue
 MAX_QUEUE_BYTES = 10 * 1024 * 1024  # 10 MB default for queue buffer
 MAX_LOG_RESPONSE_BYTES = 1 * 1024 * 1024  # 1 MB default for API response
 
 
-# ByteLimitedQueue class for byte-based queue management
-class ByteLimitedQueue:
-    """Queue that limits total byte size instead of item count"""
+def get_logs_from_queue(
+    output_queue: multiprocessing.Queue, max_bytes: int
+) -> List[str]:
+    """
+    Retrieve logs from queue up to max_bytes (non-destructive read)
+    :param output_queue: The multiprocessing queue containing log messages
+    :param max_bytes: Maximum bytes to retrieve
+    :return: List of log messages
+    """
+    logs = []
+    total_bytes = 0
+    temp_messages = []
 
-    def __init__(self, max_bytes: int):
-        """
-        Initialize ByteLimitedQueue
-        :param max_bytes: Maximum total bytes allowed in the queue
-        """
-        self.queue = multiprocessing.Queue()
-        self.max_bytes = max_bytes
-        self.current_bytes = multiprocessing.Value("i", 0)  # Shared counter
-        self.lock = multiprocessing.Lock()
-        # Keep a list of messages for non-destructive reads
-        self.messages: List[str] = []
+    # Collect all messages from queue
+    while not output_queue.empty():
+        try:
+            msg = output_queue.get_nowait()
+            temp_messages.append(msg)
+        except queue.Empty:
+            break
 
-    def put(self, msg: str):
-        """
-        Add a message to the queue, removing old messages if necessary
-        :param msg: Message string to add
-        """
+    # Select messages up to max_bytes
+    for msg in temp_messages:
         msg_bytes = len(msg.encode("utf-8"))
+        if total_bytes + msg_bytes <= max_bytes:
+            logs.append(msg)
+            total_bytes += msg_bytes
+        else:
+            # Stop adding more logs but keep collecting for re-queue
+            pass
 
-        with self.lock:
-            # Remove old messages if needed to make room
-            while (
-                self.current_bytes.value + msg_bytes > self.max_bytes and self.messages
-            ):
-                old_msg = self.messages.pop(0)
-                old_msg_bytes = len(old_msg.encode("utf-8"))
-                self.current_bytes.value -= old_msg_bytes
+    # Put ALL messages back into the queue for future reads
+    for msg in temp_messages:
+        try:
+            output_queue.put_nowait(msg)
+        except queue.Full:
+            # If queue is full, we've hit the size limit
+            # Drop oldest messages by not re-queuing them
+            break
 
-            # Add new message
-            self.messages.append(msg)
-            self.current_bytes.value += msg_bytes
-
-            # Also put in queue for multiprocessing compatibility
-            try:
-                self.queue.put_nowait(msg)
-            except queue.Full:
-                pass
-
-    def get_logs(self, max_bytes: int) -> List[str]:
-        """
-        Retrieve logs up to max_bytes (non-destructive read)
-        :param max_bytes: Maximum bytes to retrieve
-        :return: List of log messages
-        """
-        logs = []
-        total_bytes = 0
-
-        with self.lock:
-            # Select messages up to max_bytes from our list
-            for msg in self.messages:
-                msg_bytes = len(msg.encode("utf-8"))
-                if total_bytes + msg_bytes <= max_bytes:
-                    logs.append(msg)
-                    total_bytes += msg_bytes
-                else:
-                    break
-
-        return logs
-
-    def empty(self) -> bool:
-        """Check if queue is empty"""
-        with self.lock:
-            return len(self.messages) == 0
-
-    def get_current_bytes(self) -> int:
-        """Get current byte count in queue"""
-        with self.lock:
-            return self.current_bytes.value
+    return logs
 
 
 # Define a the expected JSON structure in dataclass
@@ -154,7 +124,7 @@ class VllmInstance:
         self.instance_id = instance_id
         self.config = config
         self.process: Optional[multiprocessing.Process] = None
-        self.output_queue: Optional[ByteLimitedQueue] = None
+        self.output_queue: Optional[multiprocessing.Queue] = None
 
     def start(self) -> dict:
         """
@@ -164,7 +134,7 @@ class VllmInstance:
         if self.process and self.process.is_alive():
             return {"status": "already_running", "instance_id": self.instance_id}
 
-        self.output_queue = ByteLimitedQueue(max_bytes=MAX_QUEUE_BYTES)
+        self.output_queue = multiprocessing.Queue(maxsize=MAX_QUEUE_SIZE)
         self.process = multiprocessing.Process(
             target=vllm_kickoff, args=(self.config, self.output_queue)
         )
@@ -220,7 +190,7 @@ class VllmInstance:
         """
         logs = []
         if self.output_queue:
-            logs = self.output_queue.get_logs(max_bytes)
+            logs = get_logs_from_queue(self.output_queue, max_bytes)
         return logs
 
 
@@ -355,7 +325,7 @@ async def index():
                 "delete_all_instances": "DELETE /v2/vllm/instances",
                 "get_instance_status": "GET /v2/vllm/instances/{instance_id}",
                 "get_all_instances": "GET /v2/vllm/instances",
-                "get_instance_logs": "GET /v2/vllm/instances/{instance_id}/logs",
+                "get_instance_logs": "GET /v2/vllm/instances/{instance_id}/log",
             },
         },
         status_code=HTTPStatus.OK,
@@ -449,7 +419,7 @@ async def get_vllm_instance_status(
         raise HTTPException(status_code=404, detail=f"Instance {instance_id} not found")
 
 
-@app.get("/v2/vllm/instances/{instance_id}/logs")
+@app.get("/v2/vllm/instances/{instance_id}/log")
 async def get_vllm_instance_logs(
     instance_id: str = Path(..., description="Instance ID"),
     max_bytes: int = Query(
@@ -486,25 +456,29 @@ async def get_vllm_instance_logs(
 
 # Helper class to redirect stdout/stderr to queue
 class QueueWriter:
-    """Custom writer that sends output to a ByteLimitedQueue"""
+    """Custom writer that sends output to a multiprocessing Queue"""
 
-    def __init__(self, queue: ByteLimitedQueue):
+    def __init__(self, queue: multiprocessing.Queue):
         self.queue = queue
 
     def write(self, msg: str):
         if msg.strip():  # Only send non-empty messages
-            self.queue.put(msg)
+            try:
+                self.queue.put_nowait(msg)
+            except queue.Full:
+                # Drop message if queue is full
+                pass
 
     def flush(self):
         pass
 
 
 # Function to be executed by the child process
-def vllm_kickoff(vllm_config: VllmConfig, output_queue: ByteLimitedQueue):
+def vllm_kickoff(vllm_config: VllmConfig, output_queue: multiprocessing.Queue):
     """
     Child function to kickoff vllm instance
     :param vllm_config: vLLM configuration parameters and env variables
-    :param output_queue: ByteLimitedQueue for capturing stdout/stderr
+    :param output_queue: multiprocessing Queue for capturing stdout/stderr
     """
 
     # Redirect stdout and stderr to queue

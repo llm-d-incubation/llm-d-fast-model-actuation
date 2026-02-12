@@ -131,7 +131,7 @@ make build-and-push-launcher CONTAINER_IMG_REG=$CONTAINER_IMG_REG
 ### 1. Start the Launcher Service
 
 ```bash
-python vllm_launcher.py
+python launcher.py
 ```
 
 The service will start on `http://0.0.0.0:8001`
@@ -210,7 +210,7 @@ Get service information and available endpoints.
     "delete_all_instances": "DELETE /v2/vllm/instances",
     "get_instance_status": "GET /v2/vllm/instances/{instance_id}",
     "get_all_instances": "GET /v2/vllm/instances",
-    "get_instance_logs": "GET /v2/vllm/instances/{instance_id}/logs"
+    "get_instance_logs": "GET /v2/vllm/instances/{instance_id}/log"
   }
 }
 ```
@@ -318,7 +318,7 @@ Stop and delete a specific vLLM instance.
 
 #### Get Instance Logs
 
-**GET** `/v2/vllm/instances/{instance_id}/logs`
+**GET** `/v2/vllm/instances/{instance_id}/log`
 
 Retrieve recent stdout/stderr logs from a specific vLLM instance.
 
@@ -527,13 +527,13 @@ curl http://localhost:8001/v2/vllm/instances
 
 ```bash
 # Get up to 1 MB of logs (default)
-curl http://localhost:8001/v2/vllm/instances/abc123.../logs
+curl http://localhost:8001/v2/vllm/instances/abc123.../log
 
 # Get up to 500 KB of logs
-curl "http://localhost:8001/v2/vllm/instances/abc123.../logs?max_bytes=512000"
+curl "http://localhost:8001/v2/vllm/instances/abc123.../log?max_bytes=512000"
 
 # Get up to 5 MB of logs for debugging
-curl "http://localhost:8001/v2/vllm/instances/abc123.../logs?max_bytes=5242880"
+curl "http://localhost:8001/v2/vllm/instances/abc123.../log?max_bytes=5242880"
 ```
 
 ## Configuration
