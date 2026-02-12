@@ -320,7 +320,7 @@ Stop and delete a specific vLLM instance.
 
 **GET** `/v2/vllm/instances/{instance_id}/log`
 
-Retrieve recent stdout/stderr logs from a specific vLLM instance.
+Retrieve stdout/stderr logs from a specific vLLM instance starting from a specific byte position.
 
 **Path Parameters:**
 
@@ -328,7 +328,8 @@ Retrieve recent stdout/stderr logs from a specific vLLM instance.
 
 **Query Parameters:**
 
-- `max_bytes` (optional): Maximum bytes of log data to retrieve (default: 1048576 (1 MB), range: 1024-10485760 (10 MB))
+- `start_byte` (optional): Byte position to start reading from (default: 0, minimum: 0). Use this to continue reading from where you left off.
+- `max_bytes` (optional): Maximum bytes of log data to retrieve from start_byte (default: 1048576 (1 MB), range: 1024-10485760 (10 MB))
 
 **Response (200 OK):**
 
@@ -341,9 +342,19 @@ Retrieve recent stdout/stderr logs from a specific vLLM instance.
     "INFO: Application startup complete"
   ],
   "count": 3,
-  "total_bytes": 156
+  "start_byte": 0,
+  "total_bytes": 156,
+  "next_byte": 156
 }
 ```
+
+**Response Fields:**
+
+- `logs`: Array of log messages
+- `count`: Number of log messages returned
+- `start_byte`: The byte position where reading started
+- `total_bytes`: Total bytes of log data returned
+- `next_byte`: The byte position to use for the next request to continue reading. Use this value as `start_byte` in subsequent requests.
 
 **Error Responses:**
 
@@ -526,15 +537,47 @@ curl http://localhost:8001/v2/vllm/instances
 ### Example 5: Retrieve Instance Logs
 
 ```bash
-# Get up to 1 MB of logs (default)
+# Get up to 1 MB of logs from the beginning (default)
 curl http://localhost:8001/v2/vllm/instances/abc123.../log
 
-# Get up to 500 KB of logs
+# Get up to 500 KB of logs from the beginning
 curl "http://localhost:8001/v2/vllm/instances/abc123.../log?max_bytes=512000"
 
-# Get up to 5 MB of logs for debugging
-curl "http://localhost:8001/v2/vllm/instances/abc123.../log?max_bytes=5242880"
+# Continue reading from where you left off (streaming logs)
+# First request - get initial logs
+curl "http://localhost:8001/v2/vllm/instances/abc123.../log?start_byte=0&max_bytes=1048576"
+# Response includes: "next_byte": 1048576
+
+# Second request - get next chunk using next_byte from previous response
+curl "http://localhost:8001/v2/vllm/instances/abc123.../log?start_byte=1048576&max_bytes=1048576"
+# Response includes: "next_byte": 2097152
+
+# Third request - continue from new position
+curl "http://localhost:8001/v2/vllm/instances/abc123.../log?start_byte=2097152&max_bytes=1048576"
 ```
+
+**How `start_byte` Works:**
+
+The `start_byte` parameter uses **inclusive boundary matching** - it includes all messages that **start at or after** the specified byte position:
+
+```
+Example: 3 log messages of 10 bytes each
+Message A: bytes 0-9   (starts at byte 0)
+Message B: bytes 10-19 (starts at byte 10)
+Message C: bytes 20-29 (starts at byte 20)
+
+start_byte=0  → Returns: A, B, C (all messages)
+start_byte=10 → Returns: B, C (messages starting at byte 10 or later)
+start_byte=15 → Returns: C (only message starting at byte 20)
+start_byte=20 → Returns: C (message starting exactly at byte 20)
+start_byte=25 → Returns: nothing (no messages start at or after byte 25)
+```
+
+This design ensures:
+
+- **No duplicate data**: Messages are never returned twice when using `next_byte`
+- **Clean boundaries**: Starting at a message boundary includes that message
+- **Efficient streaming**: Track position with `next_byte` to fetch only new content
 
 ## Configuration
 
@@ -608,7 +651,7 @@ Represents a single vLLM instance with its process and configuration.
 - `start()`: Start the vLLM process
 - `stop(timeout=10)`: Stop the vLLM process gracefully (or force kill after timeout)
 - `get_status()`: Get detailed status information
-- `get_logs(max_bytes=1048576)`: Retrieve recent logs from the instance (up to specified bytes)
+- `get_logs(start_byte=0, max_bytes=1048576)`: Retrieve logs from the instance starting from a byte position (returns tuple of logs and next_byte)
 
 #### `VllmMultiProcessManager`
 
@@ -621,7 +664,7 @@ Manages multiple VllmInstance objects.
 - `stop_all_instances(timeout=10)`: Stop all running instances
 - `get_instance_status(instance_id)`: Get status of a specific instance
 - `get_all_instances_status()`: Get status of all instances
-- `get_instance_logs(instance_id, max_bytes=1048576)`: Retrieve logs from a specific instance (up to specified bytes)
+- `get_instance_logs(instance_id, start_byte=0, max_bytes=1048576)`: Retrieve logs from a specific instance starting from a byte position (returns tuple of logs and next_byte)
 
 ## Best Practices
 
@@ -679,20 +722,32 @@ Be mindful of system resources:
 
 The launcher captures stdout/stderr from each vLLM instance in memory using a byte-limited queue:
 
-- **Queue Size**: Limited to 10 MB per instance (configurable via `MAX_QUEUE_BYTES`)
-- **Byte-Based Limits**: Uses actual byte size instead of line count for more predictable memory usage
+- **Queue Size**: Limited to 5000 messages per instance (configurable via `MAX_QUEUE_SIZE`)
+- **Byte-Based Retrieval**: Uses actual byte size for efficient log streaming
 - **Circular Buffer**: When full, oldest messages are automatically dropped
 - **Memory Protection**: Prevents unbounded memory growth from excessive logging
 - **Non-blocking**: Log capture doesn't slow down the vLLM process
 - **Unicode Support**: Properly handles multi-byte characters in logs
+- **Streaming Support**: Use `start_byte` parameter to efficiently stream logs without re-reading
 
 **Best Practices:**
 
-- Retrieve logs periodically if you need to monitor instance behavior
-- Use `max_bytes` parameter to limit response size (default: 1 MB, max: 10 MB)
-- Logs are lost when an instance is deleted
-- For production, consider external logging solutions for long-term storage
-- Byte-based limits provide more accurate memory control than line-based limits
+- **Streaming Logs**: Use `start_byte` and `next_byte` to efficiently stream logs:
+
+  ```bash
+  # First request
+  response=$(curl "http://localhost:8001/v2/vllm/instances/id/log?start_byte=0&max_bytes=1048576")
+  next_byte=$(echo $response | jq -r '.next_byte')
+
+  # Subsequent requests
+  curl "http://localhost:8001/v2/vllm/instances/id/log?start_byte=$next_byte&max_bytes=1048576"
+  ```
+
+- **Polling**: Track `next_byte` between requests to only fetch new log content
+- **Memory Efficiency**: Use `max_bytes` parameter to limit response size (default: 1 MB, max: 10 MB)
+- **Data Loss**: Logs are lost when an instance is deleted
+- **Production**: Consider external logging solutions for long-term storage and analysis
+- **Byte Tracking**: The `start_byte` position is relative to all logs ever captured, not just current queue content
 
 ### 6. Testing
 
