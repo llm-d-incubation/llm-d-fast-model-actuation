@@ -196,7 +196,7 @@ func BuildLauncherPodFromTemplate(template corev1.PodTemplateSpec, ns, nodeName,
 	}
 
 	// Set readiness probe to check if launcher can list instances.
-	// This is necessary because otherwise the dual-pod controller will be confused when
+	// This is necessary because otherwise the dual-pods controller will be confused when
 	// the launcher Pod is said to be ready but got refused when listing its vLLM instances.
 	container.ReadinessProbe = &corev1.Probe{
 		ProbeHandler: corev1.ProbeHandler{

@@ -37,7 +37,7 @@ function expect() {
 
 function clear_img_repo() (
     set +o pipefail
-    docker images $1 | fgrep -v '<none>' | grep -vw REPOSITORY | while read name tag rest; do
+    docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.CreatedAt}}" $1 | fgrep -v '<none>' | grep -vw REPOSITORY | while read name tag rest; do
 	docker rmi $name:$tag
     done
 )
