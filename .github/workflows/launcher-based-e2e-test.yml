@@ -1,0 +1,105 @@
+# Tests launcher-based server-providing pods in a `kind` cluster
+name: Launcher-Based E2E Test
+
+on:
+  push:
+    paths:
+      - ".github/workflows/launcher-based-e2e-test.yml"
+      - Makefile
+      - cmd/dual-pods-controller/**
+      - cmd/test-requester/**
+      - cmd/launcher-populator/**
+      - inference_server/launcher/**
+      - dockerfiles/Dockerfile.launcher.benchmark
+      - pkg/**
+      - test/e2e/run-launcher-based.sh
+      - test/e2e/mkobjs.sh
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  debug:
+    name: print relevant info
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "github.actor=${{ github.actor }}"
+          echo "github.action_ref=${{ github.action_ref }}"
+          echo "github.event_name=${{ github.event_name }}"
+          echo "github.head_ref=$GITHUB_HEAD_REF"
+          echo "github.ref=${{ github.ref }}"
+          echo "github.ref_name=${{ github.ref_name }}"
+          echo "github.repository=${{ github.repository }}"
+          echo "github.repository_owner=${{ github.repository_owner }}"
+          echo "github.triggering_actor=${{ github.triggering_actor }}"
+          echo "GITHUB_ACTION_REF=$GITHUB_ACTION_REF"
+
+  run-launcher-test:
+    runs-on: ubuntu-22.04-arm
+    steps:
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.2'
+
+      - name: Install ko
+        uses: ko-build/setup-ko@v0.8
+        with:
+          version: v0.15.2
+
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+
+      - name: Run launcher-based E2E test
+        run: test/e2e/run-launcher-based.sh
+
+      - name: show all pods
+        if: always()
+        run: kubectl get pods -A -o wide
+
+      - name: show test pods with labels
+        if: always()
+        run: kubectl get pods -L dual-pods.llm-d.ai/dual,dual-pods.llm-d.ai/sleeping,dual-pods.llm-d.ai/launcher-config-name
+
+      - name: show ReplicaSets
+        if: always()
+        run: kubectl get rs -A
+
+      - name: show dual-pods controller log
+        if: always()
+        run: kubectl logs deploy/dpctlr
+
+      - name: show launcher-populator log
+        if: always()
+        run: kubectl logs deploy/launcher-populator || echo "launcher-populator not deployed"
+
+      - name: show GPU allocations
+        if: always()
+        run: kubectl get cm gpu-allocs -o yaml
+
+      - name: show GPU map
+        if: always()
+        run: kubectl get cm gpu-map -o yaml
+
+      - name: show InferenceServerConfigs
+        if: always()
+        run: kubectl get inferenceserverconfigs -o yaml
+
+      - name: show LauncherConfigs
+        if: always()
+        run: kubectl get launcherconfigs -o yaml
+
+      - name: show YAML of test pods
+        if: always()
+        run: kubectl get pods -o yaml
+
+      - name: show launcher pod logs
+        if: always()
+        run: |
+          for pod in $(kubectl get pods -l dual-pods.llm-d.ai/launcher-config-name -o name); do
+            echo "=== Logs for $pod ==="
+            kubectl logs $pod || echo "Failed to get logs for $pod"
+          done

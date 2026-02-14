@@ -85,9 +85,12 @@ func removeVolumeMount(ctr *corev1.Container, volumeName string) {
 	}
 }
 
-// GetInferenceServerPort, given a server-providing Pod,
-// returns (containerIndex int, port int16, err error)
-func GetInferenceServerPort(pod *corev1.Pod) (int, int16, error) {
+// GetInferenceServerPort, given a server-providing Pod and whether it is launcher-based,
+// returns (containerIndex int, inferenceServerPort int16, err error)
+// For direct server-providing pods, the inference server port is identified from readinessProbe.
+// For launcher-based server-providing pods, the inference server port can't be identified from the launcher pod,
+// so we return a dummy value -1.
+func GetInferenceServerPort(pod *corev1.Pod, launcherBased bool) (int, int16, error) {
 	// identify the inference server container
 	cIdx := slices.IndexFunc(pod.Spec.Containers, func(c corev1.Container) bool {
 		return c.Name == api.InferenceServerContainerName
@@ -95,6 +98,13 @@ func GetInferenceServerPort(pod *corev1.Pod) (int, int16, error) {
 	if cIdx == -1 {
 		return 0, 0, fmt.Errorf("container %q not found", api.InferenceServerContainerName)
 	}
+
+	// for launcher-based server-providing pod, return a dummy value
+	if launcherBased {
+		return cIdx, -1, nil
+	}
+
+	// for direct server-providing pod, identify the port from readinessProbe
 	isCtr := &pod.Spec.Containers[cIdx]
 	if isCtr.ReadinessProbe == nil {
 		return 0, 0, errors.New("the inference server container has no readinessProbe")
@@ -125,13 +135,15 @@ func IsPodReady(pod *corev1.Pod) bool {
 	return false
 }
 
-// BuildPodFromTemplate creates a pod from a template and assigns it to a node
-func BuildPodFromTemplate(template corev1.PodTemplateSpec, ns, nodeName, launcherConfigName string) (*corev1.Pod, error) {
+// BuildLauncherPodFromTemplate creates a launcher pod from a LauncherConfig object's
+// Spec.PodTemplate and assigns the built launcher pod to a node
+func BuildLauncherPodFromTemplate(template corev1.PodTemplateSpec, ns, nodeName, launcherConfigName string) (*corev1.Pod, error) {
 	pod := &corev1.Pod{
 		ObjectMeta: template.ObjectMeta,
 		Spec:       *DeIndividualize(template.Spec.DeepCopy()),
 	}
 	pod.Namespace = ns
+	pod.GenerateName = "launcher-"
 	// Ensure labels are set
 	if pod.Labels == nil {
 		pod.Labels = make(map[string]string)
@@ -158,7 +170,7 @@ func BuildPodFromTemplate(template corev1.PodTemplateSpec, ns, nodeName, launche
 	}
 	pod.Annotations = MapSet(pod.Annotations, string(common.LauncherConfigHashAnnotationKey), nominalHash)
 
-	cIdx, serverPort, err := GetInferenceServerPort(pod)
+	cIdx, _, err := GetInferenceServerPort(pod, true)
 	if err != nil {
 		return nil, err
 	}
@@ -172,13 +184,31 @@ func BuildPodFromTemplate(template corev1.PodTemplateSpec, ns, nodeName, launche
 		ProbeHandler: corev1.ProbeHandler{
 			HTTPGet: &corev1.HTTPGetAction{
 				Path:   "/health",
-				Port:   intstr.FromInt(int(serverPort)),
+				Port:   intstr.FromInt(common.LauncherServicePort),
 				Scheme: corev1.URISchemeHTTP,
 			},
 		},
 		InitialDelaySeconds: 10,
 		PeriodSeconds:       20,
 		TimeoutSeconds:      1,
+		SuccessThreshold:    1,
+		FailureThreshold:    3,
+	}
+
+	// Set readiness probe to check if launcher can list instances.
+	// This is necessary because otherwise the dual-pods controller will be confused when
+	// the launcher Pod is said to be ready but got refused when listing its vLLM instances.
+	container.ReadinessProbe = &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{
+				Path:   "/v2/vllm/instances",
+				Port:   intstr.FromInt(common.LauncherServicePort),
+				Scheme: corev1.URISchemeHTTP,
+			},
+		},
+		InitialDelaySeconds: 2,
+		PeriodSeconds:       5,
+		TimeoutSeconds:      2,
 		SuccessThreshold:    1,
 		FailureThreshold:    3,
 	}
