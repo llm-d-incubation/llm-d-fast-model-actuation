@@ -1,0 +1,20 @@
+# Of course, you never really want to use `:latest`
+image: ghcr.io/llm-d-incubation/llm-d-fast-model-actuation-controller:latest
+
+# Set this to true when deploying in a local cluster.
+# This suppresses image pulls.
+local: false
+
+# Name of the ClusterRole to bind to controller to authorize it to
+# get/list/watch Node objects.
+# Empty string means no new binding is needed.
+nodeViewClusterRole: ""
+
+# Limit on the number of server-running Pods with a sleeping
+# inference server, per GPU.
+sleeperLimit: 2
+
+# Whether to debug the accelerator memory usage.
+# This involves querying the requester;
+# the test-requester does not support the query.
+debugAcceleratorMemory: true
