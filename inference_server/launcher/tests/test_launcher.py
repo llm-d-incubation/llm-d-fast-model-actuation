@@ -17,6 +17,7 @@ Unit tests for Multi-Instance vLLM Launcher
 Run as:
 python -m pytest tests/test_launcher.py -v
 """
+import signal
 import sys
 from unittest.mock import MagicMock, patch
 
@@ -87,6 +88,7 @@ class MockProcess:
         self._is_alive = True
         self.terminated = False
         self.killed = False
+        self.pid = 12345
 
     def start(self):
         pass
@@ -187,8 +189,11 @@ class TestVllmInstance:
         assert result["status"] == "not_running"
         assert result["instance_id"] == "test-id"
 
+    @patch("launcher.os.killpg")
     @patch("launcher.multiprocessing.Process")
-    def test_instance_force_kill(self, mock_process_class, vllm_config, gpu_translator):
+    def test_instance_force_kill(
+        self, mock_process_class, mock_killpg, vllm_config, gpu_translator
+    ):
         """Test force killing an instance that won't terminate"""
         mock_process = MockProcess()
 
@@ -197,13 +202,24 @@ class TestVllmInstance:
             pass  # Don't change _is_alive
 
         mock_process.terminate = stay_alive_on_terminate
+
+        # Make join after killpg finally stop the process
+        call_count = 0
+
+        def join_side_effect(timeout=None):
+            nonlocal call_count
+            call_count += 1
+            if call_count > 1:
+                mock_process._is_alive = False
+
+        mock_process.join = join_side_effect
         mock_process_class.return_value = mock_process
 
         instance = VllmInstance("test-id", vllm_config, gpu_translator)
         instance.start()
         _ = instance.stop(timeout=0.1)
 
-        assert mock_process.killed is True
+        mock_killpg.assert_called_once_with(mock_process.pid, signal.SIGKILL)
 
     @patch("launcher.multiprocessing.Process")
     def test_instance_get_status(self, mock_process_class, vllm_config, gpu_translator):
@@ -722,7 +738,7 @@ class TestQueueWriter:
 
         mock_queue = MagicMock()
         mock_queue.put_nowait.side_effect = None  # Simulate successful put
-        writer = QueueWriter(mock_queue)
+        writer = QueueWriter(mock_queue, sys.stdout)
 
         writer.write("Test message")
 
@@ -734,7 +750,7 @@ class TestQueueWriter:
         from unittest.mock import MagicMock
 
         mock_queue = MagicMock()
-        writer = QueueWriter(mock_queue)
+        writer = QueueWriter(mock_queue, sys.stdout)
 
         writer.write("")
         writer.write("   ")
@@ -748,7 +764,7 @@ class TestQueueWriter:
         from unittest.mock import MagicMock
 
         mock_queue = MagicMock()
-        writer = QueueWriter(mock_queue)
+        writer = QueueWriter(mock_queue, sys.stdout)
 
         # Should not raise any exception
         writer.flush()
