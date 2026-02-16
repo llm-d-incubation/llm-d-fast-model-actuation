@@ -335,25 +335,18 @@ Retrieve stdout/stderr logs from a specific vLLM instance starting from a specif
 
 ```json
 {
-  "instance_id": "instance-id",
-  "log": "INFO: Started server process\nINFO: Waiting for application startup\nINFO: Application startup complete\n",
-  "start_byte": 0,
-  "total_bytes": 156,
-  "next_byte": 156
+  "log": "INFO: Started server process\nINFO: Waiting for application startup\nINFO: Application startup complete\n"
 }
 ```
 
 **Response Fields:**
 
-- `log`: Log content as a single string
-- `start_byte`: The byte position where reading started
-- `total_bytes`: Total bytes of log data returned
-- `next_byte`: The byte position to use for the next request to continue reading. Use this value as `start_byte` in subsequent requests.
+- `log`: Log content as a single string. To continue reading in subsequent requests, use `start_byte + len(log)` as the next `start_byte`.
 
 **Error Responses:**
 
 - `404 Not Found`: Instance not found
-- `500 Internal Server Error`: Failed to retrieve logs
+- `416 Range Not Satisfiable`: The requested `start_byte` is beyond available log content. The error detail includes the number of available bytes.
 
 ---
 
@@ -540,11 +533,10 @@ curl "http://localhost:8001/v2/vllm/instances/abc123.../log?max_bytes=512000"
 # Continue reading from where you left off (streaming logs)
 # First request - get initial logs
 curl "http://localhost:8001/v2/vllm/instances/abc123.../log?start_byte=0&max_bytes=1048576"
-# Response includes: "next_byte": 1048576
+# To continue, use start_byte + len(log) as the next start_byte
 
-# Second request - get next chunk using next_byte from previous response
+# Second request - get next chunk
 curl "http://localhost:8001/v2/vllm/instances/abc123.../log?start_byte=1048576&max_bytes=1048576"
-# Response includes: "next_byte": 2097152
 
 # Third request - continue from new position
 curl "http://localhost:8001/v2/vllm/instances/abc123.../log?start_byte=2097152&max_bytes=1048576"
@@ -552,26 +544,17 @@ curl "http://localhost:8001/v2/vllm/instances/abc123.../log?start_byte=2097152&m
 
 **How `start_byte` Works:**
 
-The `start_byte` parameter uses **inclusive boundary matching** - it includes all messages that **start at or after** the specified byte position:
+The log is treated as a flat byte stream. The `start_byte` parameter specifies the exact byte offset to begin reading from, and `max_bytes` limits how many bytes are returned:
 
 ```
-Example: 3 log messages of 10 bytes each
-Message A: bytes 0-9   (starts at byte 0)
-Message B: bytes 10-19 (starts at byte 10)
-Message C: bytes 20-29 (starts at byte 20)
+Example: 30 bytes of log content
 
-start_byte=0  → Returns: A, B, C (all messages)
-start_byte=10 → Returns: B, C (messages starting at byte 10 or later)
-start_byte=15 → Returns: C (only message starting at byte 20)
-start_byte=20 → Returns: C (message starting exactly at byte 20)
-start_byte=25 → Returns: nothing (no messages start at or after byte 25)
+start_byte=0              → Returns bytes [0, max_bytes)
+start_byte=15             → Returns bytes [15, 15 + max_bytes)
+start_byte=15, max_bytes=5 → Returns bytes [15, 20)
 ```
 
-This design ensures:
-
-- **No duplicate data**: Messages are never returned twice when using `next_byte`
-- **Clean boundaries**: Starting at a message boundary includes that message
-- **Efficient streaming**: Track position with `next_byte` to fetch only new content
+To stream logs, use `start_byte + len(log)` as the `start_byte` for the next request.
 
 ## Configuration
 
@@ -645,7 +628,7 @@ Represents a single vLLM instance with its process and configuration.
 - `start()`: Start the vLLM process
 - `stop(timeout=10)`: Stop the vLLM process gracefully (or force kill after timeout)
 - `get_status()`: Get detailed status information
-- `get_logs(start_byte=0, max_bytes=1048576)`: Retrieve logs from the instance starting from a byte position (returns tuple of log content string and next_byte)
+- `get_logs(start_byte=0, max_bytes=1048576)`: Retrieve logs from the instance starting from a byte position
 
 #### `VllmMultiProcessManager`
 
@@ -658,7 +641,7 @@ Manages multiple VllmInstance objects.
 - `stop_all_instances(timeout=10)`: Stop all running instances
 - `get_instance_status(instance_id)`: Get status of a specific instance
 - `get_all_instances_status()`: Get status of all instances
-- `get_instance_logs(instance_id, start_byte=0, max_bytes=1048576)`: Retrieve logs from a specific instance starting from a byte position (returns tuple of log content string and next_byte)
+- `get_instance_logs(instance_id, start_byte=0, max_bytes=1048576)`: Retrieve logs from a specific instance starting from a byte position
 
 ## Best Practices
 
@@ -726,18 +709,19 @@ The launcher captures stdout/stderr from each vLLM instance in memory using a by
 
 **Best Practices:**
 
-- **Streaming Logs**: Use `start_byte` and `next_byte` to efficiently stream logs:
+- **Streaming Logs**: Use `start_byte` and `len(log)` to efficiently stream logs:
 
   ```bash
   # First request
   response=$(curl "http://localhost:8001/v2/vllm/instances/id/log?start_byte=0&max_bytes=1048576")
-  next_byte=$(echo $response | jq -r '.next_byte')
+  log=$(echo $response | jq -r '.log')
+  next_start=$(($(echo $response | jq -r '.start_byte') + ${#log}))
 
   # Subsequent requests
-  curl "http://localhost:8001/v2/vllm/instances/id/log?start_byte=$next_byte&max_bytes=1048576"
+  curl "http://localhost:8001/v2/vllm/instances/id/log?start_byte=$next_start&max_bytes=1048576"
   ```
 
-- **Polling**: Track `next_byte` between requests to only fetch new log content
+- **Polling**: Track `start_byte + len(log)` between requests to only fetch new log content
 - **Memory Efficiency**: Use `max_bytes` parameter to limit response size (default: 1 MB, max: 10 MB)
 - **Data Loss**: Logs are lost when an instance is deleted
 - **Production**: Consider external logging solutions for long-term storage and analysis

@@ -42,22 +42,33 @@ MAX_QUEUE_BYTES = 10 * 1024 * 1024  # 10 MB default for queue buffer
 MAX_LOG_RESPONSE_BYTES = 1 * 1024 * 1024  # 1 MB default for API response
 
 
+class LogRangeNotAvailable(Exception):
+    """Raised when the requested start_byte is beyond available log content"""
+
+    def __init__(self, start_byte, available_bytes):
+        self.start_byte = start_byte
+        self.available_bytes = available_bytes
+        super().__init__(
+            f"start_byte {start_byte} is beyond available content "
+            f"({available_bytes} bytes available)"
+        )
+
+
 def get_logs_from_queue(
     output_queue: multiprocessing.Queue,
     start_byte: int = 0,
     max_bytes: int = MAX_LOG_RESPONSE_BYTES,
-) -> tuple[str, int]:
+) -> str:
     """
-    Retrieve logs from queue starting from
-    start_byte up to max_bytes (non-destructive read)
+    Retrieve logs from queue as a byte-oriented stream.
+    Concatenates all queue messages and returns the byte slice
+    [start_byte, start_byte + max_bytes).
     :param output_queue: The multiprocessing queue containing log messages
     :param start_byte: Byte position to start reading from (0-based)
     :param max_bytes: Maximum bytes to retrieve from start_byte
-    :return: Tuple of (log content as string, next_byte_position)
+    :return: Log content as string
+    :raises LogRangeNotAvailable: If start_byte is beyond available content
     """
-    log_content = ""
-    current_byte = 0
-    bytes_read = 0
     temp_messages = []
 
     # Collect all messages from queue
@@ -68,20 +79,25 @@ def get_logs_from_queue(
         except queue.Empty:
             break
 
-    # Process messages: skip until start_byte, then collect up to max_bytes
-    for msg in temp_messages:
-        msg_bytes = len(msg.encode("utf-8"))
-        msg_start_byte = current_byte
-        msg_end_byte = current_byte + msg_bytes
+    # Concatenate all messages into a single byte stream
+    all_content = "".join(temp_messages)
+    all_bytes = all_content.encode("utf-8")
+    total_available = len(all_bytes)
 
-        # Check if this message starts at or after our start position
-        if msg_start_byte >= start_byte:
-            # Check if adding this message would exceed max_bytes
-            if bytes_read + msg_bytes <= max_bytes:
-                log_content += msg
-                bytes_read += msg_bytes
+    # Check if start_byte is beyond available content
+    if start_byte > 0 and total_available > 0 and start_byte >= total_available:
+        # Put messages back before raising
+        for msg in temp_messages:
+            try:
+                output_queue.put_nowait(msg)
+            except queue.Full:
+                break
+        raise LogRangeNotAvailable(start_byte, total_available)
 
-        current_byte = msg_end_byte
+    # Slice the byte stream
+    end_byte = start_byte + max_bytes
+    log_bytes = all_bytes[start_byte:end_byte]
+    log_content = log_bytes.decode("utf-8", errors="replace")
 
     # Put ALL messages back into the queue for future reads
     for msg in temp_messages:
@@ -92,10 +108,7 @@ def get_logs_from_queue(
             # Drop oldest messages by not re-queuing them
             break
 
-    # Calculate next byte position for client to use
-    next_byte = start_byte + bytes_read
-
-    return log_content, next_byte
+    return log_content
 
 
 # Define a the expected JSON structure in dataclass
@@ -197,20 +210,17 @@ class VllmInstance:
 
     def get_logs(
         self, start_byte: int = 0, max_bytes: int = MAX_LOG_RESPONSE_BYTES
-    ) -> tuple[str, int]:
+    ) -> str:
         """
         Retrieve logs from the child process
         :param start_byte: Byte position to start reading from
         :param max_bytes: Maximum bytes of log data to retrieve
-        :return: Tuple of (log content as string, next_byte_position)
+        :return: Log content as string
+        :raises LogRangeNotAvailable: If start_byte is beyond available content
         """
-        log_content = ""
-        next_byte = start_byte
         if self.output_queue:
-            log_content, next_byte = get_logs_from_queue(
-                self.output_queue, start_byte, max_bytes
-            )
-        return log_content, next_byte
+            return get_logs_from_queue(self.output_queue, start_byte, max_bytes)
+        return ""
 
 
 # Multi-instance vLLM process manager
@@ -298,13 +308,14 @@ class VllmMultiProcessManager:
         instance_id: str,
         start_byte: int = 0,
         max_bytes: int = MAX_LOG_RESPONSE_BYTES,
-    ) -> tuple[str, int]:
+    ) -> str:
         """
         Get logs from a specific instance
         :param instance_id: ID of the instance
         :param start_byte: Byte position to start reading from
         :param max_bytes: Maximum bytes of log data to retrieve
-        :return: Tuple of (log content as string, next_byte_position)
+        :return: Log content as string
+        :raises LogRangeNotAvailable: If start_byte is beyond available content
         """
         if instance_id not in self.instances:
             raise KeyError(f"Instance {instance_id} not found")
@@ -466,25 +477,24 @@ async def get_vllm_instance_logs(
     Get logs from a specific vLLM instance starting from a byte position.
 
     Use start_byte=0 to read from the beginning.
-    Use the returned next_byte value in subsequent requests to continue reading.
+    Use start_byte + len(log) in subsequent requests to continue reading.
     """
     try:
-        log_content, next_byte = vllm_manager.get_instance_logs(
-            instance_id, start_byte, max_bytes
-        )
-        total_bytes = len(log_content.encode("utf-8"))
+        log_content = vllm_manager.get_instance_logs(instance_id, start_byte, max_bytes)
         return JSONResponse(
             content={
-                "instance_id": instance_id,
                 "log": log_content,
-                "start_byte": start_byte,
-                "total_bytes": total_bytes,
-                "next_byte": next_byte,
             },
             status_code=HTTPStatus.OK,
         )
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Instance {instance_id} not found")
+    except LogRangeNotAvailable as e:
+        raise HTTPException(
+            status_code=416,
+            detail=f"Requested start_byte {e.start_byte} is beyond available"
+            f" log content ({e.available_bytes} bytes available)",
+        )
     except Exception as e:
         logger.error(f"Failed to get logs for instance {instance_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
