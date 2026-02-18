@@ -40,7 +40,6 @@ from vllm.utils.argparse_utils import FlexibleArgumentParser
 
 # Queue size limits
 MAX_QUEUE_SIZE = 5000  # Maximum number of log messages in queue
-MAX_QUEUE_BYTES = 10 * 1024 * 1024  # 10 MB default for queue buffer
 MAX_LOG_RESPONSE_BYTES = 1 * 1024 * 1024  # 1 MB default for API response
 
 
@@ -54,63 +53,6 @@ class LogRangeNotAvailable(Exception):
             f"start_byte {start_byte} is beyond available content "
             f"({available_bytes} bytes available)"
         )
-
-
-def get_logs_from_queue(
-    output_queue: multiprocessing.Queue,
-    start_byte: int = 0,
-    max_bytes: int = MAX_LOG_RESPONSE_BYTES,
-) -> str:
-    """
-    Retrieve logs from queue as a byte-oriented stream.
-    Concatenates all queue messages and returns the byte slice
-    [start_byte, start_byte + max_bytes).
-    :param output_queue: The multiprocessing queue containing log messages
-    :param start_byte: Byte position to start reading from (0-based)
-    :param max_bytes: Maximum bytes to retrieve from start_byte
-    :return: Log content as string
-    :raises LogRangeNotAvailable: If start_byte is beyond available content
-    """
-    temp_messages = []
-
-    # Collect all messages from queue
-    while not output_queue.empty():
-        try:
-            msg = output_queue.get_nowait()
-            temp_messages.append(msg)
-        except queue.Empty:
-            break
-
-    # Concatenate all messages into a single byte stream
-    all_content = "".join(temp_messages)
-    all_bytes = all_content.encode("utf-8")
-    total_available = len(all_bytes)
-
-    # Check if start_byte is beyond available content
-    if start_byte > 0 and total_available > 0 and start_byte >= total_available:
-        # Put messages back before raising
-        for msg in temp_messages:
-            try:
-                output_queue.put_nowait(msg)
-            except queue.Full:
-                break
-        raise LogRangeNotAvailable(start_byte, total_available)
-
-    # Slice the byte stream
-    end_byte = start_byte + max_bytes
-    log_bytes = all_bytes[start_byte:end_byte]
-    log_content = log_bytes.decode("utf-8", errors="replace")
-
-    # Put ALL messages back into the queue for future reads
-    for msg in temp_messages:
-        try:
-            output_queue.put_nowait(msg)
-        except queue.Full:
-            # If queue is full, we've hit the size limit
-            # Drop oldest messages by not re-queuing them
-            break
-
-    return log_content
 
 
 # Define a the expected JSON structure in dataclass
@@ -153,6 +95,7 @@ class VllmInstance:
         self.config = config
         self.process: Optional[multiprocessing.Process] = None
         self.output_queue: Optional[multiprocessing.Queue] = None
+        self._log_buffer: bytes = b""
 
     def start(self) -> dict:
         """
@@ -216,19 +159,36 @@ class VllmInstance:
             "instance_id": self.instance_id,
         }
 
+    def _drain_queue_to_buffer(self):
+        """Drain all pending messages from the queue into the persistent log buffer."""
+        if not self.output_queue:
+            return
+        while not self.output_queue.empty():
+            try:
+                msg = self.output_queue.get_nowait()
+                self._log_buffer += msg.encode("utf-8")
+            except queue.Empty:
+                break
+
     def get_logs(
         self, start_byte: int = 0, max_bytes: int = MAX_LOG_RESPONSE_BYTES
     ) -> str:
         """
-        Retrieve logs from the child process
+        Retrieve logs from the child process.
         :param start_byte: Byte position to start reading from
         :param max_bytes: Maximum bytes of log data to retrieve
         :return: Log content as string
         :raises LogRangeNotAvailable: If start_byte is beyond available content
         """
-        if self.output_queue:
-            return get_logs_from_queue(self.output_queue, start_byte, max_bytes)
-        return ""
+        self._drain_queue_to_buffer()
+        total_available = len(self._log_buffer)
+
+        if start_byte > total_available:
+            raise LogRangeNotAvailable(start_byte, total_available)
+
+        end_byte = start_byte + max_bytes
+        log_bytes = self._log_buffer[start_byte:end_byte]
+        return log_bytes.decode("utf-8", errors="replace")
 
 
 # Multi-instance vLLM process manager
@@ -508,10 +468,9 @@ async def get_vllm_instance_logs(
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Instance {instance_id} not found")
     except LogRangeNotAvailable as e:
-        raise HTTPException(
-            status_code=416,
-            detail=f"Requested start_byte {e.start_byte} is beyond available"
-            f" log content ({e.available_bytes} bytes available)",
+        return JSONResponse(
+            content={"available_bytes": e.available_bytes},
+            status_code=HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE,
         )
     except Exception as e:
         logger.error(f"Failed to get logs for instance {instance_id}: {e}")
@@ -549,7 +508,7 @@ class QueueWriter:
         return len(msg)
 
     def flush(self):
-        pass
+        self._original.flush()
 
     def fileno(self):
         return self._original.fileno()

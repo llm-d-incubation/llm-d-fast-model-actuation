@@ -328,7 +328,7 @@ Retrieve stdout/stderr logs from a specific vLLM instance starting from a specif
 
 **Query Parameters:**
 
-- `start_byte` (optional): Byte position to start reading from (default: 0, minimum: 0). Use this to continue reading from where you left off.
+- `start_byte` (optional): Byte position to start reading from (default: 0, minimum: 0). The largest valid value is the total number of bytes captured so far (i.e., the length of the log). Use this to continue reading from where you left off.
 - `max_bytes` (optional): Maximum bytes of log data to retrieve from start_byte (default: 1048576 (1 MB), range: 1024-10485760 (10 MB))
 
 **Response (200 OK):**
@@ -346,7 +346,7 @@ Retrieve stdout/stderr logs from a specific vLLM instance starting from a specif
 **Error Responses:**
 
 - `404 Not Found`: Instance not found
-- `416 Range Not Satisfiable`: The requested `start_byte` is beyond available log content. The error detail includes the number of available bytes.
+- `416 Range Not Satisfiable`: The requested `start_byte` is beyond available log content. The response body is JSON: `{"available_bytes": N}`, where `N` is the total number of bytes captured so far (i.e., the largest valid value of `start_byte`).
 
 ---
 
@@ -699,7 +699,7 @@ Be mindful of system resources:
 
 The launcher captures stdout/stderr from each vLLM instance in memory using a byte-limited queue:
 
-- **Queue Size**: Limited to 5000 messages per instance (configurable via `MAX_QUEUE_SIZE`)
+- **Queue Size**: Limited to 5000 messages per instance (`MAX_QUEUE_SIZE`, a Python constant defined in `launcher.py`)
 - **Byte-Based Retrieval**: Uses actual byte size for efficient log streaming
 - **Circular Buffer**: When full, oldest messages are automatically dropped
 - **Memory Protection**: Prevents unbounded memory growth from excessive logging
