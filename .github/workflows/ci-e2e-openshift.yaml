@@ -476,27 +476,29 @@ jobs:
           echo "  Image: $CONTROLLER_IMAGE"
           echo "  EnableValidationPolicy: $POLICIES_ENABLED"
 
-          helm upgrade --install "$FMA_RELEASE_NAME" charts/dual-pods-controller \
+          helm upgrade --install "$FMA_RELEASE_NAME" charts/fma-controllers \
             -n "$FMA_NAMESPACE" \
-            --set Image="$CONTROLLER_IMAGE" \
-            --set NodeViewClusterRole=fma-node-viewer \
-            --set SleeperLimit=2 \
-            --set Local=false \
-            --set DebugAcceleratorMemory=false \
-            --set EnableValidationPolicy="$POLICIES_ENABLED"
+            --set dualPodsController.image.repository="${CONTROLLER_IMAGE%:*}" \
+            --set dualPodsController.image.tag="${CONTROLLER_IMAGE##*:}" \
+            --set global.nodeViewClusterRole=fma-node-viewer \
+            --set dualPodsController.sleeperLimit=2 \
+            --set global.local=false \
+            --set dualPodsController.debugAcceleratorMemory=false \
+            --set global.enableValidationPolicy="$POLICIES_ENABLED" \
+            --set launcherPopulator.enabled=false
 
       - name: Wait for controller to be ready
         run: |
           echo "Waiting for FMA controller deployment to be ready..."
           kubectl wait --for=condition=available --timeout=120s \
-            deployment "$FMA_RELEASE_NAME" -n "$FMA_NAMESPACE"
+            deployment "$FMA_RELEASE_NAME-dual-pods-controller" -n "$FMA_NAMESPACE"
 
           echo ""
           echo "=== Controller Pod Status ==="
-          kubectl get pods -n "$FMA_NAMESPACE" -l app.kubernetes.io/name=dual-pods
+          kubectl get pods -n "$FMA_NAMESPACE" -l app.kubernetes.io/name=fma-controllers
           echo ""
           echo "=== Controller Deployment ==="
-          kubectl get deployment "$FMA_RELEASE_NAME" -n "$FMA_NAMESPACE"
+          kubectl get deployment "$FMA_RELEASE_NAME-dual-pods-controller" -n "$FMA_NAMESPACE"
 
       - name: Verify controller health
         run: |
@@ -504,7 +506,7 @@ jobs:
 
           # Get the controller pod name
           POD_NAME=$(kubectl get pods -n "$FMA_NAMESPACE" \
-            -l app.kubernetes.io/name=dual-pods,app.kubernetes.io/component=controller \
+            -l app.kubernetes.io/name=fma-controllers,app.kubernetes.io/component=dual-pods-controller \
             -o jsonpath='{.items[0].metadata.name}')
 
           if [ -z "$POD_NAME" ]; then
@@ -910,7 +912,7 @@ jobs:
         if: failure()
         run: |
           echo "Test failed - scaling down controller to free resources while preserving for debugging..."
-          kubectl scale deployment "$FMA_RELEASE_NAME" -n "$FMA_NAMESPACE" --replicas=0 || true
+          kubectl scale deployment "$FMA_RELEASE_NAME-dual-pods-controller" -n "$FMA_NAMESPACE" --replicas=0 || true
 
           echo ""
           echo "=== Remaining resources for debugging ==="
@@ -923,13 +925,13 @@ jobs:
           echo "=== Events ==="
           kubectl get events -n "$FMA_NAMESPACE" --sort-by='.lastTimestamp' 2>/dev/null | tail -30 || true
           echo ""
-          echo "=== Full controller logs ==="
-          kubectl logs deployment/"$FMA_RELEASE_NAME" -n "$FMA_NAMESPACE" --previous 2>/dev/null || true
-          kubectl logs deployment/"$FMA_RELEASE_NAME" -n "$FMA_NAMESPACE" 2>/dev/null || true
+          echo "=== Dual Pods controller logs ==="
+          kubectl logs deployment/"$FMA_RELEASE_NAME-dual-pods-controller" -n "$FMA_NAMESPACE" --previous 2>/dev/null || true
+          kubectl logs deployment/"$FMA_RELEASE_NAME-dual-pods-controller" -n "$FMA_NAMESPACE" 2>/dev/null || true
           echo ""
-          echo "=== Launcher-populator logs ==="
-          kubectl logs deployment/launcher-populator -n "$FMA_NAMESPACE" --previous 2>/dev/null || true
-          kubectl logs deployment/launcher-populator -n "$FMA_NAMESPACE" 2>/dev/null || true
+          echo "=== Launcher-populator controller logs ==="
+          kubectl logs deployment/"$FMA_RELEASE_NAME-launcher-populator" -n "$FMA_NAMESPACE" --previous 2>/dev/null || true
+          kubectl logs deployment/"$FMA_RELEASE_NAME-launcher-populator" -n "$FMA_NAMESPACE" 2>/dev/null || true
 
   # Report status back to PR for issue_comment triggered runs
   # This ensures fork PRs show the correct status after /ok-to-test runs complete

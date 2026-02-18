@@ -61,7 +61,7 @@ jobs:
 
       - name: show dual-pods controller log
         if: always()
-        run: kubectl logs deploy/dpctlr
+        run: kubectl logs deploy/dpctlr-dual-pods-controller
 
       - name: show GPU allocations
         if: always()

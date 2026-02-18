@@ -70,11 +70,11 @@ jobs:
 
       - name: show dual-pods controller log
         if: always()
-        run: kubectl logs deploy/dpctlr
+        run: kubectl logs deploy/dpctlr-dual-pods-controller
 
       - name: show launcher-populator log
         if: always()
-        run: kubectl logs deploy/launcher-populator || echo "launcher-populator not deployed"
+        run: kubectl logs deploy/dpctlr-launcher-populator || echo "launcher-populator not deployed"
 
       - name: show GPU allocations
         if: always()
