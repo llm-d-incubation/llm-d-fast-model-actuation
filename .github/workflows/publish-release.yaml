@@ -13,8 +13,6 @@ on:
 permissions:
   contents: read
   packages: write
-  attestations: write
-  id-token: write
 
 jobs:
   release:
@@ -99,52 +97,30 @@ jobs:
       # -----------------------------------------
       # 7. Build and push requester image
       # -----------------------------------------
-      - name: Extract requester metadata
-        id: requester-meta
-        uses: docker/metadata-action@c1e51972afc2121e065aed6d45c65596fe445f3f # v5.8.0
-        with:
-          images: ghcr.io/${{ github.repository }}/requester
-          tags: |
-            type=raw,value=${{ steps.version.outputs.tag }}
-
       - name: Build and push requester image
-        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
-        with:
-          context: .
-          file: ./dockerfiles/Dockerfile.requester
-          platforms: linux/amd64,linux/arm64
-          push: true
-          provenance: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          tags: ${{ steps.requester-meta.outputs.tags }}
-          labels: ${{ steps.requester-meta.outputs.labels }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          reg="${{ github.repository }}"
+
+          make build-and-push-requester \
+            CONTAINER_IMG_REG=ghcr.io/${reg@L} \
+            REQUESTER_IMG_TAG=$TAG
+
+          echo "Requester image published: ghcr.io/${reg@L}/requester:$TAG"
 
       # -----------------------------------------
       # 8. Build and push launcher image
       # -----------------------------------------
-      - name: Extract launcher metadata
-        id: launcher-meta
-        uses: docker/metadata-action@c1e51972afc2121e065aed6d45c65596fe445f3f # v5.8.0
-        with:
-          images: ghcr.io/${{ github.repository }}/launcher
-          tags: |
-            type=raw,value=${{ steps.version.outputs.tag }}
-
       - name: Build and push launcher image
-        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
-        with:
-          context: .
-          file: ./dockerfiles/Dockerfile.launcher.benchmark
-          platforms: linux/amd64
-          push: true
-          provenance: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          tags: ${{ steps.launcher-meta.outputs.tags }}
-          labels: ${{ steps.launcher-meta.outputs.labels }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          reg="${{ github.repository }}"
+
+          make build-and-push-launcher \
+            CONTAINER_IMG_REG=ghcr.io/${reg@L} \
+            LAUNCHER_IMG_TAG=$TAG
+
+          echo "Launcher image published: ghcr.io/${reg@L}/launcher:$TAG"
 
       # -----------------------------------------
       # 9. Update Helm chart values with release images

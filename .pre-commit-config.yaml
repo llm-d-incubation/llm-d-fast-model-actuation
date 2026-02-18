@@ -4,7 +4,9 @@ repos:
     rev: v4.6.0
     hooks:
       - id: trailing-whitespace
+        exclude: \.lock\.yml$
       - id: end-of-file-fixer
+        exclude: \.lock\.yml$
       - id: check-yaml
         exclude: ^charts/.*/templates/.*\.yaml$
       - id: check-json
