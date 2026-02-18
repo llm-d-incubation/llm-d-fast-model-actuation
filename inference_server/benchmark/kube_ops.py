@@ -379,7 +379,7 @@ class KindKubernetesOps(KubernetesOps):
             self.logger.debug(f"Err: {cpe.stderr}, Output: {cpe.stdout}")
             exit(1)
 
-        # Deploy the helm chart for the dual pod controller in the cluster.
+        # Deploy the helm chart for the FMA controllers in the cluster.
         full_registry = dpc_controller_registry + f"/dual-pods-controller:{dpc_tag}"
         self.logger.info(f"Deploying DPC Image {full_registry} in Kind Cluster")
         try:
@@ -389,15 +389,19 @@ class KindKubernetesOps(KubernetesOps):
                     "upgrade",
                     "--install",
                     "dpctlr",
-                    "charts/dual-pods-controller",
+                    "charts/fma-controllers",
                     "--set",
-                    f"Image={full_registry}",
+                    f"dualPodsController.image.repository={dpc_controller_registry}/dual-pods-controller",
                     "--set",
-                    "NodeViewClusterRole=node-viewer",
+                    f"dualPodsController.image.tag={dpc_tag}",
                     "--set",
-                    "SleeperLimit=2",
+                    "global.nodeViewClusterRole=node-viewer",
                     "--set",
-                    "Local=true",
+                    "dualPodsController.sleeperLimit=2",
+                    "--set",
+                    "global.local=true",
+                    "--set",
+                    "launcherPopulator.enabled=false",
                 ]
             )
         except CalledProcessError as cpe:

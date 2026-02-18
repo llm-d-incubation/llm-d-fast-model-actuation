@@ -60,7 +60,13 @@ kind load docker-image $regy/test-requester:$tag          --name fmatest
 kind load docker-image $regy/test-server:$tag             --name fmatest
 kind load docker-image $regy/dual-pods-controller:$tag    --name fmatest
 
-helm upgrade --install dpctlr charts/dual-pods-controller --set Image="$regy/dual-pods-controller:$tag" --set NodeViewClusterRole=node-viewer --set SleeperLimit=1 --set Local=true
+helm upgrade --install dpctlr charts/fma-controllers \
+  --set dualPodsController.image.repository="$regy/dual-pods-controller" \
+  --set dualPodsController.image.tag="$tag" \
+  --set global.nodeViewClusterRole=node-viewer \
+  --set dualPodsController.sleeperLimit=1 \
+  --set global.local=true \
+  --set launcherPopulator.enabled=false
 
 function mkrs() {
 inst=$(date +%H-%M-%S)
