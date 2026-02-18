@@ -58,13 +58,13 @@ example, that would go as follows.
 CONTROLLER_IMG_TAG=b699bc6 # JUST AN EXAMPLE - USE WHAT YOU BUILT
 ```
 
-Instantiate the Helm chart for the dual-pods controller. Specify the
+Instantiate the Helm chart for the FMA controllers. Specify the
 tag produced by the build above. Specify the name of the ClusterRole
 to use for Node get/list/watch authorization, or omit if not
-needed. Adjust the SleeperLimit setting to your liking (the default is
-2). Set EnableValidationPolicy as needed (the default is true).
+needed. Adjust the sleeperLimit setting to your liking (the default is
+2). Set enableValidationPolicy as needed (the default is true).
 
-**Note:** Validating Admission Policy became Generally Available (GA) and enabled by default in Kubernetes release 1.30. In the event that your cluster does not support these policies, set `EnableValidationPolicy` to `false`. More about validating admission policies [here](#example-9-exercise-protection-against-unwanted-label-and-annotation-modifications).
+**Note:** Validating Admission Policy became Generally Available (GA) and enabled by default in Kubernetes release 1.30. In the event that your cluster does not support these policies, set `global.enableValidationPolicy` to `false`. More about validating admission policies [here](#example-9-exercise-protection-against-unwanted-label-and-annotation-modifications).
 
 
 ```shell
@@ -75,7 +75,12 @@ NOTE: if you have done this before then you will need to delete the
 old Helm chart instance before re-making it.
 
 ```shell
-helm upgrade --install dpctlr charts/dual-pods-controller --set Image="${CONTAINER_IMG_REG}/dual-pods-controller:${CONTROLLER_IMG_TAG}" --set NodeViewClusterRole=vcp-node-viewer --set SleeperLimit=1 --set EnableValidationPolicy=${POLICIES_ENABLED}
+helm upgrade --install dpctlr charts/fma-controllers \
+  --set dualPodsController.image.repository="${CONTAINER_IMG_REG}/dual-pods-controller" \
+  --set dualPodsController.image.tag="${CONTROLLER_IMG_TAG}" \
+  --set global.nodeViewClusterRole=vcp-node-viewer \
+  --set dualPodsController.sleeperLimit=1 \
+  --set global.enableValidationPolicy=${POLICIES_ENABLED}
 ```
 
 Finally, define a shell function that creates a new ReplicaSet whose
@@ -453,7 +458,7 @@ its `/is_sleeping` path, the response says that it is indeed
 sleeping. Examine the dual-pods controller's log.
 
 ```shell
-kubectl logs deploy/dpctlr > /tmp/dpctlr.log
+kubectl logs deploy/dpctlr-dual-pods-controller > /tmp/dpctlr.log
 ```
 
 Expect to find a message "Unbound server-running Pod", and later a

@@ -71,9 +71,8 @@ Once you publish the release, the `publish-release` workflow runs automatically 
 
 3. **Packages Helm charts** using `helm package --version 0.3.1 --app-version v0.3.1`
 
-4. **Publishes charts to GHCR**:
-   - `oci://ghcr.io/llm-d-incubation/llm-d-fast-model-actuation/charts/dual-pods-controller`
-   - `oci://ghcr.io/llm-d-incubation/llm-d-fast-model-actuation/charts/launcher-populator`
+4. **Publishes chart to GHCR**:
+   - `oci://ghcr.io/llm-d-incubation/llm-d-fast-model-actuation/charts/fma-controllers`
 
 ### 4. Manual Testing
 

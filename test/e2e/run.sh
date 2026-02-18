@@ -130,11 +130,19 @@ if kubectl api-resources --api-group=admissionregistration.k8s.io -o name | grep
   POLICIES_ENABLED=true
 fi
 
-: Deploy the dual-pods controller in the cluster
+: Deploy the FMA controllers in the cluster
 
 ctlr_img=$(make echo-var VAR=CONTROLLER_IMG)
 
-helm upgrade --install dpctlr charts/dual-pods-controller --set Image="$ctlr_img" --set NodeViewClusterRole=node-viewer --set SleeperLimit=2 --set Local=true --set DebugAcceleratorMemory=false --set EnableValidationPolicy=${POLICIES_ENABLED}
+helm upgrade --install dpctlr charts/fma-controllers \
+  --set dualPodsController.image.repository="${ctlr_img%:*}" \
+  --set dualPodsController.image.tag="${ctlr_img##*:}" \
+  --set global.nodeViewClusterRole=node-viewer \
+  --set dualPodsController.sleeperLimit=2 \
+  --set global.local=true \
+  --set dualPodsController.debugAcceleratorMemory=false \
+  --set global.enableValidationPolicy=${POLICIES_ENABLED} \
+  --set launcherPopulator.enabled=false
 
 : Test Pod creation
 
