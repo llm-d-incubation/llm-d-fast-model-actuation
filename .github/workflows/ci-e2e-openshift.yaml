@@ -533,8 +533,17 @@ jobs:
             --set NodeViewClusterRole=fma-node-viewer
 
           echo "Waiting for launcher-populator to be ready..."
-          kubectl wait --for=condition=available --timeout=120s \
-            deployment launcher-populator -n "$FMA_NAMESPACE"
+          if ! kubectl wait --for=condition=available --timeout=120s \
+            deployment launcher-populator -n "$FMA_NAMESPACE"; then
+            echo "::error::Launcher-populator failed to become ready"
+            echo "=== Pod status ==="
+            kubectl get pods -n "$FMA_NAMESPACE" -l app.kubernetes.io/name=launcher-populator -o wide
+            echo "=== Pod describe ==="
+            kubectl describe pod -n "$FMA_NAMESPACE" -l app.kubernetes.io/name=launcher-populator
+            echo "=== Events ==="
+            kubectl get events -n "$FMA_NAMESPACE" --sort-by='.lastTimestamp' | tail -20
+            exit 1
+          fi
 
           echo "Launcher-populator deployed and ready"
           kubectl get pods -n "$FMA_NAMESPACE" -l app.kubernetes.io/name=launcher-populator
@@ -961,9 +970,19 @@ jobs:
           echo "Namespace: $FMA_NAMESPACE"
           kubectl get all -n "$FMA_NAMESPACE" || true
           echo ""
+          echo "=== Pod details ==="
+          kubectl describe pods -n "$FMA_NAMESPACE" 2>/dev/null || true
+          echo ""
+          echo "=== Events ==="
+          kubectl get events -n "$FMA_NAMESPACE" --sort-by='.lastTimestamp' 2>/dev/null | tail -30 || true
+          echo ""
           echo "=== Full controller logs ==="
           kubectl logs deployment/"$FMA_RELEASE_NAME" -n "$FMA_NAMESPACE" --previous 2>/dev/null || true
           kubectl logs deployment/"$FMA_RELEASE_NAME" -n "$FMA_NAMESPACE" 2>/dev/null || true
+          echo ""
+          echo "=== Launcher-populator logs ==="
+          kubectl logs deployment/launcher-populator -n "$FMA_NAMESPACE" --previous 2>/dev/null || true
+          kubectl logs deployment/launcher-populator -n "$FMA_NAMESPACE" 2>/dev/null || true
 
   # Report status back to PR for issue_comment triggered runs
   # This ensures fork PRs show the correct status after /ok-to-test runs complete

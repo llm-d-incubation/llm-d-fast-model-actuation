@@ -23,7 +23,7 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy | default "IfNotPresent" }}
           command:
-            - /launcher-populator
+            - /ko-app/launcher-populator
             - --namespace=$(CONTROLLER_NAMESPACE)
           env:
             - name: CONTROLLER_NAMESPACE
