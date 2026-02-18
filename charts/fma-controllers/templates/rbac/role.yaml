@@ -1,0 +1,17 @@
+# This file has been modified with the assistance of Claude Opus 4.6
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    {{- include "fma-controllers.labels" . | nindent 4 }}
+  name: {{ include "fma-controllers.serviceAccountName" . }}
+rules:
+- apiGroups: [ "fma.llm-d.ai" ]
+  resources: [ inferenceserverconfigs, launcherconfigs, launcherpopulationpolicies ]
+  verbs: [ get, list, watch ]
+- apiGroups: [ "" ]
+  resources: [ configmaps ]
+  verbs: [ get, list, watch ]
+- apiGroups: [ "" ]
+  resources: [ pods ]
+  verbs: [ get, list, watch, create, update, patch, delete ]

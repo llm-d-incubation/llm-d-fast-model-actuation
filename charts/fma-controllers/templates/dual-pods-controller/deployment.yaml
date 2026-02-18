@@ -1,0 +1,40 @@
+# This file has been modified with the assistance of Claude Opus 4.6
+{{- if .Values.dualPodsController.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    {{- include "fma-controllers.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dual-pods-controller
+  name: "{{ .Release.Name }}-dual-pods-controller"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: fma-controllers
+      app.kubernetes.io/component: dual-pods-controller
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: fma-controllers
+        app.kubernetes.io/component: dual-pods-controller
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      containers:
+      - name: controller
+        image: "{{ .Values.dualPodsController.image.repository }}:{{ .Values.dualPodsController.image.tag }}"
+        imagePullPolicy: {{ include "fma-controllers.dpc.imagePullPolicy" . }}
+        command:
+        - /ko-app/dual-pods-controller
+        - "-v=5"
+        - "--namespace=$(POD_NAMESPACE)"
+        - "--sleeper-limit={{ .Values.dualPodsController.sleeperLimit }}"
+        - "--debug-accelerator-memory={{ .Values.dualPodsController.debugAcceleratorMemory }}"
+        env:
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+      serviceAccountName: {{ include "fma-controllers.serviceAccountName" . }}
+{{- end }}
