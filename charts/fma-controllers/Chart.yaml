@@ -1,0 +1,19 @@
+# This file has been modified with the assistance of Claude Opus 4.6
+apiVersion: v2
+name: fma-controllers
+description: FMA controllers for dual-pods and launcher population
+home: https://github.com/llm-d-incubation/llm-d-fast-model-actuation
+keywords:
+- llm-d
+- dual-pods
+- controller
+- launcher-populator
+- fma
+maintainers:
+- name: Mike Spreitzer
+- name: Jun Duan
+sources:
+- https://github.com/llm-d-incubation/llm-d-fast-model-actuation
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

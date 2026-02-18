@@ -1,0 +1,48 @@
+# This file has been modified with the assistance of Claude Opus 4.6
+{{- if .Values.launcherPopulator.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    {{- include "fma-controllers.labels" . | nindent 4 }}
+    app.kubernetes.io/component: launcher-populator
+  name: "{{ .Release.Name }}-launcher-populator"
+spec:
+  replicas: {{ .Values.launcherPopulator.replicaCount | default 1 }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: fma-controllers
+      app.kubernetes.io/component: launcher-populator
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: fma-controllers
+        app.kubernetes.io/component: launcher-populator
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      serviceAccountName: {{ include "fma-controllers.serviceAccountName" . }}
+      containers:
+        - name: launcher-populator
+          image: "{{ .Values.launcherPopulator.image.repository }}:{{ .Values.launcherPopulator.image.tag }}"
+          imagePullPolicy: {{ .Values.launcherPopulator.image.pullPolicy | default "IfNotPresent" }}
+          command:
+            - /launcher-populator
+            - --namespace=$(CONTROLLER_NAMESPACE)
+          env:
+            - name: CONTROLLER_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          ports:
+            - containerPort: 8080
+              name: metrics
+              protocol: TCP
+          resources:
+            limits:
+              cpu: {{ .Values.launcherPopulator.resources.limits.cpu | default "2" }}
+              memory: {{ .Values.launcherPopulator.resources.limits.memory | default "2Gi" }}
+            requests:
+              cpu: {{ .Values.launcherPopulator.resources.requests.cpu | default "100m" }}
+              memory: {{ .Values.launcherPopulator.resources.requests.memory | default "128Mi" }}
+{{- end }}

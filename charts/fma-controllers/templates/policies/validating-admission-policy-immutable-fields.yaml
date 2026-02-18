@@ -1,0 +1,30 @@
+# This file has been modified with the assistance of Claude Opus 4.6
+{{- if .Values.global.enableValidationPolicy }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: fma-immutable-fields
+  annotations:
+    description: "Deny mutation of critical annotations and labels unless performed by an FMA controller service account."
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: ["pods"]
+        operations: ["UPDATE"]
+  validations:
+    # The expression below denies update operations that attempt to change
+    # some critical annotations/labels. It permits
+    # such changes only when the requester is an FMA controller service
+    # account.
+    - expression: |
+        request.userInfo.username.matches("^system:serviceaccount:[^:]+:({{ include "fma-controllers.serviceAccountName" . }})$") ||
+        (
+          oldObject.metadata.?annotations['dual-pods.llm-d.ai/requester'].orValue('') == object.metadata.?annotations['dual-pods.llm-d.ai/requester'].orValue('') &&
+          oldObject.metadata.?annotations['dual-pods.llm-d.ai/status'].orValue('') == object.metadata.?annotations['dual-pods.llm-d.ai/status'].orValue('') &&
+          oldObject.metadata.?labels['dual-pods.llm-d.ai/dual'].orValue('') == object.metadata.?labels['dual-pods.llm-d.ai/dual'].orValue('')
+        )
+      message: "One or more annotations/labels are managed by FMA controllers and cannot be modified directly."
+{{- end }}
