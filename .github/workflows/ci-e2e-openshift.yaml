@@ -401,6 +401,23 @@ jobs:
           echo "Creating namespace $FMA_NAMESPACE..."
           kubectl create namespace "$FMA_NAMESPACE"
 
+      - name: Create GHCR image pull secret
+        env:
+          CR_USER: ${{ secrets.CR_USER }}
+          CR_TOKEN: ${{ secrets.CR_TOKEN }}
+        run: |
+          echo "Creating GHCR image pull secret in $FMA_NAMESPACE..."
+          kubectl create secret docker-registry ghcr-pull-secret \
+            --docker-server=ghcr.io \
+            --docker-username="$CR_USER" \
+            --docker-password="$CR_TOKEN" \
+            -n "$FMA_NAMESPACE"
+
+          # Patch default SA so all pods in the namespace can pull from GHCR
+          kubectl patch serviceaccount default -n "$FMA_NAMESPACE" \
+            -p '{"imagePullSecrets": [{"name": "ghcr-pull-secret"}]}'
+          echo "GHCR pull secret created and attached to default SA"
+
       - name: Apply FMA CRDs
         run: |
           echo "Applying FMA CRDs..."
@@ -575,6 +592,8 @@ jobs:
           EOF
 
           kubectl create sa testreq -n "$FMA_NAMESPACE" || true
+          kubectl patch serviceaccount testreq -n "$FMA_NAMESPACE" \
+            -p '{"imagePullSecrets": [{"name": "ghcr-pull-secret"}]}'
           kubectl create rolebinding testreq \
             --role=testreq --serviceaccount="${FMA_NAMESPACE}:testreq" \
             -n "$FMA_NAMESPACE" || true
@@ -652,6 +671,8 @@ jobs:
             maxSleepingInstances: 3
             podTemplate:
               spec:
+                imagePullSecrets:
+                  - name: ghcr-pull-secret
                 containers:
                   - name: inference-server
                     image: ${TEST_LAUNCHER_IMAGE}
@@ -686,6 +707,8 @@ jobs:
                   dual-pods.llm-d.ai/admin-port: "8081"
                   dual-pods.llm-d.ai/inference-server-config: "inference-server-config-${INST}"
               spec:
+                imagePullSecrets:
+                  - name: ghcr-pull-secret
                 containers:
                   - name: inference-server
                     image: ${TEST_REQUESTER_IMAGE}
