@@ -606,12 +606,14 @@ jobs:
         run: |
           echo "Populating gpu-map from cluster nodes..."
 
-          # Build gpu-map data from nodes that have GPUs
-          GPU_MAP_DATA=""
+          # Patch gpu-map one node at a time (matching the KinD test approach).
+          # Each entry maps GPU UUID to device index, e.g. {"GPU-0": 0, "GPU-1": 1}.
           gpu_idx=0
+          found_gpus=false
           for node in $(kubectl get nodes -l nvidia.com/gpu.present=true -o name 2>/dev/null | sed 's%^node/%%'); do
             gpu_count=$(kubectl get node "$node" -o jsonpath='{.status.capacity.nvidia\.com/gpu}' 2>/dev/null || echo "0")
             if [ "$gpu_count" -gt 0 ]; then
+              found_gpus=true
               # Build JSON map: {"GPU-0": 0, "GPU-1": 1, ...}
               gpu_json="{"
               for i in $(seq 0 $((gpu_count - 1))); do
@@ -620,19 +622,21 @@ jobs:
                 gpu_idx=$((gpu_idx + 1))
               done
               gpu_json="${gpu_json}}"
-              GPU_MAP_DATA="${GPU_MAP_DATA}  ${node}: '${gpu_json}'"$'\n'
-              echo "  Node $node: $gpu_count GPUs"
+              echo "  Node $node: $gpu_count GPUs -> $gpu_json"
+
+              # Patch one node at a time using YAML format (like the KinD test)
+              kubectl patch configmap gpu-map -n "$FMA_NAMESPACE" \
+                -p "$(printf 'data:\n  %s: '"'"'%s'"'"'' "$node" "$gpu_json")"
             fi
           done
 
-          if [ -z "$GPU_MAP_DATA" ]; then
+          if [ "$found_gpus" = false ]; then
             echo "::warning::No GPU nodes found. Test objects requesting GPUs will remain Pending."
-            echo "Leaving gpu-map empty."
-          else
-            kubectl patch configmap gpu-map -n "$FMA_NAMESPACE" \
-              -p "{\"data\":{$(echo "$GPU_MAP_DATA" | sed 's/  //' | tr '\n' ',' | sed 's/,$//')}}" || true
-            echo "gpu-map populated"
           fi
+
+          # Verify gpu-map contents
+          echo "gpu-map contents:"
+          kubectl get configmap gpu-map -n "$FMA_NAMESPACE" -o yaml
 
           # Create gpu-allocs if not already present
           kubectl get configmap gpu-allocs -n "$FMA_NAMESPACE" &>/dev/null || \
@@ -792,7 +796,16 @@ jobs:
               echo "::error::Launcher pod did not appear within ${LIMIT}s"
               kubectl get pods -n "$FMA_NAMESPACE" -o wide
               kubectl get events -n "$FMA_NAMESPACE" --sort-by='.lastTimestamp' | tail -20
+              echo "=== Controller logs ==="
               kubectl logs deployment/"$FMA_RELEASE_NAME" -n "$FMA_NAMESPACE" --tail=50 || true
+              echo "=== Test-requester logs ==="
+              kubectl logs "$REQUESTER" -n "$FMA_NAMESPACE" --tail=50 || true
+              echo "=== Launcher-populator logs ==="
+              kubectl logs deployment/launcher-populator -n "$FMA_NAMESPACE" --tail=50 || true
+              echo "=== gpu-map contents ==="
+              kubectl get configmap gpu-map -n "$FMA_NAMESPACE" -o yaml || true
+              echo "=== gpu-allocs contents ==="
+              kubectl get configmap gpu-allocs -n "$FMA_NAMESPACE" -o yaml || true
               exit 1
             fi
             sleep 5
