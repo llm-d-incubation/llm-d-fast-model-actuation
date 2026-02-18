@@ -390,6 +390,10 @@ jobs:
           kubectl delete clusterrolebinding -l app.kubernetes.io/name=launcher-populator --ignore-not-found 2>/dev/null || true
           kubectl delete clusterrole fma-node-viewer --ignore-not-found || true
 
+          # Clean up ValidatingAdmissionPolicy resources (cluster-scoped, created by dual-pods-controller chart)
+          kubectl delete validatingadmissionpolicy fma-bound-serverreqpod fma-immutable-fields --ignore-not-found 2>/dev/null || true
+          kubectl delete validatingadmissionpolicybinding bind-fma-bound-serverreqpod bind-fma-immutable-fields --ignore-not-found 2>/dev/null || true
+
           echo "Cleanup complete"
 
       - name: Create namespace
@@ -956,6 +960,10 @@ jobs:
           kubectl delete clusterrolebinding "$FMA_RELEASE_NAME-node-view" --ignore-not-found || true
           kubectl delete clusterrolebinding launcher-populator-node-view --ignore-not-found || true
           kubectl delete clusterrolebinding "testreq-view-${FMA_NAMESPACE}" --ignore-not-found || true
+
+          # Delete ValidatingAdmissionPolicy resources (cluster-scoped)
+          kubectl delete validatingadmissionpolicy fma-bound-serverreqpod fma-immutable-fields --ignore-not-found 2>/dev/null || true
+          kubectl delete validatingadmissionpolicybinding bind-fma-bound-serverreqpod bind-fma-immutable-fields --ignore-not-found 2>/dev/null || true
 
           echo "Cleanup complete"
 
