@@ -38,7 +38,7 @@ jobs:
   run-launcher-test:
     runs-on: ubuntu-22.04-arm
     steps:
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.24.2'
 
