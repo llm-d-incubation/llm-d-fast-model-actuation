@@ -130,20 +130,21 @@ jobs:
           TAG="${{ steps.version.outputs.tag }}"
           reg="${{ github.repository }}"
 
-          # Update dual-pods-controller chart values
-          DPCTLR_CHART="charts/dual-pods-controller"
-          yq eval -i ".Image = \"ghcr.io/${reg@L}/dual-pods-controller:${TAG}\"" $DPCTLR_CHART/values.yaml
+          CHART="charts/fma-controllers"
 
-          echo "Updated $DPCTLR_CHART/values.yaml:"
-          yq eval '.Image' $DPCTLR_CHART/values.yaml
+          # Update dual-pods-controller image
+          yq eval -i ".dualPodsController.image.repository = \"ghcr.io/${reg@L}/dual-pods-controller\"" $CHART/values.yaml
+          yq eval -i ".dualPodsController.image.tag = \"${TAG}\"" $CHART/values.yaml
 
-          # Update launcher-populator chart values
-          POPULATOR_CHART="charts/launcher-populator"
-          yq eval -i ".image.repository = \"ghcr.io/${reg@L}/launcher-populator\"" $POPULATOR_CHART/values.yaml
-          yq eval -i ".image.tag = \"${TAG}\"" $POPULATOR_CHART/values.yaml
+          echo "Updated dual-pods-controller image:"
+          yq eval '.dualPodsController.image' $CHART/values.yaml
 
-          echo "Updated $POPULATOR_CHART/values.yaml:"
-          yq eval '.image' $POPULATOR_CHART/values.yaml
+          # Update launcher-populator image
+          yq eval -i ".launcherPopulator.image.repository = \"ghcr.io/${reg@L}/launcher-populator\"" $CHART/values.yaml
+          yq eval -i ".launcherPopulator.image.tag = \"${TAG}\"" $CHART/values.yaml
+
+          echo "Updated launcher-populator image:"
+          yq eval '.launcherPopulator.image' $CHART/values.yaml
 
       # -----------------------------------------
       # 10. Login to GHCR for Helm
@@ -198,10 +199,8 @@ jobs:
           echo "  • ghcr.io/${reg@L}/requester:$TAG"
           echo ""
           echo "Helm Charts (version $VERSION):"
-          echo "  • oci://ghcr.io/${reg@L}/charts/dual-pods-controller"
-          echo "  • oci://ghcr.io/${reg@L}/charts/launcher-populator"
+          echo "  • oci://ghcr.io/${reg@L}/charts/fma-controllers"
           echo ""
           echo "Install with:"
-          echo "  helm install dpctlr oci://ghcr.io/${reg@L}/charts/dual-pods-controller --version $VERSION"
-          echo "  helm install launcher-populator oci://ghcr.io/${reg@L}/charts/launcher-populator --version $VERSION"
+          echo "  helm install dpctlr oci://ghcr.io/${reg@L}/charts/fma-controllers --version $VERSION"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
