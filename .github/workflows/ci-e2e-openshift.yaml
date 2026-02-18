@@ -248,6 +248,9 @@ jobs:
     outputs:
       image_tag: ${{ steps.build.outputs.image_tag }}
       controller_image: ${{ steps.build.outputs.controller_image }}
+      populator_image: ${{ steps.build.outputs.populator_image }}
+      test_requester_image: ${{ steps.build.outputs.test_requester_image }}
+      test_launcher_image: ${{ steps.build.outputs.test_launcher_image }}
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -273,28 +276,48 @@ jobs:
           username: ${{ secrets.CR_USER }}
           password: ${{ secrets.CR_TOKEN }}
 
-      - name: Build and push image
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push images
         id: build
         env:
           GIT_REF: ${{ needs.gate.outputs.pr_head_sha }}
         run: |
-          # Build image with git ref tag for this PR
           # Use first 8 chars of the git ref (POSIX-compliant)
           IMAGE_TAG="ref-$(printf '%s' "$GIT_REF" | cut -c1-8)"
           reg="${{ github.repository }}"
           CONTAINER_IMG_REG="ghcr.io/${reg@L}"
 
-          echo "Building image with tag: $IMAGE_TAG"
+          echo "Building images with tag: $IMAGE_TAG"
           echo "Registry: $CONTAINER_IMG_REG"
 
+          # Build controller (ko)
           make build-controller \
             CONTAINER_IMG_REG="$CONTAINER_IMG_REG" \
             CONTROLLER_IMG_TAG="$IMAGE_TAG"
 
-          FULL_IMAGE="${CONTAINER_IMG_REG}/dual-pods-controller:${IMAGE_TAG}"
+          # Build launcher-populator (ko)
+          make build-populator \
+            CONTAINER_IMG_REG="$CONTAINER_IMG_REG" \
+            POPULATOR_IMG_TAG="$IMAGE_TAG"
+
+          # Build test-requester (ko)
+          KO_DOCKER_REPO="$CONTAINER_IMG_REG" \
+            ko build -B ./cmd/test-requester -t "$IMAGE_TAG" --platform linux/amd64
+
+          # Build test-launcher (Docker)
+          docker buildx build --push \
+            -t "${CONTAINER_IMG_REG}/test-launcher:${IMAGE_TAG}" \
+            -f dockerfiles/Dockerfile.launcher.cpu . \
+            --platform linux/amd64
+
           echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
-          echo "controller_image=${FULL_IMAGE}" >> $GITHUB_OUTPUT
-          echo "Image built and pushed: $FULL_IMAGE"
+          echo "controller_image=${CONTAINER_IMG_REG}/dual-pods-controller:${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          echo "populator_image=${CONTAINER_IMG_REG}/launcher-populator:${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          echo "test_requester_image=${CONTAINER_IMG_REG}/test-requester:${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          echo "test_launcher_image=${CONTAINER_IMG_REG}/test-launcher:${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          echo "All images built and pushed"
 
   # Run e2e tests on OpenShift self-hosted runner
   e2e-openshift:
@@ -307,8 +330,11 @@ jobs:
       FMA_NAMESPACE: fma-e2e-pr-${{ needs.gate.outputs.pr_number || github.run_id }}
       # Unique release name per run to avoid conflicts
       FMA_RELEASE_NAME: fma-e2e-${{ github.run_id }}
-      # Use the image built in the previous job
+      # Use the images built in the previous job
       CONTROLLER_IMAGE: ${{ needs.build-image.outputs.controller_image }}
+      POPULATOR_IMAGE: ${{ needs.build-image.outputs.populator_image }}
+      TEST_REQUESTER_IMAGE: ${{ needs.build-image.outputs.test_requester_image }}
+      TEST_LAUNCHER_IMAGE: ${{ needs.build-image.outputs.test_launcher_image }}
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -361,6 +387,7 @@ jobs:
           # Clean up cluster-scoped resources from previous runs
           echo "Cleaning up cluster-scoped resources..."
           kubectl delete clusterrolebinding -l app.kubernetes.io/name=dual-pods --ignore-not-found 2>/dev/null || true
+          kubectl delete clusterrolebinding -l app.kubernetes.io/name=launcher-populator --ignore-not-found 2>/dev/null || true
           kubectl delete clusterrole fma-node-viewer --ignore-not-found || true
 
           echo "Cleanup complete"
@@ -491,6 +518,409 @@ jobs:
           echo ""
           echo "Controller health check passed"
 
+      - name: Deploy launcher-populator
+        env:
+          POPULATOR_RELEASE: fma-populator-${{ github.run_id }}
+        run: |
+          echo "Deploying launcher-populator..."
+          echo "  Image: $POPULATOR_IMAGE"
+
+          helm upgrade --install "$POPULATOR_RELEASE" charts/launcher-populator \
+            -n "$FMA_NAMESPACE" \
+            --set image.repository="${POPULATOR_IMAGE%%:*}" \
+            --set image.tag="${POPULATOR_IMAGE##*:}" \
+            --set image.pullPolicy=Always \
+            --set NodeViewClusterRole=fma-node-viewer
+
+          echo "Waiting for launcher-populator to be ready..."
+          kubectl wait --for=condition=available --timeout=120s \
+            deployment launcher-populator -n "$FMA_NAMESPACE"
+
+          echo "Launcher-populator deployed and ready"
+          kubectl get pods -n "$FMA_NAMESPACE" -l app.kubernetes.io/name=launcher-populator
+
+      - name: Set up test RBAC
+        run: |
+          echo "Creating RBAC for test workloads..."
+
+          kubectl apply -n "$FMA_NAMESPACE" -f - <<'EOF'
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: Role
+          metadata:
+            name: testreq
+          rules:
+          - apiGroups: ["fma.llm-d.ai"]
+            resources: ["inferenceserverconfigs", "launcherconfigs"]
+            verbs: ["get", "list", "watch"]
+          - apiGroups: [""]
+            resources: ["configmaps"]
+            resourceNames: ["gpu-map", "gpu-allocs"]
+            verbs: ["update", "patch", "get", "list", "watch"]
+          - apiGroups: [""]
+            resources: ["configmaps"]
+            verbs: ["create"]
+          EOF
+
+          kubectl create sa testreq -n "$FMA_NAMESPACE" || true
+          kubectl create rolebinding testreq \
+            --role=testreq --serviceaccount="${FMA_NAMESPACE}:testreq" \
+            -n "$FMA_NAMESPACE" || true
+          kubectl create clusterrolebinding "testreq-view-${FMA_NAMESPACE}" \
+            --clusterrole=view --serviceaccount="${FMA_NAMESPACE}:testreq" || true
+
+          echo "Test RBAC created"
+
+      - name: Populate GPU map
+        run: |
+          echo "Populating gpu-map from cluster nodes..."
+
+          # Build gpu-map data from nodes that have GPUs
+          GPU_MAP_DATA=""
+          gpu_idx=0
+          for node in $(kubectl get nodes -l nvidia.com/gpu.present=true -o name 2>/dev/null | sed 's%^node/%%'); do
+            gpu_count=$(kubectl get node "$node" -o jsonpath='{.status.capacity.nvidia\.com/gpu}' 2>/dev/null || echo "0")
+            if [ "$gpu_count" -gt 0 ]; then
+              # Build JSON map: {"GPU-0": 0, "GPU-1": 1, ...}
+              gpu_json="{"
+              for i in $(seq 0 $((gpu_count - 1))); do
+                [ "$i" -gt 0 ] && gpu_json="${gpu_json}, "
+                gpu_json="${gpu_json}\"GPU-${gpu_idx}\": ${i}"
+                gpu_idx=$((gpu_idx + 1))
+              done
+              gpu_json="${gpu_json}}"
+              GPU_MAP_DATA="${GPU_MAP_DATA}  ${node}: '${gpu_json}'"$'\n'
+              echo "  Node $node: $gpu_count GPUs"
+            fi
+          done
+
+          if [ -z "$GPU_MAP_DATA" ]; then
+            echo "::warning::No GPU nodes found. Test objects requesting GPUs will remain Pending."
+            echo "Leaving gpu-map empty."
+          else
+            kubectl patch configmap gpu-map -n "$FMA_NAMESPACE" \
+              -p "{\"data\":{$(echo "$GPU_MAP_DATA" | sed 's/  //' | tr '\n' ',' | sed 's/,$//')}}" || true
+            echo "gpu-map populated"
+          fi
+
+          # Create gpu-allocs if not already present
+          kubectl get configmap gpu-allocs -n "$FMA_NAMESPACE" &>/dev/null || \
+            kubectl create configmap gpu-allocs -n "$FMA_NAMESPACE"
+
+      - name: Create test objects
+        id: test-objects
+        run: |
+          INST=$(date +%d-%H-%M-%S)
+          echo "Creating test objects with instance: $INST"
+
+          kubectl apply -n "$FMA_NAMESPACE" -f - <<EOF
+          apiVersion: fma.llm-d.ai/v1alpha1
+          kind: InferenceServerConfig
+          metadata:
+            name: inference-server-config-${INST}
+          spec:
+            modelServerConfig:
+              port: 8005
+              options: "--model TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+              env_vars:
+                VLLM_SERVER_DEV_MODE: "1"
+                VLLM_USE_V1: "1"
+                VLLM_LOGGING_LEVEL: "DEBUG"
+              labels:
+                component: inference
+              annotations:
+                description: "E2E test InferenceServerConfig"
+            launcherConfigName: launcher-config-${INST}
+          ---
+          apiVersion: fma.llm-d.ai/v1alpha1
+          kind: LauncherConfig
+          metadata:
+            name: launcher-config-${INST}
+          spec:
+            maxSleepingInstances: 3
+            podTemplate:
+              spec:
+                containers:
+                  - name: inference-server
+                    image: ${TEST_LAUNCHER_IMAGE}
+                    imagePullPolicy: Always
+                    command:
+                    - /bin/bash
+                    - "-c"
+                    args:
+                    - |
+                      uvicorn launcher:app \
+                      --host 0.0.0.0 \
+                      --log-level info \
+                      --port 8001
+          ---
+          apiVersion: apps/v1
+          kind: ReplicaSet
+          metadata:
+            name: my-request-${INST}
+            labels:
+              app: dp-example
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: dp-example
+            template:
+              metadata:
+                labels:
+                  app: dp-example
+                  instance: "${INST}"
+                annotations:
+                  dual-pods.llm-d.ai/admin-port: "8081"
+                  dual-pods.llm-d.ai/inference-server-config: "inference-server-config-${INST}"
+              spec:
+                containers:
+                  - name: inference-server
+                    image: ${TEST_REQUESTER_IMAGE}
+                    imagePullPolicy: Always
+                    command:
+                    - /ko-app/test-requester
+                    - --node=\$(NODE_NAME)
+                    - --pod-uid=\$(POD_UID)
+                    - --namespace=\$(NAMESPACE)
+                    env:
+                      - name: NODE_NAME
+                        valueFrom:
+                          fieldRef: { fieldPath: spec.nodeName }
+                      - name: POD_UID
+                        valueFrom:
+                          fieldRef: { fieldPath: metadata.uid }
+                      - name: NAMESPACE
+                        valueFrom:
+                          fieldRef: { fieldPath: metadata.namespace }
+                    ports:
+                    - name: probes
+                      containerPort: 8080
+                    - name: spi
+                      containerPort: 8081
+                    readinessProbe:
+                      httpGet:
+                        path: /ready
+                        port: 8080
+                      initialDelaySeconds: 2
+                      periodSeconds: 5
+                    resources:
+                      limits:
+                        nvidia.com/gpu: "1"
+                        cpu: "200m"
+                        memory: 250Mi
+                serviceAccount: testreq
+          EOF
+
+          echo "instance=${INST}" >> $GITHUB_OUTPUT
+          echo "isc=inference-server-config-${INST}" >> $GITHUB_OUTPUT
+          echo "lc=launcher-config-${INST}" >> $GITHUB_OUTPUT
+          echo "rs=my-request-${INST}" >> $GITHUB_OUTPUT
+          echo "Test objects created"
+
+      - name: Verify launcher pod creation
+        env:
+          INST: ${{ steps.test-objects.outputs.instance }}
+          LC: ${{ steps.test-objects.outputs.lc }}
+        run: |
+          echo "Waiting for requester pod..."
+          ELAPSED=0
+          LIMIT=300
+          while true; do
+            COUNT=$(kubectl get pods -n "$FMA_NAMESPACE" -l "app=dp-example,instance=$INST" -o name 2>/dev/null | wc -l | tr -d ' ')
+            if [ "$COUNT" -ge 1 ]; then
+              echo "Requester pod found"
+              break
+            fi
+            if [ "$ELAPSED" -ge "$LIMIT" ]; then
+              echo "::error::Requester pod did not appear within ${LIMIT}s"
+              kubectl get pods -n "$FMA_NAMESPACE" -o wide
+              kubectl get events -n "$FMA_NAMESPACE" --sort-by='.lastTimestamp' | tail -20
+              exit 1
+            fi
+            sleep 5
+            ELAPSED=$((ELAPSED + 5))
+          done
+
+          REQUESTER=$(kubectl get pods -n "$FMA_NAMESPACE" -l "app=dp-example,instance=$INST" -o name | head -1 | sed 's%pod/%%')
+          echo "Requester pod: $REQUESTER"
+
+          echo "Waiting for launcher pod..."
+          ELAPSED=0
+          while true; do
+            COUNT=$(kubectl get pods -n "$FMA_NAMESPACE" -l "dual-pods.llm-d.ai/launcher-config-name=$LC" -o name 2>/dev/null | wc -l | tr -d ' ')
+            if [ "$COUNT" -ge 1 ]; then
+              echo "Launcher pod found"
+              break
+            fi
+            if [ "$ELAPSED" -ge "$LIMIT" ]; then
+              echo "::error::Launcher pod did not appear within ${LIMIT}s"
+              kubectl get pods -n "$FMA_NAMESPACE" -o wide
+              kubectl get events -n "$FMA_NAMESPACE" --sort-by='.lastTimestamp' | tail -20
+              kubectl logs deployment/"$FMA_RELEASE_NAME" -n "$FMA_NAMESPACE" --tail=50 || true
+              exit 1
+            fi
+            sleep 5
+            ELAPSED=$((ELAPSED + 5))
+          done
+
+          LAUNCHER=$(kubectl get pods -n "$FMA_NAMESPACE" -l "dual-pods.llm-d.ai/launcher-config-name=$LC" -o name | head -1 | sed 's%pod/%%')
+          echo "Launcher pod: $LAUNCHER"
+
+          # Verify dual-pod binding (requester <-> launcher)
+          echo "Verifying dual-pod binding..."
+          ELAPSED=0
+          while true; do
+            REQ_DUAL=$(kubectl get pod "$REQUESTER" -n "$FMA_NAMESPACE" -o jsonpath='{.metadata.labels.dual-pods\.llm-d\.ai/dual}' 2>/dev/null || true)
+            LAUNCHER_DUAL=$(kubectl get pod "$LAUNCHER" -n "$FMA_NAMESPACE" -o jsonpath='{.metadata.labels.dual-pods\.llm-d\.ai/dual}' 2>/dev/null || true)
+            if [ "$REQ_DUAL" = "$LAUNCHER" ] && [ "$LAUNCHER_DUAL" = "$REQUESTER" ]; then
+              echo "Binding verified: $REQUESTER <-> $LAUNCHER"
+              break
+            fi
+            if [ "$ELAPSED" -ge "$LIMIT" ]; then
+              echo "::error::Dual-pod binding not established within ${LIMIT}s"
+              echo "  Requester dual label: $REQ_DUAL (expected: $LAUNCHER)"
+              echo "  Launcher dual label: $LAUNCHER_DUAL (expected: $REQUESTER)"
+              kubectl get pods -n "$FMA_NAMESPACE" -o wide --show-labels
+              kubectl logs deployment/"$FMA_RELEASE_NAME" -n "$FMA_NAMESPACE" --tail=100 || true
+              exit 1
+            fi
+            sleep 5
+            ELAPSED=$((ELAPSED + 5))
+          done
+
+          # Wait for both pods to be ready
+          echo "Waiting for pods to be Ready..."
+          kubectl wait --for=condition=Ready "pod/$REQUESTER" -n "$FMA_NAMESPACE" --timeout=120s
+          kubectl wait --for=condition=Ready "pod/$LAUNCHER" -n "$FMA_NAMESPACE" --timeout=120s
+
+          echo ""
+          echo "=== Launcher test passed: pods created and bound ==="
+          kubectl get pods -n "$FMA_NAMESPACE" -o wide --show-labels
+
+      - name: Test wake-up fast path
+        env:
+          INST: ${{ steps.test-objects.outputs.instance }}
+          RS: ${{ steps.test-objects.outputs.rs }}
+          LC: ${{ steps.test-objects.outputs.lc }}
+        run: |
+          LIMIT=300
+
+          # Get current launcher pod name before scaling down
+          LAUNCHER=$(kubectl get pods -n "$FMA_NAMESPACE" -l "dual-pods.llm-d.ai/launcher-config-name=$LC" -o name | head -1 | sed 's%pod/%%')
+          echo "Current launcher pod: $LAUNCHER"
+
+          # Scale requester to 0
+          echo "Scaling requester RS to 0..."
+          kubectl scale rs "$RS" -n "$FMA_NAMESPACE" --replicas=0
+
+          # Wait for requester to be deleted
+          ELAPSED=0
+          while true; do
+            COUNT=$(kubectl get pods -n "$FMA_NAMESPACE" -l "app=dp-example,instance=$INST" -o name 2>/dev/null | wc -l | tr -d ' ')
+            if [ "$COUNT" -eq 0 ]; then
+              echo "Requester pod deleted"
+              break
+            fi
+            if [ "$ELAPSED" -ge "$LIMIT" ]; then
+              echo "::error::Requester pod not deleted within ${LIMIT}s"
+              exit 1
+            fi
+            sleep 5
+            ELAPSED=$((ELAPSED + 5))
+          done
+
+          # Launcher should still exist (sleeping)
+          kubectl get pod "$LAUNCHER" -n "$FMA_NAMESPACE" || {
+            echo "::error::Launcher pod was deleted after scaling down requester"
+            exit 1
+          }
+
+          # Verify launcher is unbound
+          ELAPSED=0
+          while true; do
+            DUAL=$(kubectl get pod "$LAUNCHER" -n "$FMA_NAMESPACE" -o jsonpath='{.metadata.labels.dual-pods\.llm-d\.ai/dual}' 2>/dev/null || true)
+            if [ -z "$DUAL" ]; then
+              echo "Launcher is unbound (sleeping)"
+              break
+            fi
+            if [ "$ELAPSED" -ge 60 ]; then
+              echo "::error::Launcher still bound after ${ELAPSED}s"
+              exit 1
+            fi
+            sleep 5
+            ELAPSED=$((ELAPSED + 5))
+          done
+
+          sleep 5
+
+          # Scale back up (should reuse same launcher pod)
+          echo "Scaling requester RS back to 1..."
+          kubectl scale rs "$RS" -n "$FMA_NAMESPACE" --replicas=1
+
+          # Wait for new requester pod
+          ELAPSED=0
+          while true; do
+            COUNT=$(kubectl get pods -n "$FMA_NAMESPACE" -l "app=dp-example,instance=$INST" -o name 2>/dev/null | wc -l | tr -d ' ')
+            if [ "$COUNT" -ge 1 ]; then
+              echo "New requester pod appeared"
+              break
+            fi
+            if [ "$ELAPSED" -ge "$LIMIT" ]; then
+              echo "::error::New requester pod not created within ${LIMIT}s"
+              exit 1
+            fi
+            sleep 5
+            ELAPSED=$((ELAPSED + 5))
+          done
+
+          REQUESTER2=$(kubectl get pods -n "$FMA_NAMESPACE" -l "app=dp-example,instance=$INST" -o name | head -1 | sed 's%pod/%%')
+
+          # Verify same launcher pod was reused
+          LAUNCHER2=$(kubectl get pods -n "$FMA_NAMESPACE" -l "dual-pods.llm-d.ai/launcher-config-name=$LC" -o name | head -1 | sed 's%pod/%%')
+          if [ "$LAUNCHER2" != "$LAUNCHER" ]; then
+            echo "::error::Launcher pod was not reused (expected: $LAUNCHER, got: $LAUNCHER2)"
+            exit 1
+          fi
+          echo "Same launcher pod reused: $LAUNCHER"
+
+          # Verify binding
+          ELAPSED=0
+          while true; do
+            REQ_DUAL=$(kubectl get pod "$REQUESTER2" -n "$FMA_NAMESPACE" -o jsonpath='{.metadata.labels.dual-pods\.llm-d\.ai/dual}' 2>/dev/null || true)
+            LAUNCHER_DUAL=$(kubectl get pod "$LAUNCHER" -n "$FMA_NAMESPACE" -o jsonpath='{.metadata.labels.dual-pods\.llm-d\.ai/dual}' 2>/dev/null || true)
+            if [ "$REQ_DUAL" = "$LAUNCHER" ] && [ "$LAUNCHER_DUAL" = "$REQUESTER2" ]; then
+              echo "Re-binding verified: $REQUESTER2 <-> $LAUNCHER"
+              break
+            fi
+            if [ "$ELAPSED" -ge "$LIMIT" ]; then
+              echo "::error::Re-binding not established within ${LIMIT}s"
+              exit 1
+            fi
+            sleep 5
+            ELAPSED=$((ELAPSED + 5))
+          done
+
+          kubectl wait --for=condition=Ready "pod/$REQUESTER2" -n "$FMA_NAMESPACE" --timeout=120s
+          kubectl wait --for=condition=Ready "pod/$LAUNCHER" -n "$FMA_NAMESPACE" --timeout=30s
+
+          echo ""
+          echo "=== Wake-up fast path test passed ==="
+
+      - name: Clean up test objects
+        if: always()
+        env:
+          ISC: ${{ steps.test-objects.outputs.isc }}
+          LC: ${{ steps.test-objects.outputs.lc }}
+          RS: ${{ steps.test-objects.outputs.rs }}
+        run: |
+          echo "Cleaning up test objects..."
+          kubectl delete rs "$RS" -n "$FMA_NAMESPACE" --ignore-not-found || true
+          kubectl delete inferenceserverconfig "$ISC" -n "$FMA_NAMESPACE" --ignore-not-found || true
+          kubectl delete launcherconfig "$LC" -n "$FMA_NAMESPACE" --ignore-not-found || true
+          # Wait for test pods to terminate
+          sleep 10
+          echo "Test objects cleaned up"
+
       - name: Cleanup infrastructure
         # Cleanup on success or cancellation, but NOT on failure (preserve for debugging)
         if: (success() || cancelled()) && env.SKIP_CLEANUP != 'true'
@@ -499,9 +929,11 @@ jobs:
           echo "  FMA_NAMESPACE: $FMA_NAMESPACE"
           echo "  FMA_RELEASE_NAME: $FMA_RELEASE_NAME"
 
-          # Uninstall Helm release
-          helm uninstall "$FMA_RELEASE_NAME" -n "$FMA_NAMESPACE" \
-            --ignore-not-found --wait --timeout 60s || true
+          # Uninstall Helm releases
+          for release in $(helm list -n "$FMA_NAMESPACE" -q 2>/dev/null); do
+            echo "  Uninstalling helm release: $release"
+            helm uninstall "$release" -n "$FMA_NAMESPACE" --ignore-not-found --wait --timeout 60s || true
+          done
 
           # Delete namespace
           kubectl delete namespace "$FMA_NAMESPACE" \
@@ -513,6 +945,8 @@ jobs:
           # Delete cluster-scoped resources
           kubectl delete clusterrole fma-node-viewer --ignore-not-found || true
           kubectl delete clusterrolebinding "$FMA_RELEASE_NAME-node-view" --ignore-not-found || true
+          kubectl delete clusterrolebinding launcher-populator-node-view --ignore-not-found || true
+          kubectl delete clusterrolebinding "testreq-view-${FMA_NAMESPACE}" --ignore-not-found || true
 
           echo "Cleanup complete"
 
