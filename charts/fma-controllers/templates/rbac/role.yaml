@@ -4,7 +4,7 @@ kind: Role
 metadata:
   labels:
     {{- include "fma-controllers.labels" . | nindent 4 }}
-  name: {{ include "fma-controllers.serviceAccountName" . }}
+  name: fma-controller
 rules:
 - apiGroups: [ "fma.llm-d.ai" ]
   resources: [ inferenceserverconfigs, launcherconfigs, launcherpopulationpolicies ]

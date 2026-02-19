@@ -20,7 +20,7 @@ spec:
     # such changes only when the requester is an FMA controller service
     # account.
     - expression: |
-        request.userInfo.username.matches("^system:serviceaccount:[^:]+:({{ include "fma-controllers.serviceAccountName" . }})$") ||
+        request.userInfo.username.matches("^system:serviceaccount:[^:]+:(fma-controller)$") ||
         !(
           oldObject.metadata.?annotations['dual-pods.llm-d.ai/inference-server-config'].orValue('') != "" &&
           oldObject.metadata.?labels['dual-pods.llm-d.ai/dual'].orValue('') != ""

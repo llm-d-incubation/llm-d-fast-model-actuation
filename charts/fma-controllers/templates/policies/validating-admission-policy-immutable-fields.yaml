@@ -20,7 +20,7 @@ spec:
     # such changes only when the requester is an FMA controller service
     # account.
     - expression: |
-        request.userInfo.username.matches("^system:serviceaccount:[^:]+:({{ include "fma-controllers.serviceAccountName" . }})$") ||
+        request.userInfo.username.matches("^system:serviceaccount:[^:]+:(fma-controller)$") ||
         (
           oldObject.metadata.?annotations['dual-pods.llm-d.ai/requester'].orValue('') == object.metadata.?annotations['dual-pods.llm-d.ai/requester'].orValue('') &&
           oldObject.metadata.?annotations['dual-pods.llm-d.ai/status'].orValue('') == object.metadata.?annotations['dual-pods.llm-d.ai/status'].orValue('') &&
