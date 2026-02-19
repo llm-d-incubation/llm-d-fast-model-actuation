@@ -2,6 +2,14 @@
 
 # Global settings shared by both controllers
 global:
+  # Container image registry prefix shared by all controller images.
+  # Image references are built as: <imageRegistry>/dual-pods-controller:<imageTag>
+  # and <imageRegistry>/launcher-populator:<imageTag>.
+  imageRegistry: ghcr.io/llm-d-incubation/llm-d-fast-model-actuation
+
+  # Of course, you never really want to use `:latest`
+  imageTag: latest
+
   # Name of the ClusterRole to bind to controllers to authorize them to
   # get/list/watch Node objects.
   # Empty string means no new binding is needed.
@@ -19,10 +27,6 @@ global:
 # Dual-pods controller configuration
 dualPodsController:
   enabled: true
-  image:
-    # Of course, you never really want to use `:latest`
-    repository: ghcr.io/llm-d-incubation/llm-d-fast-model-actuation/dual-pods-controller
-    tag: latest
   # Limit on the number of server-running Pods with a sleeping
   # inference server, per GPU.
   sleeperLimit: 2
@@ -34,10 +38,7 @@ dualPodsController:
 # Launcher populator controller configuration
 launcherPopulator:
   enabled: true
-  image:
-    repository: ghcr.io/llm-d-incubation/llm-d-fast-model-actuation/launcher-populator
-    tag: latest
-    pullPolicy: IfNotPresent
+  pullPolicy: IfNotPresent
   replicaCount: 1
   resources:
     limits:

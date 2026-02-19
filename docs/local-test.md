@@ -60,9 +60,9 @@ kind load docker-image $regy/test-requester:$tag          --name fmatest
 kind load docker-image $regy/test-server:$tag             --name fmatest
 kind load docker-image $regy/dual-pods-controller:$tag    --name fmatest
 
-helm upgrade --install dpctlr charts/fma-controllers \
-  --set dualPodsController.image.repository="$regy/dual-pods-controller" \
-  --set dualPodsController.image.tag="$tag" \
+helm upgrade --install fma charts/fma-controllers \
+  --set global.imageRegistry="$regy" \
+  --set global.imageTag="$tag" \
   --set global.nodeViewClusterRole=node-viewer \
   --set dualPodsController.sleeperLimit=1 \
   --set global.local=true \

@@ -1,13 +1,6 @@
 {{/* This file has been modified with the assistance of Claude Opus 4.6 */}}
 
 {{/*
-Service account name used by all FMA controllers.
-*/}}
-{{- define "fma-controllers.serviceAccountName" -}}
-fma-controller
-{{- end }}
-
-{{/*
 Common labels for all FMA controller resources.
 */}}
 {{- define "fma-controllers.labels" -}}

@@ -478,8 +478,8 @@ jobs:
 
           helm upgrade --install "$FMA_RELEASE_NAME" charts/fma-controllers \
             -n "$FMA_NAMESPACE" \
-            --set dualPodsController.image.repository="${CONTROLLER_IMAGE%:*}" \
-            --set dualPodsController.image.tag="${CONTROLLER_IMAGE##*:}" \
+            --set global.imageRegistry="${CONTROLLER_IMAGE%/dual-pods-controller:*}" \
+            --set global.imageTag="${CONTROLLER_IMAGE##*:}" \
             --set global.nodeViewClusterRole=fma-node-viewer \
             --set dualPodsController.sleeperLimit=2 \
             --set global.local=false \
@@ -557,28 +557,29 @@ jobs:
           echo "Deploying launcher-populator..."
           echo "  Image: $POPULATOR_IMAGE"
 
-          helm upgrade --install "$POPULATOR_RELEASE" charts/launcher-populator \
+          helm upgrade --install "$POPULATOR_RELEASE" charts/fma-controllers \
             -n "$FMA_NAMESPACE" \
-            --set image.repository="${POPULATOR_IMAGE%%:*}" \
-            --set image.tag="${POPULATOR_IMAGE##*:}" \
-            --set image.pullPolicy=Always \
-            --set NodeViewClusterRole=fma-node-viewer
+            --set global.imageRegistry="${POPULATOR_IMAGE%/launcher-populator:*}" \
+            --set global.imageTag="${POPULATOR_IMAGE##*:}" \
+            --set global.nodeViewClusterRole=fma-node-viewer \
+            --set dualPodsController.enabled=false \
+            --set launcherPopulator.pullPolicy=Always
 
           echo "Waiting for launcher-populator to be ready..."
           if ! kubectl wait --for=condition=available --timeout=120s \
-            deployment launcher-populator -n "$FMA_NAMESPACE"; then
+            deployment "$POPULATOR_RELEASE-launcher-populator" -n "$FMA_NAMESPACE"; then
             echo "::error::Launcher-populator failed to become ready"
             echo "=== Pod status ==="
-            kubectl get pods -n "$FMA_NAMESPACE" -l app.kubernetes.io/name=launcher-populator -o wide
+            kubectl get pods -n "$FMA_NAMESPACE" -l app.kubernetes.io/component=launcher-populator -o wide
             echo "=== Pod describe ==="
-            kubectl describe pod -n "$FMA_NAMESPACE" -l app.kubernetes.io/name=launcher-populator
+            kubectl describe pod -n "$FMA_NAMESPACE" -l app.kubernetes.io/component=launcher-populator
             echo "=== Events ==="
             kubectl get events -n "$FMA_NAMESPACE" --sort-by='.lastTimestamp' | tail -20
             exit 1
           fi
 
           echo "Launcher-populator deployed and ready"
-          kubectl get pods -n "$FMA_NAMESPACE" -l app.kubernetes.io/name=launcher-populator
+          kubectl get pods -n "$FMA_NAMESPACE" -l app.kubernetes.io/component=launcher-populator
 
       - name: Set up test RBAC
         run: |
@@ -812,7 +813,7 @@ jobs:
               echo "=== Test-requester logs ==="
               kubectl logs "$REQUESTER" -n "$FMA_NAMESPACE" --tail=50 || true
               echo "=== Launcher-populator logs ==="
-              kubectl logs deployment/launcher-populator -n "$FMA_NAMESPACE" --tail=50 || true
+              kubectl logs deployment/fma-populator-${{ github.run_id }}-launcher-populator -n "$FMA_NAMESPACE" --tail=50 || true
               echo "=== gpu-map contents ==="
               kubectl get configmap gpu-map -n "$FMA_NAMESPACE" -o yaml || true
               echo "=== gpu-allocs contents ==="

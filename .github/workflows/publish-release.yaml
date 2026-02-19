@@ -132,19 +132,13 @@ jobs:
 
           CHART="charts/fma-controllers"
 
-          # Update dual-pods-controller image
-          yq eval -i ".dualPodsController.image.repository = \"ghcr.io/${reg@L}/dual-pods-controller\"" $CHART/values.yaml
-          yq eval -i ".dualPodsController.image.tag = \"${TAG}\"" $CHART/values.yaml
+          # Update global image registry and tag
+          yq eval -i ".global.imageRegistry = \"ghcr.io/${reg@L}\"" $CHART/values.yaml
+          yq eval -i ".global.imageTag = \"${TAG}\"" $CHART/values.yaml
 
-          echo "Updated dual-pods-controller image:"
-          yq eval '.dualPodsController.image' $CHART/values.yaml
-
-          # Update launcher-populator image
-          yq eval -i ".launcherPopulator.image.repository = \"ghcr.io/${reg@L}/launcher-populator\"" $CHART/values.yaml
-          yq eval -i ".launcherPopulator.image.tag = \"${TAG}\"" $CHART/values.yaml
-
-          echo "Updated launcher-populator image:"
-          yq eval '.launcherPopulator.image' $CHART/values.yaml
+          echo "Updated global image settings:"
+          yq eval '.global.imageRegistry' $CHART/values.yaml
+          yq eval '.global.imageTag' $CHART/values.yaml
 
       # -----------------------------------------
       # 10. Login to GHCR for Helm
@@ -202,5 +196,5 @@ jobs:
           echo "  • oci://ghcr.io/${reg@L}/charts/fma-controllers"
           echo ""
           echo "Install with:"
-          echo "  helm install dpctlr oci://ghcr.io/${reg@L}/charts/fma-controllers --version $VERSION"
+          echo "  helm install fma oci://ghcr.io/${reg@L}/charts/fma-controllers --version $VERSION"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

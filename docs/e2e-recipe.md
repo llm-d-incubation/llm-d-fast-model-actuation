@@ -58,11 +58,14 @@ example, that would go as follows.
 CONTROLLER_IMG_TAG=b699bc6 # JUST AN EXAMPLE - USE WHAT YOU BUILT
 ```
 
-Instantiate the Helm chart for the FMA controllers. Specify the
-tag produced by the build above. Specify the name of the ClusterRole
-to use for Node get/list/watch authorization, or omit if not
-needed. Adjust the sleeperLimit setting to your liking (the default is
-2). Set enableValidationPolicy as needed (the default is true).
+Instantiate the Helm chart for the FMA controllers. This deploys both
+the dual-pods controller and the launcher-populator by default. Specify
+the tag produced by the build above. Specify the name of the
+ClusterRole to use for Node get/list/watch authorization, or omit if
+not needed. Adjust the sleeperLimit setting to your liking (the default
+is 2). Set enableValidationPolicy as needed (the default is true).
+To deploy without the launcher-populator, add
+`--set launcherPopulator.enabled=false`.
 
 **Note:** Validating Admission Policy became Generally Available (GA) and enabled by default in Kubernetes release 1.30. In the event that your cluster does not support these policies, set `global.enableValidationPolicy` to `false`. More about validating admission policies [here](#example-9-exercise-protection-against-unwanted-label-and-annotation-modifications).
 
@@ -75,9 +78,9 @@ NOTE: if you have done this before then you will need to delete the
 old Helm chart instance before re-making it.
 
 ```shell
-helm upgrade --install dpctlr charts/fma-controllers \
-  --set dualPodsController.image.repository="${CONTAINER_IMG_REG}/dual-pods-controller" \
-  --set dualPodsController.image.tag="${CONTROLLER_IMG_TAG}" \
+helm upgrade --install fma charts/fma-controllers \
+  --set global.imageRegistry="${CONTAINER_IMG_REG}" \
+  --set global.imageTag="${CONTROLLER_IMG_TAG}" \
   --set global.nodeViewClusterRole=vcp-node-viewer \
   --set dualPodsController.sleeperLimit=1 \
   --set global.enableValidationPolicy=${POLICIES_ENABLED}
@@ -386,7 +389,7 @@ server-requesting Pod should appear and get satisfied as in example 1.
 ## Example 3: deletions while controller is not running
 
 Modify the first two examples by surrounding the pod deletion by first
-`helm delete dpctlr` to remove the controller and then, after the Pod
+`helm delete fma` to remove the controller and then, after the Pod
 deletion, re-instantiate the controller Helm chart. Remember when
 using `kubectl delete` that it will hang until the controller is
 re-instantiated to remove the controller's finalizer on the Pod,
@@ -458,7 +461,7 @@ its `/is_sleeping` path, the response says that it is indeed
 sleeping. Examine the dual-pods controller's log.
 
 ```shell
-kubectl logs deploy/dpctlr-dual-pods-controller > /tmp/dpctlr.log
+kubectl logs deploy/fma-dual-pods-controller > /tmp/fma-dpctlr.log
 ```
 
 Expect to find a message "Unbound server-running Pod", and later a

@@ -35,13 +35,23 @@ Run the script to populate the `gpu-map` ConfigMap.
 scripts/ensure-nodes-mapped.sh
 ```
 
-Instantiate the Helm chart for the FMA controllers. Specify the tag produced by the build above. Specify the name of the ClusterRole to use for Node get/list/watch authorization, or omit if not needed.
+Instantiate the Helm chart for the FMA controllers. This deploys both the dual-pods controller and the launcher-populator by default. Specify the tag produced by the build above. Specify the name of the ClusterRole to use for Node get/list/watch authorization, or omit if not needed.
 
 ```shell
-helm upgrade --install dpctlr charts/fma-controllers \
-  --set dualPodsController.image.repository="${CONTAINER_IMG_REG}/dual-pods-controller" \
-  --set dualPodsController.image.tag="9010ece" \
+helm upgrade --install fma charts/fma-controllers \
+  --set global.imageRegistry="${CONTAINER_IMG_REG}" \
+  --set global.imageTag="9010ece" \
   --set global.nodeViewClusterRole=vcp-node-viewer
+```
+
+To deploy only the dual-pods controller (without the launcher-populator):
+
+```shell
+helm upgrade --install fma charts/fma-controllers \
+  --set global.imageRegistry="${CONTAINER_IMG_REG}" \
+  --set global.imageTag="9010ece" \
+  --set global.nodeViewClusterRole=vcp-node-viewer \
+  --set launcherPopulator.enabled=false
 ```
 
 Create a ReplicaSet of 1 server-requesting Pod.
@@ -210,7 +220,7 @@ Check the allocated GPU.
 ```console
 $ kubectl get po -o wide
 NAME                          READY   STATUS              RESTARTS   AGE     IP           NODE               NOMINATED NODE   READINESS GATES
-dpctlr-78494ffcc7-p58tc       1/1     Running             0          7m58s   10.0.0.218   ip-172-31-58-228   <none>           <none>
+fma-dual-pods-controller-78494ffcc7-p58tc   1/1     Running             0          7m58s   10.0.0.218   ip-172-31-58-228   <none>           <none>
 my-request-5n2m6              0/1     Running             0          8m36s   10.0.0.134   ip-172-31-58-228   <none>           <none>
 my-request-5n2m6-dual-2wn7w   0/1     ContainerCreating   0          40s     <none>       ip-172-31-58-228   <none>           <none>
 $ REQ_IP=10.0.0.134
@@ -297,7 +307,7 @@ Make an inference request.
 ```console
 $ kubectl get po -owide
 NAME                          READY   STATUS    RESTARTS   AGE     IP           NODE               NOMINATED NODE   READINESS GATES
-dpctlr-78494ffcc7-p58tc       1/1     Running   0          16m     10.0.0.218   ip-172-31-58-228   <none>           <none>
+fma-dual-pods-controller-78494ffcc7-p58tc   1/1     Running   0          16m     10.0.0.218   ip-172-31-58-228   <none>           <none>
 my-request-5n2m6              1/1     Running   0          17m     10.0.0.134   ip-172-31-58-228   <none>           <none>
 my-request-5n2m6-dual-2wn7w   1/1     Running   0          9m10s   10.0.0.145   ip-172-31-58-228   <none>           <none>
 $ curl -s http://10.0.0.145:8000/v1/completions \
@@ -326,6 +336,6 @@ $ kubectl delete rs my-request
 replicaset.apps "my-request" deleted
 $ kubectl delete po my-request-5n2m6-dual-2wn7w
 pod "my-request-5n2m6-dual-2wn7w" deleted
-$ helm delete dpctlr
-release "dpctlr" uninstalled
+$ helm delete fma
+release "fma" uninstalled
 ```

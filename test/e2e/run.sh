@@ -134,9 +134,9 @@ fi
 
 ctlr_img=$(make echo-var VAR=CONTROLLER_IMG)
 
-helm upgrade --install dpctlr charts/fma-controllers \
-  --set dualPodsController.image.repository="${ctlr_img%:*}" \
-  --set dualPodsController.image.tag="${ctlr_img##*:}" \
+helm upgrade --install fma charts/fma-controllers \
+  --set global.imageRegistry="${ctlr_img%/dual-pods-controller:*}" \
+  --set global.imageTag="${ctlr_img##*:}" \
   --set global.nodeViewClusterRole=node-viewer \
   --set dualPodsController.sleeperLimit=2 \
   --set global.local=true \

@@ -383,18 +383,17 @@ class KindKubernetesOps(KubernetesOps):
         full_registry = dpc_controller_registry + f"/dual-pods-controller:{dpc_tag}"
         self.logger.info(f"Deploying DPC Image {full_registry} in Kind Cluster")
         try:
-            image_repo = f"{dpc_controller_registry}/dual-pods-controller"
             invoke_shell(
                 [
                     "helm",
                     "upgrade",
                     "--install",
-                    "dpctlr",
+                    "fma",
                     "charts/fma-controllers",
                     "--set",
-                    f"dualPodsController.image.repository={image_repo}",
+                    f"global.imageRegistry={dpc_controller_registry}",
                     "--set",
-                    f"dualPodsController.image.tag={dpc_tag}",
+                    f"global.imageTag={dpc_tag}",
                     "--set",
                     "global.nodeViewClusterRole=node-viewer",
                     "--set",
