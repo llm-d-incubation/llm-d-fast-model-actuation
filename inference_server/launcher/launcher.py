@@ -471,6 +471,7 @@ async def get_vllm_instance_logs(
         return JSONResponse(
             content={"available_bytes": e.available_bytes},
             status_code=HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE,
+            headers={"Content-Range": f"bytes */{e.available_bytes}"},
         )
     except Exception as e:
         logger.error(f"Failed to get logs for instance {instance_id}: {e}")
