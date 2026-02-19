@@ -8,15 +8,60 @@ if out=$(kubectl apply -f - 2>&1 <<EOF
 apiVersion: fma.llm-d.ai/v1alpha1
 kind: InferenceServerConfig
 metadata:
-  name: inference-server-config-$inst
+  name: inference-server-config-smol-$inst
+  labels:
+    instance: "$inst"
 spec:
   modelServerConfig:
     port: 8005
+    options: "--model HuggingFaceTB/SmolLM2-360M-Instruct"
+    env_vars:
+      VLLM_SERVER_DEV_MODE: "1"
+      VLLM_USE_V1: "1"
+      VLLM_LOGGING_LEVEL: "DEBUG"
+      VLLM_CPU_KVCACHE_SPACE: "1" # GiB
+    labels:
+      component: inference
+    annotations:
+      description: "Example InferenceServerConfig"
+  launcherConfigName: launcher-config-$inst
+---
+apiVersion: fma.llm-d.ai/v1alpha1
+kind: InferenceServerConfig
+metadata:
+  name: inference-server-config-qwen-$inst
+  labels:
+    instance: "$inst"
+spec:
+  modelServerConfig:
+    port: 8006
+    options: "--model Qwen/Qwen2.5-0.5B-Instruct"
+    env_vars:
+      VLLM_SERVER_DEV_MODE: "1"
+      VLLM_USE_V1: "1"
+      VLLM_LOGGING_LEVEL: "DEBUG"
+      VLLM_CPU_KVCACHE_SPACE: "1" # GiB
+    labels:
+      component: inference
+    annotations:
+      description: "Example InferenceServerConfig"
+  launcherConfigName: launcher-config-$inst
+---
+apiVersion: fma.llm-d.ai/v1alpha1
+kind: InferenceServerConfig
+metadata:
+  name: inference-server-config-tinyllama-$inst
+  labels:
+    instance: "$inst"
+spec:
+  modelServerConfig:
+    port: 8007
     options: "--model TinyLlama/TinyLlama-1.1B-Chat-v1.0"
     env_vars:
       VLLM_SERVER_DEV_MODE: "1"
       VLLM_USE_V1: "1"
       VLLM_LOGGING_LEVEL: "DEBUG"
+      VLLM_CPU_KVCACHE_SPACE: "1" # GiB
     labels:
       component: inference
     annotations:
@@ -27,8 +72,10 @@ apiVersion: fma.llm-d.ai/v1alpha1
 kind: LauncherConfig
 metadata:
   name: launcher-config-$inst
+  labels:
+    instance: "$inst"
 spec:
-  maxSleepingInstances: 3
+  maxSleepingInstances: 1
   podTemplate:
     spec:
       containers:
@@ -63,7 +110,7 @@ spec:
         instance: "$inst"
       annotations:
         dual-pods.llm-d.ai/admin-port: "8081"
-        dual-pods.llm-d.ai/inference-server-config: "inference-server-config-$inst"
+        dual-pods.llm-d.ai/inference-server-config: "inference-server-config-smol-$inst"
     spec:
       containers:
         - name: inference-server
@@ -105,9 +152,12 @@ spec:
 EOF
         )
 then
-    echo inference-server-config-$inst
+    # output to be parsed by caller, e.g. the e2e test script
+    echo inference-server-config-smol-$inst
     echo launcher-config-$inst
     echo my-request-$inst
+    echo inference-server-config-qwen-$inst
+    echo inference-server-config-tinyllama-$inst
 else
     echo Failed to create objects >&2
     echo "$out" >&2
