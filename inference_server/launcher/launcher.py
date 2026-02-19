@@ -20,12 +20,16 @@ vLLM Launcher
 import logging
 import multiprocessing
 import os
+import queue
+import signal
+import sys
 import uuid
+from contextlib import asynccontextmanager
 from http import HTTPStatus  # HTTP Status Codes
 from typing import Any, Dict, List, Optional
 
 import uvloop
-from fastapi import FastAPI, HTTPException, Path
+from fastapi import FastAPI, HTTPException, Path, Query
 from fastapi.responses import JSONResponse
 from gputranslator import GpuTranslator
 from pydantic import BaseModel
@@ -33,6 +37,22 @@ from vllm.entrypoints.openai.api_server import run_server
 from vllm.entrypoints.openai.cli_args import make_arg_parser, validate_parsed_serve_args
 from vllm.entrypoints.utils import cli_env_setup
 from vllm.utils.argparse_utils import FlexibleArgumentParser
+
+# Queue size limits
+MAX_QUEUE_SIZE = 5000  # Maximum number of log messages in queue
+MAX_LOG_RESPONSE_BYTES = 1 * 1024 * 1024  # 1 MB default for API response
+
+
+class LogRangeNotAvailable(Exception):
+    """Raised when the requested start_byte is beyond available log content"""
+
+    def __init__(self, start_byte, available_bytes):
+        self.start_byte = start_byte
+        self.available_bytes = available_bytes
+        super().__init__(
+            f"start_byte {start_byte} is beyond available content "
+            f"({available_bytes} bytes available)"
+        )
 
 
 # Define a the expected JSON structure in dataclass
@@ -74,6 +94,8 @@ class VllmInstance:
         self.instance_id = instance_id
         self.config = config
         self.process: Optional[multiprocessing.Process] = None
+        self.output_queue: Optional[multiprocessing.Queue] = None
+        self._log_buffer: bytes = b""
 
     def start(self) -> dict:
         """
@@ -83,7 +105,10 @@ class VllmInstance:
         if self.process and self.process.is_alive():
             return {"status": "already_running", "instance_id": self.instance_id}
 
-        self.process = multiprocessing.Process(target=vllm_kickoff, args=(self.config,))
+        self.output_queue = multiprocessing.Queue(maxsize=MAX_QUEUE_SIZE)
+        self.process = multiprocessing.Process(
+            target=vllm_kickoff, args=(self.config, self.output_queue)
+        )
         self.process.start()
 
         return {
@@ -103,13 +128,19 @@ class VllmInstance:
                 "instance_id": self.instance_id,
             }
 
-        # Graceful termination
+        # Graceful termination — send SIGTERM to the vLLM process,
+        # which will propagate shutdown to the EngineCore via vLLM's
+        # own cleanup logic.
         self.process.terminate()
         self.process.join(timeout=timeout)
 
-        # Force kill if needed
+        # Force kill the entire process group (vLLM server + EngineCore)
+        # if graceful shutdown did not complete in time.
         if self.process.is_alive():
-            self.process.kill()
+            try:
+                os.killpg(self.process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
             self.process.join()
 
         return {
@@ -127,6 +158,37 @@ class VllmInstance:
             "status": "running" if self.process.is_alive() else "stopped",
             "instance_id": self.instance_id,
         }
+
+    def _drain_queue_to_buffer(self):
+        """Drain all pending messages from the queue into the persistent log buffer."""
+        if not self.output_queue:
+            return
+        while not self.output_queue.empty():
+            try:
+                msg = self.output_queue.get_nowait()
+                self._log_buffer += msg.encode("utf-8")
+            except queue.Empty:
+                break
+
+    def get_logs(
+        self, start_byte: int = 0, max_bytes: int = MAX_LOG_RESPONSE_BYTES
+    ) -> str:
+        """
+        Retrieve logs from the child process.
+        :param start_byte: Byte position to start reading from
+        :param max_bytes: Maximum bytes of log data to retrieve
+        :return: Log content as string
+        :raises LogRangeNotAvailable: If start_byte is beyond available content
+        """
+        self._drain_queue_to_buffer()
+        total_available = len(self._log_buffer)
+
+        if start_byte > total_available:
+            raise LogRangeNotAvailable(start_byte, total_available)
+
+        end_byte = start_byte + max_bytes
+        log_bytes = self._log_buffer[start_byte:end_byte]
+        return log_bytes.decode("utf-8", errors="replace")
 
 
 # Multi-instance vLLM process manager
@@ -209,19 +271,47 @@ class VllmMultiProcessManager:
         """List all instance IDs"""
         return list(self.instances.keys())
 
+    def get_instance_logs(
+        self,
+        instance_id: str,
+        start_byte: int = 0,
+        max_bytes: int = MAX_LOG_RESPONSE_BYTES,
+    ) -> str:
+        """
+        Get logs from a specific instance
+        :param instance_id: ID of the instance
+        :param start_byte: Byte position to start reading from
+        :param max_bytes: Maximum bytes of log data to retrieve
+        :return: Log content as string
+        :raises LogRangeNotAvailable: If start_byte is beyond available content
+        """
+        if instance_id not in self.instances:
+            raise KeyError(f"Instance {instance_id} not found")
+        return self.instances[instance_id].get_logs(start_byte, max_bytes)
+
 
 # Create global manager instance
 vllm_manager = VllmMultiProcessManager()
+
+# Setup logging
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    """Manage application lifecycle: clean up all vLLM instances on shutdown."""
+    yield
+    logger.info("Launcher shutting down, stopping all vLLM instances...")
+    vllm_manager.stop_all_instances()
+
 
 # Create FastAPI application
 app = FastAPI(
     title="Multi-Instance vLLM Management API",
     version="2.0",
     description="REST API for managing multiple vLLM instances",
+    lifespan=lifespan,
 )
-
-# Setup logging
-logger = logging.getLogger(__name__)
 
 
 ############################################################
@@ -252,6 +342,7 @@ async def index():
                 "delete_all_instances": "DELETE /v2/vllm/instances",
                 "get_instance_status": "GET /v2/vllm/instances/{instance_id}",
                 "get_all_instances": "GET /v2/vllm/instances",
+                "get_instance_logs": "GET /v2/vllm/instances/{instance_id}/log",
             },
         },
         status_code=HTTPStatus.OK,
@@ -345,17 +436,105 @@ async def get_vllm_instance_status(
         raise HTTPException(status_code=404, detail=f"Instance {instance_id} not found")
 
 
+@app.get("/v2/vllm/instances/{instance_id}/log")
+async def get_vllm_instance_logs(
+    instance_id: str = Path(..., description="Instance ID"),
+    start_byte: int = Query(
+        0,
+        description="Byte position to start reading from (0-based)",
+        ge=0,
+    ),
+    max_bytes: int = Query(
+        MAX_LOG_RESPONSE_BYTES,
+        description="Maximum bytes of log data to retrieve",
+        ge=1024,
+        le=10 * 1024 * 1024,
+    ),
+):
+    """
+    Get logs from a specific vLLM instance starting from a byte position.
+
+    Use start_byte=0 to read from the beginning.
+    Use start_byte + len(log) in subsequent requests to continue reading.
+    """
+    try:
+        log_content = vllm_manager.get_instance_logs(instance_id, start_byte, max_bytes)
+        return JSONResponse(
+            content={
+                "log": log_content,
+            },
+            status_code=HTTPStatus.OK,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Instance {instance_id} not found")
+    except LogRangeNotAvailable as e:
+        return JSONResponse(
+            content={"available_bytes": e.available_bytes},
+            status_code=HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE,
+            headers={"Content-Range": f"bytes */{e.available_bytes}"},
+        )
+    except Exception as e:
+        logger.error(f"Failed to get logs for instance {instance_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 ######################################################################
 # HELPER FUNCTIONS
 ######################################################################
 
 
+# Helper class to redirect stdout/stderr to queue
+class QueueWriter:
+    """Custom writer that sends output to a multiprocessing Queue.
+
+    Wraps the original stream so that libraries which inspect stream
+    attributes (e.g. uvicorn's logging config) continue to work.
+    """
+
+    def __init__(self, output_queue: multiprocessing.Queue, original_stream):
+        self._queue = output_queue
+        self._original = original_stream
+        # Expose attributes that logging/uvicorn may inspect
+        self.encoding = getattr(original_stream, "encoding", "utf-8")
+        self.name = getattr(original_stream, "name", "<queue>")
+        self.errors = getattr(original_stream, "errors", "strict")
+
+    def write(self, msg: str):
+        if msg.strip():  # Only send non-empty messages
+            try:
+                self._queue.put_nowait(msg)
+            except queue.Full:
+                # Drop message if queue is full
+                pass
+        return len(msg)
+
+    def flush(self):
+        self._original.flush()
+
+    def fileno(self):
+        return self._original.fileno()
+
+    def isatty(self):
+        return False
+
+
 # Function to be executed by the child process
-def vllm_kickoff(vllm_config: VllmConfig):
+def vllm_kickoff(vllm_config: VllmConfig, output_queue: multiprocessing.Queue):
     """
     Child function to kickoff vllm instance
     :param vllm_config: vLLM configuration parameters and env variables
+    :param output_queue: multiprocessing Queue for capturing stdout/stderr
     """
+
+    # Isolate this process tree into its own process group so that
+    # signals (SIGINT/SIGTERM) sent to the launcher's group do not
+    # propagate to the vLLM server or its EngineCore child process.
+    os.setpgrp()
+
+    # Redirect stdout and stderr to queue while preserving original
+    # stream attributes needed by uvicorn's logging configuration.
+    sys.stdout = QueueWriter(output_queue, sys.stdout)
+    sys.stderr = QueueWriter(output_queue, sys.stderr)
 
     logger.info(f"VLLM process (PID: {os.getpid()}) started.")
     # Set env vars in the current process

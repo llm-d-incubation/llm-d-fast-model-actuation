@@ -17,6 +17,7 @@ Unit tests for Multi-Instance vLLM Launcher
 Run as:
 python -m pytest tests/test_launcher.py -v
 """
+import signal
 import sys
 from unittest.mock import MagicMock, patch
 
@@ -34,6 +35,10 @@ sys.modules["vllm.entrypoints.utils"] = MagicMock()
 
 # Import the application and classes
 from launcher import (  # noqa: E402
+    MAX_LOG_RESPONSE_BYTES,
+    MAX_QUEUE_SIZE,
+    LogRangeNotAvailable,
+    QueueWriter,
     VllmConfig,
     VllmInstance,
     VllmMultiProcessManager,
@@ -81,6 +86,7 @@ class MockProcess:
         self._is_alive = True
         self.terminated = False
         self.killed = False
+        self.pid = 12345
 
     def start(self):
         pass
@@ -181,8 +187,11 @@ class TestVllmInstance:
         assert result["status"] == "not_running"
         assert result["instance_id"] == "test-id"
 
+    @patch("launcher.os.killpg")
     @patch("launcher.multiprocessing.Process")
-    def test_instance_force_kill(self, mock_process_class, vllm_config, gpu_translator):
+    def test_instance_force_kill(
+        self, mock_process_class, mock_killpg, vllm_config, gpu_translator
+    ):
         """Test force killing an instance that won't terminate"""
         mock_process = MockProcess()
 
@@ -191,13 +200,24 @@ class TestVllmInstance:
             pass  # Don't change _is_alive
 
         mock_process.terminate = stay_alive_on_terminate
+
+        # Make join after killpg finally stop the process
+        call_count = 0
+
+        def join_side_effect(timeout=None):
+            nonlocal call_count
+            call_count += 1
+            if call_count > 1:
+                mock_process._is_alive = False
+
+        mock_process.join = join_side_effect
         mock_process_class.return_value = mock_process
 
         instance = VllmInstance("test-id", vllm_config, gpu_translator)
         instance.start()
         _ = instance.stop(timeout=0.1)
 
-        assert mock_process.killed is True
+        mock_killpg.assert_called_once_with(mock_process.pid, signal.SIGKILL)
 
     @patch("launcher.multiprocessing.Process")
     def test_instance_get_status(self, mock_process_class, vllm_config, gpu_translator):
@@ -463,6 +483,54 @@ class TestVllmMultiProcessManager:
         assert "id-1" in instances
         assert "id-2" in instances
 
+    @patch("launcher.multiprocessing.Process")
+    @patch("launcher.multiprocessing.Queue")
+    def test_get_instance_logs(
+        self, mock_queue_class, mock_process_class, manager, vllm_config
+    ):
+        """Test getting logs from a specific instance"""
+        mock_process = MockProcess()
+        mock_process_class.return_value = mock_process
+
+        mock_queue = MagicMock()
+        mock_queue.empty.side_effect = [False, False, False, True]
+        mock_queue.get_nowait.side_effect = ["Log line 1", "Log line 2", "Log line 3"]
+        mock_queue_class.return_value = mock_queue
+
+        manager.create_instance(vllm_config, "test-id")
+        log_content = manager.get_instance_logs("test-id", start_byte=0, max_bytes=1000)
+
+        assert isinstance(log_content, str)
+        assert "Log line 1" in log_content
+        assert "Log line 2" in log_content
+        assert "Log line 3" in log_content
+
+    @patch("launcher.multiprocessing.Process")
+    def test_get_instance_logs_nonexistent(self, mock_process_class, manager):
+        """Test getting logs from nonexistent instance raises KeyError"""
+        with pytest.raises(KeyError, match="not found"):
+            manager.get_instance_logs("nonexistent-id")
+
+    @patch("launcher.multiprocessing.Process")
+    @patch("launcher.multiprocessing.Queue")
+    def test_get_instance_logs_respects_max_bytes(
+        self, mock_queue_class, mock_process_class, manager, vllm_config
+    ):
+        """Test that get_logs respects max_bytes parameter"""
+        mock_process = MockProcess()
+        mock_process_class.return_value = mock_process
+
+        mock_queue = MagicMock()
+        mock_queue.empty.side_effect = [False, False, True]
+        mock_queue.get_nowait.side_effect = ["A" * 60, "B" * 60]
+        mock_queue_class.return_value = mock_queue
+
+        manager.create_instance(vllm_config, "test-id")
+        log_content = manager.get_instance_logs("test-id", start_byte=0, max_bytes=100)
+
+        assert isinstance(log_content, str)
+        assert len(log_content.encode("utf-8")) <= 100
+
 
 # Tests for API Endpoints
 class TestAPIEndpoints:
@@ -480,7 +548,7 @@ class TestAPIEndpoints:
         assert data["name"] == "Multi-Instance vLLM Management API"
         assert data["version"] == "2.0"
         assert "endpoints" in data
-        assert len(data["endpoints"]) == 8
+        assert len(data["endpoints"]) == 9
 
     @patch("launcher.vllm_manager")
     def test_create_vllm_instance(self, mock_manager, client, vllm_config):
@@ -615,6 +683,213 @@ class TestAPIEndpoints:
 
         assert response.status_code == 404
 
+    @patch("launcher.vllm_manager")
+    def test_get_instance_logs_endpoint(self, mock_manager, client):
+        """Test getting instance logs via API"""
+        mock_manager.get_instance_logs.return_value = "Log line 1Log line 2Log line 3"
+
+        response = client.get("/v2/vllm/instances/test-id/log")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "log" in data
+        assert isinstance(data["log"], str)
+        assert "Log line 1" in data["log"]
+
+    @patch("launcher.vllm_manager")
+    def test_get_instance_logs_with_max_bytes(self, mock_manager, client):
+        """Test getting instance logs with max_bytes parameter"""
+        mock_manager.get_instance_logs.return_value = "Log 1Log 2"
+
+        response = client.get("/v2/vllm/instances/test-id/log?max_bytes=5000")
+
+        assert response.status_code == 200
+        mock_manager.get_instance_logs.assert_called_once_with("test-id", 0, 5000)
+
+    @patch("launcher.vllm_manager")
+    def test_get_instance_logs_nonexistent_endpoint(self, mock_manager, client):
+        """Test getting logs from nonexistent instance returns 404"""
+        mock_manager.get_instance_logs.side_effect = KeyError("not found")
+
+        response = client.get("/v2/vllm/instances/nonexistent-id/log")
+
+        assert response.status_code == 404
+
+    @patch("launcher.vllm_manager")
+    def test_get_instance_logs_range_not_available(self, mock_manager, client):
+        """Test getting logs with start_byte beyond available content.
+        Returns 416 with JSON body"""
+        mock_manager.get_instance_logs.side_effect = LogRangeNotAvailable(5000, 1000)
+
+        response = client.get("/v2/vllm/instances/test-id/log?start_byte=5000")
+
+        assert response.status_code == 416
+        data = response.json()
+        assert data["available_bytes"] == 1000
+
+
+# Tests for QueueWriter
+class TestQueueWriter:
+    def test_queue_writer_write_non_empty(self):
+        """Test QueueWriter writes non-empty messages to queue"""
+        from unittest.mock import MagicMock
+
+        mock_queue = MagicMock()
+        mock_queue.put_nowait.side_effect = None  # Simulate successful put
+        writer = QueueWriter(mock_queue, sys.stdout)
+
+        writer.write("Test message")
+
+        # Verify put_nowait was called with the message
+        mock_queue.put_nowait.assert_called_once_with("Test message")
+
+    def test_queue_writer_ignores_empty_messages(self):
+        """Test QueueWriter ignores empty/whitespace messages"""
+        from unittest.mock import MagicMock
+
+        mock_queue = MagicMock()
+        writer = QueueWriter(mock_queue, sys.stdout)
+
+        writer.write("")
+        writer.write("   ")
+        writer.write("\n")
+
+        # put should not have been called for empty messages
+        mock_queue.put.assert_not_called()
+
+    def test_queue_writer_flush(self):
+        """Test QueueWriter flush passes through to original stream"""
+        from unittest.mock import MagicMock
+
+        mock_queue = MagicMock()
+        mock_original = MagicMock()
+        writer = QueueWriter(mock_queue, mock_original)
+
+        writer.flush()
+
+        mock_original.flush.assert_called_once()
+
+
+# Tests for VllmInstance log functionality
+class TestVllmInstanceLogs:
+    @patch("launcher.multiprocessing.Process")
+    @patch("launcher.multiprocessing.Queue")
+    def test_get_logs_empty_queue(
+        self,
+        mock_queue_class,
+        mock_process_class,
+        vllm_config,
+        gpu_translator,
+    ):
+        """Test get_logs returns empty string when queue is empty"""
+        mock_process = MockProcess()
+        mock_process_class.return_value = mock_process
+
+        mock_queue = MagicMock()
+        mock_queue.empty.return_value = True
+        mock_queue_class.return_value = mock_queue
+
+        instance = VllmInstance("test-id", vllm_config, gpu_translator)
+        instance.start()
+
+        log_content = instance.get_logs()
+
+        assert log_content == ""
+
+    @patch("launcher.multiprocessing.Process")
+    @patch("launcher.multiprocessing.Queue")
+    def test_get_logs_with_messages(
+        self,
+        mock_queue_class,
+        mock_process_class,
+        vllm_config,
+        gpu_translator,
+    ):
+        """Test get_logs retrieves messages from queue"""
+        mock_process = MockProcess()
+        mock_process_class.return_value = mock_process
+
+        mock_queue = MagicMock()
+        mock_queue.empty.side_effect = [False, False, True]
+        mock_queue.get_nowait.side_effect = ["Log 1", "Log 2"]
+        mock_queue_class.return_value = mock_queue
+
+        instance = VllmInstance("test-id", vllm_config, gpu_translator)
+        instance.start()
+
+        log_content = instance.get_logs()
+
+        assert isinstance(log_content, str)
+        assert "Log 1" in log_content
+        assert "Log 2" in log_content
+
+    @patch("launcher.multiprocessing.Process")
+    @patch("launcher.multiprocessing.Queue")
+    def test_get_logs_respects_max_bytes(
+        self,
+        mock_queue_class,
+        mock_process_class,
+        vllm_config,
+        gpu_translator,
+    ):
+        """Test get_logs respects max_bytes parameter"""
+        mock_process = MockProcess()
+        mock_process_class.return_value = mock_process
+
+        mock_queue = MagicMock()
+        mock_queue.empty.side_effect = [False, False, False, True]
+        mock_queue.get_nowait.side_effect = ["A" * 50, "B" * 50, "C" * 50]
+        mock_queue_class.return_value = mock_queue
+
+        instance = VllmInstance("test-id", vllm_config, gpu_translator)
+        instance.start()
+
+        log_content = instance.get_logs(start_byte=0, max_bytes=100)
+
+        assert isinstance(log_content, str)
+        assert len(log_content.encode("utf-8")) <= 100
+
+    @patch("launcher.multiprocessing.Process")
+    def test_get_logs_no_queue(self, mock_process_class, vllm_config, gpu_translator):
+        """Test get_logs returns empty string when queue doesn't exist"""
+        instance = VllmInstance("test-id", vllm_config, gpu_translator)
+        # Don't start the instance, so output_queue is None
+
+        log_content = instance.get_logs()
+
+        assert log_content == ""
+
+    @patch("launcher.multiprocessing.Process")
+    @patch("launcher.multiprocessing.Queue")
+    def test_get_logs_buffer_persists_across_calls(
+        self,
+        mock_queue_class,
+        mock_process_class,
+        vllm_config,
+        gpu_translator,
+    ):
+        """Test that log buffer accumulates across multiple get_logs calls"""
+        mock_process = MockProcess()
+        mock_process_class.return_value = mock_process
+
+        mock_queue = MagicMock()
+        mock_queue_class.return_value = mock_queue
+
+        instance = VllmInstance("test-id", vllm_config, gpu_translator)
+        instance.start()
+
+        # First call: queue has some messages
+        mock_queue.empty.side_effect = [False, False, True]
+        mock_queue.get_nowait.side_effect = ["Hello ", "World"]
+        log_content = instance.get_logs(start_byte=0)
+        assert log_content == "Hello World"
+
+        # Second call: queue has new messages, buffer should have old + new
+        mock_queue.empty.side_effect = [False, True]
+        mock_queue.get_nowait.side_effect = ["!"]
+        log_content = instance.get_logs(start_byte=0)
+        assert log_content == "Hello World!"
+
 
 # Tests for Helper Functions
 class TestHelperFunctions:
@@ -633,6 +908,158 @@ class TestHelperFunctions:
         # Cleanup
         for key in test_vars.keys():
             del os.environ[key]
+
+    def test_max_queue_size_constant(self):
+        """Test that MAX_QUEUE_SIZE constant is defined"""
+        assert MAX_QUEUE_SIZE == 5000
+
+    def test_max_log_response_bytes_constant(self):
+        """Test that MAX_LOG_RESPONSE_BYTES constant is defined"""
+        assert MAX_LOG_RESPONSE_BYTES == 1 * 1024 * 1024  # 1 MB
+
+
+# Tests for VllmInstance log buffer behavior
+class TestLogBuffer:
+    """Test suite for VllmInstance buffer-based log retrieval"""
+
+    def _make_instance(self, gpu_translator):
+        """Helper to create a VllmInstance without starting a real process"""
+        config = VllmConfig(options="--model test --port 8000")
+        instance = VllmInstance("test-id", config, gpu_translator)
+        return instance
+
+    def test_basic_retrieval(self, gpu_translator):
+        """Test basic log retrieval"""
+        instance = self._make_instance(gpu_translator)
+        mock_queue = MagicMock()
+        mock_queue.empty.side_effect = [False, False, True]
+        mock_queue.get_nowait.side_effect = ["Test message 1", "Test message 2"]
+        instance.output_queue = mock_queue
+
+        log_content = instance.get_logs(start_byte=0, max_bytes=1000)
+        assert isinstance(log_content, str)
+        assert "Test message 1" in log_content
+        assert "Test message 2" in log_content
+
+    def test_empty_queue(self, gpu_translator):
+        """Test getting logs from empty queue"""
+        instance = self._make_instance(gpu_translator)
+        mock_queue = MagicMock()
+        mock_queue.empty.return_value = True
+        instance.output_queue = mock_queue
+
+        log_content = instance.get_logs(start_byte=0, max_bytes=1000)
+        assert log_content == ""
+
+    def test_byte_limit_enforcement(self, gpu_translator):
+        """Test that byte limit is enforced"""
+        instance = self._make_instance(gpu_translator)
+        mock_queue = MagicMock()
+        messages = [f"Message {i}" for i in range(10)]
+        mock_queue.empty.side_effect = [False] * 10 + [True]
+        mock_queue.get_nowait.side_effect = messages
+        instance.output_queue = mock_queue
+
+        log_content = instance.get_logs(start_byte=0, max_bytes=50)
+        assert isinstance(log_content, str)
+        assert len(log_content.encode("utf-8")) <= 50
+
+    def test_max_bytes_larger_than_content(self, gpu_translator):
+        """Test when max_bytes is larger than available content"""
+        instance = self._make_instance(gpu_translator)
+        mock_queue = MagicMock()
+        mock_queue.empty.side_effect = [False, False, True]
+        mock_queue.get_nowait.side_effect = ["Short", "Message"]
+        instance.output_queue = mock_queue
+
+        log_content = instance.get_logs(start_byte=0, max_bytes=10000)
+        assert isinstance(log_content, str)
+        assert "Short" in log_content
+        assert "Message" in log_content
+
+    def test_buffer_not_refilled_into_queue(self, gpu_translator):
+        """Test that messages are NOT put back into the queue (one-way pipe)"""
+        instance = self._make_instance(gpu_translator)
+        mock_queue = MagicMock()
+        mock_queue.empty.side_effect = [False, False, True]
+        mock_queue.get_nowait.side_effect = ["Message 1", "Message 2"]
+        instance.output_queue = mock_queue
+
+        instance.get_logs(start_byte=0, max_bytes=1000)
+
+        # put_nowait should NOT be called — queue is one-way
+        mock_queue.put_nowait.assert_not_called()
+
+    def test_unicode_handling(self, gpu_translator):
+        """Test handling of unicode characters"""
+        instance = self._make_instance(gpu_translator)
+        mock_queue = MagicMock()
+        mock_queue.empty.side_effect = [False, False, True]
+        mock_queue.get_nowait.side_effect = ["Hello 世界", "Test émojis 🚀"]
+        instance.output_queue = mock_queue
+
+        log_content = instance.get_logs(start_byte=0, max_bytes=1000)
+        assert isinstance(log_content, str)
+        assert "世界" in log_content
+        assert "🚀" in log_content
+
+    def test_partial_retrieval_with_byte_limit(self, gpu_translator):
+        """Test that only bytes within limit are returned"""
+        instance = self._make_instance(gpu_translator)
+        mock_queue = MagicMock()
+        mock_queue.empty.side_effect = [False, False, False, True]
+        mock_queue.get_nowait.side_effect = ["A" * 20, "B" * 20, "C" * 20]
+        instance.output_queue = mock_queue
+
+        log_content = instance.get_logs(start_byte=0, max_bytes=45)
+        assert log_content == "A" * 20 + "B" * 20 + "C" * 5
+
+    def test_start_byte_offset(self, gpu_translator):
+        """Test that start_byte returns bytes from exact position"""
+        instance = self._make_instance(gpu_translator)
+        mock_queue = MagicMock()
+        mock_queue.empty.side_effect = [False, False, False, True]
+        mock_queue.get_nowait.side_effect = ["A" * 10, "B" * 10, "C" * 10]
+        instance.output_queue = mock_queue
+
+        log_content = instance.get_logs(start_byte=15, max_bytes=100)
+        assert log_content == "B" * 5 + "C" * 10
+
+    def test_start_byte_at_message_boundary(self, gpu_translator):
+        """Test that start_byte at exact message boundary works correctly"""
+        instance = self._make_instance(gpu_translator)
+        mock_queue = MagicMock()
+        mock_queue.empty.side_effect = [False, False, False, True]
+        mock_queue.get_nowait.side_effect = ["A" * 10, "B" * 10, "C" * 10]
+        instance.output_queue = mock_queue
+
+        log_content = instance.get_logs(start_byte=10, max_bytes=100)
+        assert log_content == "B" * 10 + "C" * 10
+
+    def test_start_byte_beyond_available_raises_error(self, gpu_translator):
+        """Test that start_byte beyond available content raises LogRangeNotAvailable"""
+        instance = self._make_instance(gpu_translator)
+        mock_queue = MagicMock()
+        mock_queue.empty.side_effect = [False, False, True]
+        mock_queue.get_nowait.side_effect = ["A" * 10, "B" * 10]
+        instance.output_queue = mock_queue
+
+        with pytest.raises(LogRangeNotAvailable) as exc_info:
+            instance.get_logs(start_byte=50, max_bytes=100)
+
+        assert exc_info.value.start_byte == 50
+        assert exc_info.value.available_bytes == 20
+
+    def test_start_byte_equal_to_length_returns_empty(self, gpu_translator):
+        """Test that start_byte equal to log length returns empty string"""
+        instance = self._make_instance(gpu_translator)
+        mock_queue = MagicMock()
+        mock_queue.empty.side_effect = [False, True]
+        mock_queue.get_nowait.side_effect = ["A" * 10]
+        instance.output_queue = mock_queue
+
+        log_content = instance.get_logs(start_byte=10, max_bytes=100)
+        assert log_content == ""
 
 
 if __name__ == "__main__":

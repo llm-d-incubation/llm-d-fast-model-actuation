@@ -28,6 +28,7 @@ The launcher preloads vLLM’s Python modules to accelerate the initialization o
 - **Environment Variable Support**: Set custom environment variables per instance
 - **Graceful Shutdown**: Proper termination with configurable timeout and force-kill fallback
 - **Status Monitoring**: Query status of individual instances or all instances at once
+- **Log Capture**: Retrieve stdout/stderr logs from running instances via REST API
 - **Health Checks**: Built-in health endpoint for monitoring service availability
 
 > [!NOTE]
@@ -130,7 +131,7 @@ make build-and-push-launcher CONTAINER_IMG_REG=$CONTAINER_IMG_REG
 ### 1. Start the Launcher Service
 
 ```bash
-python vllm_launcher.py
+python launcher.py
 ```
 
 The service will start on `http://0.0.0.0:8001`
@@ -209,6 +210,7 @@ Get service information and available endpoints.
     "delete_all_instances": "DELETE /v2/vllm/instances",
     "get_instance_status": "GET /v2/vllm/instances/{instance_id}",
     "get_all_instances": "GET /v2/vllm/instances",
+    "get_instance_logs": "GET /v2/vllm/instances/{instance_id}/log"
   }
 }
 ```
@@ -311,6 +313,40 @@ Stop and delete a specific vLLM instance.
 **Error Responses:**
 
 - `404 Not Found`: Instance not found
+
+---
+
+#### Get Instance Logs
+
+**GET** `/v2/vllm/instances/{instance_id}/log`
+
+Retrieve stdout/stderr logs from a specific vLLM instance starting from a specific byte position.
+
+**Path Parameters:**
+
+- `instance_id`: ID of the instance
+
+**Query Parameters:**
+
+- `start_byte` (optional): Byte position to start reading from (default: 0, minimum: 0). The largest valid value is the total number of bytes captured so far (i.e., the length of the log). Use this to continue reading from where you left off.
+- `max_bytes` (optional): Maximum bytes of log data to retrieve from start_byte (default: 1048576 (1 MB), range: 1024-10485760 (10 MB))
+
+**Response (200 OK):**
+
+```json
+{
+  "log": "INFO: Started server process\nINFO: Waiting for application startup\nINFO: Application startup complete\n"
+}
+```
+
+**Response Fields:**
+
+- `log`: Log content as a single string. Since `start_byte` is a byte offset but the JSON response contains unicode characters, the client must encode the string back to UTF-8 to compute the correct byte length for the next `start_byte` (e.g., `start_byte + len(log.encode("utf-8"))` in Python). Using the character length directly will produce incorrect offsets if the log contains multi-byte characters.
+
+**Error Responses:**
+
+- `404 Not Found`: Instance not found
+- `416 Range Not Satisfiable`: The requested `start_byte` is beyond available log content. The response includes a `Content-Range: bytes */N` header (per [RFC 9110 §15.5.17](https://www.rfc-editor.org/rfc/rfc9110#status.416)) and a JSON body: `{"available_bytes": N}`, where `N` is the total number of bytes captured so far (i.e., the largest valid value of `start_byte`).
 
 ---
 
@@ -485,6 +521,42 @@ curl -X POST http://localhost:8001/v2/vllm/instances \
 curl http://localhost:8001/v2/vllm/instances
 ```
 
+### Example 5: Retrieve Instance Logs
+
+```bash
+# Get up to 1 MB of logs from the beginning (default)
+curl http://localhost:8001/v2/vllm/instances/abc123.../log
+
+# Get up to 500 KB of logs from the beginning
+curl "http://localhost:8001/v2/vllm/instances/abc123.../log?max_bytes=512000"
+
+# Continue reading from where you left off (streaming logs)
+# First request - get initial logs
+curl "http://localhost:8001/v2/vllm/instances/abc123.../log?start_byte=0&max_bytes=1048576"
+# To continue, use start_byte + len(log.encode("utf-8")) as the next start_byte
+# (encode to UTF-8 first to get byte length, not character length)
+
+# Second request - get next chunk
+curl "http://localhost:8001/v2/vllm/instances/abc123.../log?start_byte=1048576&max_bytes=1048576"
+
+# Third request - continue from new position
+curl "http://localhost:8001/v2/vllm/instances/abc123.../log?start_byte=2097152&max_bytes=1048576"
+```
+
+**How `start_byte` Works:**
+
+The log is treated as a flat byte stream. The `start_byte` parameter specifies the exact byte offset to begin reading from, and `max_bytes` limits how many bytes are returned:
+
+```
+Example: 30 bytes of log content
+
+start_byte=0              → Returns bytes [0, max_bytes)
+start_byte=15             → Returns bytes [15, 15 + max_bytes)
+start_byte=15, max_bytes=5 → Returns bytes [15, 20)
+```
+
+To stream logs, use `start_byte + len(log.encode("utf-8"))` as the `start_byte` for the next request, since `start_byte` is a byte offset and the JSON response contains unicode characters.
+
 ## Configuration
 
 ### vLLM Options
@@ -557,6 +629,7 @@ Represents a single vLLM instance with its process and configuration.
 - `start()`: Start the vLLM process
 - `stop(timeout=10)`: Stop the vLLM process gracefully (or force kill after timeout)
 - `get_status()`: Get detailed status information
+- `get_logs(start_byte=0, max_bytes=1048576)`: Retrieve logs from the instance starting from a byte position
 
 #### `VllmMultiProcessManager`
 
@@ -569,6 +642,7 @@ Manages multiple VllmInstance objects.
 - `stop_all_instances(timeout=10)`: Stop all running instances
 - `get_instance_status(instance_id)`: Get status of a specific instance
 - `get_all_instances_status()`: Get status of all instances
+- `get_instance_logs(instance_id, start_byte=0, max_bytes=1048576)`: Retrieve logs from a specific instance starting from a byte position
 
 ## Best Practices
 
@@ -622,7 +696,40 @@ Be mindful of system resources:
 - **CPU**: vLLM uses CPU for pre/post-processing
 - **Disk**: Models are cached in the container's filesystem
 
-### 5. Testing
+### 5. Log Management
+
+The launcher captures stdout/stderr from each vLLM instance using a multiprocessing queue that feeds into a persistent in-memory byte buffer (`_log_buffer`) per instance:
+
+- **Architecture**: A `QueueWriter` in the child process sends messages to a bounded queue (`MAX_QUEUE_SIZE = 5000` messages, a Python constant defined in `launcher.py`). On read, the launcher drains the queue into the instance's `_log_buffer`, which accumulates all log bytes.
+- **Byte-Based Retrieval**: The `start_byte` parameter is a byte offset into the accumulated buffer. The `max_bytes` parameter limits how many bytes are returned per request.
+- **Queue Overflow**: When the queue is full, new messages are dropped (non-blocking put). Messages already drained into the buffer are preserved.
+- **Non-blocking**: Log capture doesn't slow down the vLLM process.
+- **Streaming Support**: Use `start_byte` parameter to efficiently stream logs without re-reading.
+
+**Best Practices:**
+
+- **Streaming Logs**: Use `start_byte` to efficiently stream logs. Since `start_byte` is a byte offset but the JSON response contains unicode characters, compute the byte length by encoding the string back to UTF-8:
+
+  ```python
+  # Python example
+  import requests
+
+  start_byte = 0
+  while True:
+      resp = requests.get(f"http://localhost:8001/v2/vllm/instances/id/log?start_byte={start_byte}")
+      log = resp.json()["log"]
+      if not log:
+          break
+      start_byte += len(log.encode("utf-8"))
+  ```
+
+- **Polling**: Track `start_byte + len(log.encode("utf-8"))` between requests to only fetch new log content
+- **Memory Efficiency**: Use `max_bytes` parameter to limit response size (default: 1 MB, max: 10 MB)
+- **Data Loss**: Logs are lost when an instance is deleted
+- **Production**: Consider external logging solutions for long-term storage and analysis
+- **Byte Tracking**: The `start_byte` position is relative to all logs ever captured, not just current queue content
+
+### 6. Testing
 
 Test with small models first:
 
