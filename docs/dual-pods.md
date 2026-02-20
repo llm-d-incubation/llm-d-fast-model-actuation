@@ -86,11 +86,10 @@ is not yet supported.
 
 ## Design
 
-Note: this document currently focuses on the design for the second of
-three milestones.
-
-Defining limitation of milestone 2: No use of the launcher. Each
-server-providing Pod runs just one vLLM instance.
+Note: this document covers the design for milestones 2 and 3.
+Milestone 2 (vLLM sleep/wake without the launcher) is finished.
+Milestone 3 (launcher-based model swapping) is under implementation;
+see [launcher](launcher.md) for details on the launcher API.
 
 ### Drawing
 
@@ -508,8 +507,7 @@ ConfigMap is populated with the needed information. The dual-pods
 controller reads the mapping from GPU UUID to index from that
 ConfigMap.
 
-This will change in milestone 3. The launcher will read the
-UUIDs of the GPUs on its node, and the request to launch a vLLM
-instance will carry the list of assigned GPU UUIDs. The launcher will
-translate from UUID to index and put the list of indices in the vLLM
-container's CUDA_VISIBLE_DEVICES.
+In milestone 3, the launcher reads the UUIDs of the GPUs on its node,
+and the request to launch a vLLM instance carries the list of assigned
+GPU UUIDs. The launcher translates from UUID to index and puts the
+list of indices in the vLLM container's CUDA_VISIBLE_DEVICES.
