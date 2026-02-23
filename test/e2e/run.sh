@@ -24,14 +24,14 @@ function expect() {
     local start=$(date)
     local limit=${LIMIT:-45}
     while true; do
-	kubectl get pods -L dual-pods.llm-d.ai/dual,dual-pods.llm-d.ai/sleeping
-	if eval "$1"; then return; fi
-	if (( elapsed > limit )); then
-	    echo "Did not become true (from $start to $(date)): $1" >&2
+        kubectl get pods -L dual-pods.llm-d.ai/dual,dual-pods.llm-d.ai/sleeping
+        if eval "$1"; then return; fi
+        if (( elapsed > limit )); then
+            echo "Did not become true (from $start to $(date)): $1" >&2
             exit 99
-	fi
-	sleep 5
-	elapsed=$(( elapsed+5 ))
+        fi
+        sleep 5
+        elapsed=$(( elapsed+5 ))
     done
 }
 
@@ -135,17 +135,6 @@ fi
 ctlr_img=$(make echo-var VAR=CONTROLLER_IMG)
 
 helm upgrade --install dpctlr charts/dual-pods-controller --set Image="$ctlr_img" --set NodeViewClusterRole=node-viewer --set SleeperLimit=2 --set Local=true --set DebugAcceleratorMemory=false --set EnableValidationPolicy=${POLICIES_ENABLED}
-
-: Test CEL policy verification if enabled
-
-if [ "${POLICIES_ENABLED}" = true ]; then
-  sleep 15 # A short sleep to wait for the bindings to exist before running the validation tests
-  if ! test/e2e/validate.sh; then
-    echo "ERROR: CEL policy tests failed!" >&2
-    exit 1
-  fi
-  cheer CEL policy checks passed
-fi
 
 : Test Pod creation
 

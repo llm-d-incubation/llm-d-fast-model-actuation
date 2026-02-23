@@ -23,14 +23,14 @@ function expect() {
     local start=$(date)
     local limit=${LIMIT:-600}
     while true; do
-	kubectl get pods -L dual-pods.llm-d.ai/dual,dual-pods.llm-d.ai/sleeping
-	if eval "$1"; then return; fi
-	if (( elapsed > limit )); then
-	    echo "Did not become true (from $start to $(date)): $1" >&2
+        kubectl get pods -L dual-pods.llm-d.ai/dual,dual-pods.llm-d.ai/sleeping
+        if eval "$1"; then return; fi
+        if (( elapsed > limit )); then
+            echo "Did not become true (from $start to $(date)): $1" >&2
             exit 99
-	fi
-	sleep 5
-	elapsed=$(( elapsed+5 ))
+        fi
+        sleep 5
+        elapsed=$(( elapsed+5 ))
     done
 }
 
@@ -161,12 +161,12 @@ instlb=${rslb#my-request-}
 # Expect requester pod to be created
 expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | grep -c '^pod/' | grep -w 1"
 
-reqlb=$(kubectl get pods -o name -l app=dp-example,instance=$instlb | sed s%pod/%%)
+export reqlb=$(kubectl get pods -o name -l app=dp-example,instance=$instlb | sed s%pod/%%)
 
 # Expect launcher pod to be created (not a direct provider)
 expect "kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | grep -c '^pod/' | grep -w 1"
 
-launcherlb=$(kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | sed s%pod/%%)
+export launcherlb=$(kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | sed s%pod/%%)
 
 # Verify requester is bound to launcher
 expect '[ "$(kubectl get pod $reqlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcherlb" ]'
@@ -180,6 +180,16 @@ kubectl wait --for condition=Ready pod/$reqlb --timeout=60s
 kubectl wait --for condition=Ready pod/$launcherlb --timeout=60s
 
 cheer Successful launcher-based pod creation
+
+: Test CEL policy verification if enabled
+
+if [ "${POLICIES_ENABLED}" = true ]; then
+  if ! test/e2e/validate.sh; then
+    echo "ERROR: CEL policy tests failed!" >&2
+    exit 1
+  fi
+  cheer CEL policy checks passed
+fi
 
 : Instance Wake-up Fast Path
 

@@ -503,63 +503,132 @@ Ensure the Helm chart has installed the policy objects:
 kubectl get validatingadmissionpolicy fma-immutable-fields fma-bound-serverreqpod
 ```
 
-Create an example server-requesting Pod (without the `dual` label - the controller will set it):
+Create examples of an inference server config and a launcher config:
 
 ```shell
 kubectl apply -f - <<EOF
-apiVersion: v1
-kind: Pod
+apiVersion: fma.llm-d.ai/v1alpha1
+kind: InferenceServerConfig
 metadata:
-  name: my-requester-test
-  labels:
-    app: dp-example
-  annotations:
-    dual-pods.llm-d.ai/inference-server-config: "test-config"
+  name: my-is-config
 spec:
-  containers:
-  - name: requester
-    image: busybox
-    command: ["/bin/sh","-c","sleep 3600"]
+  modelServerConfig:
+    port: 8005
+    options: "--model TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+    env_vars:
+      VLLM_SERVER_DEV_MODE: "1"
+      VLLM_USE_V1: "1"
+      VLLM_LOGGING_LEVEL: "DEBUG"
+    labels:
+      component: inference
+    annotations:
+      description: "Example InferenceServerConfig"
+  launcherConfigName: my-launcher-config
+---
+apiVersion: fma.llm-d.ai/v1alpha1
+kind: LauncherConfig
+metadata:
+  name: my-launcher-config
+spec:
+  maxSleepingInstances: 3
+  podTemplate:
+    spec:
+      containers:
+        - name: inference-server
+          image: ${CONTAINER_IMG_REG}/launcher:latest
+          imagePullPolicy: IfNotPresent
+          command:
+          - /bin/bash
+          - "-c"
+          args:
+          - |
+            uvicorn launcher:app \
+            --host 0.0.0.0 \
+            --log-level info \
+            --port 8001
 EOF
 ```
 
-Get the UID of the server-requesting Pod:
-
-```shell
-REQUESTER_UID=$(kubectl get pod my-requester-test -o jsonpath='{.metadata.uid}')
-```
-
-Create an example launcher Pod bound to the server-requesting Pod:
+Create a ReplicaSet of server-requesting Pods
 
 ```shell
 kubectl apply -f - <<EOF
-apiVersion: v1
-kind: Pod
+apiVersion: apps/v1
+kind: ReplicaSet
 metadata:
-  name: my-launcher-test
+  name: my-requester-example
   labels:
-    app: dp-example
-    dual-pods.llm-d.ai/dual: "my-requester-test"
-  annotations:
-    dual-pods.llm-d.ai/requester: "${REQUESTER_UID} my-requester-test"
+    app: validation-example
 spec:
-  containers:
-  - name: launcher
-    image: busybox
-    command: ["/bin/sh","-c","sleep 3600"]
+  replicas: 1
+  selector:
+    matchLabels:
+      app: validation-example
+  template:
+    metadata:
+      labels:
+        app: validation-example
+      annotations:
+        dual-pods.llm-d.ai/admin-port: "8081"
+        dual-pods.llm-d.ai/inference-server-config: my-is-config
+    spec:
+      containers:
+        - name: inference-server
+          image: ${CONTAINER_IMG_REG}/requester:latest
+          imagePullPolicy: IfNotPresent
+          command:
+          - /app/requester
+          ports:
+          - name: probes
+            containerPort: 8080
+          - name: spi
+            containerPort: 8081
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            limits:
+              nvidia.com/gpu: "1"
+              cpu: "200m"
+              memory: 250Mi
 EOF
 ```
 
-Wait for the controller to set the `dual` label on the requester pod.
-
-Verify user-initiated annotation changes on the launcher are rejected with an error:
-
 ```shell
-kubectl annotate pod my-launcher-test "dual-pods.llm-d.ai/requester=patched" --overwrite
+# Wait for requester pod to be created
+kubectl wait --for=jsonpath='{.items[0].metadata.name}' pods -l app=validation-example --timeout=60s
+
+# Get the requester pod name
+REQUESTER_POD_NAME=$(kubectl get pods -l app=validation-example -o jsonpath='{.items[0].metadata.name}')
+
+# Wait for launcher pod to be created
+kubectl wait --for=jsonpath='{.items[0].metadata.name}' pods -l dual-pods.llm-d.ai/launcher-config-name=my-launcher-config --timeout=60s
+
+# Get the launcher pod name
+LAUNCHER_POD_NAME=$(kubectl get pods -l dual-pods.llm-d.ai/launcher-config-name=my-launcher-config -o jsonpath='{.items[0].metadata.name}')
 ```
 
-Verify user-initiated annotation changes on the server-requesting Pod are rejected with an error:
+Wait for the dual-pods controller to establish binding:
 
 ```shell
-kubectl annotate pod my-requester-test "dual-pods.llm-d.ai/inference-server-config=patched-config" --overwrite
+kubectl wait --for=jsonpath="{.metadata.labels.dual-pods\.llm-d\.ai/dual}"="${LAUNCHER_POD_NAME}" pod/${REQUESTER_POD_NAME} --timeout=60s
+```
+
+Now verify that protected annotations and labels cannot be modified:
+
+```shell
+# This should fail - attempting to change immutable annotation on launcher
+kubectl annotate pod ${LAUNCHER_POD_NAME} "dual-pods.llm-d.ai/requester=patched" --overwrite
+
+# This should fail - attempting to change immutable label on launcher
+kubectl label pod ${LAUNCHER_POD_NAME} "dual-pods.llm-d.ai/dual=patched-pod" --overwrite
+
+# This should fail - attempting to change immutable annotation on bound requester
+kubectl annotate pod ${REQUESTER_POD_NAME} "dual-pods.llm-d.ai/inference-server-config=patched-config" --overwrite
+
+# This should succeed - changing non-protected label on bound requester
+kubectl label pod ${REQUESTER_POD_NAME} "regular-label=yes" --overwrite
 ```
