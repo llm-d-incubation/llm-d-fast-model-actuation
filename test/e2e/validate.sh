@@ -1,33 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-function expect() {
-    local elapsed=0
-    local start=$(date)
-    local limit=${LIMIT:-600}
-    while true; do
-	kubectl get pods -L dual-pods.llm-d.ai/dual,dual-pods.llm-d.ai/sleeping
-	if eval "$1"; then return; fi
-	if (( elapsed > limit )); then
-	    echo "Did not become true (from $start to $(date)): $1" >&2
-            exit 99
-	fi
-	sleep 5
-	elapsed=$(( elapsed+5 ))
-    done
-}
+# Test script for ValidatingAdmissionPolicy CEL rules
 
 cleanup() {
   echo "Cleaning up test resources"
-  if [ -n "${rslb:-}" ]; then
-    kubectl delete replicaset "${rslb}" --ignore-not-found || true
-  fi
-  if [ -n "${isc:-}" ]; then
-    kubectl delete inferenceserverconfig "${isc}" --ignore-not-found || true
-  fi
-  if [ -n "${lc:-}" ]; then
-    kubectl delete launcherconfig "${lc}" --ignore-not-found || true
-  fi
   kubectl delete pod "${POD_NAME}" --ignore-not-found || true
   kubectl delete pod "${UNBOUND_REQUESTER_POD_NAME}" --ignore-not-found || true
 }
@@ -35,7 +12,6 @@ cleanup() {
 # Trap EXIT to run cleanup
 trap 'rc=$?; cleanup; exit $rc' EXIT
 
-# Test script for ValidatingAdmissionPolicy CEL rules
 POD_NAME=${POD_NAME:-my-regular-test}
 UNBOUND_REQUESTER_POD_NAME=${UNBOUND_REQUESTER_POD_NAME:-my-unbound-requester-test}
 
@@ -44,32 +20,11 @@ if ! kubectl get validatingadmissionpolicy fma-immutable-fields fma-bound-server
   exit 1
 fi
 
-objs=$(test/e2e/mkobjs.sh)
-isc=$(echo $objs | awk '{print $1}')
-lc=$(echo $objs | awk '{print $2}')
-rslb=$(echo $objs | awk '{print $3}')
-instlb=${rslb#my-request-}
-
-# Expect requester pod to be created
-expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | grep -c '^pod/' | grep -w 1"
-
-reqlb=$(kubectl get pods -o name -l app=dp-example,instance=$instlb | sed s%pod/%%)
-
-# Expect launcher pod to be created (not a direct provider)
-expect "kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | grep -c '^pod/' | grep -w 1"
-
-launcherlb=$(kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | sed s%pod/%%)
-
-# Verify requester is bound to launcher
-expect '[ "$(kubectl get pod $reqlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcherlb" ]'
-
-# Verify launcher is bound to requester
-expect '[ "$(kubectl get pod $launcherlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$reqlb" ]'
-
-# Wait for both pods to be ready
-date
-kubectl wait --for condition=Ready pod/$reqlb --timeout=60s
-kubectl wait --for condition=Ready pod/$launcherlb --timeout=60s
+# Verify required variables are set
+if [ -z "${reqlb:-}" ] || [ -z "${launcherlb:-}" ]; then
+  echo "ERROR: This script must be called from run-launcher-based.sh"
+  exit 1
+fi
 
 echo "=== Running ValidatingAdmissionPolicy Tests ==="
 
@@ -135,7 +90,7 @@ kind: Pod
 metadata:
   name: ${UNBOUND_REQUESTER_POD_NAME}
   annotations:
-    dual-pods.llm-d.ai/inference-server-config: "unbound-config"
+    dual-pods.llm-d.ai/inference-server-config: unbound-config
 spec:
   containers:
   - name: inference-server

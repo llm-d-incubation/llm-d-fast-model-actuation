@@ -506,7 +506,7 @@ kubectl get validatingadmissionpolicy fma-immutable-fields fma-bound-serverreqpo
 Create examples of an inference server config and a launcher config:
 
 ```shell
-cat <<EOF | kubectl apply -f -
+kubectl apply -f - <<EOF
 apiVersion: fma.llm-d.ai/v1alpha1
 kind: InferenceServerConfig
 metadata:
@@ -549,7 +549,7 @@ spec:
 EOF
 ```
 
-Create a server-requesting Pod as a ReplicaSet:
+Create a ReplicaSet of server-requesting Pods
 
 ```shell
 kubectl apply -f - <<EOF
@@ -570,7 +570,7 @@ spec:
         app: validation-example
       annotations:
         dual-pods.llm-d.ai/admin-port: "8081"
-        dual-pods.llm-d.ai/inference-server-config: "my-is-config"
+        dual-pods.llm-d.ai/inference-server-config: my-is-config
     spec:
       containers:
         - name: inference-server
@@ -598,6 +598,9 @@ EOF
 ```
 
 ```shell
+# Wait for requester pod to be created
+kubectl wait --for=jsonpath='{.items[0].metadata.name}' pods -l app=validation-example --timeout=60s
+
 # Get the requester pod name
 REQUESTER_POD_NAME=$(kubectl get pods -l app=validation-example -o jsonpath='{.items[0].metadata.name}')
 

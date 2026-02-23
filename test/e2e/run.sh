@@ -24,14 +24,14 @@ function expect() {
     local start=$(date)
     local limit=${LIMIT:-45}
     while true; do
-	kubectl get pods -L dual-pods.llm-d.ai/dual,dual-pods.llm-d.ai/sleeping
-	if eval "$1"; then return; fi
-	if (( elapsed > limit )); then
-	    echo "Did not become true (from $start to $(date)): $1" >&2
+        kubectl get pods -L dual-pods.llm-d.ai/dual,dual-pods.llm-d.ai/sleeping
+        if eval "$1"; then return; fi
+        if (( elapsed > limit )); then
+            echo "Did not become true (from $start to $(date)): $1" >&2
             exit 99
-	fi
-	sleep 5
-	elapsed=$(( elapsed+5 ))
+        fi
+        sleep 5
+        elapsed=$(( elapsed+5 ))
     done
 }
 
