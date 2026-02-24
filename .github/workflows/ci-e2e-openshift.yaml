@@ -248,7 +248,6 @@ jobs:
     outputs:
       image_tag: ${{ steps.build.outputs.image_tag }}
       controller_image: ${{ steps.build.outputs.controller_image }}
-      populator_image: ${{ steps.build.outputs.populator_image }}
       test_requester_image: ${{ steps.build.outputs.test_requester_image }}
       test_launcher_image: ${{ steps.build.outputs.test_launcher_image }}
     steps:
@@ -295,12 +294,12 @@ jobs:
           # Build controller (ko)
           make build-controller \
             CONTAINER_IMG_REG="$CONTAINER_IMG_REG" \
-            CONTROLLER_IMG_TAG="$IMAGE_TAG"
+            IMAGE_TAG="$IMAGE_TAG"
 
           # Build launcher-populator (ko)
           make build-populator \
             CONTAINER_IMG_REG="$CONTAINER_IMG_REG" \
-            POPULATOR_IMG_TAG="$IMAGE_TAG"
+            IMAGE_TAG="$IMAGE_TAG"
 
           # Build test-requester (ko)
           KO_DOCKER_REPO="$CONTAINER_IMG_REG" \
@@ -314,7 +313,6 @@ jobs:
 
           echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
           echo "controller_image=${CONTAINER_IMG_REG}/dual-pods-controller:${IMAGE_TAG}" >> $GITHUB_OUTPUT
-          echo "populator_image=${CONTAINER_IMG_REG}/launcher-populator:${IMAGE_TAG}" >> $GITHUB_OUTPUT
           echo "test_requester_image=${CONTAINER_IMG_REG}/test-requester:${IMAGE_TAG}" >> $GITHUB_OUTPUT
           echo "test_launcher_image=${CONTAINER_IMG_REG}/test-launcher:${IMAGE_TAG}" >> $GITHUB_OUTPUT
           echo "All images built and pushed"
@@ -332,7 +330,6 @@ jobs:
       FMA_RELEASE_NAME: fma-e2e-${{ github.run_id }}
       # Use the images built in the previous job
       CONTROLLER_IMAGE: ${{ needs.build-image.outputs.controller_image }}
-      POPULATOR_IMAGE: ${{ needs.build-image.outputs.populator_image }}
       TEST_REQUESTER_IMAGE: ${{ needs.build-image.outputs.test_requester_image }}
       TEST_LAUNCHER_IMAGE: ${{ needs.build-image.outputs.test_launcher_image }}
     steps:
@@ -386,8 +383,7 @@ jobs:
 
           # Clean up cluster-scoped resources from previous runs
           echo "Cleaning up cluster-scoped resources..."
-          kubectl delete clusterrolebinding -l app.kubernetes.io/name=dual-pods --ignore-not-found 2>/dev/null || true
-          kubectl delete clusterrolebinding -l app.kubernetes.io/name=launcher-populator --ignore-not-found 2>/dev/null || true
+          kubectl delete clusterrolebinding -l app.kubernetes.io/name=fma-controllers --ignore-not-found 2>/dev/null || true
           kubectl delete clusterrole fma-node-viewer --ignore-not-found || true
 
           # Clean up ValidatingAdmissionPolicy resources (cluster-scoped, created by dual-pods-controller chart)
@@ -549,37 +545,6 @@ jobs:
 
           echo ""
           echo "Controller health check passed"
-
-      - name: Deploy launcher-populator
-        env:
-          POPULATOR_RELEASE: fma-populator-${{ github.run_id }}
-        run: |
-          echo "Deploying launcher-populator..."
-          echo "  Image: $POPULATOR_IMAGE"
-
-          helm upgrade --install "$POPULATOR_RELEASE" charts/fma-controllers \
-            -n "$FMA_NAMESPACE" \
-            --set global.imageRegistry="${POPULATOR_IMAGE%/launcher-populator:*}" \
-            --set global.imageTag="${POPULATOR_IMAGE##*:}" \
-            --set global.nodeViewClusterRole=fma-node-viewer \
-            --set dualPodsController.enabled=false \
-            --set launcherPopulator.pullPolicy=Always
-
-          echo "Waiting for launcher-populator to be ready..."
-          if ! kubectl wait --for=condition=available --timeout=120s \
-            deployment "$POPULATOR_RELEASE-launcher-populator" -n "$FMA_NAMESPACE"; then
-            echo "::error::Launcher-populator failed to become ready"
-            echo "=== Pod status ==="
-            kubectl get pods -n "$FMA_NAMESPACE" -l app.kubernetes.io/component=launcher-populator -o wide
-            echo "=== Pod describe ==="
-            kubectl describe pod -n "$FMA_NAMESPACE" -l app.kubernetes.io/component=launcher-populator
-            echo "=== Events ==="
-            kubectl get events -n "$FMA_NAMESPACE" --sort-by='.lastTimestamp' | tail -20
-            exit 1
-          fi
-
-          echo "Launcher-populator deployed and ready"
-          kubectl get pods -n "$FMA_NAMESPACE" -l app.kubernetes.io/component=launcher-populator
 
       - name: Set up test RBAC
         run: |
@@ -809,11 +774,9 @@ jobs:
               kubectl get pods -n "$FMA_NAMESPACE" -o wide
               kubectl get events -n "$FMA_NAMESPACE" --sort-by='.lastTimestamp' | tail -20
               echo "=== Controller logs ==="
-              kubectl logs deployment/"$FMA_RELEASE_NAME" -n "$FMA_NAMESPACE" --tail=50 || true
+              kubectl logs deployment/"$FMA_RELEASE_NAME-dual-pods-controller" -n "$FMA_NAMESPACE" --tail=50 || true
               echo "=== Test-requester logs ==="
               kubectl logs "$REQUESTER" -n "$FMA_NAMESPACE" --tail=50 || true
-              echo "=== Launcher-populator logs ==="
-              kubectl logs deployment/fma-populator-${{ github.run_id }}-launcher-populator -n "$FMA_NAMESPACE" --tail=50 || true
               echo "=== gpu-map contents ==="
               kubectl get configmap gpu-map -n "$FMA_NAMESPACE" -o yaml || true
               echo "=== gpu-allocs contents ==="
@@ -900,7 +863,6 @@ jobs:
           # Delete cluster-scoped resources
           kubectl delete clusterrole fma-node-viewer --ignore-not-found || true
           kubectl delete clusterrolebinding "$FMA_RELEASE_NAME-node-view" --ignore-not-found || true
-          kubectl delete clusterrolebinding launcher-populator-node-view --ignore-not-found || true
           kubectl delete clusterrolebinding "testreq-view-${FMA_NAMESPACE}" --ignore-not-found || true
 
           # Delete ValidatingAdmissionPolicy resources (cluster-scoped)
@@ -929,10 +891,6 @@ jobs:
           echo "=== Dual Pods controller logs ==="
           kubectl logs deployment/"$FMA_RELEASE_NAME-dual-pods-controller" -n "$FMA_NAMESPACE" --previous 2>/dev/null || true
           kubectl logs deployment/"$FMA_RELEASE_NAME-dual-pods-controller" -n "$FMA_NAMESPACE" 2>/dev/null || true
-          echo ""
-          echo "=== Launcher-populator controller logs ==="
-          kubectl logs deployment/"$FMA_RELEASE_NAME-launcher-populator" -n "$FMA_NAMESPACE" --previous 2>/dev/null || true
-          kubectl logs deployment/"$FMA_RELEASE_NAME-launcher-populator" -n "$FMA_NAMESPACE" 2>/dev/null || true
 
   # Report status back to PR for issue_comment triggered runs
   # This ensures fork PRs show the correct status after /ok-to-test runs complete
