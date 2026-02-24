@@ -866,8 +866,9 @@ jobs:
           kubectl delete namespace "$FMA_NAMESPACE" \
             --ignore-not-found --timeout=120s || true
 
-          # NOTE: CRDs are NOT deleted here because they are cluster-scoped and shared
-          # across multiple concurrent test runs. The apply --server-side in setup is idempotent.
+          # NOTE: CRDs are intentionally NOT deleted here.
+          # They are cluster-scoped and shared across test runs. Deleting them
+          # would disrupt other concurrent E2E tests on the same cluster.
 
           # Delete cluster-scoped resources
           kubectl delete clusterrole fma-node-viewer --ignore-not-found || true
