@@ -38,12 +38,12 @@ jobs:
   run-launcher-test:
     runs-on: ubuntu-22.04-arm
     steps:
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
         with:
           go-version: '1.24.2'
 
       - name: Install ko
-        uses: ko-build/setup-ko@v0.8
+        uses: ko-build/setup-ko@d006021bd0c28d1ce33a07e7943d48b079944c8d # v0.9
         with:
           version: v0.15.2
 
