@@ -28,13 +28,8 @@ spec:
         command:
         - /ko-app/dual-pods-controller
         - "-v=5"
-        - "--namespace=$(POD_NAMESPACE)"
+        - "--namespace={{ .Release.Namespace }}"
         - "--sleeper-limit={{ .Values.dualPodsController.sleeperLimit }}"
         - "--debug-accelerator-memory={{ .Values.dualPodsController.debugAcceleratorMemory }}"
-        env:
-        - name: POD_NAMESPACE
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.namespace
-      serviceAccountName: fma-controller
+      serviceAccountName: {{ .Release.Name }}-controller
 {{- end }}

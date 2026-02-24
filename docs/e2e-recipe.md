@@ -55,7 +55,7 @@ can see that tag in the last line of the output). Continuing the above
 example, that would go as follows.
 
 ```shell
-CONTROLLER_IMG_TAG=b699bc6 # JUST AN EXAMPLE - USE WHAT YOU BUILT
+IMAGE_TAG=b699bc6 # JUST AN EXAMPLE - USE WHAT YOU BUILT
 ```
 
 Instantiate the Helm chart for the FMA controllers. This deploys both
@@ -80,7 +80,7 @@ old Helm chart instance before re-making it.
 ```shell
 helm upgrade --install fma charts/fma-controllers \
   --set global.imageRegistry="${CONTAINER_IMG_REG}" \
-  --set global.imageTag="${CONTROLLER_IMG_TAG}" \
+  --set global.imageTag="${IMAGE_TAG}" \
   --set global.nodeViewClusterRole=vcp-node-viewer \
   --set dualPodsController.sleeperLimit=1 \
   --set global.enableValidationPolicy=${POLICIES_ENABLED}

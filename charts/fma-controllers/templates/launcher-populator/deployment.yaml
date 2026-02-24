@@ -21,19 +21,14 @@ spec:
         app.kubernetes.io/component: launcher-populator
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
-      serviceAccountName: fma-controller
+      serviceAccountName: {{ .Release.Name }}-controller
       containers:
         - name: launcher-populator
           image: "{{ .Values.global.imageRegistry }}/launcher-populator:{{ .Values.global.imageTag }}"
           imagePullPolicy: {{ .Values.launcherPopulator.pullPolicy | default "IfNotPresent" }}
           command:
             - /launcher-populator
-            - --namespace=$(CONTROLLER_NAMESPACE)
-          env:
-            - name: CONTROLLER_NAMESPACE
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.namespace
+            - --namespace={{ .Release.Namespace }}
           ports:
             - containerPort: 8080
               name: metrics

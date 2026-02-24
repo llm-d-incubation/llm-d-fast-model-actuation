@@ -76,7 +76,7 @@ jobs:
 
           make build-controller \
             CONTAINER_IMG_REG=ghcr.io/${reg@L} \
-            CONTROLLER_IMG_TAG=$TAG
+            IMAGE_TAG=$TAG
 
           echo "Dual-pods controller image published: ghcr.io/${reg@L}/dual-pods-controller:$TAG"
 
@@ -90,7 +90,7 @@ jobs:
 
           make build-populator \
             CONTAINER_IMG_REG=ghcr.io/${reg@L} \
-            POPULATOR_IMG_TAG=$TAG
+            IMAGE_TAG=$TAG
 
           echo "Launcher population controller image published: ghcr.io/${reg@L}/launcher-populator:$TAG"
 

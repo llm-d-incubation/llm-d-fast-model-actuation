@@ -7,16 +7,12 @@ REQUESTER_IMG_REPO ?= requester
 REQUESTER_IMG_TAG ?= latest
 REQUESTER_IMAGE := $(CONTAINER_IMG_REG)/$(REQUESTER_IMG_REPO):$(REQUESTER_IMG_TAG)
 
-CONTROLLER_IMG_TAG ?= $(shell git rev-parse --short HEAD)
-CONTROLLER_IMG ?= $(CONTAINER_IMG_REG)/dual-pods-controller:$(CONTROLLER_IMG_TAG)
-TEST_REQUESTER_IMG_TAG ?= $(shell git rev-parse --short HEAD)
-TEST_REQUESTER_IMG ?= $(CONTAINER_IMG_REG)/test-requester:$(TEST_REQUESTER_IMG_TAG)
-TEST_SERVER_IMG_TAG ?= $(shell git rev-parse --short HEAD)
-TEST_SERVER_IMG ?= $(CONTAINER_IMG_REG)/test-server:$(TEST_SERVER_IMG_TAG)
-TEST_LAUNCHER_IMG_TAG ?= $(shell git rev-parse --short HEAD)
-TEST_LAUNCHER_IMG ?= $(CONTAINER_IMG_REG)/test-launcher:$(TEST_LAUNCHER_IMG_TAG)
-POPULATOR_IMG_TAG ?= $(shell git rev-parse --short HEAD)
-POPULATOR_IMG ?= $(CONTAINER_IMG_REG)/launcher-populator:$(POPULATOR_IMG_TAG)
+IMAGE_TAG ?= $(shell git rev-parse --short HEAD)
+CONTROLLER_IMG ?= $(CONTAINER_IMG_REG)/dual-pods-controller:$(IMAGE_TAG)
+TEST_REQUESTER_IMG ?= $(CONTAINER_IMG_REG)/test-requester:$(IMAGE_TAG)
+TEST_SERVER_IMG ?= $(CONTAINER_IMG_REG)/test-server:$(IMAGE_TAG)
+TEST_LAUNCHER_IMG ?= $(CONTAINER_IMG_REG)/test-launcher:$(IMAGE_TAG)
+POPULATOR_IMG ?= $(CONTAINER_IMG_REG)/launcher-populator:$(IMAGE_TAG)
 
 TARGETARCH ?= $(shell go env GOARCH)
 
@@ -48,8 +44,8 @@ build-and-push-requester:
 
 .PHONY: build-controller-local
 build-controller-local:
-	KO_DOCKER_REPO=ko.local ko build -B ./cmd/dual-pods-controller -t ${CONTROLLER_IMG_TAG} --platform linux/$(shell go env GOARCH)
-	docker tag ko.local/dual-pods-controller:${CONTROLLER_IMG_TAG} ${CONTROLLER_IMG}
+	KO_DOCKER_REPO=ko.local ko build -B ./cmd/dual-pods-controller -t ${IMAGE_TAG} --platform linux/$(shell go env GOARCH)
+	docker tag ko.local/dual-pods-controller:${IMAGE_TAG} ${CONTROLLER_IMG}
 
 .PHONY: load-controller-local
 load-controller-local:
@@ -57,12 +53,12 @@ load-controller-local:
 
 .PHONY: build-controller
 build-controller:
-	KO_DOCKER_REPO=$(CONTAINER_IMG_REG) ko build -B ./cmd/dual-pods-controller -t ${CONTROLLER_IMG_TAG} --platform all
+	KO_DOCKER_REPO=$(CONTAINER_IMG_REG) ko build -B ./cmd/dual-pods-controller -t ${IMAGE_TAG} --platform all
 
 .PHONY: build-test-requester-local
 build-test-requester-local:
-	KO_DOCKER_REPO=ko.local ko build -B ./cmd/test-requester -t ${TEST_REQUESTER_IMG_TAG} --platform linux/$(shell go env GOARCH)
-	docker tag ko.local/test-requester:${TEST_REQUESTER_IMG_TAG} ${TEST_REQUESTER_IMG}
+	KO_DOCKER_REPO=ko.local ko build -B ./cmd/test-requester -t ${IMAGE_TAG} --platform linux/$(shell go env GOARCH)
+	docker tag ko.local/test-requester:${IMAGE_TAG} ${TEST_REQUESTER_IMG}
 
 .PHONY: load-test-requester-local
 load-test-requester-local:
@@ -70,8 +66,8 @@ load-test-requester-local:
 
 .PHONY: build-test-server-local
 build-test-server-local:
-	KO_DOCKER_REPO=ko.local ko build -B ./cmd/test-server -t ${TEST_SERVER_IMG_TAG} --platform linux/$(shell go env GOARCH)
-	docker tag ko.local/test-server:${TEST_SERVER_IMG_TAG} ${TEST_SERVER_IMG}
+	KO_DOCKER_REPO=ko.local ko build -B ./cmd/test-server -t ${IMAGE_TAG} --platform linux/$(shell go env GOARCH)
+	docker tag ko.local/test-server:${IMAGE_TAG} ${TEST_SERVER_IMG}
 
 .PHONY: load-test-server-local
 load-test-server-local:
@@ -87,8 +83,8 @@ load-test-launcher-local:
 
 .PHONY: build-populator-local
 build-populator-local:
-	KO_DOCKER_REPO=ko.local ko build -B ./cmd/launcher-populator -t ${POPULATOR_IMG_TAG} --platform linux/$(shell go env GOARCH)
-	docker tag ko.local/launcher-populator:${POPULATOR_IMG_TAG} ${POPULATOR_IMG}
+	KO_DOCKER_REPO=ko.local ko build -B ./cmd/launcher-populator -t ${IMAGE_TAG} --platform linux/$(shell go env GOARCH)
+	docker tag ko.local/launcher-populator:${IMAGE_TAG} ${POPULATOR_IMG}
 
 .PHONY: load-populator-local
 load-populator-local:
@@ -96,7 +92,7 @@ load-populator-local:
 
 .PHONY: build-populator
 build-populator:
-	KO_DOCKER_REPO=$(CONTAINER_IMG_REG) ko build -B ./cmd/launcher-populator -t ${POPULATOR_IMG_TAG} --platform all
+	KO_DOCKER_REPO=$(CONTAINER_IMG_REG) ko build -B ./cmd/launcher-populator -t ${IMAGE_TAG} --platform all
 
 .PHONY: echo-var
 echo-var:

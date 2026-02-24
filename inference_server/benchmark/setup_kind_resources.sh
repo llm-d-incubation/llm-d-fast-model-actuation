@@ -17,9 +17,9 @@ requesterImageTag="$2"
 printf "RequesterImage Tag: %s\n" "$requesterImageTag"
 
 # Build the container images for local testing.
-make build-test-requester-local TEST_REQUESTER_IMG_TAG="$requesterImageTag"
-make build-test-server-local TEST_SERVER_IMG_TAG="$requesterImageTag"
-make build-controller-local CONTROLLER_IMG_TAG="$requesterImageTag"
+make build-test-requester-local IMAGE_TAG="$requesterImageTag"
+make build-test-server-local IMAGE_TAG="$requesterImageTag"
+make build-controller-local IMAGE_TAG="$requesterImageTag"
 
 # Recreate the cluster if it already exists.
 kind delete cluster --name "$clusterName"
@@ -72,9 +72,9 @@ kubectl get nodes -o name | sed 's%^node/%%' | while read node; do
 done
 
 # Load the container images into the kind cluster
-make load-test-requester-local CLUSTER_NAME="$clusterName" TEST_REQUESTER_IMG_TAG="$requesterImageTag"
-make load-test-server-local CLUSTER_NAME="$clusterName" TEST_SERVER_IMG_TAG="$requesterImageTag"
-make load-controller-local CLUSTER_NAME="$clusterName" CONTROLLER_IMG_TAG="$requesterImageTag"
+make load-test-requester-local CLUSTER_NAME="$clusterName" IMAGE_TAG="$requesterImageTag"
+make load-test-server-local CLUSTER_NAME="$clusterName" IMAGE_TAG="$requesterImageTag"
+make load-controller-local CLUSTER_NAME="$clusterName" IMAGE_TAG="$requesterImageTag"
 
 # Wait a few seconds for all machinery to come online before issuing requests.
 sleep 10

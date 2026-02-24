@@ -135,11 +135,12 @@ fi
 
 : Deploy the FMA controllers in the cluster
 
-ctlr_img=$(make echo-var VAR=CONTROLLER_IMG)
+img_reg=$(make echo-var VAR=CONTAINER_IMG_REG)
+img_tag=$(make echo-var VAR=IMAGE_TAG)
 
 helm upgrade --install fma charts/fma-controllers \
-  --set global.imageRegistry="${ctlr_img%/dual-pods-controller:*}" \
-  --set global.imageTag="${ctlr_img##*:}" \
+  --set global.imageRegistry="$img_reg" \
+  --set global.imageTag="$img_tag" \
   --set global.nodeViewClusterRole=node-viewer \
   --set dualPodsController.sleeperLimit=2 \
   --set global.local=true \
