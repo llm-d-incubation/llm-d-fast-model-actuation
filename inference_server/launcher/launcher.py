@@ -211,23 +211,18 @@ class VllmInstance:
 
 # Multi-instance vLLM process manager
 class VllmMultiProcessManager:
-<<<<<<< launcher-log-improvements
-    def __init__(self, log_dir: str = ""):
-        self.instances: Dict[str, VllmInstance] = {}
-        self.gpu_translator = GpuTranslator()
-        self.log_dir = log_dir
-=======
     def __init__(
         self,
         mock_gpus: bool = False,
         mock_gpu_count: int = 8,
         node_name: Optional[str] = None,
+        log_dir: str = "",
     ):
         self.instances: Dict[str, VllmInstance] = {}
         self.gpu_translator = GpuTranslator(
             mock_gpus=mock_gpus, mock_gpu_count=mock_gpu_count, node_name=node_name
         )
->>>>>>> main
+        self.log_dir = log_dir
 
     def create_instance(
         self, vllm_config: VllmConfig, instance_id: Optional[str] = None
