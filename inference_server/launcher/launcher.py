@@ -20,6 +20,7 @@ vLLM Launcher
 import logging
 import multiprocessing
 import os
+import re
 import signal
 import sys
 import uuid
@@ -28,8 +29,8 @@ from http import HTTPStatus  # HTTP Status Codes
 from typing import Any, Dict, List, Optional
 
 import uvloop
-from fastapi import FastAPI, HTTPException, Path, Query
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Header, HTTPException, Path
+from fastapi.responses import JSONResponse, Response
 from gputranslator import GpuTranslator
 from pydantic import BaseModel
 from vllm.entrypoints.openai.api_server import run_server
@@ -174,30 +175,37 @@ class VllmInstance:
             "instance_id": self.instance_id,
         }
 
-    def get_logs(
-        self, start_byte: int = 0, max_bytes: int = MAX_LOG_RESPONSE_BYTES
-    ) -> str:
+    def get_log_bytes(
+        self, start: int = 0, end: int | None = None
+    ) -> tuple[bytes, int]:
         """
-        Retrieve logs from the child process.
-        :param start_byte: Byte position to start reading from
-        :param max_bytes: Maximum bytes of log data to retrieve
-        :return: Log content as string
-        :raises LogRangeNotAvailable: If start_byte is beyond available content
+        Retrieve log bytes from the child process.
+        :param start: First byte to read (inclusive, 0-based)
+        :param end: Last byte to read (inclusive). None means up to
+                    start + MAX_LOG_RESPONSE_BYTES - 1 or EOF.
+        :return: (content_bytes, total_file_size)
+        :raises LogRangeNotAvailable: If start is beyond available content
         """
         try:
-            total_available = os.path.getsize(self._log_file_path)
+            total = os.path.getsize(self._log_file_path)
         except FileNotFoundError:
-            if start_byte > 0:
-                raise LogRangeNotAvailable(start_byte, 0)
-            return ""
+            if start > 0:
+                raise LogRangeNotAvailable(start, 0)
+            return (b"", 0)
 
-        if start_byte > total_available:
-            raise LogRangeNotAvailable(start_byte, total_available)
+        if start > total or (start == total and total > 0):
+            raise LogRangeNotAvailable(start, total)
 
+        if end is None:
+            read_end = min(start + MAX_LOG_RESPONSE_BYTES - 1, total - 1)
+        else:
+            read_end = min(end, total - 1)
+
+        nbytes = read_end - start + 1
         with open(self._log_file_path, "rb") as f:
-            f.seek(start_byte)
-            log_bytes = f.read(max_bytes)
-        return log_bytes.decode("utf-8", errors="replace")
+            f.seek(start)
+            data = f.read(nbytes)
+        return (data, total)
 
 
 # Multi-instance vLLM process manager
@@ -283,23 +291,23 @@ class VllmMultiProcessManager:
         """List all instance IDs"""
         return list(self.instances.keys())
 
-    def get_instance_logs(
+    def get_instance_log_bytes(
         self,
         instance_id: str,
-        start_byte: int = 0,
-        max_bytes: int = MAX_LOG_RESPONSE_BYTES,
-    ) -> str:
+        start: int = 0,
+        end: int | None = None,
+    ) -> tuple[bytes, int]:
         """
-        Get logs from a specific instance
+        Get log bytes from a specific instance.
         :param instance_id: ID of the instance
-        :param start_byte: Byte position to start reading from
-        :param max_bytes: Maximum bytes of log data to retrieve
-        :return: Log content as string
-        :raises LogRangeNotAvailable: If start_byte is beyond available content
+        :param start: First byte to read (inclusive, 0-based)
+        :param end: Last byte to read (inclusive), or None for default limit
+        :return: (content_bytes, total_file_size)
+        :raises LogRangeNotAvailable: If start is beyond available content
         """
         if instance_id not in self.instances:
             raise KeyError(f"Instance {instance_id} not found")
-        return self.instances[instance_id].get_logs(start_byte, max_bytes)
+        return self.instances[instance_id].get_log_bytes(start, end)
 
 
 # Create global manager instance
@@ -324,6 +332,28 @@ app = FastAPI(
     description="REST API for managing multiple vLLM instances",
     lifespan=lifespan,
 )
+
+
+_RANGE_RE = re.compile(r"^bytes=(\d+)-(\d+)?$")
+
+
+def parse_range_header(range_header: str) -> tuple[int, int | None]:
+    """Parse an HTTP Range header value.
+
+    Accepts ``bytes=START-END`` (both inclusive) or ``bytes=START-``
+    (open-ended).  Returns ``(start, end)`` where *end* may be ``None``.
+
+    Raises :class:`ValueError` for unsupported or malformed values
+    (e.g. suffix ranges like ``bytes=-500``).
+    """
+    m = _RANGE_RE.match(range_header)
+    if m is None:
+        raise ValueError(f"Unsupported or malformed Range header: {range_header}")
+    start = int(m.group(1))
+    end = int(m.group(2)) if m.group(2) is not None else None
+    if end is not None and end < start:
+        raise ValueError(f"Range end ({end}) must be >= start ({start})")
+    return (start, end)
 
 
 ############################################################
@@ -451,40 +481,54 @@ async def get_vllm_instance_status(
 @app.get("/v2/vllm/instances/{instance_id}/log")
 async def get_vllm_instance_logs(
     instance_id: str = Path(..., description="Instance ID"),
-    start_byte: int = Query(
-        0,
-        description="Byte position to start reading from (0-based)",
-        ge=0,
-    ),
-    max_bytes: int = Query(
-        MAX_LOG_RESPONSE_BYTES,
-        description="Maximum bytes of log data to retrieve",
-        ge=1024,
-        le=10 * 1024 * 1024,
-    ),
+    range: str | None = Header(None, alias="Range"),
 ):
     """
-    Get logs from a specific vLLM instance starting from a byte position.
+    Get logs from a specific vLLM instance.
 
-    Use start_byte=0 to read from the beginning.
-    Use start_byte + len(log) in subsequent requests to continue reading.
+    Without a Range header the full log (up to 1 MB) is returned with 200 OK.
+    With ``Range: bytes=START-END`` or ``Range: bytes=START-`` the
+    requested slice is returned with 206 Partial Content and a
+    ``Content-Range`` header.
     """
     try:
-        log_content = vllm_manager.get_instance_logs(instance_id, start_byte, max_bytes)
-        return JSONResponse(
-            content={
-                "log": log_content,
-            },
-            status_code=HTTPStatus.OK,
+        if range is None:
+            start, end = 0, None
+            partial = False
+        else:
+            try:
+                start, end = parse_range_header(range)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+            partial = True
+
+        data, total = vllm_manager.get_instance_log_bytes(instance_id, start, end)
+
+        actual_end = start + len(data) - 1 if data else start
+        headers = {"Accept-Ranges": "bytes"}
+        if partial:
+            headers["Content-Range"] = f"bytes {start}-{actual_end}/{total}"
+            status_code = HTTPStatus.PARTIAL_CONTENT
+        else:
+            status_code = HTTPStatus.OK
+
+        return Response(
+            content=data,
+            status_code=status_code,
+            media_type="application/octet-stream",
+            headers=headers,
         )
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Instance {instance_id} not found")
     except LogRangeNotAvailable as e:
-        return JSONResponse(
-            content={"available_bytes": e.available_bytes},
+        return Response(
+            content=b"",
             status_code=HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE,
+            media_type="application/octet-stream",
             headers={"Content-Range": f"bytes */{e.available_bytes}"},
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to get logs for instance {instance_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))

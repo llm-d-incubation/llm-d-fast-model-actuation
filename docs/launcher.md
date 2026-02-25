@@ -320,33 +320,37 @@ Stop and delete a specific vLLM instance.
 
 **GET** `/v2/vllm/instances/{instance_id}/log`
 
-Retrieve stdout/stderr logs from a specific vLLM instance starting from a specific byte position.
+Retrieve stdout/stderr logs from a specific vLLM instance as raw bytes.
 
 **Path Parameters:**
 
 - `instance_id`: ID of the instance
 
-**Query Parameters:**
+**Request Headers:**
 
-- `start_byte` (optional): Byte position to start reading from (default: 0, minimum: 0). The largest valid value is the total number of bytes captured so far (i.e., the length of the log). Use this to continue reading from where you left off.
-- `max_bytes` (optional): Maximum bytes of log data to retrieve from start_byte (default: 1048576 (1 MB), range: 1024-10485760 (10 MB))
+- `Range` (optional): Byte range to retrieve, following [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110#field.range). Supported formats:
+  - `Range: bytes=START-END` — retrieve bytes from START to END (both inclusive)
+  - `Range: bytes=START-` — retrieve bytes from START to end of log (up to 1 MB)
+  - Suffix ranges (`bytes=-N`) are **not** supported.
 
-**Response (200 OK):**
+**Response (200 OK) — without Range header:**
 
-```json
-{
-  "log": "INFO: Started server process\nINFO: Waiting for application startup\nINFO: Application startup complete\n"
-}
+Returns the full log content (up to 1 MB) as `application/octet-stream`.
+
+**Response (206 Partial Content) — with Range header:**
+
+Returns the requested byte range as `application/octet-stream` with a `Content-Range` header:
+
 ```
-
-**Response Fields:**
-
-- `log`: Log content as a single string. Since `start_byte` is a byte offset but the JSON response contains unicode characters, the client must encode the string back to UTF-8 to compute the correct byte length for the next `start_byte` (e.g., `start_byte + len(log.encode("utf-8"))` in Python). Using the character length directly will produce incorrect offsets if the log contains multi-byte characters.
+Content-Range: bytes START-END/TOTAL
+Content-Type: application/octet-stream
+```
 
 **Error Responses:**
 
+- `400 Bad Request`: Malformed or unsupported Range header
 - `404 Not Found`: Instance not found
-- `416 Range Not Satisfiable`: The requested `start_byte` is beyond available log content. The response includes a `Content-Range: bytes */N` header (per [RFC 9110 §15.5.17](https://www.rfc-editor.org/rfc/rfc9110#status.416)) and a JSON body: `{"available_bytes": N}`, where `N` is the total number of bytes captured so far (i.e., the largest valid value of `start_byte`).
+- `416 Range Not Satisfiable`: The requested start position is beyond available log content. The response includes a `Content-Range: bytes */N` header (per [RFC 9110 §15.5.17](https://www.rfc-editor.org/rfc/rfc9110#status.416)) with an empty body, where `N` is the total number of bytes captured so far.
 
 ---
 
@@ -524,38 +528,36 @@ curl http://localhost:8001/v2/vllm/instances
 ### Example 5: Retrieve Instance Logs
 
 ```bash
-# Get up to 1 MB of logs from the beginning (default)
+# Get up to 1 MB of logs from the beginning (no Range header → 200 OK)
 curl http://localhost:8001/v2/vllm/instances/abc123.../log
 
-# Get up to 500 KB of logs from the beginning
-curl "http://localhost:8001/v2/vllm/instances/abc123.../log?max_bytes=512000"
+# Get the first 1 MB chunk (Range header → 206 Partial Content)
+curl -H "Range: bytes=0-1048575" \
+  http://localhost:8001/v2/vllm/instances/abc123.../log
 
-# Continue reading from where you left off (streaming logs)
-# First request - get initial logs
-curl "http://localhost:8001/v2/vllm/instances/abc123.../log?start_byte=0&max_bytes=1048576"
-# To continue, use start_byte + len(log.encode("utf-8")) as the next start_byte
-# (encode to UTF-8 first to get byte length, not character length)
+# Second chunk — continue from byte 1048576
+curl -H "Range: bytes=1048576-2097151" \
+  http://localhost:8001/v2/vllm/instances/abc123.../log
 
-# Second request - get next chunk
-curl "http://localhost:8001/v2/vllm/instances/abc123.../log?start_byte=1048576&max_bytes=1048576"
-
-# Third request - continue from new position
-curl "http://localhost:8001/v2/vllm/instances/abc123.../log?start_byte=2097152&max_bytes=1048576"
+# Open-ended range — from byte 2097152 to EOF (up to 1 MB)
+curl -H "Range: bytes=2097152-" \
+  http://localhost:8001/v2/vllm/instances/abc123.../log
 ```
 
-**How `start_byte` Works:**
+**How the Range header works:**
 
-The log is treated as a flat byte stream. The `start_byte` parameter specifies the exact byte offset to begin reading from, and `max_bytes` limits how many bytes are returned:
+The log is treated as a flat byte stream. The `Range` header specifies which bytes to retrieve:
 
 ```
 Example: 30 bytes of log content
 
-start_byte=0              → Returns bytes [0, max_bytes)
-start_byte=15             → Returns bytes [15, 15 + max_bytes)
-start_byte=15, max_bytes=5 → Returns bytes [15, 20)
+No Range header        → 200 OK, returns bytes [0, 30)
+Range: bytes=0-14      → 206, returns bytes [0, 15)
+Range: bytes=15-29     → 206, returns bytes [15, 30)
+Range: bytes=15-       → 206, returns bytes [15, 30) (open-ended)
 ```
 
-To stream logs, use `start_byte + len(log.encode("utf-8"))` as the `start_byte` for the next request, since `start_byte` is a byte offset and the JSON response contains unicode characters.
+The `Content-Range` response header tells you exactly which bytes were returned and the total file size, e.g. `Content-Range: bytes 0-1048575/5242880`.
 
 ## Configuration
 
@@ -629,7 +631,7 @@ Represents a single vLLM instance with its process and configuration.
 - `start()`: Start the vLLM process
 - `stop(timeout=10)`: Stop the vLLM process gracefully (or force kill after timeout)
 - `get_status()`: Get detailed status information
-- `get_logs(start_byte=0, max_bytes=1048576)`: Retrieve logs from the instance starting from a byte position
+- `get_log_bytes(start=0, end=None)`: Retrieve log bytes from the instance, returns `(bytes, total_size)`
 
 #### `VllmMultiProcessManager`
 
@@ -642,7 +644,7 @@ Manages multiple VllmInstance objects.
 - `stop_all_instances(timeout=10)`: Stop all running instances
 - `get_instance_status(instance_id)`: Get status of a specific instance
 - `get_all_instances_status()`: Get status of all instances
-- `get_instance_logs(instance_id, start_byte=0, max_bytes=1048576)`: Retrieve logs from a specific instance starting from a byte position
+- `get_instance_log_bytes(instance_id, start=0, end=None)`: Retrieve log bytes from a specific instance, returns `(bytes, total_size)`
 
 ## Best Practices
 
@@ -701,34 +703,38 @@ Be mindful of system resources:
 The launcher captures stdout/stderr from each vLLM instance by writing directly to a log file on disk:
 
 - **Architecture**: A `FileWriter` in the child process appends output to a per-instance log file (`/tmp/launcher-<pid>-vllm-<instance_id>.log`). Two `FileWriter` instances (stdout + stderr) safely share the same file via POSIX `O_APPEND` semantics. Each write is followed by a flush so the parent can read new content immediately.
-- **Byte-Based Retrieval**: The `start_byte` parameter is a byte offset into the log file. The `max_bytes` parameter limits how many bytes are returned per request.
+- **Raw Bytes**: The log endpoint returns `application/octet-stream` — raw bytes, not JSON.
+- **Range Header**: Use the standard HTTP `Range: bytes=START-END` header to request specific byte ranges. Without a Range header, the full log (up to 1 MB) is returned.
 - **No Data Loss**: Since logs are written directly to disk, there is no bounded queue that could overflow and drop messages.
 - **Non-blocking**: Log capture doesn't slow down the vLLM process.
-- **Streaming Support**: Use `start_byte` parameter to efficiently stream logs without re-reading.
+- **Streaming Support**: Use the `Content-Range` response header to track position for efficient streaming.
 - **Cleanup**: Log files are automatically removed when an instance is stopped or deleted.
 
 **Best Practices:**
 
-- **Streaming Logs**: Use `start_byte` to efficiently stream logs. Since `start_byte` is a byte offset but the JSON response contains unicode characters, compute the byte length by encoding the string back to UTF-8:
+- **Streaming Logs**: Use the Range header to stream logs efficiently. The `Content-Range` response header tells you the byte range and total size:
 
   ```python
   # Python example
   import requests
 
-  start_byte = 0
+  start = 0
   while True:
-      resp = requests.get(f"http://localhost:8001/v2/vllm/instances/id/log?start_byte={start_byte}")
-      log = resp.json()["log"]
-      if not log:
+      resp = requests.get(
+          f"http://localhost:8001/v2/vllm/instances/id/log",
+          headers={"Range": f"bytes={start}-"},
+      )
+      if resp.status_code == 416:
+          break  # No new content
+      data = resp.content
+      if not data:
           break
-      start_byte += len(log.encode("utf-8"))
+      start += len(data)
   ```
 
-- **Polling**: Track `start_byte + len(log.encode("utf-8"))` between requests to only fetch new log content
-- **Memory Efficiency**: Use `max_bytes` parameter to limit response size (default: 1 MB, max: 10 MB)
+- **Polling**: Track `start + len(response.content)` between requests to only fetch new content
 - **Data Loss**: Logs are lost when an instance is deleted (the log file is removed)
 - **Production**: Consider external logging solutions for long-term storage and analysis
-- **Byte Tracking**: The `start_byte` position is a byte offset into the log file on disk
 
 ### 6. Testing
 

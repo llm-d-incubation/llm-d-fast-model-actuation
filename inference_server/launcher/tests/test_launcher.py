@@ -43,6 +43,7 @@ from launcher import (  # noqa: E402
     VllmInstance,
     VllmMultiProcessManager,
     app,
+    parse_range_header,
     set_env_vars,
 )
 
@@ -511,8 +512,8 @@ class TestVllmMultiProcessManager:
         assert "id-2" in instances
 
     @patch("launcher.multiprocessing.Process")
-    def test_get_instance_logs(self, mock_process_class, manager, vllm_config):
-        """Test getting logs from a specific instance"""
+    def test_get_instance_log_bytes(self, mock_process_class, manager, vllm_config):
+        """Test getting log bytes from a specific instance"""
         mock_process = MockProcess()
         mock_process_class.return_value = mock_process
 
@@ -523,24 +524,25 @@ class TestVllmMultiProcessManager:
         with open(instance._log_file_path, "wb") as f:
             f.write(b"Log line 1Log line 2Log line 3")
 
-        log_content = manager.get_instance_logs("test-id", start_byte=0, max_bytes=1000)
+        data, total = manager.get_instance_log_bytes("test-id", start=0)
 
-        assert isinstance(log_content, str)
-        assert "Log line 1" in log_content
-        assert "Log line 2" in log_content
-        assert "Log line 3" in log_content
+        assert isinstance(data, bytes)
+        assert b"Log line 1" in data
+        assert b"Log line 2" in data
+        assert b"Log line 3" in data
+        assert total == 30
 
     @patch("launcher.multiprocessing.Process")
-    def test_get_instance_logs_nonexistent(self, mock_process_class, manager):
-        """Test getting logs from nonexistent instance raises KeyError"""
+    def test_get_instance_log_bytes_nonexistent(self, mock_process_class, manager):
+        """Test getting log bytes from nonexistent instance raises KeyError"""
         with pytest.raises(KeyError, match="not found"):
-            manager.get_instance_logs("nonexistent-id")
+            manager.get_instance_log_bytes("nonexistent-id")
 
     @patch("launcher.multiprocessing.Process")
-    def test_get_instance_logs_respects_max_bytes(
+    def test_get_instance_log_bytes_with_end(
         self, mock_process_class, manager, vllm_config
     ):
-        """Test that get_logs respects max_bytes parameter"""
+        """Test that get_instance_log_bytes respects end parameter"""
         mock_process = MockProcess()
         mock_process_class.return_value = mock_process
 
@@ -551,10 +553,11 @@ class TestVllmMultiProcessManager:
         with open(instance._log_file_path, "wb") as f:
             f.write(b"A" * 60 + b"B" * 60)
 
-        log_content = manager.get_instance_logs("test-id", start_byte=0, max_bytes=100)
+        data, total = manager.get_instance_log_bytes("test-id", start=0, end=99)
 
-        assert isinstance(log_content, str)
-        assert len(log_content.encode("utf-8")) <= 100
+        assert isinstance(data, bytes)
+        assert len(data) == 100
+        assert total == 120
 
 
 # Tests for API Endpoints
@@ -710,31 +713,36 @@ class TestAPIEndpoints:
 
     @patch("launcher.vllm_manager")
     def test_get_instance_logs_endpoint(self, mock_manager, client):
-        """Test getting instance logs via API"""
-        mock_manager.get_instance_logs.return_value = "Log line 1Log line 2Log line 3"
+        """Test getting instance logs without Range header returns 200"""
+        mock_manager.get_instance_log_bytes.return_value = (
+            b"Log line 1Log line 2Log line 3",
+            29,
+        )
 
         response = client.get("/v2/vllm/instances/test-id/log")
 
         assert response.status_code == 200
-        data = response.json()
-        assert "log" in data
-        assert isinstance(data["log"], str)
-        assert "Log line 1" in data["log"]
+        assert response.headers["content-type"] == "application/octet-stream"
+        assert response.content == b"Log line 1Log line 2Log line 3"
+        mock_manager.get_instance_log_bytes.assert_called_once_with("test-id", 0, None)
 
     @patch("launcher.vllm_manager")
-    def test_get_instance_logs_with_max_bytes(self, mock_manager, client):
-        """Test getting instance logs with max_bytes parameter"""
-        mock_manager.get_instance_logs.return_value = "Log 1Log 2"
+    def test_get_instance_logs_with_range_header(self, mock_manager, client):
+        """Test getting instance logs with Range header"""
+        mock_manager.get_instance_log_bytes.return_value = (b"A" * 5000, 10000)
 
-        response = client.get("/v2/vllm/instances/test-id/log?max_bytes=5000")
+        response = client.get(
+            "/v2/vllm/instances/test-id/log",
+            headers={"Range": "bytes=0-4999"},
+        )
 
-        assert response.status_code == 200
-        mock_manager.get_instance_logs.assert_called_once_with("test-id", 0, 5000)
+        assert response.status_code == 206
+        mock_manager.get_instance_log_bytes.assert_called_once_with("test-id", 0, 4999)
 
     @patch("launcher.vllm_manager")
     def test_get_instance_logs_nonexistent_endpoint(self, mock_manager, client):
         """Test getting logs from nonexistent instance returns 404"""
-        mock_manager.get_instance_logs.side_effect = KeyError("not found")
+        mock_manager.get_instance_log_bytes.side_effect = KeyError("not found")
 
         response = client.get("/v2/vllm/instances/nonexistent-id/log")
 
@@ -742,15 +750,68 @@ class TestAPIEndpoints:
 
     @patch("launcher.vllm_manager")
     def test_get_instance_logs_range_not_available(self, mock_manager, client):
-        """Test getting logs with start_byte beyond available content.
-        Returns 416 with JSON body"""
-        mock_manager.get_instance_logs.side_effect = LogRangeNotAvailable(5000, 1000)
+        """Test getting logs with start beyond available content returns 416"""
+        mock_manager.get_instance_log_bytes.side_effect = LogRangeNotAvailable(
+            5000, 1000
+        )
 
-        response = client.get("/v2/vllm/instances/test-id/log?start_byte=5000")
+        response = client.get(
+            "/v2/vllm/instances/test-id/log",
+            headers={"Range": "bytes=5000-"},
+        )
 
         assert response.status_code == 416
-        data = response.json()
-        assert data["available_bytes"] == 1000
+        assert response.headers["content-range"] == "bytes */1000"
+
+    @patch("launcher.vllm_manager")
+    def test_get_instance_logs_partial_content_206(self, mock_manager, client):
+        """Test 206 Partial Content with correct Content-Range header"""
+        mock_manager.get_instance_log_bytes.return_value = (b"ABCDE", 100)
+
+        response = client.get(
+            "/v2/vllm/instances/test-id/log",
+            headers={"Range": "bytes=10-14"},
+        )
+
+        assert response.status_code == 206
+        assert response.content == b"ABCDE"
+        assert response.headers["content-range"] == "bytes 10-14/100"
+
+    @patch("launcher.vllm_manager")
+    def test_get_instance_logs_open_ended_range(self, mock_manager, client):
+        """Test open-ended Range: bytes=100-"""
+        mock_manager.get_instance_log_bytes.return_value = (b"rest of log", 200)
+
+        response = client.get(
+            "/v2/vllm/instances/test-id/log",
+            headers={"Range": "bytes=100-"},
+        )
+
+        assert response.status_code == 206
+        mock_manager.get_instance_log_bytes.assert_called_once_with(
+            "test-id", 100, None
+        )
+        assert response.headers["content-range"] == "bytes 100-110/200"
+
+    @patch("launcher.vllm_manager")
+    def test_get_instance_logs_invalid_range(self, mock_manager, client):
+        """Test malformed Range header returns 400"""
+        response = client.get(
+            "/v2/vllm/instances/test-id/log",
+            headers={"Range": "invalid"},
+        )
+
+        assert response.status_code == 400
+
+    @patch("launcher.vllm_manager")
+    def test_get_instance_logs_suffix_range_rejected(self, mock_manager, client):
+        """Test suffix range bytes=-500 returns 400"""
+        response = client.get(
+            "/v2/vllm/instances/test-id/log",
+            headers={"Range": "bytes=-500"},
+        )
+
+        assert response.status_code == 400
 
 
 # Tests for FileWriter
@@ -819,63 +880,65 @@ class TestVllmInstanceLogs:
         instance = VllmInstance("test-id", config, gpu_translator, log_dir=log_dir)
         return instance
 
-    def test_get_logs_no_file(self, gpu_translator, tmp_log_dir):
-        """Test get_logs returns empty string when log file doesn't exist"""
+    def test_get_log_bytes_no_file(self, gpu_translator, tmp_log_dir):
+        """Test get_log_bytes returns empty bytes when log file doesn't exist"""
         instance = self._make_instance(gpu_translator, tmp_log_dir)
-        # Don't start the instance, so log file doesn't exist
 
-        log_content = instance.get_logs()
+        data, total = instance.get_log_bytes()
 
-        assert log_content == ""
+        assert data == b""
+        assert total == 0
 
-    def test_get_logs_empty_file(self, gpu_translator, tmp_log_dir):
-        """Test get_logs returns empty string when log file is empty"""
+    def test_get_log_bytes_empty_file(self, gpu_translator, tmp_log_dir):
+        """Test get_log_bytes returns empty bytes when log file is empty"""
         instance = self._make_instance(gpu_translator, tmp_log_dir)
-        # Create an empty log file
         open(instance._log_file_path, "wb").close()
 
-        log_content = instance.get_logs()
+        data, total = instance.get_log_bytes()
 
-        assert log_content == ""
+        assert data == b""
+        assert total == 0
 
-    def test_get_logs_with_content(self, gpu_translator, tmp_log_dir):
-        """Test get_logs retrieves content from log file"""
+    def test_get_log_bytes_with_content(self, gpu_translator, tmp_log_dir):
+        """Test get_log_bytes retrieves content from log file"""
         instance = self._make_instance(gpu_translator, tmp_log_dir)
         with open(instance._log_file_path, "wb") as f:
             f.write(b"Log 1Log 2")
 
-        log_content = instance.get_logs()
+        data, total = instance.get_log_bytes()
 
-        assert isinstance(log_content, str)
-        assert "Log 1" in log_content
-        assert "Log 2" in log_content
+        assert isinstance(data, bytes)
+        assert b"Log 1" in data
+        assert b"Log 2" in data
+        assert total == 10
 
-    def test_get_logs_respects_max_bytes(self, gpu_translator, tmp_log_dir):
-        """Test get_logs respects max_bytes parameter"""
+    def test_get_log_bytes_with_end(self, gpu_translator, tmp_log_dir):
+        """Test get_log_bytes respects end parameter"""
         instance = self._make_instance(gpu_translator, tmp_log_dir)
         with open(instance._log_file_path, "wb") as f:
             f.write(b"A" * 50 + b"B" * 50 + b"C" * 50)
 
-        log_content = instance.get_logs(start_byte=0, max_bytes=100)
+        data, total = instance.get_log_bytes(start=0, end=99)
 
-        assert isinstance(log_content, str)
-        assert len(log_content.encode("utf-8")) <= 100
+        assert isinstance(data, bytes)
+        assert len(data) == 100
+        assert total == 150
 
-    def test_get_logs_buffer_persists_across_calls(self, gpu_translator, tmp_log_dir):
+    def test_get_log_bytes_persists_across_calls(self, gpu_translator, tmp_log_dir):
         """Test that log file accumulates across multiple reads"""
         instance = self._make_instance(gpu_translator, tmp_log_dir)
 
-        # Write initial content
         with open(instance._log_file_path, "wb") as f:
             f.write(b"Hello World")
-        log_content = instance.get_logs(start_byte=0)
-        assert log_content == "Hello World"
+        data, total = instance.get_log_bytes(start=0)
+        assert data == b"Hello World"
+        assert total == 11
 
-        # Append more content (simulating the child process writing more)
         with open(instance._log_file_path, "ab") as f:
             f.write(b"!")
-        log_content = instance.get_logs(start_byte=0)
-        assert log_content == "Hello World!"
+        data, total = instance.get_log_bytes(start=0)
+        assert data == b"Hello World!"
+        assert total == 12
 
 
 # Tests for Helper Functions
@@ -915,110 +978,116 @@ class TestLogFile:
         with open(instance._log_file_path, "wb") as f:
             f.write(b"Test message 1Test message 2")
 
-        log_content = instance.get_logs(start_byte=0, max_bytes=1000)
-        assert isinstance(log_content, str)
-        assert "Test message 1" in log_content
-        assert "Test message 2" in log_content
+        data, total = instance.get_log_bytes(start=0)
+        assert isinstance(data, bytes)
+        assert b"Test message 1" in data
+        assert b"Test message 2" in data
+        assert total == 28
 
     def test_empty_file(self, gpu_translator, tmp_log_dir):
         """Test getting logs from empty file"""
         instance = self._make_instance(gpu_translator, tmp_log_dir)
         open(instance._log_file_path, "wb").close()
 
-        log_content = instance.get_logs(start_byte=0, max_bytes=1000)
-        assert log_content == ""
+        data, total = instance.get_log_bytes(start=0)
+        assert data == b""
+        assert total == 0
 
-    def test_byte_limit_enforcement(self, gpu_translator, tmp_log_dir):
-        """Test that byte limit is enforced"""
+    def test_end_limit_enforcement(self, gpu_translator, tmp_log_dir):
+        """Test that end parameter limits returned bytes"""
         instance = self._make_instance(gpu_translator, tmp_log_dir)
-        data = "".join(f"Message {i}" for i in range(10))
+        content = "".join(f"Message {i}" for i in range(10))
         with open(instance._log_file_path, "wb") as f:
-            f.write(data.encode("utf-8"))
+            f.write(content.encode("utf-8"))
 
-        log_content = instance.get_logs(start_byte=0, max_bytes=50)
-        assert isinstance(log_content, str)
-        assert len(log_content.encode("utf-8")) <= 50
+        data, total = instance.get_log_bytes(start=0, end=49)
+        assert isinstance(data, bytes)
+        assert len(data) == 50
 
-    def test_max_bytes_larger_than_content(self, gpu_translator, tmp_log_dir):
-        """Test when max_bytes is larger than available content"""
+    def test_end_larger_than_content(self, gpu_translator, tmp_log_dir):
+        """Test when end is beyond available content (truncates to EOF)"""
         instance = self._make_instance(gpu_translator, tmp_log_dir)
         with open(instance._log_file_path, "wb") as f:
             f.write(b"ShortMessage")
 
-        log_content = instance.get_logs(start_byte=0, max_bytes=10000)
-        assert isinstance(log_content, str)
-        assert "Short" in log_content
-        assert "Message" in log_content
+        data, total = instance.get_log_bytes(start=0, end=9999)
+        assert isinstance(data, bytes)
+        assert b"Short" in data
+        assert b"Message" in data
+        assert total == 12
 
-    def test_unicode_handling(self, gpu_translator, tmp_log_dir):
-        """Test handling of unicode characters"""
+    def test_unicode_bytes(self, gpu_translator, tmp_log_dir):
+        """Test that raw bytes with unicode are returned as-is"""
         instance = self._make_instance(gpu_translator, tmp_log_dir)
+        raw = "Hello 世界Test émojis 🚀".encode("utf-8")
         with open(instance._log_file_path, "wb") as f:
-            f.write("Hello 世界Test émojis 🚀".encode("utf-8"))
+            f.write(raw)
 
-        log_content = instance.get_logs(start_byte=0, max_bytes=1000)
-        assert isinstance(log_content, str)
-        assert "世界" in log_content
-        assert "🚀" in log_content
+        data, total = instance.get_log_bytes(start=0)
+        assert isinstance(data, bytes)
+        assert data == raw
+        assert total == len(raw)
 
-    def test_partial_retrieval_with_byte_limit(self, gpu_translator, tmp_log_dir):
-        """Test that only bytes within limit are returned"""
+    def test_partial_retrieval_with_end(self, gpu_translator, tmp_log_dir):
+        """Test that only bytes up to end are returned"""
         instance = self._make_instance(gpu_translator, tmp_log_dir)
         with open(instance._log_file_path, "wb") as f:
             f.write(b"A" * 20 + b"B" * 20 + b"C" * 20)
 
-        log_content = instance.get_logs(start_byte=0, max_bytes=45)
-        assert log_content == "A" * 20 + "B" * 20 + "C" * 5
+        data, total = instance.get_log_bytes(start=0, end=44)
+        assert data == b"A" * 20 + b"B" * 20 + b"C" * 5
+        assert total == 60
 
-    def test_start_byte_offset(self, gpu_translator, tmp_log_dir):
-        """Test that start_byte returns bytes from exact position"""
+    def test_start_offset(self, gpu_translator, tmp_log_dir):
+        """Test that start returns bytes from exact position"""
         instance = self._make_instance(gpu_translator, tmp_log_dir)
         with open(instance._log_file_path, "wb") as f:
             f.write(b"A" * 10 + b"B" * 10 + b"C" * 10)
 
-        log_content = instance.get_logs(start_byte=15, max_bytes=100)
-        assert log_content == "B" * 5 + "C" * 10
+        data, total = instance.get_log_bytes(start=15)
+        assert data == b"B" * 5 + b"C" * 10
+        assert total == 30
 
-    def test_start_byte_at_message_boundary(self, gpu_translator, tmp_log_dir):
-        """Test that start_byte at exact boundary works correctly"""
+    def test_start_at_message_boundary(self, gpu_translator, tmp_log_dir):
+        """Test that start at exact boundary works correctly"""
         instance = self._make_instance(gpu_translator, tmp_log_dir)
         with open(instance._log_file_path, "wb") as f:
             f.write(b"A" * 10 + b"B" * 10 + b"C" * 10)
 
-        log_content = instance.get_logs(start_byte=10, max_bytes=100)
-        assert log_content == "B" * 10 + "C" * 10
+        data, total = instance.get_log_bytes(start=10)
+        assert data == b"B" * 10 + b"C" * 10
+        assert total == 30
 
-    def test_start_byte_beyond_available_raises_error(
-        self, gpu_translator, tmp_log_dir
-    ):
-        """Test that start_byte beyond available content raises LogRangeNotAvailable"""
+    def test_start_beyond_available_raises_error(self, gpu_translator, tmp_log_dir):
+        """Test that start beyond available content raises LogRangeNotAvailable"""
         instance = self._make_instance(gpu_translator, tmp_log_dir)
         with open(instance._log_file_path, "wb") as f:
             f.write(b"A" * 10 + b"B" * 10)
 
         with pytest.raises(LogRangeNotAvailable) as exc_info:
-            instance.get_logs(start_byte=50, max_bytes=100)
+            instance.get_log_bytes(start=50)
 
         assert exc_info.value.start_byte == 50
         assert exc_info.value.available_bytes == 20
 
-    def test_start_byte_equal_to_length_returns_empty(
-        self, gpu_translator, tmp_log_dir
-    ):
-        """Test that start_byte equal to log length returns empty string"""
+    def test_start_equal_to_length_raises_error(self, gpu_translator, tmp_log_dir):
+        """Test that start equal to file size raises LogRangeNotAvailable"""
         instance = self._make_instance(gpu_translator, tmp_log_dir)
         with open(instance._log_file_path, "wb") as f:
             f.write(b"A" * 10)
 
-        log_content = instance.get_logs(start_byte=10, max_bytes=100)
-        assert log_content == ""
+        with pytest.raises(LogRangeNotAvailable) as exc_info:
+            instance.get_log_bytes(start=10)
 
-    def test_no_file_with_start_byte_raises_error(self, gpu_translator, tmp_log_dir):
-        """Test that requesting logs with start_byte > 0 when no file exists raises"""
+        assert exc_info.value.start_byte == 10
+        assert exc_info.value.available_bytes == 10
+
+    def test_no_file_with_start_raises_error(self, gpu_translator, tmp_log_dir):
+        """Test that requesting logs with start > 0 when no file exists raises"""
         instance = self._make_instance(gpu_translator, tmp_log_dir)
 
         with pytest.raises(LogRangeNotAvailable) as exc_info:
-            instance.get_logs(start_byte=10, max_bytes=100)
+            instance.get_log_bytes(start=10)
 
         assert exc_info.value.start_byte == 10
         assert exc_info.value.available_bytes == 0
@@ -1065,6 +1134,42 @@ class TestLogFileCleanup:
         instance = self._make_instance(gpu_translator, tmp_log_dir)
         # Should not raise
         instance._cleanup_log_file()
+
+
+class TestParseRangeHeader:
+    """Tests for the parse_range_header helper function"""
+
+    def test_full_range(self):
+        """Test parsing bytes=0-99"""
+        assert parse_range_header("bytes=0-99") == (0, 99)
+
+    def test_open_ended_range(self):
+        """Test parsing bytes=100-"""
+        assert parse_range_header("bytes=100-") == (100, None)
+
+    def test_large_values(self):
+        """Test parsing large byte values"""
+        assert parse_range_header("bytes=1048576-2097151") == (1048576, 2097151)
+
+    def test_suffix_range_rejected(self):
+        """Test that suffix range bytes=-500 raises ValueError"""
+        with pytest.raises(ValueError, match="Unsupported or malformed"):
+            parse_range_header("bytes=-500")
+
+    def test_invalid_unit(self):
+        """Test that non-bytes unit raises ValueError"""
+        with pytest.raises(ValueError, match="Unsupported or malformed"):
+            parse_range_header("items=0-99")
+
+    def test_garbage_input(self):
+        """Test that garbage input raises ValueError"""
+        with pytest.raises(ValueError, match="Unsupported or malformed"):
+            parse_range_header("not-a-range")
+
+    def test_end_less_than_start(self):
+        """Test that end < start raises ValueError"""
+        with pytest.raises(ValueError, match="must be >= start"):
+            parse_range_header("bytes=100-50")
 
 
 if __name__ == "__main__":
