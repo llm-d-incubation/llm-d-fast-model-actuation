@@ -698,13 +698,14 @@ Be mindful of system resources:
 
 ### 5. Log Management
 
-The launcher captures stdout/stderr from each vLLM instance using a multiprocessing queue that feeds into a persistent in-memory byte buffer (`_log_buffer`) per instance:
+The launcher captures stdout/stderr from each vLLM instance by writing directly to a log file on disk:
 
-- **Architecture**: A `QueueWriter` in the child process sends messages to a bounded queue (`MAX_QUEUE_SIZE = 5000` messages, a Python constant defined in `launcher.py`). On read, the launcher drains the queue into the instance's `_log_buffer`, which accumulates all log bytes.
-- **Byte-Based Retrieval**: The `start_byte` parameter is a byte offset into the accumulated buffer. The `max_bytes` parameter limits how many bytes are returned per request.
-- **Queue Overflow**: When the queue is full, new messages are dropped (non-blocking put). Messages already drained into the buffer are preserved.
+- **Architecture**: A `FileWriter` in the child process appends output to a per-instance log file (`/tmp/launcher-<pid>-vllm-<instance_id>.log`). Two `FileWriter` instances (stdout + stderr) safely share the same file via POSIX `O_APPEND` semantics. Each write is followed by a flush so the parent can read new content immediately.
+- **Byte-Based Retrieval**: The `start_byte` parameter is a byte offset into the log file. The `max_bytes` parameter limits how many bytes are returned per request.
+- **No Data Loss**: Since logs are written directly to disk, there is no bounded queue that could overflow and drop messages.
 - **Non-blocking**: Log capture doesn't slow down the vLLM process.
 - **Streaming Support**: Use `start_byte` parameter to efficiently stream logs without re-reading.
+- **Cleanup**: Log files are automatically removed when an instance is stopped or deleted.
 
 **Best Practices:**
 
@@ -725,9 +726,9 @@ The launcher captures stdout/stderr from each vLLM instance using a multiprocess
 
 - **Polling**: Track `start_byte + len(log.encode("utf-8"))` between requests to only fetch new log content
 - **Memory Efficiency**: Use `max_bytes` parameter to limit response size (default: 1 MB, max: 10 MB)
-- **Data Loss**: Logs are lost when an instance is deleted
+- **Data Loss**: Logs are lost when an instance is deleted (the log file is removed)
 - **Production**: Consider external logging solutions for long-term storage and analysis
-- **Byte Tracking**: The `start_byte` position is relative to all logs ever captured, not just current queue content
+- **Byte Tracking**: The `start_byte` position is a byte offset into the log file on disk
 
 ### 6. Testing
 
