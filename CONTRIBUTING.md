@@ -63,93 +63,16 @@ For changes that fix broken code or add small changes within a component:
 
 ## Feature Testing
 
-The FMA project includes several components that require different testing approaches:
+The current testing documentation can be found within the respective components of the [docs folder](docs/).
 
-### Testing FMA Components
-
-#### 1. Dual-Pods Controller Testing
-
-The dual-pods controller manages server-providing Pods in reaction to server-requesting Pods:
-
-* **Unit tests**: Test controller logic in `cmd/dual-pods-controller/`
-* **Integration tests**: Verify Pod creation, deletion, and lifecycle management
-* **E2E tests**: Run the full controller in a Kubernetes cluster (kind or OpenShift)
-  * Use `test/e2e/run.sh` for end-to-end testing
-  * Verify server-requesting Pods trigger server-providing Pod creation
-  * Test resource allocation and GPU assignment
-
-#### 2. Launcher Testing
-
-The vLLM instance launcher is a persistent management process written in Python:
-
-* **Unit tests**: Located in `inference_server/launcher/tests/`
-  * `test_launcher.py`: Tests launcher logic and vLLM instance management
-  * `test_gputranslator.py`: Tests GPU resource translation
-* **Integration tests**: Test launcher with actual vLLM instances
-  * Verify model loading and unloading
-  * Test sleep/wake functionality
-  * Validate model swapping capabilities
-* **Benchmark tests**: Use `inference_server/benchmark/` for performance testing
-  * Run scenarios defined in `scenarios.py`
-  * Measure startup latency and model swap times
-
-#### 3. Launcher-Populator Controller Testing
-
-The launcher-populator controller ensures the right number of launcher pods exist on each node:
-
-* **Unit tests**: Test controller logic in `cmd/launcher-populator/`
-* **Integration tests**: Verify LauncherConfig and LauncherPopulationPolicy handling
-* **E2E tests**: Validate launcher pod distribution across nodes
-  * Use `test/e2e/run-launcher-based.sh` for launcher-based testing
-
-#### 4. Custom Resource Definitions (CRDs)
-
-Test the three CRDs defined in `config/crd/`:
-
-* **InferenceServerConfig**: Verify server configuration properties
-* **LauncherConfig**: Test launcher process configuration
-* **LauncherPopulationPolicy**: Validate launcher pod population rules
-
-### Running Tests
-
-**Go tests:**
-
-```bash
-make test
-```
-
-**Python tests:**
-
-```bash
-cd inference_server/launcher
-python -m pytest tests/
-```
-
-**E2E tests:**
-
-```bash
-# Standard dual-pods test
-./test/e2e/run.sh
-
-# Launcher-based test
-./test/e2e/run-launcher-based.sh
-```
-
-**Benchmark tests:**
-
-```bash
-cd inference_server/benchmark
-python benchmark_base.py
-```
-
-### Code Review Requirements
+## Code Review Requirements
 
 * **All code changes** must be submitted as pull requests (no direct pushes)
 * **All changes** must be reviewed and approved by a maintainer other than the author
 * **All repositories** must gate merges on compilation and passing tests
 * **All experimental features** must be off by default and require explicit opt-in
 
-### Commit and Pull Request Style
+## Commit and Pull Request Style
 
 * **Pull requests** should describe the problem succinctly
 * **Rebase and squash** before merging
@@ -163,66 +86,45 @@ python benchmark_base.py
   * See [PR_SIGNOFF.md](PR_SIGNOFF.md) for configuration details
   * Required for all contributions per [Developer Certificate of Origin](https://developercertificate.org/)
 
-## Code Organization and Ownership
-
-### Components and Maintainers
-
-* **Components** are the primary unit of code organization (repo scope or directory/package/module within a repo)
-* **Maintainers** own components and approve changes
-* **Contributors** can become maintainers through sufficient evidence of contribution
-* Code ownership is reflected in [OWNERS files](https://go.k8s.io/owners) consistent with Kubernetes project conventions
-
-### Experimental Features in FMA
-
-As an incubating component, FMA encourages fast iteration and exploration with these constraints:
-
-1. **Clear identification** as experimental in code and documentation
-2. **Default to off** and require explicit enablement for experimental features
-3. **Best effort support** only
-4. **Removal if unmaintained** with no one to move it forward
-5. **No stigma** to experimental or incubating status
-
-**Naming convention**: Experimental flags must include `experimental` in name (e.g., `--experimental-model-swap-v2=true`)
-
-When adding experimental features:
-
-1. Open pull request with clear experimental designation
-2. Maintainer reviews and enforces "off-by-default" gating
-3. Provide tests for both on/off states
-4. Document the experimental nature in code comments and user documentation
-5. When graduating a feature, default to on and remove conditional logic after one release
-
 ## API Changes and Deprecation
 
-* **No breaking changes**: Once an API/protocol is in GA release (non-experimental), it cannot be removed or behavior changed
+* **No breaking changes**: The no-breaking-changes policy will apply once we reach GA
 * **Includes**: All protocols, API endpoints, internal APIs, command line flags/arguments
 * **Exception**: Bug fixes that don't impact significant number of consumers (As the project matures, we will be stricter about such changes - Hyrum's Law is real)
-* **Versioning**: All protocols and APIs should be versionable with clear forward and backward compatibility requirements. A new version may change behavior and fields.
+* **Versioning**: All protocols and APIs should be versionable with clear forward and backward compatibility requirements. A new version may change behavior and fields. For Go modules and Python packages use semver v0.x.x.  For Kubernetes API object types we use the Kubernetes versioning structure and evolution rules
 * **Documentation**: All APIs must have documented specs describing expected behavior
 
 ## Testing Requirements
 
-We use three tiers of testing:
+We use two tiers of testing:
 
-1. **Unit tests**: Fast verification of code parts, testing different arguments
+1. **Behavioral tests**: Fast verification of code parts, testing different arguments
    * Best for fast verification of parts of code, testing different arguments
    * Doesn't cover interactions between code
-2. **Integration tests**: Testing protocols between components and built artifacts
-   * Best for testing protocols and agreements between components
-   * May not model interactions between components as they are deployed
-3. **End-to-end (e2e) tests**: Whole system testing including benchmarking
+2. **End-to-end (e2e) tests**: Whole system testing including benchmarking
    * Best for preventing end to end regression and verifying overall correctness
    * Execution can be slow
 
-Strong e2e coverage is required for deployed systems to prevent performance regression. Appropriate test coverage is an important part of code review.
+Strong e2e coverage is required for deployed systems to prevent functional regression. Appropriate test coverage is an important part of code review.
 
 ## Security
 
-Maintain appropriate security mindset for production serving. The project will establish a project email address for responsible disclosure of security issues that will be reviewed by the project maintainers. Prior to the first GA release we will formalize a security component and process.
+Maintain appropriate security mindset for production serving. The project will establish a project email address for responsible disclosure of security issues that will be reviewed by the project maintainers. Prior to the first GA release we will formalize a security component and process. More details on security can be found in the [SECURITY.md](./SECURITY.md) file.
 
-## Project Structure
+## Project Structure and Ownership
 
-The FMA repository is organized as follows:
+  The repository contains the following deployable components:
+
+  | Component | Language | Source | Description |
+  |---|---|---|---|
+  | **Dual-Pods Controller** | Go | `cmd/dual-pods-controller/`, `pkg/controller/dual-pods/` | Manages server-providing Pods in reaction to server-requesting Pods. Handles binding, sleep/wake, and readiness relay. |
+  | **Launcher-Populator Controller** | Go | `cmd/launcher-populator/`, `pkg/controller/launcher-populator/` | Proactively creates launcher pods on nodes based on `LauncherPopulationPolicy` CRDs. |
+  | **Requester** | Go | `cmd/requester/`, `pkg/server/requester/` | Lightweight binary running in server-requesting Pods. Exposes SPI endpoints for GPU info and readiness relay. |
+  | **Launcher** | Python | `inference_server/launcher/` | FastAPI service managing multiple vLLM subprocess instances via REST API. |
+  | **Test Requester** | Go | `cmd/test-requester/` | Test binary simulating a requester with GPU allocation. |
+  | **Test Server** | Go | `cmd/test-server/` | Test binary simulating a vLLM-like inference server. |
+
+  The two controllers are deployed via Helm charts in `charts/`.
 
 ### Core Organization (`llm-d-incubation/llm-d-fast-model-actuation`)
 
@@ -271,7 +173,7 @@ This is an **incubating component** in the llm-d ecosystem, focused on fast mode
 
 ### Component Ownership
 
-* **Maintainers** are listed in the [OWNERS](OWNERS) file
+* **Maintainers** are listed in the [OWNERS](OWNERS) file. The file follows Kubernetes conventions for future Prow compatibility but is not currently consumed by automation. Additional OWNERS files can be added per-directory as the project grows.
 * **Contributors** can become maintainers through consistent, quality contributions
 * Code ownership follows Kubernetes project conventions with OWNERS files
 

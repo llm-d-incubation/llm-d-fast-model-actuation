@@ -121,18 +121,7 @@ For Windows users, **Git Bash** is also highly recommended.
 
 2. Press `Enter` to select the default option if prompted to set a save-file or passphrase for the key (you may choose to enter a passphrase if desired; this will prompt you to enter the passphrase every time you perform a DCO sign-off).
    - The following output should generate a `randomart` image
-3. Use the following command to copy the **public** part of the new SSH key to your clipboard:
-
-    ```shell
-    clip < ~/.ssh/id_ed25519.pub
-    ```
-
-    Note: If you are in a WSL shell, use instead
-
-   ```shell
-   clip.exe < ~/.ssh/id_ed25519.pub
-   ```
-
+3. Copy the contents of ~/.ssh/id_ed25519.pub to your clipboard
 4. After copying or saving your SSH key, navigate to **Settings** in your Github.
 5. Navigate to the **SSH and GPG keys** page under the Access section in the sidebar.
 6. Under SSH keys, select **New SSH key**.
