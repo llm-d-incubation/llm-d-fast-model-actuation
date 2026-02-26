@@ -383,13 +383,13 @@ jobs:
             echo "  Stripping dual-pods.llm-d.ai finalizers from pods..."
             for pod in $(kubectl get pods -n "$FMA_NAMESPACE" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
               FINALIZERS=$(kubectl get pod "$pod" -n "$FMA_NAMESPACE" -o jsonpath='{.metadata.finalizers[*]}' 2>/dev/null) || true
-              if echo "$FINALIZERS" | grep -q 'dual-pods.llm-d.ai'; then
-                KEEP=$(echo "$FINALIZERS" | tr ' ' '\n' | grep -v '^dual-pods\.llm-d\.ai' | paste -sd, -)
+              if echo "$FINALIZERS" | grep -q 'dual-pods\.llm-d\.ai/'; then
+                KEEP=$(echo "$FINALIZERS" | tr ' ' '\n' | grep -v '^dual-pods\.llm-d\.ai/')
                 if [ -z "$KEEP" ]; then
                   kubectl patch pod "$pod" -n "$FMA_NAMESPACE" \
                     --type=json -p='[{"op":"remove","path":"/metadata/finalizers"}]' 2>/dev/null || true
                 else
-                  JSON_ARR=$(echo "$KEEP" | tr ',' '\n' | sed 's/.*/"&"/' | paste -sd, -)
+                  JSON_ARR=$(echo "$KEEP" | sed 's/.*/"&"/' | paste -sd, -)
                   kubectl patch pod "$pod" -n "$FMA_NAMESPACE" \
                     --type=merge -p="{\"metadata\":{\"finalizers\":[$JSON_ARR]}}" 2>/dev/null || true
                 fi
@@ -416,25 +416,9 @@ jobs:
       - name: Create namespace
         run: |
           # Wait for namespace to be fully deleted if still terminating.
-          # Strip dual-pods finalizers first, then use kubectl wait with a timeout.
+          # Finalizers were already stripped in the cleanup step above.
           if kubectl get namespace "$FMA_NAMESPACE" &>/dev/null; then
-            echo "Namespace $FMA_NAMESPACE still exists — stripping dual-pods.llm-d.ai finalizers..."
-            for pod in $(kubectl get pods -n "$FMA_NAMESPACE" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
-              FINALIZERS=$(kubectl get pod "$pod" -n "$FMA_NAMESPACE" -o jsonpath='{.metadata.finalizers[*]}' 2>/dev/null) || true
-              if echo "$FINALIZERS" | grep -q 'dual-pods.llm-d.ai'; then
-                KEEP=$(echo "$FINALIZERS" | tr ' ' '\n' | grep -v '^dual-pods\.llm-d\.ai' | paste -sd, -)
-                if [ -z "$KEEP" ]; then
-                  kubectl patch pod "$pod" -n "$FMA_NAMESPACE" \
-                    --type=json -p='[{"op":"remove","path":"/metadata/finalizers"}]' 2>/dev/null || true
-                else
-                  JSON_ARR=$(echo "$KEEP" | tr ',' '\n' | sed 's/.*/"&"/' | paste -sd, -)
-                  kubectl patch pod "$pod" -n "$FMA_NAMESPACE" \
-                    --type=merge -p="{\"metadata\":{\"finalizers\":[$JSON_ARR]}}" 2>/dev/null || true
-                fi
-              fi
-            done
-
-            echo "Waiting for namespace $FMA_NAMESPACE to be deleted (timeout 120s)..."
+            echo "Namespace $FMA_NAMESPACE still exists — waiting for deletion (timeout 120s)..."
             if ! kubectl wait --for=delete namespace/"$FMA_NAMESPACE" --timeout=120s 2>/dev/null; then
               echo "::error::Namespace $FMA_NAMESPACE still terminating after 120s"
               kubectl get namespace "$FMA_NAMESPACE" -o yaml || true
@@ -933,26 +917,6 @@ jobs:
         run: |
           echo "Test failed - scaling down controller to free resources while preserving for debugging..."
           kubectl scale deployment "$FMA_RELEASE_NAME-dual-pods-controller" -n "$FMA_NAMESPACE" --replicas=0 || true
-
-          # Strip dual-pods.llm-d.ai/* finalizers so the namespace can be cleaned up on the next run.
-          # Without this, scaling down the controller leaves orphaned finalizers that block
-          # namespace deletion indefinitely.
-          # Only remove dual-pods finalizers — other controllers' finalizers must be respected.
-          echo "Stripping dual-pods.llm-d.ai finalizers from pods (prevents stuck namespace on next cleanup)..."
-          for pod in $(kubectl get pods -n "$FMA_NAMESPACE" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
-            FINALIZERS=$(kubectl get pod "$pod" -n "$FMA_NAMESPACE" -o jsonpath='{.metadata.finalizers[*]}' 2>/dev/null) || true
-            if echo "$FINALIZERS" | grep -q 'dual-pods.llm-d.ai'; then
-              KEEP=$(echo "$FINALIZERS" | tr ' ' '\n' | grep -v '^dual-pods\.llm-d\.ai' | paste -sd, -)
-              if [ -z "$KEEP" ]; then
-                kubectl patch pod "$pod" -n "$FMA_NAMESPACE" \
-                  --type=json -p='[{"op":"remove","path":"/metadata/finalizers"}]' 2>/dev/null || true
-              else
-                JSON_ARR=$(echo "$KEEP" | tr ',' '\n' | sed 's/.*/"&"/' | paste -sd, -)
-                kubectl patch pod "$pod" -n "$FMA_NAMESPACE" \
-                  --type=merge -p="{\"metadata\":{\"finalizers\":[$JSON_ARR]}}" 2>/dev/null || true
-              fi
-            fi
-          done
 
           echo ""
           echo "=== Remaining resources for debugging ==="
