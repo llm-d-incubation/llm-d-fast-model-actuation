@@ -271,7 +271,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
         with:
-          go-version: "1.24.x"
+          go-version: "1.25.x"
           cache-dependency-path: ./go.sum
 
       - name: Set up ko
@@ -871,6 +871,29 @@ jobs:
           sleep 10
           echo "Test objects cleaned up"
 
+      - name: Dump namespace resources
+        if: always()
+        run: |
+          echo "=== All resources in namespace ==="
+          echo "Namespace: $FMA_NAMESPACE"
+          kubectl get all -n "$FMA_NAMESPACE" -o wide || true
+
+      - name: Dump pod details
+        if: always()
+        run: |
+          kubectl describe pods -n "$FMA_NAMESPACE" 2>/dev/null || true
+
+      - name: Dump namespace events
+        if: always()
+        run: |
+          kubectl get events -n "$FMA_NAMESPACE" --sort-by='.lastTimestamp' 2>/dev/null | tail -30 || true
+
+      - name: Dump controller logs
+        if: always()
+        run: |
+          kubectl logs deployment/"$FMA_RELEASE_NAME-dual-pods-controller" -n "$FMA_NAMESPACE" --previous 2>/dev/null || true
+          kubectl logs deployment/"$FMA_RELEASE_NAME-dual-pods-controller" -n "$FMA_NAMESPACE" 2>/dev/null || true
+
       - name: Cleanup infrastructure
         # Cleanup on success or cancellation, but NOT on failure (preserve for debugging)
         if: (success() || cancelled()) && env.SKIP_CLEANUP != 'true'
@@ -891,12 +914,12 @@ jobs:
           for pod in $(kubectl get pods -n "$FMA_NAMESPACE" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
             FINALIZERS=$(kubectl get pod "$pod" -n "$FMA_NAMESPACE" -o jsonpath='{.metadata.finalizers[*]}' 2>/dev/null) || true
             if echo "$FINALIZERS" | grep -q 'dual-pods.llm-d.ai'; then
-              KEEP=$(echo "$FINALIZERS" | tr ' ' '\n' | grep -v '^dual-pods\.llm-d\.ai' | paste -sd, -)
+              KEEP=$(echo "$FINALIZERS" | tr ' ' '\n' | grep -v '^dual-pods\.llm-d\.ai/')
               if [ -z "$KEEP" ]; then
                 kubectl patch pod "$pod" -n "$FMA_NAMESPACE" \
                   --type=json -p='[{"op":"remove","path":"/metadata/finalizers"}]' 2>/dev/null || true
               else
-                JSON_ARR=$(echo "$KEEP" | tr ',' '\n' | sed 's/.*/"&"/' | paste -sd, -)
+                JSON_ARR=$(echo "$KEEP" | sed 's/.*/"&"/' | paste -sd, -)
                 kubectl patch pod "$pod" -n "$FMA_NAMESPACE" \
                   --type=merge -p="{\"metadata\":{\"finalizers\":[$JSON_ARR]}}" 2>/dev/null || true
               fi
@@ -921,31 +944,6 @@ jobs:
           kubectl delete validatingadmissionpolicybinding bind-fma-bound-serverreqpod bind-fma-immutable-fields --ignore-not-found 2>/dev/null || true
 
           echo "Cleanup complete"
-
-      - name: Dump cluster state
-        if: always()
-        run: |
-          echo "=== Dumping cluster state for diagnostics ==="
-          echo ""
-          echo "=== All resources in namespace ==="
-          echo "Namespace: $FMA_NAMESPACE"
-          kubectl get all -n "$FMA_NAMESPACE" || true
-          echo ""
-          echo "=== Pod details ==="
-          kubectl describe pods -n "$FMA_NAMESPACE" 2>/dev/null || true
-          echo ""
-          echo "=== Events ==="
-          kubectl get events -n "$FMA_NAMESPACE" --sort-by='.lastTimestamp' 2>/dev/null | tail -30 || true
-          echo ""
-          echo "=== Dual Pods controller logs ==="
-          kubectl logs deployment/"$FMA_RELEASE_NAME-dual-pods-controller" -n "$FMA_NAMESPACE" --previous 2>/dev/null || true
-          kubectl logs deployment/"$FMA_RELEASE_NAME-dual-pods-controller" -n "$FMA_NAMESPACE" 2>/dev/null || true
-
-      - name: Scale down controller on failure
-        if: failure()
-        run: |
-          echo "Test failed - scaling down controller to free resources while preserving for debugging..."
-          kubectl scale deployment "$FMA_RELEASE_NAME-dual-pods-controller" -n "$FMA_NAMESPACE" --replicas=0 || true
 
   # Report status back to PR for issue_comment triggered runs
   # This ensures fork PRs show the correct status after /ok-to-test runs complete
