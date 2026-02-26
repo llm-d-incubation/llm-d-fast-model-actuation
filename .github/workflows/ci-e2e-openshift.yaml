@@ -375,6 +375,21 @@ jobs:
               echo "  Uninstalling helm release: $release"
               helm uninstall "$release" -n "$FMA_NAMESPACE" --ignore-not-found --wait --timeout 60s || true
             done
+            # Remove dual-pods.llm-d.ai/* finalizers from all pods so namespace deletion is not blocked
+            echo "  Removing dual-pods finalizers from pods in $FMA_NAMESPACE..."
+            for pod in $(kubectl get pods -n "$FMA_NAMESPACE" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+              all_finalizers=$(kubectl get pod "$pod" -n "$FMA_NAMESPACE" \
+                -o jsonpath='{range .metadata.finalizers[*]}{@}{"\n"}{end}' 2>/dev/null || true)
+              if ! echo "$all_finalizers" | grep -q '^dual-pods\.llm-d\.ai/'; then
+                continue
+              fi
+              echo "    Patching pod $pod to remove dual-pods finalizers"
+              keep_entries=$(echo "$all_finalizers" \
+                | grep -v '^dual-pods\.llm-d\.ai/' \
+                | awk 'NR>1{printf ","} {printf "\"%s\"", $0}')
+              kubectl patch pod "$pod" -n "$FMA_NAMESPACE" --type=merge \
+                -p="{\"metadata\":{\"finalizers\":[${keep_entries}]}}" 2>/dev/null || true
+            done
             echo "  Deleting namespace: $FMA_NAMESPACE"
             kubectl delete namespace "$FMA_NAMESPACE" --ignore-not-found --timeout=120s || true
           else
@@ -851,6 +866,22 @@ jobs:
           for release in $(helm list -n "$FMA_NAMESPACE" -q 2>/dev/null); do
             echo "  Uninstalling helm release: $release"
             helm uninstall "$release" -n "$FMA_NAMESPACE" --ignore-not-found --wait --timeout 60s || true
+          done
+
+          # Remove dual-pods.llm-d.ai/* finalizers from all pods so namespace deletion is not blocked
+          echo "  Removing dual-pods finalizers from pods in $FMA_NAMESPACE..."
+          for pod in $(kubectl get pods -n "$FMA_NAMESPACE" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+            all_finalizers=$(kubectl get pod "$pod" -n "$FMA_NAMESPACE" \
+              -o jsonpath='{range .metadata.finalizers[*]}{@}{"\n"}{end}' 2>/dev/null || true)
+            if ! echo "$all_finalizers" | grep -q '^dual-pods\.llm-d\.ai/'; then
+              continue
+            fi
+            echo "    Patching pod $pod to remove dual-pods finalizers"
+            keep_entries=$(echo "$all_finalizers" \
+              | grep -v '^dual-pods\.llm-d\.ai/' \
+              | awk 'NR>1{printf ","} {printf "\"%s\"", $0}')
+            kubectl patch pod "$pod" -n "$FMA_NAMESPACE" --type=merge \
+              -p="{\"metadata\":{\"finalizers\":[${keep_entries}]}}" 2>/dev/null || true
           done
 
           # Delete namespace
