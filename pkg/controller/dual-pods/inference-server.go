@@ -472,7 +472,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		// then those with capacity for new instances.
 		// Note that multiple vLLM instances could exist in one launcher Pod, but at most one instance could be awake at a time.
 
-		launcherPod, hasSleepingInstance, someNotReady, err := ctl.selectBestLauncherPod(ctx, launcherPodAnys, iscHash, nodeDat)
+		launcherPod, hasSleepingInstance, someNotReady, err := ctl.selectBestLauncherPod(ctx, launcherPodAnys, iscHash, int(lc.Spec.MaxSleepingInstances), nodeDat)
 		if err != nil {
 			return err, true
 		}
@@ -510,6 +510,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				return ctl.bind(ctx, serverDat, requestingPod, launcherPod, true, int16(isc.Spec.ModelServerConfig.Port))
 			} else {
 				// Slower path: create new instance in launcher with capacity
+				logger.V(5).Info("Creating new vLLM instance", "iscHash", iscHash)
 				result, err := lClient.CreateNamedInstance(ctx, iscHash, *cfg)
 				if err != nil {
 					return fmt.Errorf("create vLLM instance: %w", err), true
@@ -564,6 +565,7 @@ func (ctl *controller) selectBestLauncherPod(
 	ctx context.Context,
 	launcherPodAnys []interface{},
 	iscHash string,
+	maxOthers int,
 	nodeDat *nodeData,
 ) (*corev1.Pod, bool, bool, error) {
 	logger := klog.FromContext(ctx)
@@ -614,8 +616,7 @@ func (ctl *controller) selectBestLauncherPod(
 		}
 
 		// Check if this launcher has capacity for a new instance
-		// A launcher has capacity if it has zero instances (can host at least one)
-		if insts.TotalInstances == 0 && candidateWithCapacity == nil {
+		if insts.TotalInstances <= maxOthers && candidateWithCapacity == nil {
 			// Priority 2: Has capacity for new instance
 			logger.V(5).Info("Found launcher with capacity for new instance",
 				"name", launcherPod.Name,
