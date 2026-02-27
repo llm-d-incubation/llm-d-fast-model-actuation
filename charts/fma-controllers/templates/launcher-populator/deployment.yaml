@@ -21,7 +21,7 @@ spec:
         app.kubernetes.io/component: launcher-populator
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
-      serviceAccountName: {{ .Release.Name }}-controller
+      serviceAccountName: {{ .Release.Name }}-fma-controllers
       containers:
         - name: launcher-populator
           image: "{{ .Values.global.imageRegistry }}/launcher-populator:{{ .Values.global.imageTag }}"

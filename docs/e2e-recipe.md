@@ -58,21 +58,26 @@ example, that would go as follows.
 IMAGE_TAG=b699bc6 # JUST AN EXAMPLE - USE WHAT YOU BUILT
 ```
 
-Instantiate the Helm chart for the FMA controllers. This deploys both
-the dual-pods controller and the launcher-populator by default. Specify
-the tag produced by the build above. Specify the name of the
-ClusterRole to use for Node get/list/watch authorization, or omit if
-not needed. Adjust the sleeperLimit setting to your liking (the default
-is 2). Set enableValidationPolicy as needed (the default is true).
-To deploy without the launcher-populator, add
-`--set launcherPopulator.enabled=false`.
-
-**Note:** Validating Admission Policy became Generally Available (GA) and enabled by default in Kubernetes release 1.30. In the event that your cluster does not support these policies, set `global.enableValidationPolicy` to `false`. More about validating admission policies [here](#example-9-exercise-protection-against-unwanted-label-and-annotation-modifications).
-
+If your cluster supports `ValidatingAdmissionPolicy` objects (which
+became generally available in Kubernetes release 1.30) and you are
+authorized to create them then create the ones for protecting FMA
+objects with the following command. Otherwise, don't worry; these
+objects are not required for correct controller functioning, they are
+only for rejecting improper object updates. [Example
+9](#example-9-exercise-protection-against-unwanted-label-and-annotation-modifications)
+demonstrates some such rejections.
 
 ```shell
-POLICIES_ENABLED=false # SET TO WHAT FITS YOUR CLUSTER
+kubectl apply -f config/validating-admission-policies
 ```
+
+Instantiate the Helm chart for the FMA controllers. This deploys both
+the dual-pods controller and the launcher-populator by
+default. Specify the tag produced by the build above. Specify the name
+of the ClusterRole to use for Node get/list/watch authorization, or
+omit if not needed. Adjust the sleeperLimit setting to your liking
+(the default is 2). To deploy without the launcher-populator, add
+`--set launcherPopulator.enabled=false`.
 
 NOTE: if you have done this before then you will need to delete the
 old Helm chart instance before re-making it.
@@ -82,8 +87,7 @@ helm upgrade --install fma charts/fma-controllers \
   --set global.imageRegistry="${CONTAINER_IMG_REG}" \
   --set global.imageTag="${IMAGE_TAG}" \
   --set global.nodeViewClusterRole=vcp-node-viewer \
-  --set dualPodsController.sleeperLimit=1 \
-  --set global.enableValidationPolicy=${POLICIES_ENABLED}
+  --set dualPodsController.sleeperLimit=1
 ```
 
 Finally, define a shell function that creates a new ReplicaSet whose

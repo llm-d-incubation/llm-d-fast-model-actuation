@@ -1,0 +1,23 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: fma-policy-admin
+  annotations:
+    description: >
+      Grants get/watch/create/update/patch/delete access to the specific
+      ValidatingAdmissionPolicy and ValidatingAdmissionPolicyBinding objects
+      used by FMA controllers. Bind this ClusterRole to service accounts
+      and/or users that need to manage these cluster-scoped policy objects.
+rules:
+- apiGroups: ["admissionregistration.k8s.io"]
+  resources: ["validatingadmissionpolicies"]
+  resourceNames:
+    - fma-immutable-fields
+    - fma-bound-serverreqpod
+  verbs: [get, watch, create, update, patch, delete]
+- apiGroups: ["admissionregistration.k8s.io"]
+  resources: ["validatingadmissionpolicybindings"]
+  resourceNames:
+    - bind-fma-immutable-fields
+    - bind-fma-bound-serverreqpod
+  verbs: [get, watch, create, update, patch, delete]

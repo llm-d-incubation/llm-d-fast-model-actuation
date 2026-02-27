@@ -2,6 +2,7 @@
 
 - [Launcher](launcher.md)
 - [Fast Model Actuation with Process Flexibility and Dual Pods](dual-pods.md)
+- [Cluster Sharing](cluster-sharing.md)
 
 # Dev/test
 

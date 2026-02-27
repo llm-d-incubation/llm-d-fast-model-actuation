@@ -15,11 +15,6 @@ global:
   # Empty string means no new binding is needed.
   nodeViewClusterRole: ""
 
-  # Whether to install validating admission policies and bindings
-  # from this chart. These policies prevent other parties from
-  # modifying labels and annotations that the FMA controllers rely upon.
-  enableValidationPolicy: true
-
   # Set this to true when deploying in a local cluster.
   # This suppresses image pulls for the dual-pods controller.
   local: false
