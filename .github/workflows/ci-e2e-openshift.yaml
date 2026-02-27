@@ -836,6 +836,26 @@ jobs:
           echo "=== Launcher test passed: pods created and launcher bound to requester ==="
           kubectl get pods -n "$FMA_NAMESPACE" -o wide --show-labels
 
+      - name: List objects of category all
+        if: always()
+        run: kubectl get all -n "$FMA_NAMESPACE"
+
+      - name: List event objects
+        if: always()
+        run: kubectl get events -n "$FMA_NAMESPACE" --sort-by='.lastTimestamp'
+
+      - name: Dump Pod logs
+        if: always()
+        run: |
+          for pod in $(kubectl get pods -n "$FMA_NAMESPACE" -o 'jsonpath={.items[*].metadata.name} ') ; do
+            echo ""
+            echo "=== Previous log of $pod ==="
+            kubectl logs -n "$FMA_NAMESPACE" $pod --previous || true
+            echo ""
+            echo "=== Log of $pod ==="
+            kubectl logs -n "$FMA_NAMESPACE" $pod || true
+          done
+
       - name: Clean up test objects
         if: always()
         env:
@@ -906,21 +926,6 @@ jobs:
         run: |
           echo "Test failed - scaling down controller to free resources while preserving for debugging..."
           kubectl scale deployment "$FMA_RELEASE_NAME-dual-pods-controller" -n "$FMA_NAMESPACE" --replicas=0 || true
-
-          echo ""
-          echo "=== Remaining resources for debugging ==="
-          echo "Namespace: $FMA_NAMESPACE"
-          kubectl get all -n "$FMA_NAMESPACE" || true
-          echo ""
-          echo "=== Pod details ==="
-          kubectl describe pods -n "$FMA_NAMESPACE" 2>/dev/null || true
-          echo ""
-          echo "=== Events ==="
-          kubectl get events -n "$FMA_NAMESPACE" --sort-by='.lastTimestamp' 2>/dev/null | tail -30 || true
-          echo ""
-          echo "=== Dual Pods controller logs ==="
-          kubectl logs deployment/"$FMA_RELEASE_NAME-dual-pods-controller" -n "$FMA_NAMESPACE" --previous 2>/dev/null || true
-          kubectl logs deployment/"$FMA_RELEASE_NAME-dual-pods-controller" -n "$FMA_NAMESPACE" 2>/dev/null || true
 
   # Report status back to PR for issue_comment triggered runs
   # This ensures fork PRs show the correct status after /ok-to-test runs complete
