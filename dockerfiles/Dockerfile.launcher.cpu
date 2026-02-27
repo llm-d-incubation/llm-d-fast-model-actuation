@@ -2,7 +2,7 @@
 # Supports both arm64 and amd64 architectures
 
 ARG TARGETARCH
-ARG VLLM_VERSION=v0.15.0
+ARG VLLM_VERSION=v0.15.1
 
 # Define base images for each architecture
 FROM public.ecr.aws/q9t5s3a7/vllm-arm64-cpu-release-repo:${VLLM_VERSION} AS base-arm64

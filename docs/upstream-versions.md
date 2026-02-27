@@ -13,5 +13,5 @@
 | **k8s.io/client-go** | `v0.34.0` | tag | `go.mod` line 9 | [kubernetes/client-go](https://github.com/kubernetes/client-go) |
 | **sigs.k8s.io/controller-runtime** | `v0.22.1` | tag | `go.mod` line 12 | [kubernetes-sigs/controller-runtime](https://github.com/kubernetes-sigs/controller-runtime) |
 | **vllm/vllm-openai** | `v0.10.2` | tag | `cmd/requester/README.md` | [vllm-project/vllm](https://github.com/vllm-project/vllm) |
-| **vllm (CPU build)** | `v0.15.0` | tag | `dockerfiles/Dockerfile.launcher.cpu` | [vllm-project/vllm](https://github.com/vllm-project/vllm) |
+| **vllm (CPU build)** | `v0.15.1` | tag | `dockerfiles/Dockerfile.launcher.cpu` | [vllm-project/vllm](https://github.com/vllm-project/vllm) |
 | **nvidia/cuda** | `12.8.0-base-ubuntu22.04` | tag | `dockerfiles/Dockerfile.requester` | [NVIDIA CUDA](https://hub.docker.com/r/nvidia/cuda) |
