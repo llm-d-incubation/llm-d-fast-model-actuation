@@ -886,7 +886,9 @@ jobs:
             --ignore-not-found --timeout=120s || true
 
           # Delete CRDs
-          kubectl delete -f config/crd/ --ignore-not-found || true
+          # TODO: Implement safe CRD lifecycle management for tests (e.g., handle shared clusters,
+          #       concurrent test runs, and version upgrades/downgrades) before enabling CRD deletion.
+          # kubectl delete -f config/crd/ --ignore-not-found || true
 
           # Delete cluster-scoped resources
           kubectl delete clusterrole fma-node-viewer --ignore-not-found || true
