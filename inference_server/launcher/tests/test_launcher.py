@@ -17,6 +17,7 @@ Unit tests for Multi-Instance vLLM Launcher
 Run as:
 python -m pytest tests/test_launcher.py -v
 """
+import os
 import signal
 import sys
 from unittest.mock import MagicMock, patch
@@ -36,13 +37,13 @@ sys.modules["vllm.entrypoints.utils"] = MagicMock()
 # Import the application and classes
 from launcher import (  # noqa: E402
     MAX_LOG_RESPONSE_BYTES,
-    MAX_QUEUE_SIZE,
+    FileWriter,
     LogRangeNotAvailable,
-    QueueWriter,
     VllmConfig,
     VllmInstance,
     VllmMultiProcessManager,
     app,
+    parse_range_header,
     set_env_vars,
 )
 
@@ -69,15 +70,21 @@ def vllm_config_no_env():
 
 
 @pytest.fixture
-def manager():
+def manager(tmp_path):
     """Create a fresh VllmMultiProcessManager for each test"""
-    return VllmMultiProcessManager()
+    return VllmMultiProcessManager(log_dir=str(tmp_path))
 
 
 @pytest.fixture
 def client():
     """Create a FastAPI test client"""
     return TestClient(app)
+
+
+@pytest.fixture
+def tmp_log_dir(tmp_path):
+    """Provide a temporary directory for log files"""
+    return str(tmp_path)
 
 
 # Mock process for testing without actually starting vLLM
@@ -130,34 +137,43 @@ class TestVllmConfig:
 # Tests for VllmInstance
 class TestVllmInstance:
     @patch("launcher.multiprocessing.Process")
-    def test_instance_creation(self, vllm_config, gpu_translator):
+    def test_instance_creation(self, vllm_config, gpu_translator, tmp_log_dir):
         """Test creating a VllmInstance"""
-        instance = VllmInstance("test-id", vllm_config, gpu_translator)
+        instance = VllmInstance(
+            "test-id", vllm_config, gpu_translator, log_dir=tmp_log_dir
+        )
         assert instance.instance_id == "test-id"
         assert instance.config == vllm_config
         assert instance.process is None
 
     @patch("launcher.multiprocessing.Process")
-    def test_instance_start(self, mock_process_class, vllm_config, gpu_translator):
+    def test_instance_start(
+        self, mock_process_class, vllm_config, gpu_translator, tmp_log_dir
+    ):
         """Test starting a vLLM instance"""
         mock_process = MockProcess()
         mock_process_class.return_value = mock_process
 
-        instance = VllmInstance("test-id", vllm_config, gpu_translator)
+        instance = VllmInstance(
+            "test-id", vllm_config, gpu_translator, log_dir=tmp_log_dir
+        )
         result = instance.start()
 
         assert result["status"] == "started"
         assert result["instance_id"] == "test-id"
+        assert os.path.exists(instance._log_file_path)
 
     @patch("launcher.multiprocessing.Process")
     def test_instance_start_already_running(
-        self, mock_process_class, vllm_config, gpu_translator
+        self, mock_process_class, vllm_config, gpu_translator, tmp_log_dir
     ):
         """Test starting an instance that's already running"""
         mock_process = MockProcess()
         mock_process_class.return_value = mock_process
 
-        instance = VllmInstance("test-id", vllm_config, gpu_translator)
+        instance = VllmInstance(
+            "test-id", vllm_config, gpu_translator, log_dir=tmp_log_dir
+        )
         instance.start()
         result = instance.start()  # Try to start again
 
@@ -165,12 +181,16 @@ class TestVllmInstance:
         assert result["instance_id"] == "test-id"
 
     @patch("launcher.multiprocessing.Process")
-    def test_instance_stop(self, mock_process_class, vllm_config, gpu_translator):
+    def test_instance_stop(
+        self, mock_process_class, vllm_config, gpu_translator, tmp_log_dir
+    ):
         """Test stopping a running instance"""
         mock_process = MockProcess()
         mock_process_class.return_value = mock_process
 
-        instance = VllmInstance("test-id", vllm_config, gpu_translator)
+        instance = VllmInstance(
+            "test-id", vllm_config, gpu_translator, log_dir=tmp_log_dir
+        )
         instance.start()
         result = instance.stop()
 
@@ -179,9 +199,11 @@ class TestVllmInstance:
         assert mock_process.terminated is True
 
     @patch("launcher.multiprocessing.Process")
-    def test_instance_stop_not_running(self, vllm_config, gpu_translator):
+    def test_instance_stop_not_running(self, vllm_config, gpu_translator, tmp_log_dir):
         """Test stopping an instance that's not running"""
-        instance = VllmInstance("test-id", vllm_config, gpu_translator)
+        instance = VllmInstance(
+            "test-id", vllm_config, gpu_translator, log_dir=tmp_log_dir
+        )
         result = instance.stop()
 
         assert result["status"] == "not_running"
@@ -190,7 +212,7 @@ class TestVllmInstance:
     @patch("launcher.os.killpg")
     @patch("launcher.multiprocessing.Process")
     def test_instance_force_kill(
-        self, mock_process_class, mock_killpg, vllm_config, gpu_translator
+        self, mock_process_class, mock_killpg, vllm_config, gpu_translator, tmp_log_dir
     ):
         """Test force killing an instance that won't terminate"""
         mock_process = MockProcess()
@@ -213,19 +235,25 @@ class TestVllmInstance:
         mock_process.join = join_side_effect
         mock_process_class.return_value = mock_process
 
-        instance = VllmInstance("test-id", vllm_config, gpu_translator)
+        instance = VllmInstance(
+            "test-id", vllm_config, gpu_translator, log_dir=tmp_log_dir
+        )
         instance.start()
         _ = instance.stop(timeout=0.1)
 
         mock_killpg.assert_called_once_with(mock_process.pid, signal.SIGKILL)
 
     @patch("launcher.multiprocessing.Process")
-    def test_instance_get_status(self, mock_process_class, vllm_config, gpu_translator):
+    def test_instance_get_status(
+        self, mock_process_class, vllm_config, gpu_translator, tmp_log_dir
+    ):
         """Test getting instance status"""
         mock_process = MockProcess()
         mock_process_class.return_value = mock_process
 
-        instance = VllmInstance("test-id", vllm_config, gpu_translator)
+        instance = VllmInstance(
+            "test-id", vllm_config, gpu_translator, log_dir=tmp_log_dir
+        )
 
         # Running
         instance.start()
@@ -239,7 +267,7 @@ class TestVllmInstance:
 
     @patch("launcher.multiprocessing.Process")
     def test_instance_uuid_to_index_translation(
-        self, mock_process_class, gpu_translator
+        self, mock_process_class, gpu_translator, tmp_log_dir
     ):
         """Test that GPU UUIDs are correctly translated to
         indices and CUDA_VISIBLE_DEVICES is set"""
@@ -262,7 +290,7 @@ class TestVllmInstance:
         )
 
         # Create instance (this triggers UUID translation in __init__)
-        instance = VllmInstance("test-id", config, gpu_translator)
+        instance = VllmInstance("test-id", config, gpu_translator, log_dir=tmp_log_dir)
 
         # Verify uuid_to_index was called for each UUID
         assert gpu_translator.uuid_to_index.call_count == len(test_uuids)
@@ -279,7 +307,7 @@ class TestVllmInstance:
 
     @patch("launcher.multiprocessing.Process")
     def test_instance_uuid_translation_creates_env_vars_if_none(
-        self, mock_process_class, gpu_translator
+        self, mock_process_class, gpu_translator, tmp_log_dir
     ):
         """Test that env_vars dict is created when
         gpu_uuids provided but env_vars is None"""
@@ -299,7 +327,7 @@ class TestVllmInstance:
         assert config.env_vars is None
 
         # Create instance
-        instance = VllmInstance("test-id", config, gpu_translator)
+        instance = VllmInstance("test-id", config, gpu_translator, log_dir=tmp_log_dir)
 
         # Verify env_vars was created and CUDA_VISIBLE_DEVICES was set
         assert instance.config.env_vars is not None
@@ -307,7 +335,7 @@ class TestVllmInstance:
 
     @patch("launcher.multiprocessing.Process")
     def test_instance_uuid_translation_preserves_existing_env_vars(
-        self, mock_process_class, gpu_translator
+        self, mock_process_class, gpu_translator, tmp_log_dir
     ):
         """Test that existing env_vars are preserved when adding CUDA_VISIBLE_DEVICES"""
         mock_process = MockProcess()
@@ -325,7 +353,7 @@ class TestVllmInstance:
         )
 
         # Create instance
-        instance = VllmInstance("test-id", config, gpu_translator)
+        instance = VllmInstance("test-id", config, gpu_translator, log_dir=tmp_log_dir)
 
         # Verify existing env_vars are preserved
         assert instance.config.env_vars["CUSTOM_VAR"] == "custom_value"
@@ -335,7 +363,7 @@ class TestVllmInstance:
 
     @patch("launcher.multiprocessing.Process")
     def test_instance_no_uuid_translation_when_gpu_uuids_none(
-        self, mock_process_class, gpu_translator
+        self, mock_process_class, gpu_translator, tmp_log_dir
     ):
         """Test that uuid_to_index is not called when gpu_uuids is None"""
         mock_process = MockProcess()
@@ -350,7 +378,7 @@ class TestVllmInstance:
         )
 
         # Create instance
-        instance = VllmInstance("test-id", config, gpu_translator)
+        instance = VllmInstance("test-id", config, gpu_translator, log_dir=tmp_log_dir)
 
         # Verify uuid_to_index was NOT called
         gpu_translator.uuid_to_index.assert_not_called()
@@ -484,52 +512,52 @@ class TestVllmMultiProcessManager:
         assert "id-2" in instances
 
     @patch("launcher.multiprocessing.Process")
-    @patch("launcher.multiprocessing.Queue")
-    def test_get_instance_logs(
-        self, mock_queue_class, mock_process_class, manager, vllm_config
-    ):
-        """Test getting logs from a specific instance"""
+    def test_get_instance_log_bytes(self, mock_process_class, manager, vllm_config):
+        """Test getting log bytes from a specific instance"""
         mock_process = MockProcess()
         mock_process_class.return_value = mock_process
 
-        mock_queue = MagicMock()
-        mock_queue.empty.side_effect = [False, False, False, True]
-        mock_queue.get_nowait.side_effect = ["Log line 1", "Log line 2", "Log line 3"]
-        mock_queue_class.return_value = mock_queue
-
         manager.create_instance(vllm_config, "test-id")
-        log_content = manager.get_instance_logs("test-id", start_byte=0, max_bytes=1000)
 
-        assert isinstance(log_content, str)
-        assert "Log line 1" in log_content
-        assert "Log line 2" in log_content
-        assert "Log line 3" in log_content
+        # Write log data directly to the instance's log file
+        instance = manager.instances["test-id"]
+        with open(instance._log_file_path, "wb") as f:
+            f.write(b"Log line 1Log line 2Log line 3")
+
+        data, total = manager.get_instance_log_bytes("test-id", start=0)
+
+        assert isinstance(data, bytes)
+        assert b"Log line 1" in data
+        assert b"Log line 2" in data
+        assert b"Log line 3" in data
+        assert total == 30
 
     @patch("launcher.multiprocessing.Process")
-    def test_get_instance_logs_nonexistent(self, mock_process_class, manager):
-        """Test getting logs from nonexistent instance raises KeyError"""
+    def test_get_instance_log_bytes_nonexistent(self, mock_process_class, manager):
+        """Test getting log bytes from nonexistent instance raises KeyError"""
         with pytest.raises(KeyError, match="not found"):
-            manager.get_instance_logs("nonexistent-id")
+            manager.get_instance_log_bytes("nonexistent-id")
 
     @patch("launcher.multiprocessing.Process")
-    @patch("launcher.multiprocessing.Queue")
-    def test_get_instance_logs_respects_max_bytes(
-        self, mock_queue_class, mock_process_class, manager, vllm_config
+    def test_get_instance_log_bytes_with_end(
+        self, mock_process_class, manager, vllm_config
     ):
-        """Test that get_logs respects max_bytes parameter"""
+        """Test that get_instance_log_bytes respects end parameter"""
         mock_process = MockProcess()
         mock_process_class.return_value = mock_process
 
-        mock_queue = MagicMock()
-        mock_queue.empty.side_effect = [False, False, True]
-        mock_queue.get_nowait.side_effect = ["A" * 60, "B" * 60]
-        mock_queue_class.return_value = mock_queue
-
         manager.create_instance(vllm_config, "test-id")
-        log_content = manager.get_instance_logs("test-id", start_byte=0, max_bytes=100)
 
-        assert isinstance(log_content, str)
-        assert len(log_content.encode("utf-8")) <= 100
+        # Write log data directly to the instance's log file
+        instance = manager.instances["test-id"]
+        with open(instance._log_file_path, "wb") as f:
+            f.write(b"A" * 60 + b"B" * 60)
+
+        data, total = manager.get_instance_log_bytes("test-id", start=0, end=99)
+
+        assert isinstance(data, bytes)
+        assert len(data) == 100
+        assert total == 120
 
 
 # Tests for API Endpoints
@@ -685,31 +713,36 @@ class TestAPIEndpoints:
 
     @patch("launcher.vllm_manager")
     def test_get_instance_logs_endpoint(self, mock_manager, client):
-        """Test getting instance logs via API"""
-        mock_manager.get_instance_logs.return_value = "Log line 1Log line 2Log line 3"
+        """Test getting instance logs without Range header returns 200"""
+        mock_manager.get_instance_log_bytes.return_value = (
+            b"Log line 1Log line 2Log line 3",
+            29,
+        )
 
         response = client.get("/v2/vllm/instances/test-id/log")
 
         assert response.status_code == 200
-        data = response.json()
-        assert "log" in data
-        assert isinstance(data["log"], str)
-        assert "Log line 1" in data["log"]
+        assert response.headers["content-type"] == "application/octet-stream"
+        assert response.content == b"Log line 1Log line 2Log line 3"
+        mock_manager.get_instance_log_bytes.assert_called_once_with("test-id", 0, None)
 
     @patch("launcher.vllm_manager")
-    def test_get_instance_logs_with_max_bytes(self, mock_manager, client):
-        """Test getting instance logs with max_bytes parameter"""
-        mock_manager.get_instance_logs.return_value = "Log 1Log 2"
+    def test_get_instance_logs_with_range_header(self, mock_manager, client):
+        """Test getting instance logs with Range header"""
+        mock_manager.get_instance_log_bytes.return_value = (b"A" * 5000, 10000)
 
-        response = client.get("/v2/vllm/instances/test-id/log?max_bytes=5000")
+        response = client.get(
+            "/v2/vllm/instances/test-id/log",
+            headers={"Range": "bytes=0-4999"},
+        )
 
-        assert response.status_code == 200
-        mock_manager.get_instance_logs.assert_called_once_with("test-id", 0, 5000)
+        assert response.status_code == 206
+        mock_manager.get_instance_log_bytes.assert_called_once_with("test-id", 0, 4999)
 
     @patch("launcher.vllm_manager")
     def test_get_instance_logs_nonexistent_endpoint(self, mock_manager, client):
         """Test getting logs from nonexistent instance returns 404"""
-        mock_manager.get_instance_logs.side_effect = KeyError("not found")
+        mock_manager.get_instance_log_bytes.side_effect = KeyError("not found")
 
         response = client.get("/v2/vllm/instances/nonexistent-id/log")
 
@@ -717,186 +750,201 @@ class TestAPIEndpoints:
 
     @patch("launcher.vllm_manager")
     def test_get_instance_logs_range_not_available(self, mock_manager, client):
-        """Test getting logs with start_byte beyond available content.
-        Returns 416 with JSON body"""
-        mock_manager.get_instance_logs.side_effect = LogRangeNotAvailable(5000, 1000)
+        """Test getting logs with start beyond available content returns 416"""
+        mock_manager.get_instance_log_bytes.side_effect = LogRangeNotAvailable(
+            5000, 1000
+        )
 
-        response = client.get("/v2/vllm/instances/test-id/log?start_byte=5000")
+        response = client.get(
+            "/v2/vllm/instances/test-id/log",
+            headers={"Range": "bytes=5000-"},
+        )
 
         assert response.status_code == 416
-        data = response.json()
-        assert data["available_bytes"] == 1000
+        assert response.headers["content-range"] == "bytes */1000"
+
+    @patch("launcher.vllm_manager")
+    def test_get_instance_logs_partial_content_206(self, mock_manager, client):
+        """Test 206 Partial Content with correct Content-Range header"""
+        mock_manager.get_instance_log_bytes.return_value = (b"ABCDE", 100)
+
+        response = client.get(
+            "/v2/vllm/instances/test-id/log",
+            headers={"Range": "bytes=10-14"},
+        )
+
+        assert response.status_code == 206
+        assert response.content == b"ABCDE"
+        assert response.headers["content-range"] == "bytes 10-14/100"
+
+    @patch("launcher.vllm_manager")
+    def test_get_instance_logs_open_ended_range(self, mock_manager, client):
+        """Test open-ended Range: bytes=100-"""
+        mock_manager.get_instance_log_bytes.return_value = (b"rest of log", 200)
+
+        response = client.get(
+            "/v2/vllm/instances/test-id/log",
+            headers={"Range": "bytes=100-"},
+        )
+
+        assert response.status_code == 206
+        mock_manager.get_instance_log_bytes.assert_called_once_with(
+            "test-id", 100, None
+        )
+        assert response.headers["content-range"] == "bytes 100-110/200"
+
+    @patch("launcher.vllm_manager")
+    def test_get_instance_logs_invalid_range(self, mock_manager, client):
+        """Test malformed Range header returns 400"""
+        response = client.get(
+            "/v2/vllm/instances/test-id/log",
+            headers={"Range": "invalid"},
+        )
+
+        assert response.status_code == 400
+
+    @patch("launcher.vllm_manager")
+    def test_get_instance_logs_suffix_range_rejected(self, mock_manager, client):
+        """Test suffix range bytes=-500 returns 400"""
+        response = client.get(
+            "/v2/vllm/instances/test-id/log",
+            headers={"Range": "bytes=-500"},
+        )
+
+        assert response.status_code == 400
 
 
-# Tests for QueueWriter
-class TestQueueWriter:
-    def test_queue_writer_write_non_empty(self):
-        """Test QueueWriter writes non-empty messages to queue"""
-        from unittest.mock import MagicMock
-
-        mock_queue = MagicMock()
-        mock_queue.put_nowait.side_effect = None  # Simulate successful put
-        writer = QueueWriter(mock_queue, sys.stdout)
+# Tests for FileWriter
+class TestFileWriter:
+    def test_file_writer_write_non_empty(self, tmp_log_dir):
+        """Test FileWriter writes non-empty messages to file"""
+        log_path = os.path.join(tmp_log_dir, "test.log")
+        writer = FileWriter(log_path, sys.stdout)
 
         writer.write("Test message")
 
-        # Verify put_nowait was called with the message
-        mock_queue.put_nowait.assert_called_once_with("Test message")
+        with open(log_path, "rb") as f:
+            content = f.read()
+        assert content == b"Test message"
 
-    def test_queue_writer_ignores_empty_messages(self):
-        """Test QueueWriter ignores empty/whitespace messages"""
-        from unittest.mock import MagicMock
-
-        mock_queue = MagicMock()
-        writer = QueueWriter(mock_queue, sys.stdout)
+    def test_file_writer_ignores_empty_messages(self, tmp_log_dir):
+        """Test FileWriter ignores empty/whitespace messages"""
+        log_path = os.path.join(tmp_log_dir, "test.log")
+        writer = FileWriter(log_path, sys.stdout)
 
         writer.write("")
         writer.write("   ")
         writer.write("\n")
 
-        # put should not have been called for empty messages
-        mock_queue.put.assert_not_called()
+        with open(log_path, "rb") as f:
+            content = f.read()
+        assert content == b""
 
-    def test_queue_writer_flush(self):
-        """Test QueueWriter flush passes through to original stream"""
-        from unittest.mock import MagicMock
+    def test_file_writer_flush(self, tmp_log_dir):
+        """Test FileWriter flush does not raise"""
+        log_path = os.path.join(tmp_log_dir, "test.log")
+        writer = FileWriter(log_path, sys.stdout)
 
-        mock_queue = MagicMock()
-        mock_original = MagicMock()
-        writer = QueueWriter(mock_queue, mock_original)
-
+        # flush should not raise
         writer.flush()
 
-        mock_original.flush.assert_called_once()
+    def test_file_writer_multiple_writes(self, tmp_log_dir):
+        """Test FileWriter accumulates multiple writes"""
+        log_path = os.path.join(tmp_log_dir, "test.log")
+        writer = FileWriter(log_path, sys.stdout)
+
+        writer.write("Hello ")
+        writer.write("World")
+
+        with open(log_path, "rb") as f:
+            content = f.read()
+        assert content == b"Hello World"
+
+    def test_file_writer_returns_msg_length(self, tmp_log_dir):
+        """Test FileWriter.write returns the length of the message"""
+        log_path = os.path.join(tmp_log_dir, "test.log")
+        writer = FileWriter(log_path, sys.stdout)
+
+        result = writer.write("Test")
+        assert result == 4
+
+        result = writer.write("")
+        assert result == 0
 
 
 # Tests for VllmInstance log functionality
 class TestVllmInstanceLogs:
-    @patch("launcher.multiprocessing.Process")
-    @patch("launcher.multiprocessing.Queue")
-    def test_get_logs_empty_queue(
-        self,
-        mock_queue_class,
-        mock_process_class,
-        vllm_config,
-        gpu_translator,
-    ):
-        """Test get_logs returns empty string when queue is empty"""
-        mock_process = MockProcess()
-        mock_process_class.return_value = mock_process
+    def _make_instance(self, gpu_translator, log_dir):
+        """Helper to create a VllmInstance without starting a real process"""
+        config = VllmConfig(options="--model test --port 8000")
+        instance = VllmInstance("test-id", config, gpu_translator, log_dir=log_dir)
+        return instance
 
-        mock_queue = MagicMock()
-        mock_queue.empty.return_value = True
-        mock_queue_class.return_value = mock_queue
+    def test_get_log_bytes_no_file(self, gpu_translator, tmp_log_dir):
+        """Test get_log_bytes returns empty bytes when log file doesn't exist"""
+        instance = self._make_instance(gpu_translator, tmp_log_dir)
 
-        instance = VllmInstance("test-id", vllm_config, gpu_translator)
-        instance.start()
+        data, total = instance.get_log_bytes()
 
-        log_content = instance.get_logs()
+        assert data == b""
+        assert total == 0
 
-        assert log_content == ""
+    def test_get_log_bytes_empty_file(self, gpu_translator, tmp_log_dir):
+        """Test get_log_bytes returns empty bytes when log file is empty"""
+        instance = self._make_instance(gpu_translator, tmp_log_dir)
+        open(instance._log_file_path, "wb").close()
 
-    @patch("launcher.multiprocessing.Process")
-    @patch("launcher.multiprocessing.Queue")
-    def test_get_logs_with_messages(
-        self,
-        mock_queue_class,
-        mock_process_class,
-        vllm_config,
-        gpu_translator,
-    ):
-        """Test get_logs retrieves messages from queue"""
-        mock_process = MockProcess()
-        mock_process_class.return_value = mock_process
+        data, total = instance.get_log_bytes()
 
-        mock_queue = MagicMock()
-        mock_queue.empty.side_effect = [False, False, True]
-        mock_queue.get_nowait.side_effect = ["Log 1", "Log 2"]
-        mock_queue_class.return_value = mock_queue
+        assert data == b""
+        assert total == 0
 
-        instance = VllmInstance("test-id", vllm_config, gpu_translator)
-        instance.start()
+    def test_get_log_bytes_with_content(self, gpu_translator, tmp_log_dir):
+        """Test get_log_bytes retrieves content from log file"""
+        instance = self._make_instance(gpu_translator, tmp_log_dir)
+        with open(instance._log_file_path, "wb") as f:
+            f.write(b"Log 1Log 2")
 
-        log_content = instance.get_logs()
+        data, total = instance.get_log_bytes()
 
-        assert isinstance(log_content, str)
-        assert "Log 1" in log_content
-        assert "Log 2" in log_content
+        assert isinstance(data, bytes)
+        assert b"Log 1" in data
+        assert b"Log 2" in data
+        assert total == 10
 
-    @patch("launcher.multiprocessing.Process")
-    @patch("launcher.multiprocessing.Queue")
-    def test_get_logs_respects_max_bytes(
-        self,
-        mock_queue_class,
-        mock_process_class,
-        vllm_config,
-        gpu_translator,
-    ):
-        """Test get_logs respects max_bytes parameter"""
-        mock_process = MockProcess()
-        mock_process_class.return_value = mock_process
+    def test_get_log_bytes_with_end(self, gpu_translator, tmp_log_dir):
+        """Test get_log_bytes respects end parameter"""
+        instance = self._make_instance(gpu_translator, tmp_log_dir)
+        with open(instance._log_file_path, "wb") as f:
+            f.write(b"A" * 50 + b"B" * 50 + b"C" * 50)
 
-        mock_queue = MagicMock()
-        mock_queue.empty.side_effect = [False, False, False, True]
-        mock_queue.get_nowait.side_effect = ["A" * 50, "B" * 50, "C" * 50]
-        mock_queue_class.return_value = mock_queue
+        data, total = instance.get_log_bytes(start=0, end=99)
 
-        instance = VllmInstance("test-id", vllm_config, gpu_translator)
-        instance.start()
+        assert isinstance(data, bytes)
+        assert len(data) == 100
+        assert total == 150
 
-        log_content = instance.get_logs(start_byte=0, max_bytes=100)
+    def test_get_log_bytes_persists_across_calls(self, gpu_translator, tmp_log_dir):
+        """Test that log file accumulates across multiple reads"""
+        instance = self._make_instance(gpu_translator, tmp_log_dir)
 
-        assert isinstance(log_content, str)
-        assert len(log_content.encode("utf-8")) <= 100
+        with open(instance._log_file_path, "wb") as f:
+            f.write(b"Hello World")
+        data, total = instance.get_log_bytes(start=0)
+        assert data == b"Hello World"
+        assert total == 11
 
-    @patch("launcher.multiprocessing.Process")
-    def test_get_logs_no_queue(self, mock_process_class, vllm_config, gpu_translator):
-        """Test get_logs returns empty string when queue doesn't exist"""
-        instance = VllmInstance("test-id", vllm_config, gpu_translator)
-        # Don't start the instance, so output_queue is None
-
-        log_content = instance.get_logs()
-
-        assert log_content == ""
-
-    @patch("launcher.multiprocessing.Process")
-    @patch("launcher.multiprocessing.Queue")
-    def test_get_logs_buffer_persists_across_calls(
-        self,
-        mock_queue_class,
-        mock_process_class,
-        vllm_config,
-        gpu_translator,
-    ):
-        """Test that log buffer accumulates across multiple get_logs calls"""
-        mock_process = MockProcess()
-        mock_process_class.return_value = mock_process
-
-        mock_queue = MagicMock()
-        mock_queue_class.return_value = mock_queue
-
-        instance = VllmInstance("test-id", vllm_config, gpu_translator)
-        instance.start()
-
-        # First call: queue has some messages
-        mock_queue.empty.side_effect = [False, False, True]
-        mock_queue.get_nowait.side_effect = ["Hello ", "World"]
-        log_content = instance.get_logs(start_byte=0)
-        assert log_content == "Hello World"
-
-        # Second call: queue has new messages, buffer should have old + new
-        mock_queue.empty.side_effect = [False, True]
-        mock_queue.get_nowait.side_effect = ["!"]
-        log_content = instance.get_logs(start_byte=0)
-        assert log_content == "Hello World!"
+        with open(instance._log_file_path, "ab") as f:
+            f.write(b"!")
+        data, total = instance.get_log_bytes(start=0)
+        assert data == b"Hello World!"
+        assert total == 12
 
 
 # Tests for Helper Functions
 class TestHelperFunctions:
     def test_set_env_vars(self):
         """Test setting environment variables"""
-        import os
-
         test_vars = {"TEST_VAR_1": "value1", "TEST_VAR_2": 12345, "TEST_VAR_3": True}
 
         set_env_vars(test_vars)
@@ -909,157 +957,219 @@ class TestHelperFunctions:
         for key in test_vars.keys():
             del os.environ[key]
 
-    def test_max_queue_size_constant(self):
-        """Test that MAX_QUEUE_SIZE constant is defined"""
-        assert MAX_QUEUE_SIZE == 5000
-
     def test_max_log_response_bytes_constant(self):
         """Test that MAX_LOG_RESPONSE_BYTES constant is defined"""
         assert MAX_LOG_RESPONSE_BYTES == 1 * 1024 * 1024  # 1 MB
 
 
-# Tests for VllmInstance log buffer behavior
-class TestLogBuffer:
-    """Test suite for VllmInstance buffer-based log retrieval"""
+# Tests for VllmInstance file-based log behavior
+class TestLogFile:
+    """Test suite for VllmInstance file-based log retrieval"""
 
-    def _make_instance(self, gpu_translator):
+    def _make_instance(self, gpu_translator, log_dir):
         """Helper to create a VllmInstance without starting a real process"""
         config = VllmConfig(options="--model test --port 8000")
-        instance = VllmInstance("test-id", config, gpu_translator)
+        instance = VllmInstance("test-id", config, gpu_translator, log_dir=log_dir)
         return instance
 
-    def test_basic_retrieval(self, gpu_translator):
+    def test_basic_retrieval(self, gpu_translator, tmp_log_dir):
         """Test basic log retrieval"""
-        instance = self._make_instance(gpu_translator)
-        mock_queue = MagicMock()
-        mock_queue.empty.side_effect = [False, False, True]
-        mock_queue.get_nowait.side_effect = ["Test message 1", "Test message 2"]
-        instance.output_queue = mock_queue
+        instance = self._make_instance(gpu_translator, tmp_log_dir)
+        with open(instance._log_file_path, "wb") as f:
+            f.write(b"Test message 1Test message 2")
 
-        log_content = instance.get_logs(start_byte=0, max_bytes=1000)
-        assert isinstance(log_content, str)
-        assert "Test message 1" in log_content
-        assert "Test message 2" in log_content
+        data, total = instance.get_log_bytes(start=0)
+        assert isinstance(data, bytes)
+        assert b"Test message 1" in data
+        assert b"Test message 2" in data
+        assert total == 28
 
-    def test_empty_queue(self, gpu_translator):
-        """Test getting logs from empty queue"""
-        instance = self._make_instance(gpu_translator)
-        mock_queue = MagicMock()
-        mock_queue.empty.return_value = True
-        instance.output_queue = mock_queue
+    def test_empty_file(self, gpu_translator, tmp_log_dir):
+        """Test getting logs from empty file"""
+        instance = self._make_instance(gpu_translator, tmp_log_dir)
+        open(instance._log_file_path, "wb").close()
 
-        log_content = instance.get_logs(start_byte=0, max_bytes=1000)
-        assert log_content == ""
+        data, total = instance.get_log_bytes(start=0)
+        assert data == b""
+        assert total == 0
 
-    def test_byte_limit_enforcement(self, gpu_translator):
-        """Test that byte limit is enforced"""
-        instance = self._make_instance(gpu_translator)
-        mock_queue = MagicMock()
-        messages = [f"Message {i}" for i in range(10)]
-        mock_queue.empty.side_effect = [False] * 10 + [True]
-        mock_queue.get_nowait.side_effect = messages
-        instance.output_queue = mock_queue
+    def test_end_limit_enforcement(self, gpu_translator, tmp_log_dir):
+        """Test that end parameter limits returned bytes"""
+        instance = self._make_instance(gpu_translator, tmp_log_dir)
+        content = "".join(f"Message {i}" for i in range(10))
+        with open(instance._log_file_path, "wb") as f:
+            f.write(content.encode("utf-8"))
 
-        log_content = instance.get_logs(start_byte=0, max_bytes=50)
-        assert isinstance(log_content, str)
-        assert len(log_content.encode("utf-8")) <= 50
+        data, total = instance.get_log_bytes(start=0, end=49)
+        assert isinstance(data, bytes)
+        assert len(data) == 50
 
-    def test_max_bytes_larger_than_content(self, gpu_translator):
-        """Test when max_bytes is larger than available content"""
-        instance = self._make_instance(gpu_translator)
-        mock_queue = MagicMock()
-        mock_queue.empty.side_effect = [False, False, True]
-        mock_queue.get_nowait.side_effect = ["Short", "Message"]
-        instance.output_queue = mock_queue
+    def test_end_larger_than_content(self, gpu_translator, tmp_log_dir):
+        """Test when end is beyond available content (truncates to EOF)"""
+        instance = self._make_instance(gpu_translator, tmp_log_dir)
+        with open(instance._log_file_path, "wb") as f:
+            f.write(b"ShortMessage")
 
-        log_content = instance.get_logs(start_byte=0, max_bytes=10000)
-        assert isinstance(log_content, str)
-        assert "Short" in log_content
-        assert "Message" in log_content
+        data, total = instance.get_log_bytes(start=0, end=9999)
+        assert isinstance(data, bytes)
+        assert b"Short" in data
+        assert b"Message" in data
+        assert total == 12
 
-    def test_buffer_not_refilled_into_queue(self, gpu_translator):
-        """Test that messages are NOT put back into the queue (one-way pipe)"""
-        instance = self._make_instance(gpu_translator)
-        mock_queue = MagicMock()
-        mock_queue.empty.side_effect = [False, False, True]
-        mock_queue.get_nowait.side_effect = ["Message 1", "Message 2"]
-        instance.output_queue = mock_queue
+    def test_unicode_bytes(self, gpu_translator, tmp_log_dir):
+        """Test that raw bytes with unicode are returned as-is"""
+        instance = self._make_instance(gpu_translator, tmp_log_dir)
+        raw = "Hello 世界Test émojis 🚀".encode("utf-8")
+        with open(instance._log_file_path, "wb") as f:
+            f.write(raw)
 
-        instance.get_logs(start_byte=0, max_bytes=1000)
+        data, total = instance.get_log_bytes(start=0)
+        assert isinstance(data, bytes)
+        assert data == raw
+        assert total == len(raw)
 
-        # put_nowait should NOT be called — queue is one-way
-        mock_queue.put_nowait.assert_not_called()
+    def test_partial_retrieval_with_end(self, gpu_translator, tmp_log_dir):
+        """Test that only bytes up to end are returned"""
+        instance = self._make_instance(gpu_translator, tmp_log_dir)
+        with open(instance._log_file_path, "wb") as f:
+            f.write(b"A" * 20 + b"B" * 20 + b"C" * 20)
 
-    def test_unicode_handling(self, gpu_translator):
-        """Test handling of unicode characters"""
-        instance = self._make_instance(gpu_translator)
-        mock_queue = MagicMock()
-        mock_queue.empty.side_effect = [False, False, True]
-        mock_queue.get_nowait.side_effect = ["Hello 世界", "Test émojis 🚀"]
-        instance.output_queue = mock_queue
+        data, total = instance.get_log_bytes(start=0, end=44)
+        assert data == b"A" * 20 + b"B" * 20 + b"C" * 5
+        assert total == 60
 
-        log_content = instance.get_logs(start_byte=0, max_bytes=1000)
-        assert isinstance(log_content, str)
-        assert "世界" in log_content
-        assert "🚀" in log_content
+    def test_start_offset(self, gpu_translator, tmp_log_dir):
+        """Test that start returns bytes from exact position"""
+        instance = self._make_instance(gpu_translator, tmp_log_dir)
+        with open(instance._log_file_path, "wb") as f:
+            f.write(b"A" * 10 + b"B" * 10 + b"C" * 10)
 
-    def test_partial_retrieval_with_byte_limit(self, gpu_translator):
-        """Test that only bytes within limit are returned"""
-        instance = self._make_instance(gpu_translator)
-        mock_queue = MagicMock()
-        mock_queue.empty.side_effect = [False, False, False, True]
-        mock_queue.get_nowait.side_effect = ["A" * 20, "B" * 20, "C" * 20]
-        instance.output_queue = mock_queue
+        data, total = instance.get_log_bytes(start=15)
+        assert data == b"B" * 5 + b"C" * 10
+        assert total == 30
 
-        log_content = instance.get_logs(start_byte=0, max_bytes=45)
-        assert log_content == "A" * 20 + "B" * 20 + "C" * 5
+    def test_start_at_message_boundary(self, gpu_translator, tmp_log_dir):
+        """Test that start at exact boundary works correctly"""
+        instance = self._make_instance(gpu_translator, tmp_log_dir)
+        with open(instance._log_file_path, "wb") as f:
+            f.write(b"A" * 10 + b"B" * 10 + b"C" * 10)
 
-    def test_start_byte_offset(self, gpu_translator):
-        """Test that start_byte returns bytes from exact position"""
-        instance = self._make_instance(gpu_translator)
-        mock_queue = MagicMock()
-        mock_queue.empty.side_effect = [False, False, False, True]
-        mock_queue.get_nowait.side_effect = ["A" * 10, "B" * 10, "C" * 10]
-        instance.output_queue = mock_queue
+        data, total = instance.get_log_bytes(start=10)
+        assert data == b"B" * 10 + b"C" * 10
+        assert total == 30
 
-        log_content = instance.get_logs(start_byte=15, max_bytes=100)
-        assert log_content == "B" * 5 + "C" * 10
-
-    def test_start_byte_at_message_boundary(self, gpu_translator):
-        """Test that start_byte at exact message boundary works correctly"""
-        instance = self._make_instance(gpu_translator)
-        mock_queue = MagicMock()
-        mock_queue.empty.side_effect = [False, False, False, True]
-        mock_queue.get_nowait.side_effect = ["A" * 10, "B" * 10, "C" * 10]
-        instance.output_queue = mock_queue
-
-        log_content = instance.get_logs(start_byte=10, max_bytes=100)
-        assert log_content == "B" * 10 + "C" * 10
-
-    def test_start_byte_beyond_available_raises_error(self, gpu_translator):
-        """Test that start_byte beyond available content raises LogRangeNotAvailable"""
-        instance = self._make_instance(gpu_translator)
-        mock_queue = MagicMock()
-        mock_queue.empty.side_effect = [False, False, True]
-        mock_queue.get_nowait.side_effect = ["A" * 10, "B" * 10]
-        instance.output_queue = mock_queue
+    def test_start_beyond_available_raises_error(self, gpu_translator, tmp_log_dir):
+        """Test that start beyond available content raises LogRangeNotAvailable"""
+        instance = self._make_instance(gpu_translator, tmp_log_dir)
+        with open(instance._log_file_path, "wb") as f:
+            f.write(b"A" * 10 + b"B" * 10)
 
         with pytest.raises(LogRangeNotAvailable) as exc_info:
-            instance.get_logs(start_byte=50, max_bytes=100)
+            instance.get_log_bytes(start=50)
 
         assert exc_info.value.start_byte == 50
         assert exc_info.value.available_bytes == 20
 
-    def test_start_byte_equal_to_length_returns_empty(self, gpu_translator):
-        """Test that start_byte equal to log length returns empty string"""
-        instance = self._make_instance(gpu_translator)
-        mock_queue = MagicMock()
-        mock_queue.empty.side_effect = [False, True]
-        mock_queue.get_nowait.side_effect = ["A" * 10]
-        instance.output_queue = mock_queue
+    def test_start_equal_to_length_raises_error(self, gpu_translator, tmp_log_dir):
+        """Test that start equal to file size raises LogRangeNotAvailable"""
+        instance = self._make_instance(gpu_translator, tmp_log_dir)
+        with open(instance._log_file_path, "wb") as f:
+            f.write(b"A" * 10)
 
-        log_content = instance.get_logs(start_byte=10, max_bytes=100)
-        assert log_content == ""
+        with pytest.raises(LogRangeNotAvailable) as exc_info:
+            instance.get_log_bytes(start=10)
+
+        assert exc_info.value.start_byte == 10
+        assert exc_info.value.available_bytes == 10
+
+    def test_no_file_with_start_raises_error(self, gpu_translator, tmp_log_dir):
+        """Test that requesting logs with start > 0 when no file exists raises"""
+        instance = self._make_instance(gpu_translator, tmp_log_dir)
+
+        with pytest.raises(LogRangeNotAvailable) as exc_info:
+            instance.get_log_bytes(start=10)
+
+        assert exc_info.value.start_byte == 10
+        assert exc_info.value.available_bytes == 0
+
+
+# Tests for log file cleanup
+class TestLogFileCleanup:
+    """Test suite for log file cleanup on stop"""
+
+    def _make_instance(self, gpu_translator, log_dir):
+        config = VllmConfig(options="--model test --port 8000")
+        return VllmInstance("test-id", config, gpu_translator, log_dir=log_dir)
+
+    @patch("launcher.multiprocessing.Process")
+    def test_stop_terminated_cleans_up_log_file(
+        self, mock_process_class, gpu_translator, tmp_log_dir
+    ):
+        """Test that stop() removes the log file after terminating"""
+        mock_process = MockProcess()
+        mock_process_class.return_value = mock_process
+
+        instance = self._make_instance(gpu_translator, tmp_log_dir)
+        instance.start()
+        assert os.path.exists(instance._log_file_path)
+
+        instance.stop()
+        assert not os.path.exists(instance._log_file_path)
+
+    @patch("launcher.multiprocessing.Process")
+    def test_stop_not_running_cleans_up_log_file(
+        self, mock_process_class, gpu_translator, tmp_log_dir
+    ):
+        """Test that stop() removes the log file when process is not running"""
+        instance = self._make_instance(gpu_translator, tmp_log_dir)
+        # Create a log file manually
+        open(instance._log_file_path, "wb").close()
+        assert os.path.exists(instance._log_file_path)
+
+        instance.stop()
+        assert not os.path.exists(instance._log_file_path)
+
+    def test_cleanup_missing_file_no_error(self, gpu_translator, tmp_log_dir):
+        """Test that _cleanup_log_file does not raise if file doesn't exist"""
+        instance = self._make_instance(gpu_translator, tmp_log_dir)
+        # Should not raise
+        instance._cleanup_log_file()
+
+
+class TestParseRangeHeader:
+    """Tests for the parse_range_header helper function"""
+
+    def test_full_range(self):
+        """Test parsing bytes=0-99"""
+        assert parse_range_header("bytes=0-99") == (0, 99)
+
+    def test_open_ended_range(self):
+        """Test parsing bytes=100-"""
+        assert parse_range_header("bytes=100-") == (100, None)
+
+    def test_large_values(self):
+        """Test parsing large byte values"""
+        assert parse_range_header("bytes=1048576-2097151") == (1048576, 2097151)
+
+    def test_suffix_range_rejected(self):
+        """Test that suffix range bytes=-500 raises ValueError"""
+        with pytest.raises(ValueError, match="Unsupported or malformed"):
+            parse_range_header("bytes=-500")
+
+    def test_invalid_unit(self):
+        """Test that non-bytes unit raises ValueError"""
+        with pytest.raises(ValueError, match="Unsupported or malformed"):
+            parse_range_header("items=0-99")
+
+    def test_garbage_input(self):
+        """Test that garbage input raises ValueError"""
+        with pytest.raises(ValueError, match="Unsupported or malformed"):
+            parse_range_header("not-a-range")
+
+    def test_end_less_than_start(self):
+        """Test that end < start raises ValueError"""
+        with pytest.raises(ValueError, match="must be >= start"):
+            parse_range_header("bytes=100-50")
 
 
 if __name__ == "__main__":
