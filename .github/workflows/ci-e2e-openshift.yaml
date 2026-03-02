@@ -398,10 +398,6 @@ jobs:
           kubectl delete clusterrolebinding -l app.kubernetes.io/name=fma-controllers --ignore-not-found 2>/dev/null || true
           kubectl delete clusterrole fma-node-viewer --ignore-not-found || true
 
-          # Clean up ValidatingAdmissionPolicy resources (cluster-scoped, created by dual-pods-controller chart)
-          kubectl delete validatingadmissionpolicy fma-bound-serverreqpod fma-immutable-fields --ignore-not-found 2>/dev/null || true
-          kubectl delete validatingadmissionpolicybinding bind-fma-bound-serverreqpod bind-fma-immutable-fields --ignore-not-found 2>/dev/null || true
-
           echo "Cleanup complete"
 
       - name: Create namespace
@@ -437,8 +433,15 @@ jobs:
 
       - name: Apply FMA CRDs
         run: |
-          echo "Applying FMA CRDs..."
-          kubectl apply --server-side -f config/crd/
+          for crd_file in config/crd/*.yaml; do
+            crd_name=$(kubectl apply --dry-run=client -f "$crd_file" -o jsonpath='{.metadata.name}')
+            if kubectl get crd "$crd_name" &>/dev/null; then
+              echo "  CRD $crd_name already exists, skipping"
+            else
+              echo "  Applying $crd_file ($crd_name)"
+              kubectl apply --server-side -f "$crd_file"
+            fi
+          done
 
           # Verify CRDs are registered
           echo "Verifying CRDs..."
@@ -474,15 +477,23 @@ jobs:
           echo "ValidatingAdmissionPolicy support: $POLICIES_ENABLED"
           echo "policies_enabled=$POLICIES_ENABLED" >> $GITHUB_OUTPUT
 
-      - name: Deploy FMA controller
+      - name: Apply ValidatingAdmissionPolicy resources
         env:
           POLICIES_ENABLED: ${{ steps.detect-vap.outputs.policies_enabled }}
+        run: |
+          if [ "$POLICIES_ENABLED" = "true" ]; then
+            echo "Applying ValidatingAdmissionPolicy resources..."
+            kubectl apply -f config/validating-admission-policies/
+          else
+            echo "ValidatingAdmissionPolicy not supported, skipping."
+          fi
+
+      - name: Deploy FMA controller
         run: |
           echo "Deploying FMA controller..."
           echo "  Release: $FMA_RELEASE_NAME"
           echo "  Namespace: $FMA_NAMESPACE"
           echo "  Image: $CONTROLLER_IMAGE"
-          echo "  EnableValidationPolicy: $POLICIES_ENABLED"
 
           helm upgrade --install "$FMA_RELEASE_NAME" charts/fma-controllers \
             -n "$FMA_NAMESPACE" \
@@ -492,7 +503,6 @@ jobs:
             --set dualPodsController.sleeperLimit=2 \
             --set global.local=false \
             --set dualPodsController.debugAcceleratorMemory=false \
-            --set global.enableValidationPolicy="$POLICIES_ENABLED" \
             --set launcherPopulator.enabled=false
 
       - name: Wait for controller to be ready
@@ -914,10 +924,6 @@ jobs:
           kubectl delete clusterrole fma-node-viewer --ignore-not-found || true
           kubectl delete clusterrolebinding "$FMA_RELEASE_NAME-node-view" --ignore-not-found || true
           kubectl delete clusterrolebinding "testreq-view-${FMA_NAMESPACE}" --ignore-not-found || true
-
-          # Delete ValidatingAdmissionPolicy resources (cluster-scoped)
-          kubectl delete validatingadmissionpolicy fma-bound-serverreqpod fma-immutable-fields --ignore-not-found 2>/dev/null || true
-          kubectl delete validatingadmissionpolicybinding bind-fma-bound-serverreqpod bind-fma-immutable-fields --ignore-not-found 2>/dev/null || true
 
           echo "Cleanup complete"
 

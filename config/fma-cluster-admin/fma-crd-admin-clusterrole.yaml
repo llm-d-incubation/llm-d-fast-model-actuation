@@ -1,0 +1,18 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: fma-crd-admin
+  annotations:
+    description: >
+      Grants get/watch/create/update/patch/delete access to the specific
+      CustomResourceDefinition objects used by FMA controllers. Bind this
+      ClusterRole to service accounts and/or users that need to manage
+      these cluster-scoped CRD objects.
+rules:
+- apiGroups: ["apiextensions.k8s.io"]
+  resources: ["customresourcedefinitions"]
+  resourceNames:
+    - inferenceserverconfigs.fma.llm-d.ai
+    - launcherconfigs.fma.llm-d.ai
+    - launcherpopulationpolicies.fma.llm-d.ai
+  verbs: [get, watch, create, update, patch, delete]

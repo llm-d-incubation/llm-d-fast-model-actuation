@@ -123,11 +123,10 @@ make load-test-requester-local
 make load-test-server-local
 make load-controller-local
 
-: Detect whether API server supports ValidatingAdmissionPolicy
+: Create the ValidatingAdmissionPolicy[Binding] objects if possible
 
-POLICIES_ENABLED=false
 if kubectl api-resources --api-group=admissionregistration.k8s.io -o name | grep -q 'validatingadmissionpolicies'; then
-  POLICIES_ENABLED=true
+  kubectl apply -f config/validating-admission-policies
 fi
 
 : Deploy the FMA controllers in the cluster
@@ -142,7 +141,6 @@ helm upgrade --install fma charts/fma-controllers \
   --set dualPodsController.sleeperLimit=2 \
   --set global.local=true \
   --set dualPodsController.debugAcceleratorMemory=false \
-  --set global.enableValidationPolicy=${POLICIES_ENABLED} \
   --set launcherPopulator.enabled=false
 
 : Test Pod creation

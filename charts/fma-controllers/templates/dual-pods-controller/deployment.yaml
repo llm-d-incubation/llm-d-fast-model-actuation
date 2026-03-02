@@ -31,5 +31,5 @@ spec:
         - "--namespace={{ .Release.Namespace }}"
         - "--sleeper-limit={{ .Values.dualPodsController.sleeperLimit }}"
         - "--debug-accelerator-memory={{ .Values.dualPodsController.debugAcceleratorMemory }}"
-      serviceAccountName: {{ .Release.Name }}-controller
+      serviceAccountName: {{ .Release.Name }}-fma-controllers
 {{- end }}
