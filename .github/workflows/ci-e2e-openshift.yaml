@@ -578,6 +578,9 @@ jobs:
           - apiGroups: [""]
             resources: ["configmaps"]
             verbs: ["create"]
+          - apiGroups: [""]
+            resources: ["pods"]
+            verbs: ["get", "list", "watch"]
           EOF
 
           kubectl create sa testreq -n "$FMA_NAMESPACE" || true
@@ -586,8 +589,6 @@ jobs:
           kubectl create rolebinding testreq \
             --role=testreq --serviceaccount="${FMA_NAMESPACE}:testreq" \
             -n "$FMA_NAMESPACE" || true
-          kubectl create clusterrolebinding "testreq-view-${FMA_NAMESPACE}" \
-            --clusterrole=view --serviceaccount="${FMA_NAMESPACE}:testreq" || true
 
           echo "Test RBAC created"
 
@@ -913,7 +914,6 @@ jobs:
           # Delete cluster-scoped resources
           kubectl delete clusterrole fma-node-viewer --ignore-not-found || true
           kubectl delete clusterrolebinding "$FMA_RELEASE_NAME-node-view" --ignore-not-found || true
-          kubectl delete clusterrolebinding "testreq-view-${FMA_NAMESPACE}" --ignore-not-found || true
 
           # Delete ValidatingAdmissionPolicy resources (cluster-scoped)
           kubectl delete validatingadmissionpolicy fma-bound-serverreqpod fma-immutable-fields --ignore-not-found 2>/dev/null || true
