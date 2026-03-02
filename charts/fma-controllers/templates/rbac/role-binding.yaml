@@ -4,14 +4,14 @@ kind: RoleBinding
 metadata:
   labels:
     {{- include "fma-controllers.labels" . | nindent 4 }}
-  name: {{ .Release.Name }}-controller-in-ns
+  name: {{ .Release.Name }}-fma-controllers-in-ns
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: {{ .Release.Name }}-controller
+  name: {{ .Release.Name }}-fma-controllers
 subjects:
 - kind: ServiceAccount
-  name: {{ .Release.Name }}-controller
+  name: {{ .Release.Name }}-fma-controllers
 {{- if .Values.global.nodeViewClusterRole }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -27,5 +27,5 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   namespace: "{{ .Release.Namespace }}"
-  name: {{ .Release.Name }}-controller
+  name: {{ .Release.Name }}-fma-controllers
 {{- end }}
