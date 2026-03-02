@@ -395,8 +395,8 @@ jobs:
 
           # Clean up cluster-scoped resources from previous runs
           echo "Cleaning up cluster-scoped resources..."
-          kubectl delete clusterrolebinding -l app.kubernetes.io/name=fma-controllers --ignore-not-found 2>/dev/null || true
-          kubectl delete clusterrole fma-node-viewer --ignore-not-found || true
+          kubectl delete clusterrole        "${FMA_RELEASE_NAME}-node-view" --ignore-not-found || true
+          kubectl delete clusterrolebinding "${FMA_RELEASE_NAME}-node-view" --ignore-not-found || true
 
           echo "Cleanup complete"
 
@@ -462,8 +462,8 @@ jobs:
 
       - name: Create node-viewer ClusterRole
         run: |
-          echo "Creating node-viewer ClusterRole..."
-          kubectl create clusterrole fma-node-viewer --verb=get,list,watch --resource=nodes
+          echo "Creating ClusterRole ${FMA_RELEASE_NAME}-node-view..."
+          kubectl create clusterrole ${FMA_RELEASE_NAME}-node-view --verb=get,list,watch --resource=nodes
           echo "ClusterRole created"
 
       - name: Detect ValidatingAdmissionPolicy support
@@ -499,7 +499,7 @@ jobs:
             -n "$FMA_NAMESPACE" \
             --set global.imageRegistry="${CONTROLLER_IMAGE%/dual-pods-controller:*}" \
             --set global.imageTag="${CONTROLLER_IMAGE##*:}" \
-            --set global.nodeViewClusterRole=fma-node-viewer \
+            --set global.nodeViewClusterRole=${FMA_RELEASE_NAME}-node-view \
             --set dualPodsController.sleeperLimit=2 \
             --set global.local=false \
             --set dualPodsController.debugAcceleratorMemory=false \
@@ -916,14 +916,9 @@ jobs:
           kubectl delete namespace "$FMA_NAMESPACE" \
             --ignore-not-found --timeout=120s || true
 
-          # Delete CRDs
-          # TODO: Implement safe CRD lifecycle management for tests (e.g., handle shared clusters,
-          #       concurrent test runs, and version upgrades/downgrades) before enabling CRD deletion.
-          # kubectl delete -f config/crd/ --ignore-not-found || true
-
-          # Delete cluster-scoped resources
-          kubectl delete clusterrole fma-node-viewer --ignore-not-found || true
-          kubectl delete clusterrolebinding "$FMA_RELEASE_NAME-node-view" --ignore-not-found || true
+          # Delete cluster-scoped stuff for reading Node objects
+          kubectl delete clusterrole        "${FMA_RELEASE_NAME}-node-view" --ignore-not-found || true
+          kubectl delete clusterrolebinding "${FMA_RELEASE_NAME}-node-view" --ignore-not-found || true
 
           echo "Cleanup complete"
 

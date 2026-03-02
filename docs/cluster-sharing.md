@@ -23,8 +23,6 @@ object.
 - A ClusterRoleBinding that binds the node-reading ClusterRole to an
   FMA ServiceAccount.
 
-- A ClusterRoleBinding that binds ClusterRole `view` to an FMA ServiceAccount.
-
 - A Namespace that FMA is installed in.
 
 ## Solution for the CustomResourceDefinition Objects
@@ -138,3 +136,22 @@ object.
   ValidatingAdmissionPolicy[Binding] objects.
 
 - The Helm chart does nothing about these policy objects.
+
+## Solution for reading Node objects
+
+- The Helm chart can optionally create a ClusterRoleBinding for a
+  ClusterRole with a given name.
+
+- The Helm chart does nothing about creating the ClusterRole for
+  reading Node objects.
+
+- The admin of a shared cluster has several choices about what to
+  maintain on behalf of users vs. authorize users to do.
+
+- For the GHA workflow that does E2E test in a particular shared
+  OpenShift cluster, the solution is as follows. The workflow creates,
+  uses, and deletes a ClusterRole that has the workflow run ID in
+  it. The name of this ClusterRole is given to the Helm chart, which
+  makes a ClusterRoleBinding for it. The workflow deletes the Helm
+  chart instance and then, for good measure, also deletes the
+  ClusterRoleBinding.
