@@ -150,8 +150,8 @@ object.
 
 - For the GHA workflow that does E2E test in a particular shared
   OpenShift cluster, the solution is as follows. The workflow creates,
-  uses, and deletes a ClusterRole that has the workflow run ID in
-  it. The name of this ClusterRole is given to the Helm chart, which
+  uses, and deletes a ClusterRole that has the workflow run ID in its
+  name. The name of this ClusterRole is given to the Helm chart, which
   makes a ClusterRoleBinding for it. The workflow deletes the Helm
   chart instance and then, for good measure, also deletes the
   ClusterRoleBinding.
