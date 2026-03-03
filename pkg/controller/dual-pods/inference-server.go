@@ -462,7 +462,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 
 	cfg, iscHash, err := ctl.configInferenceServer(isc, serverDat.GPUIDs)
 	if err != nil {
-		return fmt.Errorf("parse inference server config: %w", err), true
+		return fmt.Errorf("failed to configure inference server config: %w", err), true
 	}
 	logger.V(5).Info("Nominal hash of InferenceServerConfig", "hash", iscHash)
 
