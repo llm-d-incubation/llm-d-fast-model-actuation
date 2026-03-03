@@ -28,12 +28,21 @@ logger = logging.getLogger(__name__)
 
 # VLLM process manager
 class GpuTranslator:
-    def __init__(self):
+    def __init__(self, mock_gpus: bool = False, mock_gpu_count: int = 8):
         """
         Initialize GPU Translator
+
+        Args:
+            mock_gpus: If True, skip pynvml and use mock mode for testing
+            mock_gpu_count: Number of mock GPUs to create (default: 8)
         """
         self.mapping = {}
-        self._check_library()
+        self.reverse_mapping = {}
+        self.device_count = 0
+        self.mock_mode = mock_gpus
+        self.mock_gpu_count = mock_gpu_count
+        if not self.mock_mode:
+            self._check_library()
         self._populate_mapping()
 
     def _check_library(self):
@@ -55,8 +64,19 @@ class GpuTranslator:
 
     def _populate_mapping(self):
         """
-        Creates mapping and reverse_mapping for the GPU Translator
+        Creates mapping and reverse_mapping for the GPU Translator.
+        In mock mode, pre-populates with mock GPU UUIDs following the pattern GPU-{index}.
         """
+        if self.mock_mode:
+            # Pre-populate with mock GPUs following the test pattern: GPU-0, GPU-1, etc.
+            for index in range(self.mock_gpu_count):
+                uuid = f"GPU-{index}"
+                self.mapping[uuid] = index
+                self.reverse_mapping[index] = uuid
+            self.device_count = self.mock_gpu_count
+            logger.info("GPU Translator initialized in mock mode with %d mock GPUs", self.mock_gpu_count)
+            return
+
         try:
             pynvml.nvmlInit()
             self.device_count = pynvml.nvmlDeviceGetCount()
@@ -70,9 +90,10 @@ class GpuTranslator:
                 )
                 self.mapping[uuid] = index
             pynvml.nvmlShutdown()
+            logger.info("GPU Translator initialized with %d real GPUs", self.device_count)
 
         except pynvml.NVMLError as error:
-            logger.error(error)
+            logger.error("Failed to initialize pynvml: %s", error)
 
         # Create reverse mapping
         self.reverse_mapping = {v: k for k, v in self.mapping.items()}

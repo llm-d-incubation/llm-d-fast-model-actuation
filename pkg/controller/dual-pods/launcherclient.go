@@ -50,8 +50,9 @@ func NewLauncherClient(baseURL string) (*LauncherClient, error) {
 
 // VllmConfig matches the launcher API schema.
 type VllmConfig struct {
-	Options string                 `json:"options"`
-	EnvVars map[string]interface{} `json:"env_vars,omitempty"`
+	Options  string                 `json:"options"`
+	GpuUUIDs []string               `json:"gpu_uuids,omitempty"`
+	EnvVars  map[string]interface{} `json:"env_vars,omitempty"`
 }
 
 // InstanceStatus returned by status APIs.

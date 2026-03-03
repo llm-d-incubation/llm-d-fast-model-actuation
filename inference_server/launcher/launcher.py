@@ -193,9 +193,9 @@ class VllmInstance:
 
 # Multi-instance vLLM process manager
 class VllmMultiProcessManager:
-    def __init__(self):
+    def __init__(self, mock_gpus: bool = False, mock_gpu_count: int = 8):
         self.instances: Dict[str, VllmInstance] = {}
-        self.gpu_translator = GpuTranslator()
+        self.gpu_translator = GpuTranslator(mock_gpus=mock_gpus, mock_gpu_count=mock_gpu_count)
 
     def create_instance(
         self, vllm_config: VllmConfig, instance_id: Optional[str] = None
@@ -568,6 +568,52 @@ def set_env_vars(env_vars: Dict[str, Any]):
 
 
 if __name__ == "__main__":
+    import argparse
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8001, log_level="info")
+    parser = argparse.ArgumentParser(description="vLLM Launcher Service")
+    parser.add_argument(
+        "--mock-gpus",
+        action="store_true",
+        help="Enable mock GPU mode for CPU-only testing environments"
+    )
+    parser.add_argument(
+        "--mock-gpu-count",
+        type=int,
+        default=8,
+        help="Number of mock GPUs to create in mock mode (default: 8)"
+    )
+    parser.add_argument(
+        "--host",
+        type=str,
+        default="0.0.0.0",
+        help="Host to bind the server to (default: 0.0.0.0)"
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8001,
+        help="Port to bind the server to (default: 8001)"
+    )
+    parser.add_argument(
+        "--log-level",
+        type=str,
+        default="info",
+        choices=["critical", "error", "warning", "info", "debug"],
+        help="Logging level (default: info)"
+    )
+
+    args = parser.parse_args()
+
+    # Reinitialize the global manager with mock mode settings
+    vllm_manager = VllmMultiProcessManager(
+        mock_gpus=args.mock_gpus,
+        mock_gpu_count=args.mock_gpu_count
+    )
+
+    uvicorn.run(
+        app,
+        host=args.host,
+        port=args.port,
+        log_level=args.log_level
+    )
