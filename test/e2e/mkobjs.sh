@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 
 inst=$(date +%d-%H-%M-%S)
-server_img=$(make echo-var VAR=TEST_SERVER_IMG)
 requester_img=$(make echo-var VAR=TEST_REQUESTER_IMG)
 launcher_img=$(make echo-var VAR=TEST_LAUNCHER_IMG)
 if out=$(kubectl apply -f - 2>&1 <<EOF
@@ -75,6 +74,7 @@ spec:
   maxSleepingInstances: 1
   podTemplate:
     spec:
+      serviceAccount: testlauncher
       containers:
         - name: inference-server
           image: $launcher_img
@@ -89,6 +89,13 @@ spec:
             --host 0.0.0.0 \
             --port 8001 \
             --log-level info
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef: { fieldPath: spec.nodeName }
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef: { fieldPath: metadata.namespace }
 ---
 apiVersion: apps/v1
 kind: ReplicaSet

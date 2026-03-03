@@ -121,6 +121,26 @@ EOF
 kubectl create rolebinding testreq --role=testreq --serviceaccount=$(kubectl get sa default -o jsonpath={.metadata.namespace}):testreq
 
 kubectl create sa testreq
+
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: testlauncher
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - list
+  - watch
+EOF
+
+kubectl create rolebinding testlauncher --role=testlauncher --serviceaccount=$(kubectl get sa default -o jsonpath={.metadata.namespace}):testlauncher
+
+kubectl create sa testlauncher
 kubectl create cm gpu-map
 kubectl get nodes -o name | sed 's%^node/%%' | while read node; do
     kubectl label node $node nvidia.com/gpu.present=true nvidia.com/gpu.product=NVIDIA-L40S nvidia.com/gpu.count=2 --overwrite=true
