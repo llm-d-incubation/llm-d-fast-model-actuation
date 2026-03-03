@@ -433,8 +433,10 @@ jobs:
 
       - name: Apply FMA CRDs
         run: |
+          CRD_NAMES=""
           for crd_file in config/crd/*.yaml; do
             crd_name=$(kubectl apply --dry-run=client -f "$crd_file" -o jsonpath='{.metadata.name}')
+            CRD_NAMES="$CRD_NAMES $crd_name"
             if kubectl get crd "$crd_name" &>/dev/null; then
               echo "  CRD $crd_name already exists, skipping"
             else
@@ -443,12 +445,13 @@ jobs:
             fi
           done
 
-          # Verify CRDs are registered
-          echo "Verifying CRDs..."
-          kubectl get crd inferenceserverconfigs.fma.llm-d.ai
-          kubectl get crd launcherconfigs.fma.llm-d.ai
-          kubectl get crd launcherpopulationpolicies.fma.llm-d.ai
-          echo "All CRDs registered successfully"
+          # Wait for CRDs to become Established (API servers have digested the definitions)
+          echo "Waiting for CRDs to become Established..."
+          CRD_TIMEOUT=120s
+          for crd_name in $CRD_NAMES; do
+            kubectl wait --for=condition=Established "crd/$crd_name" --timeout="$CRD_TIMEOUT"
+          done
+          echo "All CRDs established"
 
       - name: Create ConfigMaps
         run: |
