@@ -84,10 +84,11 @@ spec:
           - "-c"
           args:
           - |
-            uvicorn launcher:app \
+            python3 launcher.py \
+            --mock-gpus \
             --host 0.0.0.0 \
-            --log-level info \
-            --port 8001
+            --port 8001 \
+            --log-level info
 ---
 apiVersion: apps/v1
 kind: ReplicaSet

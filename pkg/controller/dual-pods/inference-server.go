@@ -460,7 +460,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		return err, false
 	}
 
-	cfg, iscHash, err := ctl.parseInferenceServerConfig(isc)
+	cfg, iscHash, err := ctl.configInferenceServer(isc, serverDat.GPUIDs)
 	if err != nil {
 		return fmt.Errorf("parse inference server config: %w", err), true
 	}
@@ -643,11 +643,12 @@ func (ctl *controller) selectBestLauncherPod(
 	return nil, false, false, nil
 }
 
-func (ctl *controller) parseInferenceServerConfig(isc *fmav1alpha1.InferenceServerConfig) (*VllmConfig, string, error) {
+func (ctl *controller) configInferenceServer(isc *fmav1alpha1.InferenceServerConfig, gpuUUIDs []string) (*VllmConfig, string, error) {
 	options := isc.Spec.ModelServerConfig.Options + " --port " + strconv.Itoa(int(isc.Spec.ModelServerConfig.Port))
-	vllmCfg := VllmConfig{ // TODO(waltforme): update this when type VllmConfig is updated
-		Options: options,
-		EnvVars: make(map[string]interface{}, len(isc.Spec.ModelServerConfig.EnvVars)),
+	vllmCfg := VllmConfig{
+		Options:  options,
+		GpuUUIDs: gpuUUIDs,
+		EnvVars:  make(map[string]interface{}, len(isc.Spec.ModelServerConfig.EnvVars)),
 	}
 	for k, v := range isc.Spec.ModelServerConfig.EnvVars {
 		vllmCfg.EnvVars[k] = v
@@ -659,6 +660,8 @@ func (ctl *controller) parseInferenceServerConfig(isc *fmav1alpha1.InferenceServ
 	}
 	hasher := sha256.New()
 	hasher.Write(iscBytes)
+	hasher.Write([]byte(";gpus="))
+	hasher.Write([]byte(strings.Join(gpuUUIDs, ",")))
 	var hash [sha256.Size]byte
 	hashSl := hasher.Sum(hash[:0])
 	// using Raw_URL_Encoding because this hash will be used in URLs to the launcher.
