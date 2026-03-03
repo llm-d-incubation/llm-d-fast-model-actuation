@@ -206,16 +206,13 @@ fi
 # Scale requester to 0 (instance should sleep in launcher)
 kubectl scale rs $rslb --replicas=0
 
-expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | grep -c '^pod/' || true | grep -w 0"
-! kubectl get pod $reqlb
+expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | wc -l | grep -w 0"
 
 # Launcher should remain
 kubectl get pod $launcherlb
 
 # Verify launcher is unbound (no dual label pointing to requester)
 expect '[ "$(kubectl get pod $launcherlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "" ]'
-
-sleep 5
 
 # Scale back up (should reuse same launcher and wake sleeping instance)
 kubectl scale rs $rslb --replicas=1
@@ -246,8 +243,7 @@ cheer Successful instance wake-up fast path
 # Scale requester to 0 again
 kubectl scale rs $rslb --replicas=0
 
-expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | grep -c '^pod/' || true | grep -w 0"
-! kubectl get pod $reqlb2
+expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | wc -l | grep -w 0"
 
 # Launcher should remain
 kubectl get pod $launcherlb
@@ -256,9 +252,7 @@ kubectl get pod $launcherlb
 expect '[ "$(kubectl get pod $launcherlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "" ]'
 
 # Patch ReplicaSet to use isc2 instead of isc
-kubectl patch rs $rslb --type=json -p='[{"op": "replace", "path": "/spec/template/metadata/annotations/dual-pods.llm-d.ai~1inference-server-config", "value": "'$isc2'"}]'
-
-sleep 5
+kubectl patch rs $rslb -p='{"spec":{"template":{"metadata":{"annotations":{"dual-pods.llm-d.ai/inference-server-config":"'$isc2'"}}}}}'
 
 # Scale back up (should reuse same launcher and create 2nd instance)
 kubectl scale rs $rslb --replicas=1
@@ -292,8 +286,7 @@ cheer Successful multiple instances sharing one launcher
 # Scale requester to 0 again
 kubectl scale rs $rslb --replicas=0
 
-expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | grep -c '^pod/' || true | grep -w 0"
-! kubectl get pod $reqlb3
+expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | wc -l | grep -w 0"
 
 # Launcher should remain
 kubectl get pod $launcherlb
@@ -302,9 +295,7 @@ kubectl get pod $launcherlb
 expect '[ "$(kubectl get pod $launcherlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "" ]'
 
 # Patch ReplicaSet back to use original isc
-kubectl patch rs $rslb --type=json -p='[{"op": "replace", "path": "/spec/template/metadata/annotations/dual-pods.llm-d.ai~1inference-server-config", "value": "'$isc'"}]'
-
-sleep 5
+kubectl patch rs $rslb -p='{"spec":{"template":{"metadata":{"annotations":{"dual-pods.llm-d.ai/inference-server-config":"'$isc'"}}}}}'
 
 # Scale back up (should reuse same launcher and wake first instance)
 kubectl scale rs $rslb --replicas=1
