@@ -189,11 +189,9 @@ class VllmInstance:
         try:
             total = os.path.getsize(self._log_file_path)
         except FileNotFoundError:
-            if start > 0:
-                raise LogRangeNotAvailable(start, 0)
-            return (b"", 0)
+            total = 0
 
-        if start > total or (start == total and total > 0):
+        if start >= total:
             raise LogRangeNotAvailable(start, total)
 
         if end is None:
@@ -350,7 +348,7 @@ def parse_range_header(range_header: str) -> tuple[int, int | None]:
     if m is None:
         raise ValueError(f"Unsupported or malformed Range header: {range_header}")
     start = int(m.group(1))
-    end = int(m.group(2)) if m.group(2) is not None else None
+    end = int(m.group(2)) if m.group(2) else None
     if end is not None and end < start:
         raise ValueError(f"Range end ({end}) must be >= start ({start})")
     return (start, end)
