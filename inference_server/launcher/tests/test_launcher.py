@@ -37,7 +37,6 @@ sys.modules["vllm.entrypoints.utils"] = MagicMock()
 # Import the application and classes
 from launcher import (  # noqa: E402
     MAX_LOG_RESPONSE_BYTES,
-    FileWriter,
     LogRangeNotAvailable,
     VllmConfig,
     VllmInstance,
@@ -812,64 +811,6 @@ class TestAPIEndpoints:
         )
 
         assert response.status_code == 400
-
-
-# Tests for FileWriter
-class TestFileWriter:
-    def test_file_writer_write_non_empty(self, tmp_log_dir):
-        """Test FileWriter writes non-empty messages to file"""
-        log_path = os.path.join(tmp_log_dir, "test.log")
-        writer = FileWriter(log_path, sys.stdout)
-
-        writer.write("Test message")
-
-        with open(log_path, "rb") as f:
-            content = f.read()
-        assert content == b"Test message"
-
-    def test_file_writer_ignores_empty_messages(self, tmp_log_dir):
-        """Test FileWriter ignores empty/whitespace messages"""
-        log_path = os.path.join(tmp_log_dir, "test.log")
-        writer = FileWriter(log_path, sys.stdout)
-
-        writer.write("")
-        writer.write("   ")
-        writer.write("\n")
-
-        with open(log_path, "rb") as f:
-            content = f.read()
-        assert content == b""
-
-    def test_file_writer_flush(self, tmp_log_dir):
-        """Test FileWriter flush does not raise"""
-        log_path = os.path.join(tmp_log_dir, "test.log")
-        writer = FileWriter(log_path, sys.stdout)
-
-        # flush should not raise
-        writer.flush()
-
-    def test_file_writer_multiple_writes(self, tmp_log_dir):
-        """Test FileWriter accumulates multiple writes"""
-        log_path = os.path.join(tmp_log_dir, "test.log")
-        writer = FileWriter(log_path, sys.stdout)
-
-        writer.write("Hello ")
-        writer.write("World")
-
-        with open(log_path, "rb") as f:
-            content = f.read()
-        assert content == b"Hello World"
-
-    def test_file_writer_returns_msg_length(self, tmp_log_dir):
-        """Test FileWriter.write returns the length of the message"""
-        log_path = os.path.join(tmp_log_dir, "test.log")
-        writer = FileWriter(log_path, sys.stdout)
-
-        result = writer.write("Test")
-        assert result == 4
-
-        result = writer.write("")
-        assert result == 0
 
 
 # Tests for VllmInstance log functionality
