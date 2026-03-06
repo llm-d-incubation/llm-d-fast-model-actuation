@@ -77,7 +77,8 @@ class GpuTranslator:
         Load GPU mapping from Kubernetes ConfigMap 'gpu-map'.
 
         Returns:
-            Dict[str, int]: GPU UUID to index mapping, or None if ConfigMap not available
+            Dict[str, int]: GPU UUID to index mapping, or None if ConfigMap not
+            available
         """
         if not self.node_name:
             logger.info("No node name provided, skipping ConfigMap GPU discovery")
@@ -117,7 +118,8 @@ class GpuTranslator:
 
         except Exception as e:
             logger.warning(
-                "Failed to load GPU mapping from ConfigMap: %s. Falling back to mock mode.",
+                "Failed to load GPU mapping from ConfigMap: %s. Falling back to "
+                "mock mode.",
                 e,
             )
             return None
@@ -126,7 +128,7 @@ class GpuTranslator:
         """
         Creates mapping and reverse_mapping for the GPU Translator.
         Priority order:
-        1. ConfigMap 'gpu-map' based mock if mock mode is enabled and node_name is available
+        1. ConfigMap 'gpu-map' based mock if mock mode enabled and node_name available
         2. Naive mock with GPU-0, GPU-1, etc. if mock mode is enabled
         3. Real GPUs via pynvml
         """
@@ -138,7 +140,8 @@ class GpuTranslator:
                 self.reverse_mapping = {v: k for k, v in self.mapping.items()}
                 self.device_count = len(self.mapping)
                 logger.info(
-                    "GPU Translator initialized from ConfigMap with %d GPUs for node '%s'",
+                    "GPU Translator initialized from ConfigMap with "
+                    "%d GPUs for node '%s'",
                     self.device_count,
                     self.node_name,
                 )
