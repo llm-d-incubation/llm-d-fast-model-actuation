@@ -1,18 +1,21 @@
 name: Bug Report
 description: File a bug report.
-title: "[Bug :bug:]: "
+title: "[Bug]: "
 labels: ["bug", "triage"]
 body:
   - type: markdown
     attributes:
       value: |
         Thanks for taking the time to fill out this bug report!
+
+        Before opening a new bug report, please [search existing issues](https://github.com/llm-d-incubation/llm-d-fast-model-actuation/issues)
+        to check if a similar bug has already been reported.
   - type: input
     id: contact
     attributes:
       label: Contact Details
-      description: How can we get in touch with you if we need more info?
-      placeholder: ex. email@ibm.com
+      description: If you are filing this on behalf of someone else, how can we reach them?
+      placeholder: ex. email@example.com
     validations:
       required: false
   - type: textarea
@@ -30,6 +33,7 @@ body:
       label: Version
       description: What version of our software are you running?
       options:
+        - main (please specify commit below)
         - v0.5.1-alpha.1
         - v0.5.1-alpha
         - v0.2.5
@@ -38,9 +42,17 @@ body:
       default: 0
     validations:
       required: true
+  - type: input
+    id: commit
+    attributes:
+      label: Commit SHA
+      description: If running from main, please provide the commit SHA.
+      placeholder: ex. abc1234
+    validations:
+      required: false
   - type: textarea
     id: logs
     attributes:
       label: Relevant log output
-      description: Please copy and paste any relevant log output. This will be automatically formatted into code, so no need for backticks.
+      description: Please attach log files or paste a short snippet. For lengthy logs, prefer uploading files using the attachment button below.
       render: shell

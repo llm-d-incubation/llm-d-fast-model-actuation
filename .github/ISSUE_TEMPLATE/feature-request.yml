@@ -36,7 +36,7 @@ body:
       description: |
         What problem does this feature solve? Please describe the use case or pain point.
         A clear description of the problem helps us understand why this feature is needed.
-      placeholder: "I'm always frustrated when..."
+      placeholder: "As a [role] trying to [do thing], I am always frustrated when..."
     validations:
       required: true
 
