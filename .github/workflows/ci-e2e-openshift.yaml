@@ -58,7 +58,7 @@ jobs:
     steps:
       - name: Check permissions and /ok-to-test
         id: check
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         with:
           script: |
             // Helper to check if user has write access
@@ -235,6 +235,19 @@ jobs:
               }
             }
 
+      - name: Write workflow summary
+        if: always()
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        with:
+          script: |
+            const shouldRun = '${{ steps.check.outputs.should_run }}';
+            if (shouldRun === 'true') {
+              core.summary.addRaw('**E2E tests will run** for this trigger.');
+            } else {
+              core.summary.addRaw('**E2E tests were skipped** (gate check did not pass for this trigger).');
+            }
+            await core.summary.write();
+
   # Build the FMA controller image on GitHub-hosted runner
   # Uses ko (Go-native image builder) and pushes to GHCR
   # Note: Skip for fork PRs on pull_request event (no secrets access).
@@ -256,20 +269,17 @@ jobs:
         with:
           ref: ${{ needs.gate.outputs.pr_head_sha }}
 
-      - name: Extract Go version from go.mod
-        run: sed -En 's/^go (.*)$/GO_VERSION=\1/p' go.mod >> $GITHUB_ENV
-
       - name: Set up Go
         uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
         with:
-          go-version: "${{ env.GO_VERSION }}"
+          go-version: "1.25.7"
           cache-dependency-path: ./go.sum
 
       - name: Set up ko
         uses: ko-build/setup-ko@d006021bd0c28d1ce33a07e7943d48b079944c8d # v0.9
 
       - name: Log in to GHCR
-        uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1 # v3.5
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ secrets.CR_USER }}
@@ -375,6 +385,21 @@ jobs:
               echo "  Uninstalling helm release: $release"
               helm uninstall "$release" -n "$FMA_NAMESPACE" --ignore-not-found --wait --timeout 60s || true
             done
+            # Remove dual-pods.llm-d.ai/* finalizers from all pods so namespace deletion is not blocked
+            echo "  Removing dual-pods finalizers from pods in $FMA_NAMESPACE..."
+            for pod in $(kubectl get pods -n "$FMA_NAMESPACE" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+              all_finalizers=$(kubectl get pod "$pod" -n "$FMA_NAMESPACE" \
+                -o jsonpath='{range .metadata.finalizers[*]}{@}{"\n"}{end}' 2>/dev/null || true)
+              if ! echo "$all_finalizers" | grep -q '^dual-pods\.llm-d\.ai/'; then
+                continue
+              fi
+              echo "    Patching pod $pod to remove dual-pods finalizers"
+              keep_entries=$(echo "$all_finalizers" \
+                | grep -v '^dual-pods\.llm-d\.ai/' \
+                | awk 'NR>1{printf ","} {printf "\"%s\"", $0}')
+              kubectl patch pod "$pod" -n "$FMA_NAMESPACE" --type=merge \
+                -p="{\"metadata\":{\"finalizers\":[${keep_entries}]}}" 2>/dev/null || true
+            done
             echo "  Deleting namespace: $FMA_NAMESPACE"
             kubectl delete namespace "$FMA_NAMESPACE" --ignore-not-found --timeout=120s || true
           else
@@ -383,12 +408,8 @@ jobs:
 
           # Clean up cluster-scoped resources from previous runs
           echo "Cleaning up cluster-scoped resources..."
-          kubectl delete clusterrolebinding -l app.kubernetes.io/name=fma-controllers --ignore-not-found 2>/dev/null || true
-          kubectl delete clusterrole fma-node-viewer --ignore-not-found || true
-
-          # Clean up ValidatingAdmissionPolicy resources (cluster-scoped, created by dual-pods-controller chart)
-          kubectl delete validatingadmissionpolicy fma-bound-serverreqpod fma-immutable-fields --ignore-not-found 2>/dev/null || true
-          kubectl delete validatingadmissionpolicybinding bind-fma-bound-serverreqpod bind-fma-immutable-fields --ignore-not-found 2>/dev/null || true
+          kubectl delete clusterrole        "${FMA_RELEASE_NAME}-node-view" --ignore-not-found || true
+          kubectl delete clusterrolebinding "${FMA_RELEASE_NAME}-node-view" --ignore-not-found || true
 
           echo "Cleanup complete"
 
@@ -425,15 +446,25 @@ jobs:
 
       - name: Apply FMA CRDs
         run: |
-          echo "Applying FMA CRDs..."
-          kubectl apply --server-side -f config/crd/
+          CRD_NAMES=""
+          for crd_file in config/crd/*.yaml; do
+            crd_name=$(kubectl apply --dry-run=client -f "$crd_file" -o jsonpath='{.metadata.name}')
+            CRD_NAMES="$CRD_NAMES $crd_name"
+            if kubectl get crd "$crd_name" &>/dev/null; then
+              echo "  CRD $crd_name already exists, skipping"
+            else
+              echo "  Applying $crd_file ($crd_name)"
+              kubectl apply --server-side -f "$crd_file"
+            fi
+          done
 
-          # Verify CRDs are registered
-          echo "Verifying CRDs..."
-          kubectl get crd inferenceserverconfigs.fma.llm-d.ai
-          kubectl get crd launcherconfigs.fma.llm-d.ai
-          kubectl get crd launcherpopulationpolicies.fma.llm-d.ai
-          echo "All CRDs registered successfully"
+          # Wait for CRDs to become Established (API servers have digested the definitions)
+          echo "Waiting for CRDs to become Established..."
+          CRD_TIMEOUT=120s
+          for crd_name in $CRD_NAMES; do
+            kubectl wait --for=condition=Established "crd/$crd_name" --timeout="$CRD_TIMEOUT"
+          done
+          echo "All CRDs established"
 
       - name: Create ConfigMaps
         run: |
@@ -447,8 +478,8 @@ jobs:
 
       - name: Create node-viewer ClusterRole
         run: |
-          echo "Creating node-viewer ClusterRole..."
-          kubectl create clusterrole fma-node-viewer --verb=get,list,watch --resource=nodes
+          echo "Creating ClusterRole ${FMA_RELEASE_NAME}-node-view..."
+          kubectl create clusterrole ${FMA_RELEASE_NAME}-node-view --verb=get,list,watch --resource=nodes
           echo "ClusterRole created"
 
       - name: Detect ValidatingAdmissionPolicy support
@@ -462,25 +493,32 @@ jobs:
           echo "ValidatingAdmissionPolicy support: $POLICIES_ENABLED"
           echo "policies_enabled=$POLICIES_ENABLED" >> $GITHUB_OUTPUT
 
-      - name: Deploy FMA controller
+      - name: Apply ValidatingAdmissionPolicy resources
         env:
           POLICIES_ENABLED: ${{ steps.detect-vap.outputs.policies_enabled }}
+        run: |
+          if [ "$POLICIES_ENABLED" = "true" ]; then
+            echo "Applying ValidatingAdmissionPolicy resources..."
+            kubectl apply -f config/validating-admission-policies/
+          else
+            echo "ValidatingAdmissionPolicy not supported, skipping."
+          fi
+
+      - name: Deploy FMA controller
         run: |
           echo "Deploying FMA controller..."
           echo "  Release: $FMA_RELEASE_NAME"
           echo "  Namespace: $FMA_NAMESPACE"
           echo "  Image: $CONTROLLER_IMAGE"
-          echo "  EnableValidationPolicy: $POLICIES_ENABLED"
 
           helm upgrade --install "$FMA_RELEASE_NAME" charts/fma-controllers \
             -n "$FMA_NAMESPACE" \
             --set global.imageRegistry="${CONTROLLER_IMAGE%/dual-pods-controller:*}" \
             --set global.imageTag="${CONTROLLER_IMAGE##*:}" \
-            --set global.nodeViewClusterRole=fma-node-viewer \
+            --set global.nodeViewClusterRole=${FMA_RELEASE_NAME}-node-view \
             --set dualPodsController.sleeperLimit=2 \
             --set global.local=false \
             --set dualPodsController.debugAcceleratorMemory=false \
-            --set global.enableValidationPolicy="$POLICIES_ENABLED" \
             --set launcherPopulator.enabled=false
 
       - name: Wait for controller to be ready
@@ -566,6 +604,9 @@ jobs:
           - apiGroups: [""]
             resources: ["configmaps"]
             verbs: ["create"]
+          - apiGroups: [""]
+            resources: ["pods"]
+            verbs: ["get", "list", "watch"]
           EOF
 
           kubectl create sa testreq -n "$FMA_NAMESPACE" || true
@@ -574,8 +615,6 @@ jobs:
           kubectl create rolebinding testreq \
             --role=testreq --serviceaccount="${FMA_NAMESPACE}:testreq" \
             -n "$FMA_NAMESPACE" || true
-          kubectl create clusterrolebinding "testreq-view-${FMA_NAMESPACE}" \
-            --clusterrole=view --serviceaccount="${FMA_NAMESPACE}:testreq" || true
 
           echo "Test RBAC created"
 
@@ -824,6 +863,26 @@ jobs:
           echo "=== Launcher test passed: pods created and launcher bound to requester ==="
           kubectl get pods -n "$FMA_NAMESPACE" -o wide --show-labels
 
+      - name: List objects of category all
+        if: always()
+        run: kubectl get all -n "$FMA_NAMESPACE"
+
+      - name: List event objects
+        if: always()
+        run: kubectl get events -n "$FMA_NAMESPACE" --sort-by='.lastTimestamp'
+
+      - name: Dump Pod logs
+        if: always()
+        run: |
+          for pod in $(kubectl get pods -n "$FMA_NAMESPACE" -o 'jsonpath={.items[*].metadata.name} ') ; do
+            echo ""
+            echo "=== Previous log of $pod ==="
+            kubectl logs -n "$FMA_NAMESPACE" $pod --previous || true
+            echo ""
+            echo "=== Log of $pod ==="
+            kubectl logs -n "$FMA_NAMESPACE" $pod || true
+          done
+
       - name: Clean up test objects
         if: always()
         env:
@@ -853,21 +912,29 @@ jobs:
             helm uninstall "$release" -n "$FMA_NAMESPACE" --ignore-not-found --wait --timeout 60s || true
           done
 
+          # Remove dual-pods.llm-d.ai/* finalizers from all pods so namespace deletion is not blocked
+          echo "  Removing dual-pods finalizers from pods in $FMA_NAMESPACE..."
+          for pod in $(kubectl get pods -n "$FMA_NAMESPACE" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+            all_finalizers=$(kubectl get pod "$pod" -n "$FMA_NAMESPACE" \
+              -o jsonpath='{range .metadata.finalizers[*]}{@}{"\n"}{end}' 2>/dev/null || true)
+            if ! echo "$all_finalizers" | grep -q '^dual-pods\.llm-d\.ai/'; then
+              continue
+            fi
+            echo "    Patching pod $pod to remove dual-pods finalizers"
+            keep_entries=$(echo "$all_finalizers" \
+              | grep -v '^dual-pods\.llm-d\.ai/' \
+              | awk 'NR>1{printf ","} {printf "\"%s\"", $0}')
+            kubectl patch pod "$pod" -n "$FMA_NAMESPACE" --type=merge \
+              -p="{\"metadata\":{\"finalizers\":[${keep_entries}]}}" 2>/dev/null || true
+          done
+
           # Delete namespace
           kubectl delete namespace "$FMA_NAMESPACE" \
             --ignore-not-found --timeout=120s || true
 
-          # Delete CRDs
-          kubectl delete -f config/crd/ --ignore-not-found || true
-
-          # Delete cluster-scoped resources
-          kubectl delete clusterrole fma-node-viewer --ignore-not-found || true
-          kubectl delete clusterrolebinding "$FMA_RELEASE_NAME-node-view" --ignore-not-found || true
-          kubectl delete clusterrolebinding "testreq-view-${FMA_NAMESPACE}" --ignore-not-found || true
-
-          # Delete ValidatingAdmissionPolicy resources (cluster-scoped)
-          kubectl delete validatingadmissionpolicy fma-bound-serverreqpod fma-immutable-fields --ignore-not-found 2>/dev/null || true
-          kubectl delete validatingadmissionpolicybinding bind-fma-bound-serverreqpod bind-fma-immutable-fields --ignore-not-found 2>/dev/null || true
+          # Delete cluster-scoped stuff for reading Node objects
+          kubectl delete clusterrole        "${FMA_RELEASE_NAME}-node-view" --ignore-not-found || true
+          kubectl delete clusterrolebinding "${FMA_RELEASE_NAME}-node-view" --ignore-not-found || true
 
           echo "Cleanup complete"
 
@@ -876,21 +943,6 @@ jobs:
         run: |
           echo "Test failed - scaling down controller to free resources while preserving for debugging..."
           kubectl scale deployment "$FMA_RELEASE_NAME-dual-pods-controller" -n "$FMA_NAMESPACE" --replicas=0 || true
-
-          echo ""
-          echo "=== Remaining resources for debugging ==="
-          echo "Namespace: $FMA_NAMESPACE"
-          kubectl get all -n "$FMA_NAMESPACE" || true
-          echo ""
-          echo "=== Pod details ==="
-          kubectl describe pods -n "$FMA_NAMESPACE" 2>/dev/null || true
-          echo ""
-          echo "=== Events ==="
-          kubectl get events -n "$FMA_NAMESPACE" --sort-by='.lastTimestamp' 2>/dev/null | tail -30 || true
-          echo ""
-          echo "=== Dual Pods controller logs ==="
-          kubectl logs deployment/"$FMA_RELEASE_NAME-dual-pods-controller" -n "$FMA_NAMESPACE" --previous 2>/dev/null || true
-          kubectl logs deployment/"$FMA_RELEASE_NAME-dual-pods-controller" -n "$FMA_NAMESPACE" 2>/dev/null || true
 
   # Report status back to PR for issue_comment triggered runs
   # This ensures fork PRs show the correct status after /ok-to-test runs complete
@@ -901,7 +953,7 @@ jobs:
     if: always() && github.event_name == 'issue_comment' && needs.gate.outputs.should_run == 'true'
     steps:
       - name: Report status to PR
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         with:
           script: |
             const prHeadSha = '${{ needs.gate.outputs.pr_head_sha }}';

@@ -460,9 +460,9 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		return err, false
 	}
 
-	cfg, iscHash, err := ctl.parseInferenceServerConfig(isc)
+	cfg, iscHash, err := ctl.configInferenceServer(isc, serverDat.GPUIDs)
 	if err != nil {
-		return fmt.Errorf("parse inference server config: %w", err), true
+		return fmt.Errorf("failed to configure inference server config: %w", err), true
 	}
 	logger.V(5).Info("Nominal hash of InferenceServerConfig", "hash", iscHash)
 
@@ -472,7 +472,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		// then those with capacity for new instances.
 		// Note that multiple vLLM instances could exist in one launcher Pod, but at most one instance could be awake at a time.
 
-		launcherPod, hasSleepingInstance, someNotReady, err := ctl.selectBestLauncherPod(ctx, launcherPodAnys, iscHash, nodeDat)
+		launcherPod, hasSleepingInstance, someNotReady, err := ctl.selectBestLauncherPod(ctx, launcherPodAnys, iscHash, int(lc.Spec.MaxSleepingInstances), nodeDat)
 		if err != nil {
 			return err, true
 		}
@@ -510,6 +510,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				return ctl.bind(ctx, serverDat, requestingPod, launcherPod, true, int16(isc.Spec.ModelServerConfig.Port))
 			} else {
 				// Slower path: create new instance in launcher with capacity
+				logger.V(5).Info("Creating new vLLM instance", "iscHash", iscHash)
 				result, err := lClient.CreateNamedInstance(ctx, iscHash, *cfg)
 				if err != nil {
 					return fmt.Errorf("create vLLM instance: %w", err), true
@@ -564,6 +565,7 @@ func (ctl *controller) selectBestLauncherPod(
 	ctx context.Context,
 	launcherPodAnys []interface{},
 	iscHash string,
+	maxOthers int,
 	nodeDat *nodeData,
 ) (*corev1.Pod, bool, bool, error) {
 	logger := klog.FromContext(ctx)
@@ -614,8 +616,7 @@ func (ctl *controller) selectBestLauncherPod(
 		}
 
 		// Check if this launcher has capacity for a new instance
-		// A launcher has capacity if it has zero instances (can host at least one)
-		if insts.TotalInstances == 0 && candidateWithCapacity == nil {
+		if insts.TotalInstances <= maxOthers && candidateWithCapacity == nil {
 			// Priority 2: Has capacity for new instance
 			logger.V(5).Info("Found launcher with capacity for new instance",
 				"name", launcherPod.Name,
@@ -642,11 +643,12 @@ func (ctl *controller) selectBestLauncherPod(
 	return nil, false, false, nil
 }
 
-func (ctl *controller) parseInferenceServerConfig(isc *fmav1alpha1.InferenceServerConfig) (*VllmConfig, string, error) {
+func (ctl *controller) configInferenceServer(isc *fmav1alpha1.InferenceServerConfig, gpuUUIDs []string) (*VllmConfig, string, error) {
 	options := isc.Spec.ModelServerConfig.Options + " --port " + strconv.Itoa(int(isc.Spec.ModelServerConfig.Port))
-	vllmCfg := VllmConfig{ // TODO(waltforme): update this when type VllmConfig is updated
-		Options: options,
-		EnvVars: make(map[string]interface{}, len(isc.Spec.ModelServerConfig.EnvVars)),
+	vllmCfg := VllmConfig{
+		Options:  options,
+		GpuUUIDs: gpuUUIDs,
+		EnvVars:  make(map[string]interface{}, len(isc.Spec.ModelServerConfig.EnvVars)),
 	}
 	for k, v := range isc.Spec.ModelServerConfig.EnvVars {
 		vllmCfg.EnvVars[k] = v
@@ -658,6 +660,8 @@ func (ctl *controller) parseInferenceServerConfig(isc *fmav1alpha1.InferenceServ
 	}
 	hasher := sha256.New()
 	hasher.Write(iscBytes)
+	hasher.Write([]byte(";gpus="))
+	hasher.Write([]byte(strings.Join(gpuUUIDs, ",")))
 	var hash [sha256.Size]byte
 	hashSl := hasher.Sum(hash[:0])
 	// using Raw_URL_Encoding because this hash will be used in URLs to the launcher.

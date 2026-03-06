@@ -108,12 +108,39 @@ rules:
   - configmaps
   verbs:
   - create
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
 EOF
 
 kubectl create rolebinding testreq --role=testreq --serviceaccount=$(kubectl get sa default -o jsonpath={.metadata.namespace}):testreq
-kubectl create clusterrolebinding testreq-view --clusterrole=view --serviceaccount=$(kubectl get sa default -o jsonpath={.metadata.namespace}):testreq
 
 kubectl create sa testreq
+
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: testlauncher
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - list
+  - watch
+EOF
+
+kubectl create rolebinding testlauncher --role=testlauncher --serviceaccount=$(kubectl get sa default -o jsonpath={.metadata.namespace}):testlauncher
+
+kubectl create sa testlauncher
 kubectl create cm gpu-map
 kubectl get nodes -o name | sed 's%^node/%%' | while read node; do
     kubectl label node $node nvidia.com/gpu.present=true nvidia.com/gpu.product=NVIDIA-L40S nvidia.com/gpu.count=2 --overwrite=true
@@ -131,6 +158,7 @@ make load-controller-local
 POLICIES_ENABLED=false
 if kubectl api-resources --api-group=admissionregistration.k8s.io -o name | grep -q 'validatingadmissionpolicies'; then
   POLICIES_ENABLED=true
+  kubectl apply -f config/validating-admission-policies
 fi
 
 : Deploy the FMA controllers in the cluster
@@ -145,7 +173,6 @@ helm upgrade --install fma charts/fma-controllers \
   --set dualPodsController.sleeperLimit=2 \
   --set global.local=true \
   --set dualPodsController.debugAcceleratorMemory=false \
-  --set global.enableValidationPolicy=${POLICIES_ENABLED} \
   --set launcherPopulator.enabled=false
 
 : Populate GPU map for testing
@@ -165,6 +192,7 @@ objs=$(test/e2e/mkobjs.sh)
 isc=$(echo $objs | awk '{print $1}')
 lc=$(echo $objs | awk '{print $2}')
 rslb=$(echo $objs | awk '{print $3}')
+isc2=$(echo $objs | awk '{print $4}')
 instlb=${rslb#my-request-}
 
 # Expect requester pod to be created
@@ -205,16 +233,13 @@ fi
 # Scale requester to 0 (instance should sleep in launcher)
 kubectl scale rs $rslb --replicas=0
 
-expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | grep -c '^pod/' || true | grep -w 0"
-! kubectl get pod $reqlb
+expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | wc -l | grep -w 0"
 
 # Launcher should remain
 kubectl get pod $launcherlb
 
 # Verify launcher is unbound (no dual label pointing to requester)
 expect '[ "$(kubectl get pod $launcherlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "" ]'
-
-sleep 5
 
 # Scale back up (should reuse same launcher and wake sleeping instance)
 kubectl scale rs $rslb --replicas=1
@@ -240,10 +265,91 @@ kubectl wait --for condition=Ready pod/$launcherlb --timeout=5s
 
 cheer Successful instance wake-up fast path
 
+: Multiple Instances Share One Launcher
+
+# Scale requester to 0 again
+kubectl scale rs $rslb --replicas=0
+
+expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | wc -l | grep -w 0"
+
+# Launcher should remain
+kubectl get pod $launcherlb
+
+# Verify launcher is unbound
+expect '[ "$(kubectl get pod $launcherlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "" ]'
+
+# Patch ReplicaSet to use isc2 instead of isc
+kubectl patch rs $rslb -p='{"spec":{"template":{"metadata":{"annotations":{"dual-pods.llm-d.ai/inference-server-config":"'$isc2'"}}}}}'
+
+# Scale back up (should reuse same launcher and create 2nd instance)
+kubectl scale rs $rslb --replicas=1
+
+expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | grep -c '^pod/' | grep -w 1"
+
+reqlb3=$(kubectl get pods -o name -l app=dp-example,instance=$instlb | sed s%pod/%%)
+
+# Should still be using the same launcher pod
+launcherlb3=$(kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | sed s%pod/%%)
+[ "$launcherlb3" == "$launcherlb" ]
+
+# Verify new requester is bound to same launcher
+expect '[ "$(kubectl get pod $reqlb3 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcherlb" ]'
+
+# Verify launcher is bound to new requester
+expect '[ "$(kubectl get pod $launcherlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$reqlb3" ]'
+
+# Wait for requester to be ready (launcher should already be ready)
+date
+kubectl wait --for condition=Ready pod/$reqlb3 --timeout=120s
+kubectl wait --for condition=Ready pod/$launcherlb --timeout=5s
+
+cheer Successful multiple instances sharing one launcher
+
+: Switch Instances In One Launcher
+
+# Scale requester to 0 again
+kubectl scale rs $rslb --replicas=0
+
+expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | wc -l | grep -w 0"
+
+# Launcher should remain
+kubectl get pod $launcherlb
+
+# Verify launcher is unbound
+expect '[ "$(kubectl get pod $launcherlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "" ]'
+
+# Patch ReplicaSet back to use original isc
+kubectl patch rs $rslb -p='{"spec":{"template":{"metadata":{"annotations":{"dual-pods.llm-d.ai/inference-server-config":"'$isc'"}}}}}'
+
+# Scale back up (should reuse same launcher and wake first instance)
+kubectl scale rs $rslb --replicas=1
+
+expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | grep -c '^pod/' | grep -w 1"
+
+reqlb4=$(kubectl get pods -o name -l app=dp-example,instance=$instlb | sed s%pod/%%)
+
+# Should still be using the same launcher pod
+launcherlb4=$(kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | sed s%pod/%%)
+[ "$launcherlb4" == "$launcherlb" ]
+
+# Verify new requester is bound to same launcher
+expect '[ "$(kubectl get pod $reqlb4 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcherlb" ]'
+
+# Verify launcher is bound to new requester
+expect '[ "$(kubectl get pod $launcherlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$reqlb4" ]'
+
+# Wait for requester to be ready (launcher should already be ready)
+date
+kubectl wait --for condition=Ready pod/$reqlb4 --timeout=120s
+kubectl wait --for condition=Ready pod/$launcherlb --timeout=5s
+
+cheer Successful switching instances in one launcher
+
 : Clean up launcher-based workloads
 
 kubectl delete rs $rslb --ignore-not-found=true
 kubectl delete inferenceserverconfig $isc --ignore-not-found=true
+kubectl delete inferenceserverconfig $isc2 --ignore-not-found=true
 kubectl delete launcherconfig $lc --ignore-not-found=true
 expect '[ $(kubectl get pods -o name | grep -c "^pod/my-request-") == "0" ]'
 
