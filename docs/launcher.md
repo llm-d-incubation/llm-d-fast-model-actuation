@@ -702,7 +702,7 @@ Be mindful of system resources:
 
 The launcher captures stdout/stderr from each vLLM instance by writing directly to a log file on disk:
 
-- **Architecture**: A `FileWriter` in the child process appends output to a per-instance log file (`/tmp/launcher-<pid>-vllm-<instance_id>.log`). Two `FileWriter` instances (stdout + stderr) safely share the same file via POSIX `O_APPEND` semantics. Each write is followed by a flush so the parent can read new content immediately.
+- **Architecture**: The child process redirects stdout and stderr at the OS level using `os.dup2`, so all output — including from vLLM, uvicorn, and C extensions — is captured to a per-instance log file (`/tmp/launcher-<pid>-vllm-<instance_id>.log`). The file is opened with `O_APPEND` so concurrent writes from stdout and stderr are safe.
 - **Raw Bytes**: The log endpoint returns `application/octet-stream` — raw bytes, not JSON.
 - **Range Header**: Use the standard HTTP `Range: bytes=START-END` header to request specific byte ranges. Without a Range header, the full log (up to 1 MB) is returned.
 - **No Data Loss**: Since logs are written directly to disk, there is no bounded queue that could overflow and drop messages.
