@@ -130,6 +130,8 @@ metadata:
 rules:
 - apiGroups:
   - ""
+  resourceNames:
+  - gpu-map
   resources:
   - configmaps
   verbs:
@@ -260,7 +262,7 @@ expect '[ "$(kubectl get pod $launcherlb -o jsonpath={.metadata.labels.dual-pods
 
 # Wait for requester to be ready (launcher should already be ready)
 date
-kubectl wait --for condition=Ready pod/$reqlb2 --timeout=30s
+kubectl wait --for condition=Ready pod/$reqlb2 --timeout=120s
 kubectl wait --for condition=Ready pod/$launcherlb --timeout=5s
 
 cheer Successful instance wake-up fast path

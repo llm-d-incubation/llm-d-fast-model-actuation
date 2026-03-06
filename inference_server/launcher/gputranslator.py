@@ -20,7 +20,6 @@ GPU Translator
 import importlib.metadata
 import json
 import logging
-import os
 from typing import Dict, Optional
 
 import pynvml
@@ -34,23 +33,29 @@ class GpuTranslator:
     def __init__(
         self,
         mock_gpus: bool = False,
-        mock_gpu_count: int = 8,
         node_name: Optional[str] = None,
+        namespace: Optional[str] = None,
+        mock_gpu_count: Optional[int] = 8,
     ):
         """
         Initialize GPU Translator
 
         Args:
             mock_gpus: If True, skip pynvml and use mock mode for testing
-            mock_gpu_count: Number of mock GPUs to create (default: 8)
-            node_name: Kubernetes node name for ConfigMap-based GPU discovery
+            node_name: Kubernetes node name for ConfigMap-based mock GPU discovery.
+                Required when mock_gpus=True.
+            namespace: Kubernetes namespace for ConfigMap-based mock GPU discovery.
+                Required when mock_gpus=True.
+            mock_gpu_count: Number of mock GPUs to create when in mock mode and
+                ConfigMap-based mock is not available (default: 8).
         """
         self.mapping = {}
         self.reverse_mapping = {}
         self.device_count = 0
         self.mock_mode = mock_gpus
         self.mock_gpu_count = mock_gpu_count
-        self.node_name = node_name or os.getenv("NODE_NAME")
+        self.node_name = node_name
+        self.namespace = namespace
         if not self.mock_mode:
             self._check_library()
         self._populate_mapping()
@@ -77,11 +82,15 @@ class GpuTranslator:
         Load GPU mapping from Kubernetes ConfigMap 'gpu-map'.
 
         Returns:
-            Dict[str, int]: GPU UUID to index mapping, or None if ConfigMap not
-            available
+            Optional[Dict[str, int]]: GPU UUID to index mapping, or None if ConfigMap
+            not available
         """
         if not self.node_name:
             logger.info("No node name provided, skipping ConfigMap GPU discovery")
+            return None
+
+        if not self.namespace:
+            logger.info("No namespace provided, skipping ConfigMap GPU discovery")
             return None
 
         try:
@@ -94,14 +103,13 @@ class GpuTranslator:
             v1 = client.CoreV1Api()
 
             # Read the ConfigMap
-            namespace = os.getenv("NAMESPACE", "default")
-            cm = v1.read_namespaced_config_map(name="gpu-map", namespace=namespace)
+            cm = v1.read_namespaced_config_map(name="gpu-map", namespace=self.namespace)
 
             if not cm.data or self.node_name not in cm.data:
                 logger.warning(
                     "Node '%s' not found in ConfigMap 'gpu-map' in namespace '%s'",
                     self.node_name,
-                    namespace,
+                    self.namespace,
                 )
                 return None
 
@@ -132,8 +140,8 @@ class GpuTranslator:
         2. Naive mock with GPU-0, GPU-1, etc. if mock mode is enabled
         3. Real GPUs via pynvml
         """
-        # Try ConfigMap first if in mock mode and node_name is available
-        if self.mock_mode and self.node_name:
+        # Try ConfigMap-based mock first if in mock mode
+        if self.mock_mode and self.node_name and self.namespace:
             configmap_mapping = self._load_gpu_map_from_configmap()
             if configmap_mapping:
                 self.mapping = configmap_mapping
@@ -147,7 +155,7 @@ class GpuTranslator:
                 )
                 return
 
-        # Fall back to hardcoded mock mode
+        # Fall back to naive mock if in mock mode
         if self.mock_mode:
             # Pre-populate with mock GPUs following the test pattern: GPU-0, GPU-1, etc.
             for index in range(self.mock_gpu_count):

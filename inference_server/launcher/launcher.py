@@ -201,10 +201,14 @@ class VllmMultiProcessManager:
         mock_gpus: bool = False,
         mock_gpu_count: int = 8,
         node_name: Optional[str] = None,
+        namespace: Optional[str] = None,
     ):
         self.instances: Dict[str, VllmInstance] = {}
         self.gpu_translator = GpuTranslator(
-            mock_gpus=mock_gpus, mock_gpu_count=mock_gpu_count, node_name=node_name
+            mock_gpus=mock_gpus,
+            node_name=node_name,
+            namespace=namespace,
+            mock_gpu_count=mock_gpu_count,
         )
 
     def create_instance(
@@ -618,12 +622,14 @@ if __name__ == "__main__":
 
     # Get node name from environment variable
     node_name = os.getenv("NODE_NAME")
+    namespace = os.getenv("NAMESPACE")
 
     # Reinitialize the global manager with mock mode settings
     vllm_manager = VllmMultiProcessManager(
         mock_gpus=args.mock_gpus,
         mock_gpu_count=args.mock_gpu_count,
         node_name=node_name,
+        namespace=namespace,
     )
 
     uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
