@@ -579,6 +579,7 @@ def set_env_vars(env_vars: Dict[str, Any]):
 
 if __name__ == "__main__":
     import argparse
+
     import uvicorn
 
     parser = argparse.ArgumentParser(description="vLLM Launcher Service")
