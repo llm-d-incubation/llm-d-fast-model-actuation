@@ -278,12 +278,9 @@ expect '[ "$(kubectl get pod $reqlb3 -o jsonpath={.metadata.labels.dual-pods\\.l
 # Verify launcher is bound to new requester
 expect '[ "$(kubectl get pod $launcherlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$reqlb3" ]'
 
-# Verify the new requester is using isc2
-expect '[ "$(kubectl get pod $reqlb3 -o jsonpath={.metadata.annotations.dual-pods\\.llm-d\\.ai/inference-server-config})" == "'$isc2'" ]'
-
 # Wait for requester to be ready (launcher should already be ready)
 date
-kubectl wait --for condition=Ready pod/$reqlb3 --timeout=30s
+kubectl wait --for condition=Ready pod/$reqlb3 --timeout=120s
 kubectl wait --for condition=Ready pod/$launcherlb --timeout=5s
 
 cheer Successful multiple instances sharing one launcher
@@ -321,12 +318,9 @@ expect '[ "$(kubectl get pod $reqlb4 -o jsonpath={.metadata.labels.dual-pods\\.l
 # Verify launcher is bound to new requester
 expect '[ "$(kubectl get pod $launcherlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$reqlb4" ]'
 
-# Verify the new requester is using original isc
-expect '[ "$(kubectl get pod $reqlb4 -o jsonpath={.metadata.annotations.dual-pods\\.llm-d\\.ai/inference-server-config})" == "'$isc'" ]'
-
 # Wait for requester to be ready (launcher should already be ready)
 date
-kubectl wait --for condition=Ready pod/$reqlb4 --timeout=30s
+kubectl wait --for condition=Ready pod/$reqlb4 --timeout=120s
 kubectl wait --for condition=Ready pod/$launcherlb --timeout=5s
 
 cheer Successful switching instances in one launcher

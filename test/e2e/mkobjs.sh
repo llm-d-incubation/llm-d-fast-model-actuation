@@ -17,7 +17,6 @@ spec:
     options: "--model HuggingFaceTB/SmolLM2-360M-Instruct"
     env_vars:
       VLLM_SERVER_DEV_MODE: "1"
-      VLLM_USE_V1: "1"
       VLLM_LOGGING_LEVEL: "DEBUG"
       VLLM_CPU_KVCACHE_SPACE: "1" # GiB
     labels:
@@ -38,7 +37,6 @@ spec:
     options: "--model Qwen/Qwen2.5-0.5B-Instruct"
     env_vars:
       VLLM_SERVER_DEV_MODE: "1"
-      VLLM_USE_V1: "1"
       VLLM_LOGGING_LEVEL: "DEBUG"
       VLLM_CPU_KVCACHE_SPACE: "1" # GiB
     labels:
@@ -59,7 +57,6 @@ spec:
     options: "--model TinyLlama/TinyLlama-1.1B-Chat-v1.0"
     env_vars:
       VLLM_SERVER_DEV_MODE: "1"
-      VLLM_USE_V1: "1"
       VLLM_LOGGING_LEVEL: "DEBUG"
       VLLM_CPU_KVCACHE_SPACE: "1" # GiB
     labels:
