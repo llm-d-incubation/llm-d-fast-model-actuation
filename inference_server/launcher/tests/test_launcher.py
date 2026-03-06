@@ -881,23 +881,21 @@ class TestVllmInstanceLogs:
         return instance
 
     def test_get_log_bytes_no_file(self, gpu_translator, tmp_log_dir):
-        """Test get_log_bytes returns empty bytes when log file doesn't exist"""
+        """Test get_log_bytes raises 416 when log file doesn't exist"""
         instance = self._make_instance(gpu_translator, tmp_log_dir)
 
-        data, total = instance.get_log_bytes()
-
-        assert data == b""
-        assert total == 0
+        with pytest.raises(LogRangeNotAvailable) as exc_info:
+            instance.get_log_bytes()
+        assert exc_info.value.available_bytes == 0
 
     def test_get_log_bytes_empty_file(self, gpu_translator, tmp_log_dir):
-        """Test get_log_bytes returns empty bytes when log file is empty"""
+        """Test get_log_bytes raises 416 when log file is empty"""
         instance = self._make_instance(gpu_translator, tmp_log_dir)
         open(instance._log_file_path, "wb").close()
 
-        data, total = instance.get_log_bytes()
-
-        assert data == b""
-        assert total == 0
+        with pytest.raises(LogRangeNotAvailable) as exc_info:
+            instance.get_log_bytes()
+        assert exc_info.value.available_bytes == 0
 
     def test_get_log_bytes_with_content(self, gpu_translator, tmp_log_dir):
         """Test get_log_bytes retrieves content from log file"""
@@ -985,13 +983,13 @@ class TestLogFile:
         assert total == 28
 
     def test_empty_file(self, gpu_translator, tmp_log_dir):
-        """Test getting logs from empty file"""
+        """Test getting logs from empty file raises 416"""
         instance = self._make_instance(gpu_translator, tmp_log_dir)
         open(instance._log_file_path, "wb").close()
 
-        data, total = instance.get_log_bytes(start=0)
-        assert data == b""
-        assert total == 0
+        with pytest.raises(LogRangeNotAvailable) as exc_info:
+            instance.get_log_bytes(start=0)
+        assert exc_info.value.available_bytes == 0
 
     def test_end_limit_enforcement(self, gpu_translator, tmp_log_dir):
         """Test that end parameter limits returned bytes"""
