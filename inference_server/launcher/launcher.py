@@ -537,40 +537,6 @@ async def get_vllm_instance_logs(
 ######################################################################
 
 
-# Helper class to redirect stdout/stderr to a log file
-class FileWriter:
-    """Custom writer that appends output to a file on disk.
-
-    Wraps the original stream so that libraries which inspect stream
-    attributes (e.g. uvicorn's logging config) continue to work.
-    Two FileWriter instances (stdout + stderr) pointing at the same file
-    are safe thanks to O_APPEND semantics on POSIX.
-    """
-
-    def __init__(self, log_file_path: str, original_stream):
-        self._file = open(log_file_path, "ab")
-        self._original = original_stream
-        # Expose attributes that logging/uvicorn may inspect
-        self.encoding = getattr(original_stream, "encoding", "utf-8")
-        self.name = getattr(original_stream, "name", log_file_path)
-        self.errors = getattr(original_stream, "errors", "strict")
-
-    def write(self, msg: str):
-        if msg.strip():  # Only write non-empty messages
-            self._file.write(msg.encode("utf-8"))
-            self._file.flush()
-        return len(msg)
-
-    def flush(self):
-        self._file.flush()
-
-    def fileno(self):
-        return self._original.fileno()
-
-    def isatty(self):
-        return False
-
-
 # Function to be executed by the child process
 def vllm_kickoff(vllm_config: VllmConfig, log_file_path: str):
     """
@@ -584,10 +550,15 @@ def vllm_kickoff(vllm_config: VllmConfig, log_file_path: str):
     # propagate to the vLLM server or its EngineCore child process.
     os.setpgrp()
 
-    # Redirect stdout and stderr to the log file while preserving
-    # original stream attributes needed by uvicorn's logging configuration.
-    sys.stdout = FileWriter(log_file_path, sys.stdout)
-    sys.stderr = FileWriter(log_file_path, sys.stderr)
+    # Redirect stdout and stderr at the OS level using dup2 so that
+    # all output (including from vLLM/uvicorn internal logging and any
+    # C extensions writing to fd 1/2) is captured in the log file.
+    log_fd = os.open(log_file_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    os.dup2(log_fd, sys.stdout.fileno())
+    os.dup2(log_fd, sys.stderr.fileno())
+    os.close(log_fd)
+    sys.stdout = os.fdopen(1, "w")
+    sys.stderr = os.fdopen(2, "w")
 
     logger.info(f"VLLM process (PID: {os.getpid()}) started.")
     # Set env vars in the current process
