@@ -1,14 +1,6 @@
 # Git Commit Signoff and Signing
 
-**NOTE**: "sign-off" is different from "signing" a commit.  The former
-indicates your assent to the repository's terms for contributors, the
-latter adds a cryptographic signature that is rarely displayed.  See
-[the git
-book](https://git-scm.com/book/en/v2/Git-Tools-Signing-Your-Work)
-about signing. For commit signoff, do a web search on `git
-signoff`. GitHub has a concept of [a commit being
-"verified"](https://docs.github.com/en/authentication/managing-commit-signature-verification)
-that extends the Git concept of signing.
+**NOTE:** "DCO sign-off" is different from commit "signing". The former affirms your compliance with the DCO, while the latter adds a cryptographic signature that is rarely displayed. See [the git book](https://git-scm.com/book/en/v2/Git-Tools-Signing-Your-Work) about signing. For commit signoff, do a web search on `git signoff`. GitHub has a concept of [a commit being "verified"](https://docs.github.com/en/authentication/managing-commit-signature-verification) that extends the Git concept of signing.
 
 In order to get a pull request approved, you must first complete a DCO
 sign-off for each commit that the request is asking to add to the
@@ -20,8 +12,7 @@ repository](https://github.com/llm-d/llm-d/blob/main/DCO). In
 the case of an individual, DCO sign-off is accomplished by doing a Git
 "sign-off" on the commit.
 
-We prefer that commits contributed to this repository be signed and
-GitHub verified, but this is not strictly necessary or enforced.
+Commits contributed to this repository must be signed and GitHub verified, as enforced by the [signed commits CI check](.github/workflows/ci-signed-commits.yaml).
 
 ## Commit Sign-off
 
