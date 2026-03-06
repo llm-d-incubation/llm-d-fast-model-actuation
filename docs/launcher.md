@@ -328,7 +328,7 @@ Retrieve stdout/stderr logs from a specific vLLM instance as raw bytes.
 
 **Request Headers:**
 
-- `Range` (optional): Byte range to retrieve, following [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110#field.range). Supported formats:
+- `Range` (optional): Byte range to retrieve, following [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110#name-range-requests). Supported formats:
   - `Range: bytes=START-END` — retrieve bytes from START to END (both inclusive)
   - `Range: bytes=START-` — retrieve bytes from START to end of log (up to 1 MB)
   - Suffix ranges (`bytes=-N`) are **not** supported.
@@ -557,7 +557,7 @@ Range: bytes=15-29     → 206, returns bytes [15, 30)
 Range: bytes=15-       → 206, returns bytes [15, 30) (open-ended)
 ```
 
-The `Content-Range` response header tells you exactly which bytes were returned and the total file size, e.g. `Content-Range: bytes 0-1048575/5242880`.
+The `Content-Range` response header tells you exactly which bytes were returned and the current total log length (which may grow over time), e.g. `Content-Range: bytes 0-1048575/5242880`.
 
 ## Configuration
 
@@ -631,7 +631,7 @@ Represents a single vLLM instance with its process and configuration.
 - `start()`: Start the vLLM process
 - `stop(timeout=10)`: Stop the vLLM process gracefully (or force kill after timeout)
 - `get_status()`: Get detailed status information
-- `get_log_bytes(start=0, end=None)`: Retrieve log bytes from the instance, returns `(bytes, total_size)`
+- `get_log_bytes(start=0, end=None)`: Retrieve log bytes from the instance (start and end are both inclusive), returns `(bytes, total_size)`
 
 #### `VllmMultiProcessManager`
 
