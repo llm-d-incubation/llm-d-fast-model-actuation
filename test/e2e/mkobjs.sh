@@ -17,7 +17,7 @@ spec:
     env_vars:
       VLLM_SERVER_DEV_MODE: "1"
       VLLM_LOGGING_LEVEL: "DEBUG"
-      VLLM_CPU_KVCACHE_SPACE: "1" # GiB
+      VLLM_CPU_KVCACHE_SPACE: "1" # GiB, helpful for small models to reduce CPU memory usage during testing
     labels:
       component: inference
     annotations:
@@ -37,7 +37,7 @@ spec:
     env_vars:
       VLLM_SERVER_DEV_MODE: "1"
       VLLM_LOGGING_LEVEL: "DEBUG"
-      VLLM_CPU_KVCACHE_SPACE: "1" # GiB
+      VLLM_CPU_KVCACHE_SPACE: "1" # GiB, helpful for small models to reduce CPU memory usage during testing
     labels:
       component: inference
     annotations:
@@ -57,7 +57,7 @@ spec:
     env_vars:
       VLLM_SERVER_DEV_MODE: "1"
       VLLM_LOGGING_LEVEL: "DEBUG"
-      VLLM_CPU_KVCACHE_SPACE: "1" # GiB
+      VLLM_CPU_KVCACHE_SPACE: "1" # GiB, helpful for small models to reduce CPU memory usage during testing
     labels:
       component: inference
     annotations:
