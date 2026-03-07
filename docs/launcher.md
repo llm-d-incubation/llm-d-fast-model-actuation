@@ -579,24 +579,34 @@ You can set environment variables for each instance, useful for:
 
 ### Launcher Configuration
 
-The launcher itself can be configured by modifying the `__main__` block:
-
-```python
-if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run(
-        app,
-        host="0.0.0.0",      # Listen address
-        port=8001,            # Launcher API port
-        log_level="info"      # Logging level
-    )
-```
-
-or passing the parameters on the command line:
+#### Command-Line Parameters
 
 ```bash
-uvicorn --port 8001 --log-level info launcher:app
+python launcher.py [OPTIONS]
+```
+
+**Parameters:**
+- `--mock-gpus`: Enable mock GPU mode for CPU-only environments (local dev, CI/CD, Kind clusters). Creates mock GPUs (GPU-0, GPU-1, etc.) and bypasses nvidia-ml-py.
+- `--mock-gpu-count <int>`: Number of mock GPUs to create (default: 8). Only used with `--mock-gpus` when ConfigMap discovery is unavailable.
+- `--host <string>`: Bind address (default: `0.0.0.0`)
+- `--port <int>`: API port (default: `8001`)
+- `--log-level <string>`: Logging level - `critical`, `error`, `warning`, `info`, `debug` (default: `info`)
+
+**Environment Variables:**
+- `NODE_NAME`: Kubernetes node name for ConfigMap-based GPU discovery (injected via Downward API). Required when using ConfigMap-based GPU discovery in mock mode.
+- `NAMESPACE`: Kubernetes namespace for ConfigMap lookup. Required when using ConfigMap-based GPU discovery in mock mode.
+
+**Examples:**
+
+```bash
+# Local development (no GPUs)
+python launcher.py --mock-gpus --mock-gpu-count 2 --log-level debug
+
+# Production (real GPUs, Kubernetes injects NODE_NAME)
+python launcher.py --port 8001 --log-level info
+
+# Using uvicorn directly
+uvicorn launcher:app --host 0.0.0.0 --port 8001 --log-level info
 ```
 
 ## Key Classes
