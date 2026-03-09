@@ -33,7 +33,7 @@ spec:
             name: launcher-code
       containers:
         - name: inference-server
-          image: vllm/vllm-openai:latest
+          image: vllm/vllm-openai:v0.15.1
           ports:
             - containerPort: 8001
           # Install dependencies and run the app
