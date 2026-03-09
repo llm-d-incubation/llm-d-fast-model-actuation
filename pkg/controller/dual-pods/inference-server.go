@@ -323,7 +323,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		if launcherBased {
 			serverPort = int16(isc.Spec.ModelServerConfig.Port)
 		} else {
-			_, serverPort, err = utils.GetInferenceServerPort(providingPod, false)
+			_, serverPort, err = utils.GetInferenceServerContainerIndexAndPort(providingPod)
 			if err != nil { // Impossible, because such a providingPod would never be created by this controller
 				return fmt.Errorf("unable to wake up server because port not known: %w", err), true
 			}
@@ -792,7 +792,7 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 	if launcherBased {
 		serverPort = instPort
 	} else {
-		_, serverPort, err = utils.GetInferenceServerPort(providingPod, false)
+		_, serverPort, err = utils.GetInferenceServerContainerIndexAndPort(providingPod)
 		if err != nil { // Impossible, because such a providingPod would never be created by this controller
 			return fmt.Errorf("unable to wake up server because port not known: %w", err), true
 		}
@@ -837,7 +837,7 @@ func (ctl *controller) maybeRemoveRequesterFinalizer(ctx context.Context, reques
 	// First, determine whether finalizer should be present
 	var wantFinalizer bool
 	if providingPod != nil {
-		isIdx, _, err := utils.GetInferenceServerPort(providingPod, false)
+		isIdx, err := utils.GetInferenceServerContainerIndex(providingPod)
 		if err == nil {
 			isCtr := &providingPod.Spec.Containers[isIdx]
 			statIdx := slices.IndexFunc(providingPod.Status.ContainerStatuses,
@@ -922,7 +922,7 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 		if !launcherBased {
 			if serverDat.NominalProvidingPod == nil {
 				var err error
-				_, serverPort, err = utils.GetInferenceServerPort(providingPod, false)
+				_, serverPort, err = utils.GetInferenceServerContainerIndexAndPort(providingPod)
 				if err != nil { // Impossible, because such a providingPod would never be created by this controller
 					return fmt.Errorf("unable to put server to sleep because port not known: %w", err)
 				}
@@ -1043,7 +1043,7 @@ func (serverDat *serverData) getNominalServerProvidingPod(ctx context.Context, r
 		}
 		nodeSelector["kubernetes.io/hostname"] = reqPod.Spec.NodeName
 
-		cIdx, serverPort, err := utils.GetInferenceServerPort(pod, false)
+		cIdx, serverPort, err := utils.GetInferenceServerContainerIndexAndPort(pod)
 		if err != nil {
 			return nil, "", err
 		}
