@@ -85,26 +85,17 @@ func removeVolumeMount(ctr *corev1.Container, volumeName string) {
 	}
 }
 
-// GetInferenceServerPort, given a server-providing Pod and whether it is launcher-based,
-// returns (containerIndex int, inferenceServerPort int16, err error)
-// For direct server-providing pods, the inference server port is identified from readinessProbe.
-// For launcher-based server-providing pods, the inference server port can't be identified from the launcher pod,
-// so we return a dummy value -1.
-func GetInferenceServerPort(pod *corev1.Pod, launcherBased bool) (int, int16, error) {
-	// identify the inference server container
-	cIdx := slices.IndexFunc(pod.Spec.Containers, func(c corev1.Container) bool {
-		return c.Name == api.InferenceServerContainerName
-	})
-	if cIdx == -1 {
-		return 0, 0, fmt.Errorf("container %q not found", api.InferenceServerContainerName)
+// GetInferenceServerContainerIndexAndPort returns the index of the inference server container
+// and the port for a server-providing Pod.
+// This function is for direct (non-launcher-based) server-providing Pods.
+// The port is identified from the readinessProbe.
+// Returns (containerIndex int, inferenceServerPort int16, err error).
+func GetInferenceServerContainerIndexAndPort(pod *corev1.Pod) (int, int16, error) {
+	cIdx, err := GetInferenceServerContainerIndex(pod)
+	if err != nil {
+		return 0, 0, err
 	}
 
-	// for launcher-based server-providing pod, return a dummy value
-	if launcherBased {
-		return cIdx, -1, nil
-	}
-
-	// for direct server-providing pod, identify the port from readinessProbe
 	isCtr := &pod.Spec.Containers[cIdx]
 	if isCtr.ReadinessProbe == nil {
 		return 0, 0, errors.New("the inference server container has no readinessProbe")
@@ -124,6 +115,19 @@ func GetInferenceServerPort(pod *corev1.Pod, launcherBased bool) (int, int16, er
 	default:
 		return 0, 0, fmt.Errorf("the readinessProbe port has unexpected type %q", portIOS.Type)
 	}
+}
+
+// GetInferenceServerContainerIndex returns the index of the inference server container
+// in the given Pod's container list.
+// This function is for both direct (non-launcher-based) and launcher-based server-providing Pods.
+func GetInferenceServerContainerIndex(pod *corev1.Pod) (int, error) {
+	cIdx := slices.IndexFunc(pod.Spec.Containers, func(c corev1.Container) bool {
+		return c.Name == api.InferenceServerContainerName
+	})
+	if cIdx == -1 {
+		return 0, fmt.Errorf("container %q not found", api.InferenceServerContainerName)
+	}
+	return cIdx, nil
 }
 
 func IsPodReady(pod *corev1.Pod) bool {
@@ -170,7 +174,7 @@ func BuildLauncherPodFromTemplate(template corev1.PodTemplateSpec, ns, nodeName,
 	}
 	pod.Annotations = MapSet(pod.Annotations, string(common.LauncherConfigHashAnnotationKey), nominalHash)
 
-	cIdx, _, err := GetInferenceServerPort(pod, true)
+	cIdx, err := GetInferenceServerContainerIndex(pod)
 	if err != nil {
 		return nil, err
 	}
