@@ -579,15 +579,11 @@ You can set environment variables for each instance, useful for:
 
 ### Launcher Configuration
 
-#### Command-Line Parameters
+#### Command-Line Parameters and Env Vars
 
-```bash
-python launcher.py [OPTIONS]
-```
-
-**Parameters:**
-- `--mock-gpus`: Enable mock GPU mode for CPU-only environments (local dev, CI/CD, Kind clusters). Creates mock GPUs (GPU-0, GPU-1, etc.) and bypasses nvidia-ml-py.
-- `--mock-gpu-count <int>`: Number of mock GPUs to create (default: 8). Only used with `--mock-gpus` when ConfigMap discovery is unavailable.
+**Command-Line Parameters:**
+- `--mock-gpus`: Enable mock GPU mode for CPU-only environments (local dev, CI/CD, Kind clusters). Bypasses nvidia-ml-py. Creates mock GPUs either based on a 'gpu-map' ConfigMap, or by naive enumerating (GPU-0, GPU-1, etc.).
+- `--mock-gpu-count <int>`: Number of mock GPUs to create (default: 8). Only used with `--mock-gpus` but ConfigMap discovery is unavailable, thus falling back to naive enumerating of mock GPUs.
 - `--host <string>`: Bind address (default: `0.0.0.0`)
 - `--port <int>`: API port (default: `8001`)
 - `--log-level <string>`: Logging level - `critical`, `error`, `warning`, `info`, `debug` (default: `info`)
@@ -597,12 +593,11 @@ python launcher.py [OPTIONS]
 - `NAMESPACE`: Kubernetes namespace for ConfigMap lookup. Required when using ConfigMap-based GPU discovery in mock mode.
 
 **Examples:**
-
 ```bash
 # Local development (no GPUs)
 python launcher.py --mock-gpus --mock-gpu-count 2 --log-level debug
 
-# Production (real GPUs, Kubernetes injects NODE_NAME)
+# Production (real GPUs)
 python launcher.py --port 8001 --log-level info
 
 # Using uvicorn directly
