@@ -43,9 +43,9 @@ class GpuTranslator:
         Args:
             mock_gpus: If True, skip pynvml and use mock mode for testing
             node_name: Kubernetes node name for ConfigMap-based mock GPU discovery.
-                Required when mock_gpus=True.
+                Required when mock_gpus=True and using ConfigMap-based mock.
             namespace: Kubernetes namespace for ConfigMap-based mock GPU discovery.
-                Required when mock_gpus=True.
+                Required when mock_gpus=True and using ConfigMap-based mock.
             mock_gpu_count: Number of mock GPUs to create when in mock mode and
                 ConfigMap-based mock is not available (default: 8).
         """
@@ -136,7 +136,8 @@ class GpuTranslator:
         """
         Creates mapping and reverse_mapping for the GPU Translator.
         Priority order:
-        1. ConfigMap 'gpu-map' based mock if mock mode enabled and node_name available
+        1. ConfigMap 'gpu-map' based mock if mock mode enabled and
+            both node_name and namespace are available
         2. Naive mock with GPU-0, GPU-1, etc. if mock mode is enabled
         3. Real GPUs via pynvml
         """
