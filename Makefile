@@ -134,6 +134,34 @@ generate: $(CONTROLLER_GEN_VERSION) ## Generate code containing DeepCopy, DeepCo
 generate_client: $(CODE_GEN_DIR) ## (Re-)generate generated files
 	./hack/generate-client.sh
 
+
+# OCP E2E test configuration
+KUBECONFIG ?= $(HOME)/.kube/config
+ENVIRONMENT ?= openshift
+POLICIES_ENABLED ?= false
+LIMIT ?= 600
+
+# Run full e2e test suite on OpenShift cluster
+# Supports KUBECONFIG or in-cluster authentication
+# Set POLICIES_ENABLED=true to enable CEL policy validation tests
+.PHONY: ocp-e2e-full
+test-e2e-full: ## Run full e2e test suite on OpenShift
+	@echo "Running full e2e test suite on $(ENVIRONMENT)..."
+	@echo "KUBECONFIG: $(KUBECONFIG)"
+	@echo "POLICIES_ENABLED: $(POLICIES_ENABLED)"
+	@echo "LIMIT: $(LIMIT)"
+	KUBECONFIG=$(KUBECONFIG) \
+	ENVIRONMENT=$(ENVIRONMENT) \
+	POLICIES_ENABLED=$(POLICIES_ENABLED) \
+	LIMIT=$(LIMIT) \
+	./test/e2e/ocp-test.sh; \
+	TEST_EXIT_CODE=$$?; \
+	echo ""; \
+	echo "=========================================="; \
+	echo "Test execution completed. Exit code: $$TEST_EXIT_CODE"; \
+	echo "=========================================="; \
+	exit $$TEST_EXIT_CODE
+
 # go-install-tool will 'go install' any package with custom target and name of binary, if it doesn't exist
 # $1 - target path with name of binary
 # $2 - package url which can be installed

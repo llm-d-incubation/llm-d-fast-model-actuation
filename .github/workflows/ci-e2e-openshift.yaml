@@ -867,6 +867,31 @@ jobs:
         if: always()
         run: kubectl get all -n "$FMA_NAMESPACE"
 
+      - name: Run OpenShift E2E tests
+        env:
+          ENVIRONMENT: openshift
+          POLICIES_ENABLED: "false"
+          LIMIT: "600"
+          # Test namespace where objects are deployed
+          NAMESPACE: ${{ env.FMA_NAMESPACE }}
+          # Test object names from previous step
+          INST: ${{ steps.test-objects.outputs.instance }}
+          ISC: ${{ steps.test-objects.outputs.isc }}
+          LC: ${{ steps.test-objects.outputs.lc }}
+          RS: ${{ steps.test-objects.outputs.rs }}
+        run: |
+          echo "Running E2E tests on OpenShift with configuration:"
+          echo "  ENVIRONMENT: $ENVIRONMENT"
+          echo "  POLICIES_ENABLED: $POLICIES_ENABLED"
+          echo "  LIMIT: $LIMIT"
+          echo "  NAMESPACE: $NAMESPACE"
+          echo "  FMA_RELEASE_NAME: $FMA_RELEASE_NAME"
+          echo "  INST: $INST"
+          echo "  ISC: $ISC"
+          echo "  LC: $LC"
+          echo "  RS: $RS"
+          make ocp-e2e-full
+
       - name: List event objects
         if: always()
         run: kubectl get events -n "$FMA_NAMESPACE" --sort-by='.lastTimestamp'
