@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=vllm/vllm-openai:latest
+ARG BASE_IMAGE=vllm/vllm-openai:v0.15.1
 FROM ${BASE_IMAGE}
 
 WORKDIR /app
