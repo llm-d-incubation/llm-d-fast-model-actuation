@@ -26,8 +26,7 @@ dualPodsController:
   # inference server, per GPU.
   sleeperLimit: 2
   # Whether to debug the accelerator memory usage.
-  # This involves querying the requester;
-  # the test-requester does not support the query.
+  # This involves querying the requester's /v1/dual-pods/accelerators/memory endpoint.
   debugAcceleratorMemory: true
 
 # Launcher populator controller configuration

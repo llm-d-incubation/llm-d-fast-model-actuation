@@ -261,8 +261,8 @@ jobs:
     outputs:
       image_tag: ${{ steps.build.outputs.image_tag }}
       controller_image: ${{ steps.build.outputs.controller_image }}
-      test_requester_image: ${{ steps.build.outputs.test_requester_image }}
-      test_launcher_image: ${{ steps.build.outputs.test_launcher_image }}
+      requester_image: ${{ steps.build.outputs.requester_image }}
+      launcher_image: ${{ steps.build.outputs.launcher_image }}
     steps:
       - name: Checkout source
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -311,20 +311,20 @@ jobs:
             CONTAINER_IMG_REG="$CONTAINER_IMG_REG" \
             IMAGE_TAG="$IMAGE_TAG"
 
-          # Build test-requester (ko)
-          KO_DOCKER_REPO="$CONTAINER_IMG_REG" \
-            ko build -B ./cmd/test-requester -t "$IMAGE_TAG" --platform linux/amd64
+          # Build requester (Docker, multi-platform)
+          make build-and-push-requester \
+            CONTAINER_IMG_REG="$CONTAINER_IMG_REG" \
+            REQUESTER_IMG_TAG="$IMAGE_TAG"
 
-          # Build test-launcher (Docker)
-          docker buildx build --push \
-            -t "${CONTAINER_IMG_REG}/test-launcher:${IMAGE_TAG}" \
-            -f dockerfiles/Dockerfile.launcher.cpu . \
-            --platform linux/amd64
+          # Build launcher (Docker, GPU-capable)
+          make build-and-push-launcher \
+            CONTAINER_IMG_REG="$CONTAINER_IMG_REG" \
+            LAUNCHER_IMG_TAG="$IMAGE_TAG"
 
           echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
           echo "controller_image=${CONTAINER_IMG_REG}/dual-pods-controller:${IMAGE_TAG}" >> $GITHUB_OUTPUT
-          echo "test_requester_image=${CONTAINER_IMG_REG}/test-requester:${IMAGE_TAG}" >> $GITHUB_OUTPUT
-          echo "test_launcher_image=${CONTAINER_IMG_REG}/test-launcher:${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          echo "requester_image=${CONTAINER_IMG_REG}/requester:${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          echo "launcher_image=${CONTAINER_IMG_REG}/launcher:${IMAGE_TAG}" >> $GITHUB_OUTPUT
           echo "All images built and pushed"
 
   # Run e2e tests on OpenShift self-hosted runner
@@ -340,8 +340,8 @@ jobs:
       FMA_RELEASE_NAME: fma-e2e-${{ github.run_id }}
       # Use the images built in the previous job
       CONTROLLER_IMAGE: ${{ needs.build-image.outputs.controller_image }}
-      TEST_REQUESTER_IMAGE: ${{ needs.build-image.outputs.test_requester_image }}
-      TEST_LAUNCHER_IMAGE: ${{ needs.build-image.outputs.test_launcher_image }}
+      REQUESTER_IMAGE: ${{ needs.build-image.outputs.requester_image }}
+      LAUNCHER_IMAGE: ${{ needs.build-image.outputs.launcher_image }}
     steps:
       - name: Checkout source
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -468,13 +468,10 @@ jobs:
 
       - name: Create ConfigMaps
         run: |
-          echo "Creating gpu-map and gpu-allocs ConfigMaps in $FMA_NAMESPACE..."
-          # The controller requires these ConfigMaps to exist.
-          # Empty maps are sufficient for install verification; the controller starts
-          # but cannot schedule dual pods without real GPU data.
+          echo "Creating gpu-map ConfigMap in $FMA_NAMESPACE..."
+          # The controller requires the gpu-map ConfigMap to map GPU UUIDs to device indices.
           kubectl create configmap gpu-map -n "$FMA_NAMESPACE"
-          kubectl create configmap gpu-allocs -n "$FMA_NAMESPACE"
-          echo "ConfigMaps created"
+          echo "ConfigMap created"
 
       - name: Create node-viewer ClusterRole
         run: |
@@ -588,6 +585,8 @@ jobs:
         run: |
           echo "Creating RBAC for test workloads..."
 
+          # The real requester does not interact with the Kubernetes API,
+          # so the Role only needs minimal permissions for the service account.
           kubectl apply -n "$FMA_NAMESPACE" -f - <<'EOF'
           apiVersion: rbac.authorization.k8s.io/v1
           kind: Role
@@ -596,16 +595,6 @@ jobs:
           rules:
           - apiGroups: ["fma.llm-d.ai"]
             resources: ["inferenceserverconfigs", "launcherconfigs"]
-            verbs: ["get", "list", "watch"]
-          - apiGroups: [""]
-            resources: ["configmaps"]
-            resourceNames: ["gpu-map", "gpu-allocs"]
-            verbs: ["update", "patch", "get", "list", "watch"]
-          - apiGroups: [""]
-            resources: ["configmaps"]
-            verbs: ["create"]
-          - apiGroups: [""]
-            resources: ["pods"]
             verbs: ["get", "list", "watch"]
           EOF
 
@@ -620,27 +609,36 @@ jobs:
 
       - name: Populate GPU map
         run: |
-          echo "Populating gpu-map from cluster nodes..."
+          echo "Populating gpu-map with real GPU UUIDs from cluster nodes..."
 
-          # Patch gpu-map one node at a time (matching the KinD test approach).
-          # Each entry maps GPU UUID to device index, e.g. {"GPU-0": 0, "GPU-1": 1}.
-          gpu_idx=0
+          # Discover real GPU UUIDs via nvidia-smi on each GPU node using oc debug.
+          # Each entry maps GPU UUID to device index, e.g. {"GPU-abc123": 0, "GPU-def456": 1}.
           found_gpus=false
           for node in $(kubectl get nodes -l nvidia.com/gpu.present=true -o name 2>/dev/null | sed 's%^node/%%'); do
             gpu_count=$(kubectl get node "$node" -o jsonpath='{.status.capacity.nvidia\.com/gpu}' 2>/dev/null || echo "0")
             if [ "$gpu_count" -gt 0 ]; then
               found_gpus=true
-              # Build JSON map: {"GPU-0": 0, "GPU-1": 1, ...}
-              gpu_json="{"
-              for i in $(seq 0 $((gpu_count - 1))); do
-                [ "$i" -gt 0 ] && gpu_json="${gpu_json}, "
-                gpu_json="${gpu_json}\"GPU-${gpu_idx}\": ${i}"
-                gpu_idx=$((gpu_idx + 1))
-              done
-              gpu_json="${gpu_json}}"
-              echo "  Node $node: $gpu_count GPUs -> $gpu_json"
 
-              # Patch one node at a time using YAML format (like the KinD test)
+              # Get real GPU UUIDs from the node via oc debug
+              uuids=$(oc debug "node/$node" -- chroot /host nvidia-smi --query-gpu=uuid --format=csv,noheader 2>/dev/null | tr -d '\r')
+              if [ -z "$uuids" ]; then
+                echo "::warning::Could not discover GPU UUIDs on node $node"
+                continue
+              fi
+
+              # Build JSON map: {"GPU-uuid1": 0, "GPU-uuid2": 1, ...}
+              gpu_json="{"
+              idx=0
+              while IFS= read -r uuid; do
+                uuid=$(echo "$uuid" | tr -d '[:space:]')
+                [ -z "$uuid" ] && continue
+                [ "$idx" -gt 0 ] && gpu_json="${gpu_json}, "
+                gpu_json="${gpu_json}\"${uuid}\": ${idx}"
+                idx=$((idx + 1))
+              done <<< "$uuids"
+              gpu_json="${gpu_json}}"
+              echo "  Node $node: $idx GPUs -> $gpu_json"
+
               kubectl patch configmap gpu-map -n "$FMA_NAMESPACE" \
                 -p "$(printf 'data:\n  %s: '"'"'%s'"'"'' "$node" "$gpu_json")"
             fi
@@ -653,10 +651,6 @@ jobs:
           # Verify gpu-map contents
           echo "gpu-map contents:"
           kubectl get configmap gpu-map -n "$FMA_NAMESPACE" -o yaml
-
-          # Create gpu-allocs if not already present
-          kubectl get configmap gpu-allocs -n "$FMA_NAMESPACE" &>/dev/null || \
-            kubectl create configmap gpu-allocs -n "$FMA_NAMESPACE"
 
       - name: Create test objects
         id: test-objects
@@ -695,22 +689,15 @@ jobs:
                   - name: ghcr-pull-secret
                 containers:
                   - name: inference-server
-                    image: ${TEST_LAUNCHER_IMAGE}
+                    image: ${LAUNCHER_IMAGE}
                     imagePullPolicy: Always
-                    command:
-                    - /app/launcher.py
-                    - --host=0.0.0.0
-                    - --log-level=info
-                    - --port=8001
-                    - --mock-gpus
-                    env:
-                      - name: NODE_NAME
-                        valueFrom:
-                          fieldRef: { fieldPath: spec.nodeName }
-                      - name: NAMESPACE
-                        valueFrom:
-                          fieldRef: { fieldPath: metadata.namespace }
-                serviceAccount: testreq
+                    args:
+                    - "--host"
+                    - "0.0.0.0"
+                    - "--log-level"
+                    - "info"
+                    - "--port"
+                    - "8001"
           ---
           apiVersion: apps/v1
           kind: ReplicaSet
@@ -736,23 +723,12 @@ jobs:
                   - name: ghcr-pull-secret
                 containers:
                   - name: inference-server
-                    image: ${TEST_REQUESTER_IMAGE}
+                    image: ${REQUESTER_IMAGE}
                     imagePullPolicy: Always
                     command:
-                    - /ko-app/test-requester
-                    - --node=\$(NODE_NAME)
-                    - --pod-uid=\$(POD_UID)
-                    - --namespace=\$(NAMESPACE)
-                    env:
-                      - name: NODE_NAME
-                        valueFrom:
-                          fieldRef: { fieldPath: spec.nodeName }
-                      - name: POD_UID
-                        valueFrom:
-                          fieldRef: { fieldPath: metadata.uid }
-                      - name: NAMESPACE
-                        valueFrom:
-                          fieldRef: { fieldPath: metadata.namespace }
+                    - /app/requester
+                    - --logtostderr=false
+                    - --log_file=/tmp/requester.log
                     ports:
                     - name: probes
                       containerPort: 8080
@@ -819,12 +795,10 @@ jobs:
               kubectl get events -n "$FMA_NAMESPACE" --sort-by='.lastTimestamp' | tail -20
               echo "=== Controller logs ==="
               kubectl logs deployment/"$FMA_RELEASE_NAME-dual-pods-controller" -n "$FMA_NAMESPACE" --tail=50 || true
-              echo "=== Test-requester logs ==="
+              echo "=== Requester logs ==="
               kubectl logs "$REQUESTER" -n "$FMA_NAMESPACE" --tail=50 || true
               echo "=== gpu-map contents ==="
               kubectl get configmap gpu-map -n "$FMA_NAMESPACE" -o yaml || true
-              echo "=== gpu-allocs contents ==="
-              kubectl get configmap gpu-allocs -n "$FMA_NAMESPACE" -o yaml || true
               exit 1
             fi
             sleep 5
@@ -840,10 +814,6 @@ jobs:
 
           # Verify the controller bound the launcher to the requester.
           # The controller sets the dual label on the launcher pod during bind().
-          # Note: The requester's dual label requires a successful wake_up call to the
-          # model server (port 8005), which needs a running vLLM instance. The test-launcher
-          # CPU image may not start a model server on GPU nodes, so we only verify the
-          # launcher->requester direction of the binding.
           echo "Verifying launcher-to-requester binding..."
           ELAPSED=0
           while true; do
