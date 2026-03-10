@@ -145,7 +145,7 @@ LIMIT ?= 600
 # Supports KUBECONFIG or in-cluster authentication
 # Set POLICIES_ENABLED=true to enable CEL policy validation tests
 .PHONY: ocp-e2e-full
-test-e2e-full: ## Run full e2e test suite on OpenShift
+ocp-e2e-full: ## Run full e2e test suite on OpenShift
 	@echo "Running full e2e test suite on $(ENVIRONMENT)..."
 	@echo "KUBECONFIG: $(KUBECONFIG)"
 	@echo "POLICIES_ENABLED: $(POLICIES_ENABLED)"

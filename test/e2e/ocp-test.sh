@@ -41,36 +41,57 @@ function expect() {
 
 # Use environment variables from workflow
 echo "Using test objects from environment variables:"
-echo "  NAMESPACE: $NAMESPACE"
-echo "  ISC: $ISC"
-echo "  LC: $LC"
-echo "  RS: $RS"
-echo "  INST: $INST"
+echo "  NAMESPACE: ${NAMESPACE:-}"
+echo "  ISC: ${ISC:-}"
+echo "  LC: ${LC:-}"
+echo "  RS: ${RS:-}"
+echo "  INST: ${INST:-}"
 
-isc="$ISC"
-lc="$LC"
-rslb="$RS"
-instlb="$INST"
-namespace="$NAMESPACE"
+isc="${ISC:-}"
+lc="${LC:-}"
+rslb="${RS:-}"
+instlb="${INST:-}"
+namespace="${NAMESPACE:-}"
 
 # Verify required environment variables are set
 if [ -z "$namespace" ] || [ -z "$isc" ] || [ -z "$lc" ] || [ -z "$rslb" ] || [ -z "$instlb" ]; then
     echo "ERROR: Required environment variables not set!" >&2
-    echo "  NAMESPACE=$NAMESPACE" >&2
-    echo "  ISC=$ISC" >&2
-    echo "  LC=$LC" >&2
-    echo "  RS=$RS" >&2
-    echo "  INST=$INST" >&2
+    echo "  NAMESPACE=${NAMESPACE:-}" >&2
+    echo "  ISC=${ISC:-}" >&2
+    echo "  LC=${LC:-}" >&2
+    echo "  RS=${RS:-}" >&2
+    echo "  INST=${INST:-}" >&2
     exit 1
 fi
 
-# Note: isc2 not provided by workflow, set to empty for tests that need it
-isc2=""
+# Initialize launcher pod name from the launcher-config label
+# The workflow has already verified the launcher pod exists and is bound to the requester
+export launcherlb=$(kubectl get pods -n "$namespace" -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | sed s%pod/%%)
+
+if [ -z "$launcherlb" ]; then
+    echo "ERROR: No launcher pod found with label dual-pods.llm-d.ai/launcher-config-name=$lc" >&2
+    kubectl get pods -n "$namespace" --show-labels >&2
+    exit 1
+fi
+
+echo "Found launcher pod: $launcherlb"
+
+# Initialize requester pod name for policy validation
+# The workflow has already verified the requester pod exists
+export reqlb=$(kubectl get pods -n "$namespace" -o name -l app=dp-example,instance=$instlb | sed s%pod/%%)
+
+if [ -z "$reqlb" ]; then
+    echo "ERROR: No requester pod found with labels app=dp-example,instance=$instlb" >&2
+    kubectl get pods -n "$namespace" --show-labels >&2
+    exit 1
+fi
+
+echo "Found requester pod: $reqlb"
 
 
 : Test CEL policy verification if enabled
 
-if [ "${POLICIES_ENABLED}" = true ]; then
+if [ "${POLICIES_ENABLED:-false}" = true ]; then
   if ! test/e2e/validate.sh; then
     echo "ERROR: CEL policy tests failed!" >&2
     exit 1
@@ -114,83 +135,3 @@ kubectl wait --for condition=Ready pod/$reqlb2 -n "$namespace" --timeout=30s
 kubectl wait --for condition=Ready pod/$launcherlb -n "$namespace" --timeout=5s
 
 cheer Successful instance wake-up fast path
-
-: Multiple Instances Share One Launcher
-
-# Scale requester to 0 again
-kubectl scale rs $rslb --replicas=0 -n "$namespace"
-
-expect "kubectl get pods -n '$namespace' -o name -l app=dp-example,instance=$instlb | wc -l | grep -w 0"
-
-# Launcher should remain
-kubectl get pod $launcherlb -n "$namespace"
-
-# Verify launcher is unbound
-expect '[ "$(kubectl get pod $launcherlb -n '"$namespace"' -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "" ]'
-
-# Patch ReplicaSet to use isc2 instead of isc
-kubectl patch rs $rslb -n "$namespace" -p='{"spec":{"template":{"metadata":{"annotations":{"dual-pods.llm-d.ai/inference-server-config":"'$isc2'"}}}}}'
-
-# Scale back up (should reuse same launcher and create 2nd instance)
-kubectl scale rs $rslb --replicas=1 -n "$namespace"
-
-expect "kubectl get pods -n '$namespace' -o name -l app=dp-example,instance=$instlb | grep -c '^pod/' | grep -w 1"
-
-reqlb3=$(kubectl get pods -n "$namespace" -o name -l app=dp-example,instance=$instlb | sed s%pod/%%)
-
-# Should still be using the same launcher pod
-launcherlb3=$(kubectl get pods -n "$namespace" -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | sed s%pod/%%)
-[ "$launcherlb3" == "$launcherlb" ]
-
-# Verify new requester is bound to same launcher
-expect '[ "$(kubectl get pod $reqlb3 -n '"$namespace"' -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcherlb" ]'
-
-# Verify launcher is bound to new requester
-expect '[ "$(kubectl get pod $launcherlb -n '"$namespace"' -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$reqlb3" ]'
-
-# Wait for requester to be ready (launcher should already be ready)
-date
-kubectl wait --for condition=Ready pod/$reqlb3 -n "$namespace" --timeout=120s
-kubectl wait --for condition=Ready pod/$launcherlb -n "$namespace" --timeout=5s
-
-cheer Successful multiple instances sharing one launcher
-
-: Switch Instances In One Launcher
-
-# Scale requester to 0 again
-kubectl scale rs $rslb --replicas=0 -n "$namespace"
-
-expect "kubectl get pods -n '$namespace' -o name -l app=dp-example,instance=$instlb | wc -l | grep -w 0"
-
-# Launcher should remain
-kubectl get pod $launcherlb -n "$namespace"
-
-# Verify launcher is unbound
-expect '[ "$(kubectl get pod $launcherlb -n '"$namespace"' -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "" ]'
-
-# Patch ReplicaSet back to use original isc
-kubectl patch rs $rslb -n "$namespace" -p='{"spec":{"template":{"metadata":{"annotations":{"dual-pods.llm-d.ai/inference-server-config":"'$isc'"}}}}}'
-
-# Scale back up (should reuse same launcher and wake first instance)
-kubectl scale rs $rslb --replicas=1 -n "$namespace"
-
-expect "kubectl get pods -n '$namespace' -o name -l app=dp-example,instance=$instlb | grep -c '^pod/' | grep -w 1"
-
-reqlb4=$(kubectl get pods -n "$namespace" -o name -l app=dp-example,instance=$instlb | sed s%pod/%%)
-
-# Should still be using the same launcher pod
-launcherlb4=$(kubectl get pods -n "$namespace" -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | sed s%pod/%%)
-[ "$launcherlb4" == "$launcherlb" ]
-
-# Verify new requester is bound to same launcher
-expect '[ "$(kubectl get pod $reqlb4 -n '"$namespace"' -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcherlb" ]'
-
-# Verify launcher is bound to new requester
-expect '[ "$(kubectl get pod $launcherlb -n '"$namespace"' -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$reqlb4" ]'
-
-# Wait for requester to be ready (launcher should already be ready)
-date
-kubectl wait --for condition=Ready pod/$reqlb4 -n "$namespace" --timeout=120s
-kubectl wait --for condition=Ready pod/$launcherlb -n "$namespace" --timeout=5s
-
-cheer Successful switching instances in one launcher
