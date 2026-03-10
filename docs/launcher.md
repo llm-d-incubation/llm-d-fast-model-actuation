@@ -579,6 +579,33 @@ You can set environment variables for each instance, useful for:
 
 ### Launcher Configuration
 
+#### Introduction to the Two Mock Modes
+The launcher maps GPU UUIDs to GPU indices on its node where the indices are required by the vLLM instances.
+The launcher can mock such mapping without real GPUs.
+This feature is convenient and useful in testing and development environments that lack GPUs.
+The launcher supports two mock modes. The ConfigMap-based mock and the naive mock.
+
+The ConfigMap-based mock relies on a ConfigMap object named `gpu-map` which holds the mapping.
+The ConfigMap-based mock is particularly useful in the e2e tests (`test/e2e/run-launcher-based.sh`),
+because the ConfigMap acts as the shared single source of truth between the test requester and the launcher.
+Prerequisites before using the ConfigMap-based mock:
+- A valid `gpu-map` must exist.
+  For example, in the e2e tests, `test/e2e/run-launcher-based.sh` populates the content of the ConfigMap.
+- The launcher must know in which Kubernetes namespace to look for the ConfigMap.
+  For example, in the e2e tests, `/test/e2e/mkobjs.sh` injects the `NODE_NAME` envar via Downward API.
+- The launcher must know the node name of the launcher to look up the mapping for that node.
+  For example, in the e2e tests, `/test/e2e/mkobjs.sh` injects the `NAMESPACE` envar via Downward API.
+
+The naive mock relies on the launcher itself, via simple enumeration (GPU-0, GPU-1, etc.).
+The naive mock is particularly useful during the development of the launcher.
+
+#### Select a Mock Mode
+The launcher is directed to use the mock modes, instead of using real GPUs, by a `--mock-gpus` command-line parameter.
+
+If `NODE_NAME` and `NAMESPACE` are both available, then the launcher tries the ConfigMap-based mock first and fails over to the naive mock.
+
+Otherwise, the launcher goes directly with the naive mock.
+
 #### Command-Line Parameters and Env Vars
 
 **Command-Line Parameters:**
