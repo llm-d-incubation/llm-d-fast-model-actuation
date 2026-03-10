@@ -698,14 +698,19 @@ jobs:
                     image: ${TEST_LAUNCHER_IMAGE}
                     imagePullPolicy: Always
                     command:
-                    - /bin/bash
-                    - "-c"
-                    args:
-                    - |
-                      uvicorn launcher:app \
-                      --host 0.0.0.0 \
-                      --log-level info \
-                      --port 8001
+                    - /app/launcher.py
+                    - --host=0.0.0.0
+                    - --log-level=info
+                    - --port=8001
+                    - --mock-gpus
+                    env:
+                      - name: NODE_NAME
+                        valueFrom:
+                          fieldRef: { fieldPath: spec.nodeName }
+                      - name: NAMESPACE
+                        valueFrom:
+                          fieldRef: { fieldPath: metadata.namespace }
+                serviceAccount: testreq
           ---
           apiVersion: apps/v1
           kind: ReplicaSet
@@ -866,6 +871,20 @@ jobs:
       - name: List objects of category all
         if: always()
         run: kubectl get all -n "$FMA_NAMESPACE"
+
+      - name: Dump GPU ConfigMaps
+        if: always()
+        run: |
+          for cm in $(kubectl get configmaps -n "$FMA_NAMESPACE" -o 'jsonpath={.items[*].metadata.name} ') ; do
+            if ! [[ "$cm" =~ gpu ]]; then continue; fi
+            echo ""
+            echo "=== ConfigMap $cm ==="
+            kubectl get configmap -n "$FMA_NAMESPACE" $cm -o yaml || true
+          done
+
+      - name: Dump all Pods
+        if: always()
+        run: kubectl get pods -n "$FMA_NAMESPACE" -o yaml
 
       - name: List event objects
         if: always()
