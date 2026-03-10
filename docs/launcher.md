@@ -32,7 +32,7 @@ The launcher preloads vLLM’s Python modules to accelerate the initialization o
 - **Health Checks**: Built-in health endpoint for monitoring service availability
 
 > [!NOTE]
-> This is still not implemeted, but the client controls the subset of the node's GPUs that get used by a given vLLM instance.
+> This is still not implemented, but the client controls the subset of the node's GPUs that get used by a given vLLM instance.
 
 ## Architecture
 
@@ -111,8 +111,8 @@ pip install -r inference_server/launcher/requirements.txt
 
 ## Build Image
 
-An image containining vLLM and the launcher.py can be built.
-Build and push it (use your favorate
+An image containing vLLM and the launcher.py can be built.
+Build and push it (use your favorite
 `CONTAINER_IMG_REG`) with a command like the following:
 
 ```shell
@@ -358,7 +358,7 @@ Content-Type: application/octet-stream
 
 **DELETE** `/v2/vllm/instances`
 
-Stop and delete all running vLLM instances. This functionality can be specially useful for testing purposes.
+Stop and delete all running vLLM instances. This functionality can be especially useful for testing purposes.
 
 **Response (200 OK):**
 
@@ -592,9 +592,9 @@ Prerequisites before using the ConfigMap-based mock:
 - A valid `gpu-map` must exist.
   For example, in the e2e tests, `test/e2e/run-launcher-based.sh` populates the content of the ConfigMap.
 - The launcher must know in which Kubernetes namespace to look for the ConfigMap.
-  For example, in the e2e tests, `/test/e2e/mkobjs.sh` injects the `NODE_NAME` envar via Downward API.
+  For example, in the e2e tests, `test/e2e/mkobjs.sh` injects the `NODE_NAME` envar via Downward API.
 - The launcher must know the node name of the launcher to look up the mapping for that node.
-  For example, in the e2e tests, `/test/e2e/mkobjs.sh` injects the `NAMESPACE` envar via Downward API.
+  For example, in the e2e tests, `test/e2e/mkobjs.sh` injects the `NAMESPACE` envar via Downward API.
 
 The naive mock relies on the launcher itself, via simple enumeration (GPU-0, GPU-1, etc.).
 The naive mock is particularly useful during the development of the launcher.
