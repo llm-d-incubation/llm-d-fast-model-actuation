@@ -592,9 +592,9 @@ Prerequisites before using the ConfigMap-based mock:
 - A valid `gpu-map` must exist.
   For example, in the e2e tests, `test/e2e/run-launcher-based.sh` populates the content of the ConfigMap.
 - The launcher must know in which Kubernetes namespace to look for the ConfigMap.
-  For example, in the e2e tests, `test/e2e/mkobjs.sh` injects the `NODE_NAME` envar via Downward API.
-- The launcher must know the node name of the launcher to look up the mapping for that node.
   For example, in the e2e tests, `test/e2e/mkobjs.sh` injects the `NAMESPACE` envar via Downward API.
+- The launcher must know the node name of the launcher to look up the mapping for that node.
+  For example, in the e2e tests, `test/e2e/mkobjs.sh` injects the `NODE_NAME` envar via Downward API.
 
 The naive mock relies on the launcher itself, via simple enumeration (GPU-0, GPU-1, etc.).
 The naive mock is particularly useful during the development of the launcher.
