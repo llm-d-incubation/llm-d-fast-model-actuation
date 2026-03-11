@@ -844,8 +844,9 @@ jobs:
           echo "Launcher pod: $LAUNCHER"
 
           # Wait for launcher pod to be Ready (proves launcher API is serving)
+          # Launcher image is ~20GB, so allow extra time for uncached pulls
           echo "Waiting for launcher pod to be Ready..."
-          kubectl wait --for=condition=Ready "pod/$LAUNCHER" -n "$FMA_NAMESPACE" --timeout=120s
+          kubectl wait --for=condition=Ready "pod/$LAUNCHER" -n "$FMA_NAMESPACE" --timeout=600s
 
           # Verify the controller bound the launcher to the requester.
           # The controller sets the dual label on the launcher pod during bind().
