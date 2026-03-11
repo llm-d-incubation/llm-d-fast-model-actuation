@@ -754,16 +754,13 @@ jobs:
                   dual-pods.llm-d.ai/admin-port: "8081"
                   dual-pods.llm-d.ai/inference-server-config: "inference-server-config-${INST}"
               spec:
+                ${RUNTIME_CLASS}
                 imagePullSecrets:
                   - name: ghcr-pull-secret
                 containers:
                   - name: inference-server
                     image: ${REQUESTER_IMAGE}
                     imagePullPolicy: Always
-                    command:
-                    - /app/requester
-                    - --logtostderr=false
-                    - --log_file=/tmp/requester.log
                     ports:
                     - name: probes
                       containerPort: 8080
