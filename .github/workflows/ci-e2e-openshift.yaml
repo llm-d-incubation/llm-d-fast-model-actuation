@@ -475,13 +475,6 @@ jobs:
           done
           echo "All CRDs established"
 
-      - name: Create ConfigMaps
-        run: |
-          echo "Creating gpu-map ConfigMap in $FMA_NAMESPACE..."
-          # The controller requires the gpu-map ConfigMap to map GPU UUIDs to device indices.
-          kubectl create configmap gpu-map -n "$FMA_NAMESPACE"
-          echo "ConfigMap created"
-
       - name: Create node-viewer ClusterRole
         run: |
           echo "Creating ClusterRole ${FMA_RELEASE_NAME}-node-view..."
@@ -594,8 +587,6 @@ jobs:
         run: |
           echo "Creating RBAC for test workloads..."
 
-          # The real requester does not interact with the Kubernetes API,
-          # so the Role only needs minimal permissions for the service account.
           kubectl apply -n "$FMA_NAMESPACE" -f - <<'EOF'
           apiVersion: rbac.authorization.k8s.io/v1
           kind: Role
@@ -615,71 +606,6 @@ jobs:
             -n "$FMA_NAMESPACE" || true
 
           echo "Test RBAC created"
-
-      - name: Populate GPU map
-        run: |
-          echo "Populating gpu-map with real GPU UUIDs from cluster nodes..."
-
-          # Discover real GPU UUIDs via nvidia-smi on each GPU node.
-          # Each entry maps GPU UUID to device index, e.g. {"GPU-abc123": 0, "GPU-def456": 1}.
-          found_gpus=false
-          for node in $(kubectl get nodes -l nvidia.com/gpu.present=true -o name 2>/dev/null | sed 's%^node/%%'); do
-            gpu_count=$(kubectl get node "$node" -o jsonpath='{.status.capacity.nvidia\.com/gpu}' 2>/dev/null || echo "0")
-            if [ "$gpu_count" -gt 0 ]; then
-              found_gpus=true
-
-              # Create a temporary pod to get GPU UUIDs
-              POD_NAME="${node}-gpu-map"
-              if [ "$CLUSTER_TYPE" = "pokprod" ]; then
-                # pokprod needs nvidia runtimeClass
-                kubectl run "$POD_NAME" -n "$FMA_NAMESPACE" --restart=OnFailure \
-                  --image=nvcr.io/nvidia/cuda:12.8.0-base-ubuntu22.04 \
-                  --overrides='{"spec":{"runtimeClassName":"nvidia","nodeSelector":{"kubernetes.io/hostname":"'"$node"'"}}}' \
-                  --command -- nvidia-smi --query-gpu=uuid --format=csv,noheader
-              else
-                kubectl run "$POD_NAME" -n "$FMA_NAMESPACE" --restart=OnFailure \
-                  --image=nvcr.io/nvidia/cuda:12.8.0-base-ubuntu22.04 \
-                  --overrides='{"spec":{"nodeSelector":{"kubernetes.io/hostname":"'"$node"'"}}}' \
-                  --command -- nvidia-smi --query-gpu=uuid --format=csv,noheader
-              fi
-              if ! kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/"$POD_NAME" -n "$FMA_NAMESPACE" --timeout=60s; then
-                echo "::warning::Could not index node $node (pod timed out)"
-                kubectl delete pod "$POD_NAME" -n "$FMA_NAMESPACE" --ignore-not-found
-                continue
-              fi
-              uuids=$(kubectl logs "$POD_NAME" -n "$FMA_NAMESPACE" | tr -d '\r')
-              kubectl delete pod "$POD_NAME" -n "$FMA_NAMESPACE" --ignore-not-found
-
-              if [ -z "$uuids" ]; then
-                echo "::warning::Could not discover GPU UUIDs on node $node"
-                continue
-              fi
-
-              # Build JSON map: {"GPU-uuid1": 0, "GPU-uuid2": 1, ...}
-              gpu_json="{"
-              idx=0
-              while IFS= read -r uuid; do
-                uuid=$(echo "$uuid" | tr -d '[:space:]')
-                [ -z "$uuid" ] && continue
-                [ "$idx" -gt 0 ] && gpu_json="${gpu_json}, "
-                gpu_json="${gpu_json}\"${uuid}\": ${idx}"
-                idx=$((idx + 1))
-              done <<< "$uuids"
-              gpu_json="${gpu_json}}"
-              echo "  Node $node: $idx GPUs -> $gpu_json"
-
-              kubectl patch configmap gpu-map -n "$FMA_NAMESPACE" \
-                -p "$(printf 'data:\n  %s: '"'"'%s'"'"'' "$node" "$gpu_json")"
-            fi
-          done
-
-          if [ "$found_gpus" = false ]; then
-            echo "::warning::No GPU nodes found. Test objects requesting GPUs will remain Pending."
-          fi
-
-          # Verify gpu-map contents
-          echo "gpu-map contents:"
-          kubectl get configmap gpu-map -n "$FMA_NAMESPACE" -o yaml
 
       - name: Create test objects
         id: test-objects
@@ -726,13 +652,11 @@ jobs:
                   - name: inference-server
                     image: ${LAUNCHER_IMAGE}
                     imagePullPolicy: Always
-                    args:
-                    - "--host"
-                    - "0.0.0.0"
-                    - "--log-level"
-                    - "info"
-                    - "--port"
-                    - "8001"
+                    command:
+                    - /app/launcher.py
+                    - --host=0.0.0.0
+                    - --log-level=info
+                    - --port=8001
                     env:
                     - name: HF_HOME
                       value: "/tmp"
@@ -842,8 +766,6 @@ jobs:
               kubectl logs deployment/"$FMA_RELEASE_NAME-dual-pods-controller" -n "$FMA_NAMESPACE" --tail=50 || true
               echo "=== Requester logs ==="
               kubectl logs "$REQUESTER" -n "$FMA_NAMESPACE" --tail=50 || true
-              echo "=== gpu-map contents ==="
-              kubectl get configmap gpu-map -n "$FMA_NAMESPACE" -o yaml || true
               exit 1
             fi
             sleep 5
@@ -855,9 +777,6 @@ jobs:
 
           # Wait for launcher pod to be Ready (proves launcher API is serving)
           # Launcher image is ~20GB, so allow extra time for uncached pulls
-          echo "Waiting for launcher pod to be Ready..."
-          kubectl wait --for=condition=Ready "pod/$LAUNCHER" -n "$FMA_NAMESPACE" --timeout=600s
-
           # Verify the controller bound the launcher to the requester.
           # The controller sets the dual label on the launcher pod during bind().
           echo "Verifying launcher-to-requester binding..."
@@ -880,7 +799,31 @@ jobs:
             ELAPSED=$((ELAPSED + 5))
           done
 
-          # Wait for requester pod to be Ready (proves it can communicate with launcher)
+          # Verify requester is bound to launcher (reverse direction)
+          echo "Verifying requester-to-launcher binding..."
+          ELAPSED=0
+          while true; do
+            REQUESTER_DUAL=$(kubectl get pod "$REQUESTER" -n "$FMA_NAMESPACE" -o jsonpath='{.metadata.labels.dual-pods\.llm-d\.ai/dual}' 2>/dev/null || true)
+            if [ "$REQUESTER_DUAL" = "$LAUNCHER" ]; then
+              echo "Requester bound to launcher: $REQUESTER -> $LAUNCHER"
+              break
+            fi
+            if [ "$ELAPSED" -ge "$LIMIT" ]; then
+              echo "::error::Requester-to-launcher binding not established within ${LIMIT}s"
+              echo "  Requester dual label: '$REQUESTER_DUAL' (expected: '$LAUNCHER')"
+              kubectl get pods -n "$FMA_NAMESPACE" -o wide --show-labels
+              echo "=== Controller logs ==="
+              kubectl logs deployment/"$FMA_RELEASE_NAME" -n "$FMA_NAMESPACE" --tail=100 || true
+              exit 1
+            fi
+            sleep 5
+            ELAPSED=$((ELAPSED + 5))
+          done
+
+          # Wait for both pods to be Ready
+          echo "Waiting for launcher pod to be Ready..."
+          kubectl wait --for=condition=Ready "pod/$LAUNCHER" -n "$FMA_NAMESPACE" --timeout=600s
+
           echo "Waiting for requester pod to be Ready..."
           kubectl wait --for=condition=Ready "pod/$REQUESTER" -n "$FMA_NAMESPACE" --timeout=120s
 
@@ -891,16 +834,6 @@ jobs:
       - name: List objects of category all
         if: always()
         run: kubectl get all -n "$FMA_NAMESPACE"
-
-      - name: Dump GPU ConfigMaps
-        if: always()
-        run: |
-          for cm in $(kubectl get configmaps -n "$FMA_NAMESPACE" -o 'jsonpath={.items[*].metadata.name} ') ; do
-            if ! [[ "$cm" =~ gpu ]]; then continue; fi
-            echo ""
-            echo "=== ConfigMap $cm ==="
-            kubectl get configmap -n "$FMA_NAMESPACE" $cm -o yaml || true
-          done
 
       - name: Dump all Pods
         if: always()
@@ -922,57 +855,57 @@ jobs:
             kubectl logs -n "$FMA_NAMESPACE" $pod || true
           done
 
-      - name: Dump vLLM instance logs from launcher
+      - name: Dump vLLM instance logs from launchers
         if: always()
         run: |
-          echo "Fetching vLLM instance logs from launcher..."
+          echo "Fetching vLLM instance logs from launcher pods..."
 
-          # Get launcher pod name and IP
-          LAUNCHER_POD=$(kubectl get pods -n "$FMA_NAMESPACE" \
+          # Get all launcher pods (there may be more than one)
+          LAUNCHER_PODS=$(kubectl get pods -n "$FMA_NAMESPACE" \
             -l "dual-pods.llm-d.ai/launcher-config-name" \
-            -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+            -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || true)
 
-          if [ -z "$LAUNCHER_POD" ]; then
-            echo "No launcher pod found"
+          if [ -z "$LAUNCHER_PODS" ]; then
+            echo "No launcher pods found"
             exit 0
           fi
 
-          LAUNCHER_IP=$(kubectl get pod "$LAUNCHER_POD" -n "$FMA_NAMESPACE" \
-            -o jsonpath='{.status.podIP}' 2>/dev/null || true)
-
-          if [ -z "$LAUNCHER_IP" ]; then
-            echo "Could not get launcher pod IP"
-            exit 0
-          fi
-
-          echo "Launcher pod: $LAUNCHER_POD, IP: $LAUNCHER_IP"
-
-          # Get list of vLLM instances from launcher API
-          echo ""
-          echo "=== vLLM instances status ==="
-          kubectl exec -n "$FMA_NAMESPACE" "$LAUNCHER_POD" -- \
-            curl -s "http://localhost:8001/v2/vllm/instances" 2>/dev/null || true
-          echo ""
-
-          # Get instance IDs
-          INSTANCE_IDS=$(kubectl exec -n "$FMA_NAMESPACE" "$LAUNCHER_POD" -- \
-            curl -s "http://localhost:8001/v2/vllm/instances?detail=false" 2>/dev/null \
-            | grep -oP '"instance_ids":\s*\[\K[^\]]+' \
-            | tr -d '"' | tr ',' '\n' || true)
-
-          if [ -z "$INSTANCE_IDS" ]; then
-            echo "No vLLM instances found"
-            exit 0
-          fi
-
-          # Fetch logs for each instance
-          for id in $INSTANCE_IDS; do
-            id=$(echo "$id" | tr -d ' ')
+          # Process each launcher pod
+          for LAUNCHER_POD in $LAUNCHER_PODS; do
             echo ""
-            echo "=== vLLM instance $id logs ==="
-            kubectl exec -n "$FMA_NAMESPACE" "$LAUNCHER_POD" -- \
-              curl -s "http://localhost:8001/v2/vllm/instances/$id/log" 2>/dev/null || true
+            echo "=========================================="
+            echo "=== Launcher pod: $LAUNCHER_POD ==="
+            echo "=========================================="
+
+            # Use port-forward to access launcher API from runner (avoids requiring curl in container)
+            kubectl port-forward -n "$FMA_NAMESPACE" "pod/$LAUNCHER_POD" 18001:8001 &
+            PF_PID=$!
+            sleep 2
+
+            # Get list of vLLM instances from launcher API
             echo ""
+            echo "=== vLLM instances status ==="
+            INSTANCES_JSON=$(curl -s "http://localhost:18001/v2/vllm/instances" 2>/dev/null || true)
+            echo "$INSTANCES_JSON" | jq . 2>/dev/null || echo "$INSTANCES_JSON"
+
+            # Get instance IDs using jq
+            INSTANCE_IDS=$(echo "$INSTANCES_JSON" | jq -r '.instances[].instance_id // empty' 2>/dev/null || true)
+
+            if [ -z "$INSTANCE_IDS" ]; then
+              echo "No vLLM instances found on this launcher"
+            else
+              # Fetch logs for each instance
+              for id in $INSTANCE_IDS; do
+                echo ""
+                echo "=== vLLM instance $id logs ==="
+                curl -s "http://localhost:18001/v2/vllm/instances/$id/log" 2>/dev/null || true
+                echo ""
+              done
+            fi
+
+            # Clean up port-forward
+            kill $PF_PID 2>/dev/null || true
+            wait $PF_PID 2>/dev/null || true
           done
 
       - name: Clean up test objects
