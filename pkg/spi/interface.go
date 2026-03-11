@@ -29,7 +29,7 @@ package spi
 const AcceleratorQueryPath = "/v1/dual-pods/accelerators"
 
 // AcceleratorMemoryQueryPath is the path part of the URL that
-// responds to an HTTP GET rquest with a response body that is
+// responds to an HTTP GET request with a response body that is
 // the JSON for a JSON "object" whose keys are accelerator IDs
 // and whose values are integers, the number of bytes of accelerator
 // memory in use.

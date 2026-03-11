@@ -84,7 +84,7 @@ func (ctl *QueueAndWorkers[Item]) StartWorkers(ctx context.Context) error {
 		workLogger.V(3).Info("Launching worker")
 		go func() {
 			wait.UntilWithContext(workCtx, func(ctx context.Context) { ctl.runWorker(ctx) }, time.Second)
-			workLogger.V(3).Info("Fnished worker")
+			workLogger.V(3).Info("Finished worker")
 		}()
 	}
 	logger.V(1).Info("Started workers", "numWorkers", ctl.NumWorkers)

@@ -34,7 +34,7 @@ func SliceMap[Domain, Range any](slice []Domain, mapFn func(Domain) (Range, erro
 	return mapped, errors
 }
 
-// SliceRemoveOnce removes the first occurence of the given element from the given slice.
+// SliceRemoveOnce removes the first occurrence of the given element from the given slice.
 // This returns a new slice rather than side-effecting the given one.
 func SliceRemoveOnce[Elt comparable](slice []Elt, goner Elt) ([]Elt, bool) {
 	idx := slices.Index(slice, goner)

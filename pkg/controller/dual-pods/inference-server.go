@@ -128,7 +128,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 			pod := podAny.(*corev1.Pod)
 			return pod.Name, nil
 		})
-		return fmt.Errorf("found multiple bound server-runninng Pods: %v", providerNames), false
+		return fmt.Errorf("found multiple bound server-running Pods: %v", providerNames), false
 	}
 
 	logger.V(5).Info("Processing inference server",
@@ -830,7 +830,7 @@ func (ctl *controller) wakeSleeper(ctx context.Context, serverDat *serverData, r
 }
 
 // maybeRemoveRequesterFinalizer removes the requesterFinalizer if necessary,
-// and detemines whether the finalizer needs to be added.
+// and determines whether the finalizer needs to be added.
 // requestingPod != nil; providingPod might be nil.
 // Returns (removed, shouldAdd bool, err error, retry bool).
 func (ctl *controller) maybeRemoveRequesterFinalizer(ctx context.Context, requestingPod, providingPod *corev1.Pod) (bool, bool, error, bool) {
