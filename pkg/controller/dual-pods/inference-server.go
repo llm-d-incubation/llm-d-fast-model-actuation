@@ -648,7 +648,7 @@ func (ctl *controller) configInferenceServer(isc *fmav1alpha1.InferenceServerCon
 	vllmCfg := VllmConfig{
 		Options:  options,
 		GpuUUIDs: gpuUUIDs,
-		EnvVars:  make(map[string]interface{}, len(isc.Spec.ModelServerConfig.EnvVars)),
+		EnvVars:  make(map[string]string, len(isc.Spec.ModelServerConfig.EnvVars)),
 	}
 	for k, v := range isc.Spec.ModelServerConfig.EnvVars {
 		vllmCfg.EnvVars[k] = v
