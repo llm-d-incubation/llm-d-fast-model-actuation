@@ -1,0 +1,10 @@
+[default.extend-words]
+ded = "ded"
+
+[default.extend-identifiers]
+ist = "ist"
+nd = "nd"
+
+[type.drawio_svg]
+extend-glob = ["*.drawio.svg"]
+check-file = false

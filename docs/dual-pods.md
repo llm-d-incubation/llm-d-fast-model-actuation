@@ -20,7 +20,7 @@ server-requesting Pods that clients/users create to describe the
 desired inference servers and (2) the server-providing Pods that
 actually run the inference servers.
 
-The dual pods technnique takes advantage of something that we have
+The dual pods technique takes advantage of something that we have
 observed: for nodes that run inference servers, just one resource
 determines what Pods can run, when and where: the accelerators (GPUs);
 CPU and main memory are always sufficient when the constraints on

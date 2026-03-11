@@ -241,7 +241,7 @@ def _run_scaling_phase(
         )
         benchmark.results.append(iter_result)
 
-    # Check whether errors occured for any of the dual pods.
+    # Check whether errors occurred for any of the dual pods.
     if readiness_result.status == ScenarioStatus.FAILURE:
         benchmark.logger.warning(
             f"Scaling step '{phase}' for request {rs_name} errored: {err}"
