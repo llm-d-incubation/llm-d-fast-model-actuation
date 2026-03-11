@@ -272,7 +272,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		// from the requestingPod's annotations, get the InferenceServerConfig object
 		if iscName == "" {
 			return ctl.ensureReqStatus(ctx, requestingPod, serverDat,
-				fmt.Sprintf("requesting Pod %q has empty value for annotation %q", requestingPod.Name, api.InferenceServerConfigAnnotationName),
+				fmt.Sprintf("empty value for annotation %q", api.InferenceServerConfigAnnotationName),
 			)
 		}
 		isc, err = ctl.iscLister.InferenceServerConfigs(ctl.namespace).Get(iscName)
@@ -284,7 +284,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	}
 
 	// Fetch the assigned GPUs if that has not already been done.
-	if serverDat.GPUIndicesStr == nil {
+	if serverDat.GPUIDsStr == nil {
 		logger.V(5).Info("Querying accelerators", "ip", requesterIP, "port", adminPort)
 		url := fmt.Sprintf("http://%s:%s%s", requesterIP, adminPort, stubapi.AcceleratorQueryPath)
 		gpuUUIDs, err := getGPUUUIDs(url)
@@ -305,7 +305,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		serverDat.GPUIDs = gpuUUIDs
 		serverDat.GPUIDsStr = &gpuIDsStr
 
-		if !launcherBased {
+		if !launcherBased && serverDat.GPUIndicesStr == nil {
 			gpuIndices, err := ctl.mapToGPUIndices(requestingPod.Spec.NodeName, gpuUUIDs)
 			if err != nil {
 				return ctl.ensureReqStatus(ctx, requestingPod, serverDat, err.Error())
@@ -548,7 +548,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		return err, true
 	}
 	serverDat.Sleeping = ptr.To(false)
-	logger.V(2).Info("Created launcher-based server-providing pod", "name", echo.Name, "gpus", serverDat.GPUIndicesStr, "annotations", echo.Annotations, "labels", echo.Labels, "resourceVersion", echo.ResourceVersion)
+	logger.V(2).Info("Created launcher-based server-providing pod", "name", echo.Name, "gpus", serverDat.GPUIDsStr, "annotations", echo.Annotations, "labels", echo.Labels, "resourceVersion", echo.ResourceVersion)
 
 	return ctl.ensureReqStatus(ctx, requestingPod, serverDat)
 }
@@ -787,7 +787,7 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 		return fmt.Errorf("failed to bind server-providing Pod %s: %w", providingPod.Name, err), true
 	}
 	serverDat.ProvidingPodName = providingPod.Name
-	logger.V(2).Info("Bound server-providing Pod", "name", providingPod.Name, "node", requestingPod.Spec.NodeName, "gpus", serverDat.GPUIndicesStr, "newResourceVersion", echo.ResourceVersion)
+	logger.V(2).Info("Bound server-providing Pod", "name", providingPod.Name, "node", requestingPod.Spec.NodeName, "gpus", serverDat.GPUIDsStr, "newResourceVersion", echo.ResourceVersion)
 	var serverPort int16
 	if launcherBased {
 		serverPort = instPort
@@ -963,7 +963,7 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 		if err != nil {
 			return fmt.Errorf("failed to unbind server-providing Pod %s: %w", providingPod.Name, err)
 		}
-		logger.V(2).Info("Unbound server-providing Pod", "name", providingPod.Name, "node", providingPod.Spec.NodeName, "gpus", serverDat.GPUIndicesStr, "newResourceVersion", echo.ResourceVersion)
+		logger.V(2).Info("Unbound server-providing Pod", "name", providingPod.Name, "node", providingPod.Spec.NodeName, "gpus", serverDat.GPUIDsStr, "newResourceVersion", echo.ResourceVersion)
 	} else {
 		logger.V(3).Info("Server-providing Pod remains unbound", "name", providingPod.Name, "resourceVersion", providingPod.ResourceVersion)
 	}
