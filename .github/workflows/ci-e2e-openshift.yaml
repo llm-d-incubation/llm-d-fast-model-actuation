@@ -733,6 +733,19 @@ jobs:
                     - "info"
                     - "--port"
                     - "8001"
+                    env:
+                    - name: HF_HOME
+                      value: "/tmp"
+                    - name: VLLM_CACHE_ROOT
+                      value: "/tmp"
+                    - name: FLASHINFER_WORKSPACE_BASE
+                      value: "/tmp"
+                    - name: TRITON_CACHE_DIR
+                      value: "/tmp"
+                    - name: XDG_CACHE_HOME
+                      value: "/tmp"
+                    - name: XDG_CONFIG_HOME
+                      value: "/tmp"
           ---
           apiVersion: apps/v1
           kind: ReplicaSet
@@ -907,6 +920,59 @@ jobs:
             echo ""
             echo "=== Log of $pod ==="
             kubectl logs -n "$FMA_NAMESPACE" $pod || true
+          done
+
+      - name: Dump vLLM instance logs from launcher
+        if: always()
+        run: |
+          echo "Fetching vLLM instance logs from launcher..."
+
+          # Get launcher pod name and IP
+          LAUNCHER_POD=$(kubectl get pods -n "$FMA_NAMESPACE" \
+            -l "dual-pods.llm-d.ai/launcher-config-name" \
+            -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+
+          if [ -z "$LAUNCHER_POD" ]; then
+            echo "No launcher pod found"
+            exit 0
+          fi
+
+          LAUNCHER_IP=$(kubectl get pod "$LAUNCHER_POD" -n "$FMA_NAMESPACE" \
+            -o jsonpath='{.status.podIP}' 2>/dev/null || true)
+
+          if [ -z "$LAUNCHER_IP" ]; then
+            echo "Could not get launcher pod IP"
+            exit 0
+          fi
+
+          echo "Launcher pod: $LAUNCHER_POD, IP: $LAUNCHER_IP"
+
+          # Get list of vLLM instances from launcher API
+          echo ""
+          echo "=== vLLM instances status ==="
+          kubectl exec -n "$FMA_NAMESPACE" "$LAUNCHER_POD" -- \
+            curl -s "http://localhost:8001/v2/vllm/instances" 2>/dev/null || true
+          echo ""
+
+          # Get instance IDs
+          INSTANCE_IDS=$(kubectl exec -n "$FMA_NAMESPACE" "$LAUNCHER_POD" -- \
+            curl -s "http://localhost:8001/v2/vllm/instances?detail=false" 2>/dev/null \
+            | grep -oP '"instance_ids":\s*\[\K[^\]]+' \
+            | tr -d '"' | tr ',' '\n' || true)
+
+          if [ -z "$INSTANCE_IDS" ]; then
+            echo "No vLLM instances found"
+            exit 0
+          fi
+
+          # Fetch logs for each instance
+          for id in $INSTANCE_IDS; do
+            id=$(echo "$id" | tr -d ' ')
+            echo ""
+            echo "=== vLLM instance $id logs ==="
+            kubectl exec -n "$FMA_NAMESPACE" "$LAUNCHER_POD" -- \
+              curl -s "http://localhost:8001/v2/vllm/instances/$id/log" 2>/dev/null || true
+            echo ""
           done
 
       - name: Clean up test objects
