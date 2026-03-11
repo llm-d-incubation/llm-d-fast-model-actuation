@@ -329,7 +329,7 @@ jobs:
 
   # Run e2e tests on OpenShift self-hosted runner
   e2e-openshift:
-    runs-on: [self-hosted, openshift]
+    runs-on: [self-hosted, openshift, vllm-d]
     needs: [gate, build-image]
     if: needs.gate.outputs.should_run == 'true'
     env:
