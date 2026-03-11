@@ -103,3 +103,45 @@ jobs:
             echo "=== Logs for $pod ==="
             kubectl logs $pod || echo "Failed to get logs for $pod"
           done
+
+      - name: show vLLM instance logs from launcher
+        if: always()
+        run: |
+          # Get bound launcher pod (one with dual label set, meaning it has vLLM instances)
+          LAUNCHER_POD=$(kubectl get pods \
+            -l "dual-pods.llm-d.ai/launcher-config-name,dual-pods.llm-d.ai/dual" \
+            -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+
+          if [ -z "$LAUNCHER_POD" ]; then
+            echo "No bound launcher pod found"
+            exit 0
+          fi
+
+          LAUNCHER_IP=$(kubectl get pod "$LAUNCHER_POD" \
+            -o jsonpath='{.status.podIP}' 2>/dev/null || true)
+
+          echo "Launcher pod: $LAUNCHER_POD, IP: $LAUNCHER_IP"
+
+          echo ""
+          echo "=== vLLM instances status ==="
+          kubectl exec "$LAUNCHER_POD" -- \
+            curl -s "http://localhost:8001/v2/vllm/instances" 2>/dev/null || true
+          echo ""
+
+          INSTANCE_IDS=$(kubectl exec "$LAUNCHER_POD" -- \
+            curl -s "http://localhost:8001/v2/vllm/instances" 2>/dev/null | \
+            jq -r '.instances[].instance_id' 2>/dev/null || true)
+
+          if [ -z "$INSTANCE_IDS" ]; then
+            echo "No vLLM instances found (expected on kind without GPUs)"
+            exit 0
+          fi
+
+          for id in $INSTANCE_IDS; do
+            id=$(echo "$id" | tr -d ' ')
+            echo ""
+            echo "=== vLLM instance $id logs ==="
+            kubectl exec "$LAUNCHER_POD" -- \
+              curl -s "http://localhost:8001/v2/vllm/instances/$id/log" 2>/dev/null || true
+            echo ""
+          done

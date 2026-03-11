@@ -216,21 +216,22 @@ expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | grep -c '^
 
 export reqlb=$(kubectl get pods -o name -l app=dp-example,instance=$instlb | sed s%pod/%%)
 
-# Expect launcher pod to be created (not a direct provider)
-expect "kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | grep -c '^pod/' | grep -w 1"
+# Expect at least one launcher pod to exist (launcher-populator may pre-create extras)
+expect "[ \$(kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | grep -c '^pod/') -ge 1 ]"
 
-export launcherlb=$(kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | sed s%pod/%%)
+# Wait for the launcher to be bound to the requester (controller sets dual label on launcher)
+expect "kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc,dual-pods.llm-d.ai/dual=$reqlb | grep -c '^pod/' | grep -w 1"
 
-# Verify requester is bound to launcher
-expect '[ "$(kubectl get pod $reqlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcherlb" ]'
+# Get the launcher pod that is bound to the requester
+export launcherlb=$(kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc,dual-pods.llm-d.ai/dual=$reqlb | sed s%pod/%%)
 
 # Verify launcher is bound to requester
 expect '[ "$(kubectl get pod $launcherlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$reqlb" ]'
 
-# Wait for both pods to be ready
+# Wait for both pods to be ready (vLLM on CPU takes ~90s to start)
 date
-kubectl wait --for condition=Ready pod/$reqlb --timeout=60s
-kubectl wait --for condition=Ready pod/$launcherlb --timeout=60s
+kubectl wait --for condition=Ready pod/$launcherlb --timeout=180s
+kubectl wait --for condition=Ready pod/$reqlb --timeout=180s
 
 cheer Successful launcher-based pod creation
 

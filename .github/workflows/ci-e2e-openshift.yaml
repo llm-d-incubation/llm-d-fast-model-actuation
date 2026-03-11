@@ -822,7 +822,7 @@ jobs:
               echo "::error::Launcher-to-requester binding not established within ${LIMIT}s"
               kubectl get pods -n "$FMA_NAMESPACE" -o wide --show-labels
               echo "=== Controller logs ==="
-              kubectl logs deployment/"$FMA_RELEASE_NAME" -n "$FMA_NAMESPACE" --tail=100 || true
+              kubectl logs deployment/"$FMA_RELEASE_NAME-dual-pods-controller" -n "$FMA_NAMESPACE" --tail=100 || true
               exit 1
             fi
             sleep 5
