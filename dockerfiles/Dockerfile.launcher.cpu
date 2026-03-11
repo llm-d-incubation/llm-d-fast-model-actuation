@@ -15,6 +15,7 @@ FROM base-${TARGETARCH} AS final
 WORKDIR /app
 
 COPY inference_server/launcher/launcher.py inference_server/launcher/gputranslator.py /app/
+RUN chmod a+x /app/launcher.py
 
 # Install uvicorn for serving the launcher API and nvidia-ml-py for gputranslator
 RUN pip install --root-user-action=ignore --no-cache-dir uvicorn nvidia-ml-py kubernetes==31.0.0
