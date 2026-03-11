@@ -48,9 +48,12 @@ clear_img_repo my-registry/my-namespace/test-requester
 clear_img_repo my-registry/my-namespace/test-launcher
 clear_img_repo ko.local/dual-pods-controller
 clear_img_repo my-registry/my-namespace/dual-pods-controller
+clear_img_repo ko.local/launcher-populator
+clear_img_repo my-registry/my-namespace/launcher-populator
 make build-test-requester-local
 make build-test-launcher-local
 make build-controller-local
+make build-populator-local
 
 : Set up the kind cluster
 
@@ -154,6 +157,7 @@ done
 make load-test-requester-local
 make load-test-launcher-local
 make load-controller-local
+make load-populator-local
 
 : Detect whether API server supports ValidatingAdmissionPolicy
 
@@ -175,7 +179,7 @@ helm upgrade --install fma charts/fma-controllers \
   --set dualPodsController.sleeperLimit=2 \
   --set global.local=true \
   --set dualPodsController.debugAcceleratorMemory=false \
-  --set launcherPopulator.enabled=false
+  --set launcherPopulator.enabled=true
 
 : Populate GPU map for testing
 
@@ -186,6 +190,14 @@ kubectl get nodes -o name | sed 's%^node/%%' | while read node; do
     let gi=gi1+1
 done
 
+: Wait for FMA controllers to be ready
+
+kubectl wait --for=condition=available deployment/fma-dual-pods-controller --timeout=120s
+kubectl get pods -l app.kubernetes.io/component=dual-pods-controller
+
+kubectl wait --for=condition=available deployment/fma-launcher-populator --timeout=120s
+kubectl get pods -l app.kubernetes.io/component=launcher-populator
+
 : Test launcher-based server-providing pods
 
 : Basic Launcher Pod Creation
@@ -195,6 +207,8 @@ isc=$(echo $objs | awk '{print $1}')
 lc=$(echo $objs | awk '{print $2}')
 rslb=$(echo $objs | awk '{print $3}')
 isc2=$(echo $objs | awk '{print $4}')
+isc3=$(echo $objs | awk '{print $5}')
+lpp=$(echo $objs | awk '{print $6}')
 instlb=${rslb#my-request-}
 
 # Expect requester pod to be created
@@ -350,8 +364,10 @@ cheer Successful switching instances in one launcher
 : Clean up launcher-based workloads
 
 kubectl delete rs $rslb --ignore-not-found=true
+kubectl delete launcherpopulationpolicy $lpp --ignore-not-found=true
 kubectl delete inferenceserverconfig $isc --ignore-not-found=true
 kubectl delete inferenceserverconfig $isc2 --ignore-not-found=true
+kubectl delete inferenceserverconfig $isc3 --ignore-not-found=true
 kubectl delete launcherconfig $lc --ignore-not-found=true
 expect '[ $(kubectl get pods -o name | grep -c "^pod/my-request-") == "0" ]'
 

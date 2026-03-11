@@ -97,6 +97,21 @@ spec:
               valueFrom:
                 fieldRef: { fieldPath: metadata.namespace }
 ---
+apiVersion: fma.llm-d.ai/v1alpha1
+kind: LauncherPopulationPolicy
+metadata:
+  name: lpp-$inst
+  labels:
+    instance: "$inst"
+spec:
+  enhancedNodeSelector:
+    labelSelector:
+      matchLabels:
+        nvidia.com/gpu.present: "true"
+  countForLauncher:
+    - launcherConfigName: launcher-config-$inst
+      launcherCount: 1
+---
 apiVersion: apps/v1
 kind: ReplicaSet
 metadata:
@@ -163,6 +178,7 @@ then
     echo my-request-$inst
     echo inference-server-config-qwen-$inst
     echo inference-server-config-tinyllama-$inst
+    echo lpp-$inst
 else
     echo Failed to create objects >&2
     echo "$out" >&2

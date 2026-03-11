@@ -529,20 +529,29 @@ jobs:
             --set dualPodsController.sleeperLimit=2 \
             --set global.local=false \
             --set dualPodsController.debugAcceleratorMemory=false \
-            --set launcherPopulator.enabled=false
+            --set launcherPopulator.enabled=true
 
-      - name: Wait for controller to be ready
+      - name: Wait for FMA controllers to be ready
         run: |
-          echo "Waiting for FMA controller deployment to be ready..."
+          echo "Waiting for FMA controller deployments to be ready..."
+
           kubectl wait --for=condition=available --timeout=120s \
             deployment "$FMA_RELEASE_NAME-dual-pods-controller" -n "$FMA_NAMESPACE"
-
           echo ""
-          echo "=== Controller Pod Status ==="
-          kubectl get pods -n "$FMA_NAMESPACE" -l app.kubernetes.io/name=fma-controllers
+          echo "=== Dual-Pod Controller Pod Status ==="
+          kubectl get pods -n "$FMA_NAMESPACE" -l app.kubernetes.io/component=dual-pods-controller
           echo ""
-          echo "=== Controller Deployment ==="
+          echo "=== Dual-Pod Controller Deployment ==="
           kubectl get deployment "$FMA_RELEASE_NAME-dual-pods-controller" -n "$FMA_NAMESPACE"
+
+          kubectl wait --for=condition=available --timeout=120s \
+            deployment "$FMA_RELEASE_NAME-launcher-populator" -n "$FMA_NAMESPACE"
+          echo ""
+          echo "=== Launcher Populator Pod Status ==="
+          kubectl get pods -n "$FMA_NAMESPACE" -l app.kubernetes.io/component=launcher-populator
+          echo ""
+          echo "=== Launcher Populator Deployment ==="
+          kubectl get deployment "$FMA_RELEASE_NAME-launcher-populator" -n "$FMA_NAMESPACE"
 
       - name: Verify controller health
         run: |
@@ -671,6 +680,19 @@ jobs:
                     - name: XDG_CONFIG_HOME
                       value: "/tmp"
           ---
+          apiVersion: fma.llm-d.ai/v1alpha1
+          kind: LauncherPopulationPolicy
+          metadata:
+            name: lpp-${INST}
+          spec:
+            enhancedNodeSelector:
+              labelSelector:
+                matchLabels:
+                  nvidia.com/gpu.present: "true"
+            countForLauncher:
+              - launcherConfigName: launcher-config-${INST}
+                launcherCount: 1
+          ---
           apiVersion: apps/v1
           kind: ReplicaSet
           metadata:
@@ -720,6 +742,7 @@ jobs:
           echo "instance=${INST}" >> $GITHUB_OUTPUT
           echo "isc=inference-server-config-${INST}" >> $GITHUB_OUTPUT
           echo "lc=launcher-config-${INST}" >> $GITHUB_OUTPUT
+          echo "lpp=lpp-${INST}" >> $GITHUB_OUTPUT
           echo "rs=my-request-${INST}" >> $GITHUB_OUTPUT
           echo "Test objects created"
 
@@ -919,10 +942,12 @@ jobs:
         env:
           ISC: ${{ steps.test-objects.outputs.isc }}
           LC: ${{ steps.test-objects.outputs.lc }}
+          LPP: ${{ steps.test-objects.outputs.lpp }}
           RS: ${{ steps.test-objects.outputs.rs }}
         run: |
           echo "Cleaning up test objects..."
           kubectl delete rs "$RS" -n "$FMA_NAMESPACE" --ignore-not-found || true
+          kubectl delete launcherpopulationpolicy "$LPP" -n "$FMA_NAMESPACE" --ignore-not-found || true
           kubectl delete inferenceserverconfig "$ISC" -n "$FMA_NAMESPACE" --ignore-not-found || true
           kubectl delete launcherconfig "$LC" -n "$FMA_NAMESPACE" --ignore-not-found || true
           # Wait for test pods to terminate
