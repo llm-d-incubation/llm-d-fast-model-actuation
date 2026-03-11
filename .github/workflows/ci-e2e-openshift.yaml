@@ -373,6 +373,15 @@ jobs:
           kubectl cluster-info
           kubectl get nodes
 
+      - name: Detect cluster type
+        run: |
+          CLUSTER_DOMAIN=$(oc get ingress.config cluster -o jsonpath='{.spec.domain}')
+          echo "Cluster domain: $CLUSTER_DOMAIN"
+          if echo "$CLUSTER_DOMAIN" | grep -q "pokprod"; then
+            echo "Detected pokprod cluster"
+            echo "CLUSTER_TYPE=pokprod" >> $GITHUB_ENV
+          fi
+
       - name: Clean up resources for this PR
         run: |
           echo "Cleaning up FMA resources for this PR..."
@@ -611,7 +620,7 @@ jobs:
         run: |
           echo "Populating gpu-map with real GPU UUIDs from cluster nodes..."
 
-          # Discover real GPU UUIDs via nvidia-smi on each GPU node using oc debug.
+          # Discover real GPU UUIDs via nvidia-smi on each GPU node.
           # Each entry maps GPU UUID to device index, e.g. {"GPU-abc123": 0, "GPU-def456": 1}.
           found_gpus=false
           for node in $(kubectl get nodes -l nvidia.com/gpu.present=true -o name 2>/dev/null | sed 's%^node/%%'); do
@@ -619,8 +628,24 @@ jobs:
             if [ "$gpu_count" -gt 0 ]; then
               found_gpus=true
 
-              # Get real GPU UUIDs from the node via oc debug
-              uuids=$(oc debug "node/$node" -- chroot /host nvidia-smi --query-gpu=uuid --format=csv,noheader 2>/dev/null | tr -d '\r')
+              # Create a temporary pod to get GPU UUIDs
+              POD_NAME="${node}-gpu-map"
+              if [ "$CLUSTER_TYPE" = "pokprod" ]; then
+                # pokprod needs nvidia runtimeClass
+                kubectl run "$POD_NAME" -n "$FMA_NAMESPACE" --restart=OnFailure \
+                  --image=nvcr.io/nvidia/cuda:12.8.0-base-ubuntu22.04 \
+                  --overrides='{"spec":{"runtimeClassName":"nvidia","nodeSelector":{"kubernetes.io/hostname":"'"$node"'"}}}' \
+                  --command -- nvidia-smi --query-gpu=uuid --format=csv,noheader
+              else
+                kubectl run "$POD_NAME" -n "$FMA_NAMESPACE" --restart=OnFailure \
+                  --image=nvcr.io/nvidia/cuda:12.8.0-base-ubuntu22.04 \
+                  --overrides='{"spec":{"nodeSelector":{"kubernetes.io/hostname":"'"$node"'"}}}' \
+                  --command -- nvidia-smi --query-gpu=uuid --format=csv,noheader
+              fi
+              kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/"$POD_NAME" -n "$FMA_NAMESPACE" --timeout=120s
+              uuids=$(kubectl logs "$POD_NAME" -n "$FMA_NAMESPACE" | tr -d '\r')
+              kubectl delete pod "$POD_NAME" -n "$FMA_NAMESPACE" --ignore-not-found
+
               if [ -z "$uuids" ]; then
                 echo "::warning::Could not discover GPU UUIDs on node $node"
                 continue
@@ -658,6 +683,11 @@ jobs:
           INST=$(date +%d-%H-%M-%S)
           echo "Creating test objects with instance: $INST"
 
+          RUNTIME_CLASS=""
+          if [ "$CLUSTER_TYPE" = "pokprod" ]; then
+            RUNTIME_CLASS="runtimeClassName: nvidia"
+          fi
+
           kubectl apply -n "$FMA_NAMESPACE" -f - <<EOF
           apiVersion: fma.llm-d.ai/v1alpha1
           kind: InferenceServerConfig
@@ -685,6 +715,7 @@ jobs:
             maxSleepingInstances: 3
             podTemplate:
               spec:
+                ${RUNTIME_CLASS}
                 imagePullSecrets:
                   - name: ghcr-pull-secret
                 containers:
