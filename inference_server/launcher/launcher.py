@@ -26,7 +26,7 @@ import sys
 import uuid
 from contextlib import asynccontextmanager
 from http import HTTPStatus  # HTTP Status Codes
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 import uvloop
 from fastapi import FastAPI, Header, HTTPException, Path
@@ -57,7 +57,7 @@ class LogRangeNotAvailable(Exception):
 class VllmConfig(BaseModel):
     options: str
     gpu_uuids: Optional[List[str]] = None
-    env_vars: Optional[Dict[str, Any]] = None
+    env_vars: Optional[Dict[str, str]] = None
 
 
 class VllmInstance:
@@ -595,15 +595,15 @@ def vllm_kickoff(vllm_config: VllmConfig, log_file_path: str):
 
 
 # Function to set env variables
-def set_env_vars(env_vars: Dict[str, Any]):
+def set_env_vars(env_vars: Dict[str, str]):
     """
     Set environment variables from a dictionary
-    :param env_vars: Dict with environment var name as keys and value as values
+    :param env_vars: Dict with environment var name as keys and string values
     """
 
     # Set environment variables from a dictionary
     for key, value in env_vars.items():
-        os.environ[key] = str(value)
+        os.environ[key] = value
 
 
 if __name__ == "__main__":

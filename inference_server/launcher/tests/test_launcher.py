@@ -884,7 +884,11 @@ class TestVllmInstanceLogs:
 class TestHelperFunctions:
     def test_set_env_vars(self):
         """Test setting environment variables"""
-        test_vars = {"TEST_VAR_1": "value1", "TEST_VAR_2": 12345, "TEST_VAR_3": True}
+        test_vars = {
+            "TEST_VAR_1": "value1",
+            "TEST_VAR_2": "12345",
+            "TEST_VAR_3": "True",
+        }
 
         set_env_vars(test_vars)
 
