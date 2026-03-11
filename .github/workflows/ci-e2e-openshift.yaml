@@ -870,8 +870,12 @@ jobs:
             ELAPSED=$((ELAPSED + 5))
           done
 
+          # Wait for requester pod to be Ready (proves it can communicate with launcher)
+          echo "Waiting for requester pod to be Ready..."
+          kubectl wait --for=condition=Ready "pod/$REQUESTER" -n "$FMA_NAMESPACE" --timeout=120s
+
           echo ""
-          echo "=== Launcher test passed: pods created and launcher bound to requester ==="
+          echo "=== Launcher test passed: pods created, bound, and both Ready ==="
           kubectl get pods -n "$FMA_NAMESPACE" -o wide --show-labels
 
       - name: List objects of category all
