@@ -265,15 +265,14 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	}
 
 	var isc *fmav1alpha1.InferenceServerConfig
-	_, launcherBased := requestingPod.Annotations[api.InferenceServerConfigAnnotationName]
+	iscName, launcherBased := requestingPod.Annotations[api.InferenceServerConfigAnnotationName]
 	if launcherBased {
 		logger.V(5).Info("Server requesting Pod is asking for launcher-based server providing Pod")
 
 		// from the requestingPod's annotations, get the InferenceServerConfig object
-		iscName, ok := requestingPod.Annotations[api.InferenceServerConfigAnnotationName]
-		if !ok {
+		if iscName == "" {
 			return ctl.ensureReqStatus(ctx, requestingPod, serverDat,
-				fmt.Sprintf("requesting Pod %q is missing annotation %q", requestingPod.Name, api.InferenceServerConfigAnnotationName),
+				fmt.Sprintf("requesting Pod %q has empty value for annotation %q", requestingPod.Name, api.InferenceServerConfigAnnotationName),
 			)
 		}
 		isc, err = ctl.iscLister.InferenceServerConfigs(ctl.namespace).Get(iscName)
