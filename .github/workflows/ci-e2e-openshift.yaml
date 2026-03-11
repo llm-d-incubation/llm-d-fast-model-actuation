@@ -642,7 +642,11 @@ jobs:
                   --overrides='{"spec":{"nodeSelector":{"kubernetes.io/hostname":"'"$node"'"}}}' \
                   --command -- nvidia-smi --query-gpu=uuid --format=csv,noheader
               fi
-              kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/"$POD_NAME" -n "$FMA_NAMESPACE" --timeout=120s
+              if ! kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/"$POD_NAME" -n "$FMA_NAMESPACE" --timeout=60s; then
+                echo "::warning::Could not index node $node (pod timed out)"
+                kubectl delete pod "$POD_NAME" -n "$FMA_NAMESPACE" --ignore-not-found
+                continue
+              fi
               uuids=$(kubectl logs "$POD_NAME" -n "$FMA_NAMESPACE" | tr -d '\r')
               kubectl delete pod "$POD_NAME" -n "$FMA_NAMESPACE" --ignore-not-found
 
