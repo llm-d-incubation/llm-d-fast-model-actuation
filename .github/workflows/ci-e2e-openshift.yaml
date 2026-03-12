@@ -588,6 +588,9 @@ jobs:
           echo "Creating service account for test workloads..."
           # The real requester does not interact with the Kubernetes API.
           # The service account is only needed for imagePullSecrets.
+          # NOTE: If the launcher populator is later integrated into this e2e test
+          # and shares this SA, a Role with access to inferenceserverconfigs,
+          # launcherconfigs, and launcherpopulationpolicies will need to be added back.
           kubectl create sa testreq -n "$FMA_NAMESPACE" || true
           kubectl patch serviceaccount testreq -n "$FMA_NAMESPACE" \
             -p '{"imagePullSecrets": [{"name": "ghcr-pull-secret"}]}'
