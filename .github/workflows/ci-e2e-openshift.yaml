@@ -768,7 +768,7 @@ jobs:
           # There may be more than one launcher pod if the controller created extras,
           # so wait for all of them using the label selector.
           echo "Waiting for launcher pod(s) to be Ready..."
-          kubectl wait --for=condition=Ready -n "$FMA_NAMESPACE" \
+          kubectl wait pods --for=condition=Ready -n "$FMA_NAMESPACE" \
             -l "dual-pods.llm-d.ai/launcher-config-name=$LC" --timeout=600s
 
           echo "Waiting for requester pod to be Ready..."
