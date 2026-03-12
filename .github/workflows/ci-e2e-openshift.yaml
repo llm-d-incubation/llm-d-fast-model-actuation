@@ -589,8 +589,8 @@ jobs:
           # The real requester does not interact with the Kubernetes API.
           # The service account is only needed for imagePullSecrets.
           # NOTE: If the launcher populator is later integrated into this e2e test
-          # and shares this SA, a Role with access to inferenceserverconfigs,
-          # launcherconfigs, and launcherpopulationpolicies will need to be added back.
+          # and shares this SA, a Role with access to launcherconfigs and
+          # launcherpopulationpolicies will need to be added back.
           kubectl create sa testreq -n "$FMA_NAMESPACE" || true
           kubectl patch serviceaccount testreq -n "$FMA_NAMESPACE" \
             -p '{"imagePullSecrets": [{"name": "ghcr-pull-secret"}]}'
@@ -761,7 +761,7 @@ jobs:
             ELAPSED=$((ELAPSED + 5))
           done
 
-          # Wait for pods to be Ready before checking bindings.
+          # 1. Wait for launcher to be Ready.
           # The controller will not bind until the launcher is ready, so waiting here
           # makes it easier to diagnose problems that prevent readiness.
           # Launcher image is ~20GB, so allow extra time for uncached pulls.
@@ -771,34 +771,21 @@ jobs:
           kubectl wait pods --for=condition=Ready -n "$FMA_NAMESPACE" \
             -l "dual-pods.llm-d.ai/launcher-config-name=$LC" --timeout=600s
 
-          echo "Waiting for requester pod to be Ready..."
-          kubectl wait --for=condition=Ready "pod/$REQUESTER" -n "$FMA_NAMESPACE" --timeout=120s
-
-          # Now that pods are Ready and binding has had a chance to occur,
-          # pick the launcher pod that is bound to our requester.
-          LAUNCHER=$(kubectl get pods -n "$FMA_NAMESPACE" -l "dual-pods.llm-d.ai/launcher-config-name=$LC" -o json \
-            | jq -r --arg req "$REQUESTER" \
-              '[.items[] | select(.metadata.labels["dual-pods.llm-d.ai/dual"] == $req)][0].metadata.name // empty')
-          if [ -z "$LAUNCHER" ]; then
-            echo "::error::No launcher pod is bound to requester $REQUESTER"
-            kubectl get pods -n "$FMA_NAMESPACE" -o wide --show-labels
-            exit 1
-          fi
-          echo "Launcher pod: $LAUNCHER"
-
-          # Verify the controller bound the launcher to the requester.
-          # The controller sets the dual label on the launcher pod during bind().
+          # 2. Verify launcher-to-requester binding.
+          # After launcher is ready, the controller binds by setting dual labels.
+          # Use the dual label to find the launcher bound to our requester.
           echo "Verifying launcher-to-requester binding..."
           ELAPSED=0
           while true; do
-            LAUNCHER_DUAL=$(kubectl get pod "$LAUNCHER" -n "$FMA_NAMESPACE" -o json | jq -r '.metadata.labels["dual-pods.llm-d.ai/dual"] // empty')
-            if [ "$LAUNCHER_DUAL" = "$REQUESTER" ]; then
+            LAUNCHER=$(kubectl get pods -n "$FMA_NAMESPACE" \
+              -l "dual-pods.llm-d.ai/launcher-config-name=$LC,dual-pods.llm-d.ai/dual=$REQUESTER" \
+              -o json | jq -r '.items[0].metadata.name // empty')
+            if [ -n "$LAUNCHER" ]; then
               echo "Launcher bound to requester: $LAUNCHER -> $REQUESTER"
               break
             fi
             if [ "$ELAPSED" -ge "$LIMIT" ]; then
               echo "::error::Launcher-to-requester binding not established within ${LIMIT}s"
-              echo "  Launcher dual label: '$LAUNCHER_DUAL' (expected: '$REQUESTER')"
               kubectl get pods -n "$FMA_NAMESPACE" -o wide --show-labels
               echo "=== Controller logs ==="
               kubectl logs deployment/"$FMA_RELEASE_NAME" -n "$FMA_NAMESPACE" --tail=100 || true
@@ -808,7 +795,7 @@ jobs:
             ELAPSED=$((ELAPSED + 5))
           done
 
-          # Verify requester is bound to launcher (reverse direction)
+          # 3. Verify requester-to-launcher binding (reverse direction).
           echo "Verifying requester-to-launcher binding..."
           ELAPSED=0
           while true; do
@@ -828,6 +815,12 @@ jobs:
             sleep 5
             ELAPSED=$((ELAPSED + 5))
           done
+
+          # 4. Wait for requester to be Ready.
+          # The controller ordering is: launcher ready -> binding -> instance created
+          # -> inference server ready -> requester ready.
+          echo "Waiting for requester pod to be Ready..."
+          kubectl wait --for=condition=Ready "pod/$REQUESTER" -n "$FMA_NAMESPACE" --timeout=120s
 
           echo ""
           echo "=== Launcher test passed: pods Ready and bound ==="
