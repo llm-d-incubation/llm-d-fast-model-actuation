@@ -211,27 +211,33 @@ isc3=$(echo $objs | awk '{print $5}')
 lpp=$(echo $objs | awk '{print $6}')
 instlb=${rslb#my-request-}
 
+# LauncherPopulationPolicy specifies launcherCount per node with nvidia.com/gpu.present=true
+GPU_NODES=$(kubectl get nodes -l nvidia.com/gpu.present=true --field-selector spec.unschedulable!=true -o name | wc -l | tr -d ' ')
+echo "Expecting launcher-populator to create $GPU_NODES launcher(s) (one per schedulable GPU node)"
+expect "[ \$(kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | grep -c '^pod/') -ge $GPU_NODES ]"
+echo "Launcher-populator created launchers successfully"
+kubectl get pods -l dual-pods.llm-d.ai/launcher-config-name=$lc
+
 # Expect requester pod to be created
 expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | grep -c '^pod/' | grep -w 1"
 
 export reqlb=$(kubectl get pods -o name -l app=dp-example,instance=$instlb | sed s%pod/%%)
 
-# Expect at least one launcher pod to exist (launcher-populator may pre-create extras)
-expect "[ \$(kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | grep -c '^pod/') -ge 1 ]"
+# Expect launcher pod to be created (not a direct provider)
+expect "kubectl get pods -o name -l dual-pods.llm-d.ai/dual=$reqlb | grep -c '^pod/' | grep -w 1"
 
-# Wait for the launcher to be bound to the requester (controller sets dual label on launcher)
-expect "kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc,dual-pods.llm-d.ai/dual=$reqlb | grep -c '^pod/' | grep -w 1"
+export launcherlb=$(kubectl get pods -o name -l dual-pods.llm-d.ai/dual=$reqlb | sed s%pod/%%)
 
-# Get the launcher pod that is bound to the requester
-export launcherlb=$(kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc,dual-pods.llm-d.ai/dual=$reqlb | sed s%pod/%%)
+# Verify requester is bound to launcher
+expect '[ "$(kubectl get pod $reqlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcherlb" ]'
 
 # Verify launcher is bound to requester
 expect '[ "$(kubectl get pod $launcherlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$reqlb" ]'
 
 # Wait for both pods to be ready (vLLM on CPU takes ~90s to start)
 date
-kubectl wait --for condition=Ready pod/$launcherlb --timeout=180s
 kubectl wait --for condition=Ready pod/$reqlb --timeout=180s
+kubectl wait --for condition=Ready pod/$launcherlb --timeout=180s
 
 cheer Successful launcher-based pod creation
 
@@ -266,7 +272,8 @@ expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | grep -c '^
 reqlb2=$(kubectl get pods -o name -l app=dp-example,instance=$instlb | sed s%pod/%%)
 
 # Should still be using the same launcher pod
-launcherlb2=$(kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | sed s%pod/%%)
+expect "kubectl get pods -o name -l dual-pods.llm-d.ai/dual=$reqlb2 | grep -c '^pod/' | grep -w 1"
+launcherlb2=$(kubectl get pods -o name -l dual-pods.llm-d.ai/dual=$reqlb2 | sed s%pod/%%)
 [ "$launcherlb2" == "$launcherlb" ]
 
 # Verify new requester is bound to same launcher
@@ -306,7 +313,8 @@ expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | grep -c '^
 reqlb3=$(kubectl get pods -o name -l app=dp-example,instance=$instlb | sed s%pod/%%)
 
 # Should still be using the same launcher pod
-launcherlb3=$(kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | sed s%pod/%%)
+expect "kubectl get pods -o name -l dual-pods.llm-d.ai/dual=$reqlb3 | grep -c '^pod/' | grep -w 1"
+launcherlb3=$(kubectl get pods -o name -l dual-pods.llm-d.ai/dual=$reqlb3 | sed s%pod/%%)
 [ "$launcherlb3" == "$launcherlb" ]
 
 # Verify new requester is bound to same launcher
@@ -346,7 +354,8 @@ expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | grep -c '^
 reqlb4=$(kubectl get pods -o name -l app=dp-example,instance=$instlb | sed s%pod/%%)
 
 # Should still be using the same launcher pod
-launcherlb4=$(kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | sed s%pod/%%)
+expect "kubectl get pods -o name -l dual-pods.llm-d.ai/dual=$reqlb4 | grep -c '^pod/' | grep -w 1"
+launcherlb4=$(kubectl get pods -o name -l dual-pods.llm-d.ai/dual=$reqlb4 | sed s%pod/%%)
 [ "$launcherlb4" == "$launcherlb" ]
 
 # Verify new requester is bound to same launcher
