@@ -207,17 +207,16 @@ expect "kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc 
 
 export launcherlb=$(kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | sed s%pod/%%)
 
-# Wait for both pods to be ready first -- the controller will not bind
-# until the launcher is ready, so this aids diagnostics.
-date
-kubectl wait --for condition=Ready pod/$reqlb --timeout=60s
-kubectl wait --for condition=Ready pod/$launcherlb --timeout=60s
-
 # Verify requester is bound to launcher
 expect '[ "$(kubectl get pod $reqlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcherlb" ]'
 
 # Verify launcher is bound to requester
 expect '[ "$(kubectl get pod $launcherlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$reqlb" ]'
+
+# Wait for both pods to be ready
+date
+kubectl wait --for condition=Ready pod/$reqlb --timeout=60s
+kubectl wait --for condition=Ready pod/$launcherlb --timeout=60s
 
 cheer Successful launcher-based pod creation
 
