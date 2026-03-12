@@ -583,29 +583,15 @@ jobs:
           echo ""
           echo "Controller health check passed"
 
-      - name: Set up test RBAC
+      - name: Set up test service account
         run: |
-          echo "Creating RBAC for test workloads..."
-
-          kubectl apply -n "$FMA_NAMESPACE" -f - <<'EOF'
-          apiVersion: rbac.authorization.k8s.io/v1
-          kind: Role
-          metadata:
-            name: testreq
-          rules:
-          - apiGroups: ["fma.llm-d.ai"]
-            resources: ["inferenceserverconfigs", "launcherconfigs"]
-            verbs: ["get", "list", "watch"]
-          EOF
-
+          echo "Creating service account for test workloads..."
+          # The real requester does not interact with the Kubernetes API.
+          # The service account is only needed for imagePullSecrets.
           kubectl create sa testreq -n "$FMA_NAMESPACE" || true
           kubectl patch serviceaccount testreq -n "$FMA_NAMESPACE" \
             -p '{"imagePullSecrets": [{"name": "ghcr-pull-secret"}]}'
-          kubectl create rolebinding testreq \
-            --role=testreq --serviceaccount="${FMA_NAMESPACE}:testreq" \
-            -n "$FMA_NAMESPACE" || true
-
-          echo "Test RBAC created"
+          echo "Service account created"
 
       - name: Create test objects
         id: test-objects
@@ -732,7 +718,7 @@ jobs:
           ELAPSED=0
           LIMIT=300
           while true; do
-            COUNT=$(kubectl get pods -n "$FMA_NAMESPACE" -l "app=dp-example,instance=$INST" -o name 2>/dev/null | wc -l | tr -d ' ')
+            COUNT=$(kubectl get pods -n "$FMA_NAMESPACE" -l "app=dp-example,instance=$INST" -o json 2>/dev/null | jq '.items | length')
             if [ "$COUNT" -ge 1 ]; then
               echo "Requester pod found"
               break
@@ -747,15 +733,15 @@ jobs:
             ELAPSED=$((ELAPSED + 5))
           done
 
-          REQUESTER=$(kubectl get pods -n "$FMA_NAMESPACE" -l "app=dp-example,instance=$INST" -o name | head -1 | sed 's%pod/%%')
+          REQUESTER=$(kubectl get pods -n "$FMA_NAMESPACE" -l "app=dp-example,instance=$INST" -o json | jq -r '.items[0].metadata.name')
           echo "Requester pod: $REQUESTER"
 
           echo "Waiting for launcher pod..."
           ELAPSED=0
           while true; do
-            COUNT=$(kubectl get pods -n "$FMA_NAMESPACE" -l "dual-pods.llm-d.ai/launcher-config-name=$LC" -o name 2>/dev/null | wc -l | tr -d ' ')
+            COUNT=$(kubectl get pods -n "$FMA_NAMESPACE" -l "dual-pods.llm-d.ai/launcher-config-name=$LC" -o json 2>/dev/null | jq '.items | length')
             if [ "$COUNT" -ge 1 ]; then
-              echo "Launcher pod found"
+              echo "Launcher pod(s) found: $COUNT"
               break
             fi
             if [ "$ELAPSED" -ge "$LIMIT" ]; then
@@ -772,17 +758,29 @@ jobs:
             ELAPSED=$((ELAPSED + 5))
           done
 
-          LAUNCHER=$(kubectl get pods -n "$FMA_NAMESPACE" -l "dual-pods.llm-d.ai/launcher-config-name=$LC" -o name | head -1 | sed 's%pod/%%')
+          # Pick the launcher pod bound to our requester, or fall back to the first one.
+          # There may be more than one launcher pod if the controller created extras.
+          LAUNCHER=$(kubectl get pods -n "$FMA_NAMESPACE" -l "dual-pods.llm-d.ai/launcher-config-name=$LC" -o json \
+            | jq -r --arg req "$REQUESTER" \
+              '(.items[] | select(.metadata.labels["dual-pods.llm-d.ai/dual"] == $req) // .items[0]).metadata.name')
           echo "Launcher pod: $LAUNCHER"
 
-          # Wait for launcher pod to be Ready (proves launcher API is serving)
-          # Launcher image is ~20GB, so allow extra time for uncached pulls
+          # Wait for pods to be Ready before checking bindings.
+          # The controller will not bind until the launcher is ready, so waiting here
+          # makes it easier to diagnose problems that prevent readiness.
+          # Launcher image is ~20GB, so allow extra time for uncached pulls.
+          echo "Waiting for launcher pod to be Ready..."
+          kubectl wait --for=condition=Ready "pod/$LAUNCHER" -n "$FMA_NAMESPACE" --timeout=600s
+
+          echo "Waiting for requester pod to be Ready..."
+          kubectl wait --for=condition=Ready "pod/$REQUESTER" -n "$FMA_NAMESPACE" --timeout=120s
+
           # Verify the controller bound the launcher to the requester.
           # The controller sets the dual label on the launcher pod during bind().
           echo "Verifying launcher-to-requester binding..."
           ELAPSED=0
           while true; do
-            LAUNCHER_DUAL=$(kubectl get pod "$LAUNCHER" -n "$FMA_NAMESPACE" -o jsonpath='{.metadata.labels.dual-pods\.llm-d\.ai/dual}' 2>/dev/null || true)
+            LAUNCHER_DUAL=$(kubectl get pod "$LAUNCHER" -n "$FMA_NAMESPACE" -o json | jq -r '.metadata.labels["dual-pods.llm-d.ai/dual"] // empty')
             if [ "$LAUNCHER_DUAL" = "$REQUESTER" ]; then
               echo "Launcher bound to requester: $LAUNCHER -> $REQUESTER"
               break
@@ -803,7 +801,7 @@ jobs:
           echo "Verifying requester-to-launcher binding..."
           ELAPSED=0
           while true; do
-            REQUESTER_DUAL=$(kubectl get pod "$REQUESTER" -n "$FMA_NAMESPACE" -o jsonpath='{.metadata.labels.dual-pods\.llm-d\.ai/dual}' 2>/dev/null || true)
+            REQUESTER_DUAL=$(kubectl get pod "$REQUESTER" -n "$FMA_NAMESPACE" -o json | jq -r '.metadata.labels["dual-pods.llm-d.ai/dual"] // empty')
             if [ "$REQUESTER_DUAL" = "$LAUNCHER" ]; then
               echo "Requester bound to launcher: $REQUESTER -> $LAUNCHER"
               break
@@ -820,15 +818,8 @@ jobs:
             ELAPSED=$((ELAPSED + 5))
           done
 
-          # Wait for both pods to be Ready
-          echo "Waiting for launcher pod to be Ready..."
-          kubectl wait --for=condition=Ready "pod/$LAUNCHER" -n "$FMA_NAMESPACE" --timeout=600s
-
-          echo "Waiting for requester pod to be Ready..."
-          kubectl wait --for=condition=Ready "pod/$REQUESTER" -n "$FMA_NAMESPACE" --timeout=120s
-
           echo ""
-          echo "=== Launcher test passed: pods created, bound, and both Ready ==="
+          echo "=== Launcher test passed: pods Ready and bound ==="
           kubectl get pods -n "$FMA_NAMESPACE" -o wide --show-labels
 
       - name: List objects of category all
