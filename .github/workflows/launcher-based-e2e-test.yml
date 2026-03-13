@@ -103,3 +103,7 @@ jobs:
             echo "=== Logs for $pod ==="
             kubectl logs $pod || echo "Failed to get logs for $pod"
           done
+
+      - name: show vLLM instance logs from launchers
+        if: always()
+        run: scripts/dump-launcher-vllm-logs.sh

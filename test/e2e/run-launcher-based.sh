@@ -48,9 +48,12 @@ clear_img_repo my-registry/my-namespace/test-requester
 clear_img_repo my-registry/my-namespace/test-launcher
 clear_img_repo ko.local/dual-pods-controller
 clear_img_repo my-registry/my-namespace/dual-pods-controller
+clear_img_repo ko.local/launcher-populator
+clear_img_repo my-registry/my-namespace/launcher-populator
 make build-test-requester-local
 make build-test-launcher-local
 make build-controller-local
+make build-populator-local
 
 : Set up the kind cluster
 
@@ -154,6 +157,7 @@ done
 make load-test-requester-local
 make load-test-launcher-local
 make load-controller-local
+make load-populator-local
 
 : Detect whether API server supports ValidatingAdmissionPolicy
 
@@ -175,7 +179,7 @@ helm upgrade --install fma charts/fma-controllers \
   --set dualPodsController.sleeperLimit=2 \
   --set global.local=true \
   --set dualPodsController.debugAcceleratorMemory=false \
-  --set launcherPopulator.enabled=false
+  --set launcherPopulator.enabled=true
 
 : Populate GPU map for testing
 
@@ -186,6 +190,14 @@ kubectl get nodes -o name | sed 's%^node/%%' | while read node; do
     let gi=gi1+1
 done
 
+: Wait for FMA controllers to be ready
+
+kubectl wait --for=condition=available deployment/fma-dual-pods-controller --timeout=120s
+kubectl get pods -l app.kubernetes.io/component=dual-pods-controller
+
+kubectl wait --for=condition=available deployment/fma-launcher-populator --timeout=120s
+kubectl get pods -l app.kubernetes.io/component=launcher-populator
+
 : Test launcher-based server-providing pods
 
 : Basic Launcher Pod Creation
@@ -195,17 +207,25 @@ isc=$(echo $objs | awk '{print $1}')
 lc=$(echo $objs | awk '{print $2}')
 rslb=$(echo $objs | awk '{print $3}')
 isc2=$(echo $objs | awk '{print $4}')
+lpp=$(echo $objs | awk '{print $5}')
 instlb=${rslb#my-request-}
 
+# LauncherPopulationPolicy specifies launcherCount per node with nvidia.com/gpu.present=true
+GPU_NODES=$(kubectl get nodes -l nvidia.com/gpu.present=true --field-selector spec.unschedulable!=true -o name | wc -l | tr -d ' ')
+echo "Expecting launcher-populator to create $GPU_NODES launcher(s) (one per schedulable GPU node)"
+expect "[ \$(kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | wc -l | tr -d ' ') -ge $GPU_NODES ]"
+echo "Launcher-populator created launchers successfully"
+kubectl get pods -l dual-pods.llm-d.ai/launcher-config-name=$lc
+
 # Expect requester pod to be created
-expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | grep -c '^pod/' | grep -w 1"
+expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | wc -l | grep -w 1"
 
 export reqlb=$(kubectl get pods -o name -l app=dp-example,instance=$instlb | sed s%pod/%%)
 
 # Expect launcher pod to be created (not a direct provider)
-expect "kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | grep -c '^pod/' | grep -w 1"
+expect "kubectl get pods -o name -l dual-pods.llm-d.ai/dual=$reqlb | wc -l | grep -w 1"
 
-export launcherlb=$(kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | sed s%pod/%%)
+export launcherlb=$(kubectl get pods -o name -l dual-pods.llm-d.ai/dual=$reqlb | sed s%pod/%%)
 
 # Verify requester is bound to launcher
 expect '[ "$(kubectl get pod $reqlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcherlb" ]'
@@ -213,10 +233,10 @@ expect '[ "$(kubectl get pod $reqlb -o jsonpath={.metadata.labels.dual-pods\\.ll
 # Verify launcher is bound to requester
 expect '[ "$(kubectl get pod $launcherlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$reqlb" ]'
 
-# Wait for both pods to be ready
+# Wait for both pods to be ready (vLLM on CPU takes ~90s to start)
 date
-kubectl wait --for condition=Ready pod/$reqlb --timeout=60s
-kubectl wait --for condition=Ready pod/$launcherlb --timeout=60s
+kubectl wait --for condition=Ready pod/$reqlb --timeout=180s
+kubectl wait --for condition=Ready pod/$launcherlb --timeout=180s
 
 cheer Successful launcher-based pod creation
 
@@ -246,12 +266,13 @@ expect '[ "$(kubectl get pod $launcherlb -o jsonpath={.metadata.labels.dual-pods
 # Scale back up (should reuse same launcher and wake sleeping instance)
 kubectl scale rs $rslb --replicas=1
 
-expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | grep -c '^pod/' | grep -w 1"
+expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | wc -l | grep -w 1"
 
 reqlb2=$(kubectl get pods -o name -l app=dp-example,instance=$instlb | sed s%pod/%%)
 
 # Should still be using the same launcher pod
-launcherlb2=$(kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | sed s%pod/%%)
+expect "kubectl get pods -o name -l dual-pods.llm-d.ai/dual=$reqlb2 | wc -l | grep -w 1"
+launcherlb2=$(kubectl get pods -o name -l dual-pods.llm-d.ai/dual=$reqlb2 | sed s%pod/%%)
 [ "$launcherlb2" == "$launcherlb" ]
 
 # Verify new requester is bound to same launcher
@@ -286,12 +307,13 @@ kubectl patch rs $rslb -p='{"spec":{"template":{"metadata":{"annotations":{"dual
 # Scale back up (should reuse same launcher and create 2nd instance)
 kubectl scale rs $rslb --replicas=1
 
-expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | grep -c '^pod/' | grep -w 1"
+expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | wc -l | grep -w 1"
 
 reqlb3=$(kubectl get pods -o name -l app=dp-example,instance=$instlb | sed s%pod/%%)
 
 # Should still be using the same launcher pod
-launcherlb3=$(kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | sed s%pod/%%)
+expect "kubectl get pods -o name -l dual-pods.llm-d.ai/dual=$reqlb3 | wc -l | grep -w 1"
+launcherlb3=$(kubectl get pods -o name -l dual-pods.llm-d.ai/dual=$reqlb3 | sed s%pod/%%)
 [ "$launcherlb3" == "$launcherlb" ]
 
 # Verify new requester is bound to same launcher
@@ -326,12 +348,13 @@ kubectl patch rs $rslb -p='{"spec":{"template":{"metadata":{"annotations":{"dual
 # Scale back up (should reuse same launcher and wake first instance)
 kubectl scale rs $rslb --replicas=1
 
-expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | grep -c '^pod/' | grep -w 1"
+expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | wc -l | grep -w 1"
 
 reqlb4=$(kubectl get pods -o name -l app=dp-example,instance=$instlb | sed s%pod/%%)
 
 # Should still be using the same launcher pod
-launcherlb4=$(kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | sed s%pod/%%)
+expect "kubectl get pods -o name -l dual-pods.llm-d.ai/dual=$reqlb4 | wc -l | grep -w 1"
+launcherlb4=$(kubectl get pods -o name -l dual-pods.llm-d.ai/dual=$reqlb4 | sed s%pod/%%)
 [ "$launcherlb4" == "$launcherlb" ]
 
 # Verify new requester is bound to same launcher
@@ -350,6 +373,7 @@ cheer Successful switching instances in one launcher
 : Clean up launcher-based workloads
 
 kubectl delete rs $rslb --ignore-not-found=true
+kubectl delete launcherpopulationpolicy $lpp --ignore-not-found=true
 kubectl delete inferenceserverconfig $isc --ignore-not-found=true
 kubectl delete inferenceserverconfig $isc2 --ignore-not-found=true
 kubectl delete launcherconfig $lc --ignore-not-found=true

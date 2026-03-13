@@ -529,20 +529,27 @@ jobs:
             --set dualPodsController.sleeperLimit=2 \
             --set global.local=false \
             --set dualPodsController.debugAcceleratorMemory=false \
-            --set launcherPopulator.enabled=false
+            --set launcherPopulator.enabled=true
 
-      - name: Wait for controller to be ready
+      - name: Wait for FMA controllers to be ready
         run: |
-          echo "Waiting for FMA controller deployment to be ready..."
           kubectl wait --for=condition=available --timeout=120s \
             deployment "$FMA_RELEASE_NAME-dual-pods-controller" -n "$FMA_NAMESPACE"
-
           echo ""
-          echo "=== Controller Pod Status ==="
-          kubectl get pods -n "$FMA_NAMESPACE" -l app.kubernetes.io/name=fma-controllers
+          echo "=== Dual-Pod Controller Pod Status ==="
+          kubectl get pods -n "$FMA_NAMESPACE" -l app.kubernetes.io/component=dual-pods-controller
           echo ""
-          echo "=== Controller Deployment ==="
+          echo "=== Dual-Pod Controller Deployment ==="
           kubectl get deployment "$FMA_RELEASE_NAME-dual-pods-controller" -n "$FMA_NAMESPACE"
+
+          kubectl wait --for=condition=available --timeout=120s \
+            deployment "$FMA_RELEASE_NAME-launcher-populator" -n "$FMA_NAMESPACE"
+          echo ""
+          echo "=== Launcher Populator Pod Status ==="
+          kubectl get pods -n "$FMA_NAMESPACE" -l app.kubernetes.io/component=launcher-populator
+          echo ""
+          echo "=== Launcher Populator Deployment ==="
+          kubectl get deployment "$FMA_RELEASE_NAME-launcher-populator" -n "$FMA_NAMESPACE"
 
       - name: Verify controller health
         run: |
@@ -671,6 +678,19 @@ jobs:
                     - name: XDG_CONFIG_HOME
                       value: "/tmp"
           ---
+          apiVersion: fma.llm-d.ai/v1alpha1
+          kind: LauncherPopulationPolicy
+          metadata:
+            name: lpp-${INST}
+          spec:
+            enhancedNodeSelector:
+              labelSelector:
+                matchLabels:
+                  nvidia.com/gpu.present: "true"
+            countForLauncher:
+              - launcherConfigName: launcher-config-${INST}
+                launcherCount: 1
+          ---
           apiVersion: apps/v1
           kind: ReplicaSet
           metadata:
@@ -720,6 +740,7 @@ jobs:
           echo "instance=${INST}" >> $GITHUB_OUTPUT
           echo "isc=inference-server-config-${INST}" >> $GITHUB_OUTPUT
           echo "lc=launcher-config-${INST}" >> $GITHUB_OUTPUT
+          echo "lpp=lpp-${INST}" >> $GITHUB_OUTPUT
           echo "rs=my-request-${INST}" >> $GITHUB_OUTPUT
           echo "Test objects created"
 
@@ -739,8 +760,6 @@ jobs:
             fi
             if [ "$ELAPSED" -ge "$LIMIT" ]; then
               echo "::error::Requester pod did not appear within ${LIMIT}s"
-              kubectl get pods -n "$FMA_NAMESPACE" -o wide
-              kubectl get events -n "$FMA_NAMESPACE" --sort-by='.lastTimestamp' | tail -20
               exit 1
             fi
             sleep 5
@@ -750,22 +769,21 @@ jobs:
           REQUESTER=$(kubectl get pods -n "$FMA_NAMESPACE" -l "app=dp-example,instance=$INST" -o json | jq -r '.items[0].metadata.name')
           echo "Requester pod: $REQUESTER"
 
-          echo "Waiting for launcher pod..."
+          # LauncherPopulationPolicy specifies launcherCount per node with nvidia.com/gpu.present=true
+          GPU_NODES=$(kubectl get nodes -l nvidia.com/gpu.present=true --field-selector spec.unschedulable!=true -o name | wc -l | tr -d ' ')
+          echo "Expecting launcher-populator to create $GPU_NODES launcher(s)"
+
+          echo "Waiting for launcher-populator to create launcher pods..."
           ELAPSED=0
           while true; do
             COUNT=$(kubectl get pods -n "$FMA_NAMESPACE" -l "dual-pods.llm-d.ai/launcher-config-name=$LC" -o json 2>/dev/null | jq '.items | length')
-            if [ "$COUNT" -ge 1 ]; then
-              echo "Launcher pod(s) found: $COUNT"
+            if [ "$COUNT" -ge "$GPU_NODES" ]; then
+              echo "Launcher-populator created $COUNT launcher(s) successfully"
+              kubectl get pods -n "$FMA_NAMESPACE" -l "dual-pods.llm-d.ai/launcher-config-name=$LC" -o wide
               break
             fi
             if [ "$ELAPSED" -ge "$LIMIT" ]; then
-              echo "::error::Launcher pod did not appear within ${LIMIT}s"
-              kubectl get pods -n "$FMA_NAMESPACE" -o wide
-              kubectl get events -n "$FMA_NAMESPACE" --sort-by='.lastTimestamp' | tail -20
-              echo "=== Controller logs ==="
-              kubectl logs deployment/"$FMA_RELEASE_NAME-dual-pods-controller" -n "$FMA_NAMESPACE" --tail=50 || true
-              echo "=== Requester logs ==="
-              kubectl logs "$REQUESTER" -n "$FMA_NAMESPACE" --tail=50 || true
+              echo "::error::Launcher-populator did not create expected $GPU_NODES launcher(s) within ${LIMIT}s (found: $COUNT)"
               exit 1
             fi
             sleep 5
@@ -797,9 +815,6 @@ jobs:
             fi
             if [ "$ELAPSED" -ge "$LIMIT" ]; then
               echo "::error::Launcher-to-requester binding not established within ${LIMIT}s"
-              kubectl get pods -n "$FMA_NAMESPACE" -o wide --show-labels
-              echo "=== Controller logs ==="
-              kubectl logs deployment/"$FMA_RELEASE_NAME" -n "$FMA_NAMESPACE" --tail=100 || true
               exit 1
             fi
             sleep 5
@@ -818,9 +833,6 @@ jobs:
             if [ "$ELAPSED" -ge "$LIMIT" ]; then
               echo "::error::Requester-to-launcher binding not established within ${LIMIT}s"
               echo "  Requester dual label: '$REQUESTER_DUAL' (expected: '$LAUNCHER')"
-              kubectl get pods -n "$FMA_NAMESPACE" -o wide --show-labels
-              echo "=== Controller logs ==="
-              kubectl logs deployment/"$FMA_RELEASE_NAME" -n "$FMA_NAMESPACE" --tail=100 || true
               exit 1
             fi
             sleep 5
@@ -863,66 +875,19 @@ jobs:
 
       - name: Dump vLLM instance logs from launchers
         if: always()
-        run: |
-          echo "Fetching vLLM instance logs from launcher pods..."
-
-          # Get all launcher pods (there may be more than one)
-          LAUNCHER_PODS=$(kubectl get pods -n "$FMA_NAMESPACE" \
-            -l "dual-pods.llm-d.ai/launcher-config-name" \
-            -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || true)
-
-          if [ -z "$LAUNCHER_PODS" ]; then
-            echo "No launcher pods found"
-            exit 0
-          fi
-
-          # Process each launcher pod
-          for LAUNCHER_POD in $LAUNCHER_PODS; do
-            echo ""
-            echo "=========================================="
-            echo "=== Launcher pod: $LAUNCHER_POD ==="
-            echo "=========================================="
-
-            # Use port-forward to access launcher API from runner (avoids requiring curl in container)
-            kubectl port-forward -n "$FMA_NAMESPACE" "pod/$LAUNCHER_POD" 18001:8001 &
-            PF_PID=$!
-            sleep 2
-
-            # Get list of vLLM instances from launcher API
-            echo ""
-            echo "=== vLLM instances status ==="
-            INSTANCES_JSON=$(curl -s "http://localhost:18001/v2/vllm/instances" 2>/dev/null || true)
-            echo "$INSTANCES_JSON" | jq . 2>/dev/null || echo "$INSTANCES_JSON"
-
-            # Get instance IDs using jq
-            INSTANCE_IDS=$(echo "$INSTANCES_JSON" | jq -r '.instances[].instance_id // empty' 2>/dev/null || true)
-
-            if [ -z "$INSTANCE_IDS" ]; then
-              echo "No vLLM instances found on this launcher"
-            else
-              # Fetch logs for each instance
-              for id in $INSTANCE_IDS; do
-                echo ""
-                echo "=== vLLM instance $id logs ==="
-                curl -s "http://localhost:18001/v2/vllm/instances/$id/log" 2>/dev/null || true
-                echo ""
-              done
-            fi
-
-            # Clean up port-forward
-            kill $PF_PID 2>/dev/null || true
-            wait $PF_PID 2>/dev/null || true
-          done
+        run: scripts/dump-launcher-vllm-logs.sh "$FMA_NAMESPACE"
 
       - name: Clean up test objects
         if: always()
         env:
           ISC: ${{ steps.test-objects.outputs.isc }}
           LC: ${{ steps.test-objects.outputs.lc }}
+          LPP: ${{ steps.test-objects.outputs.lpp }}
           RS: ${{ steps.test-objects.outputs.rs }}
         run: |
           echo "Cleaning up test objects..."
           kubectl delete rs "$RS" -n "$FMA_NAMESPACE" --ignore-not-found || true
+          kubectl delete launcherpopulationpolicy "$LPP" -n "$FMA_NAMESPACE" --ignore-not-found || true
           kubectl delete inferenceserverconfig "$ISC" -n "$FMA_NAMESPACE" --ignore-not-found || true
           kubectl delete launcherconfig "$LC" -n "$FMA_NAMESPACE" --ignore-not-found || true
           # Wait for test pods to terminate

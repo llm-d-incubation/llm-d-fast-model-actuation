@@ -27,7 +27,7 @@ spec:
           image: "{{ .Values.global.imageRegistry }}/launcher-populator:{{ .Values.global.imageTag }}"
           imagePullPolicy: {{ .Values.launcherPopulator.pullPolicy | default "IfNotPresent" }}
           command:
-            - /launcher-populator
+            - /ko-app/launcher-populator
             - --namespace={{ .Release.Namespace }}
           ports:
             - containerPort: 8080
