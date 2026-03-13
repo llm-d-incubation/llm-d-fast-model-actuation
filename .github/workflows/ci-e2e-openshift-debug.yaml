@@ -1,0 +1,435 @@
+name: CI - OpenShift E2E Debug
+
+# Debug workflow for validating deploy_fma.sh and the E2E test suite.
+# Trigger manually via workflow_dispatch.  Optionally skip the image build
+# (skip_build=true) to reuse images already pushed to GHCR.
+
+permissions:
+  contents: read
+  packages: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      skip_build:
+        description: 'Skip image build and use existing GHCR images'
+        required: false
+        default: 'false'
+      image_tag:
+        description: 'Image tag to use when skip_build=true (e.g. ref-abcd1234)'
+        required: false
+        default: ''
+      skip_cleanup:
+        description: 'Skip cleanup after tests (leave resources for inspection)'
+        required: false
+        default: 'false'
+
+jobs:
+  # --------------------------------------------------------------------------
+  # Build images (conditional)
+  # --------------------------------------------------------------------------
+  build-image:
+    if: github.event.inputs.skip_build != 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.build.outputs.image_tag }}
+      controller_image: ${{ steps.build.outputs.controller_image }}
+      requester_image: ${{ steps.build.outputs.requester_image }}
+      launcher_image: ${{ steps.build.outputs.launcher_image }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Set up Go
+        uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
+        with:
+          go-version: "1.25.7"
+          cache-dependency-path: ./go.sum
+
+      - name: Set up ko
+        uses: ko-build/setup-ko@d006021bd0c28d1ce33a07e7943d48b079944c8d # v0.9
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ secrets.CR_USER }}
+          password: ${{ secrets.CR_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Build and push images
+        id: build
+        run: |
+          IMAGE_TAG="ref-$(printf '%s' "${{ github.sha }}" | cut -c1-8)"
+          reg="${{ github.repository }}"
+          CONTAINER_IMG_REG="ghcr.io/${reg@L}"
+
+          echo "Building images with tag: $IMAGE_TAG"
+          echo "Registry: $CONTAINER_IMG_REG"
+
+          make build-controller \
+            CONTAINER_IMG_REG="$CONTAINER_IMG_REG" \
+            IMAGE_TAG="$IMAGE_TAG"
+
+          make build-populator \
+            CONTAINER_IMG_REG="$CONTAINER_IMG_REG" \
+            IMAGE_TAG="$IMAGE_TAG"
+
+          make build-and-push-requester \
+            CONTAINER_IMG_REG="$CONTAINER_IMG_REG" \
+            REQUESTER_IMG_TAG="$IMAGE_TAG"
+
+          make build-and-push-launcher \
+            CONTAINER_IMG_REG="$CONTAINER_IMG_REG" \
+            LAUNCHER_IMG_TAG="$IMAGE_TAG"
+
+          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          echo "controller_image=${CONTAINER_IMG_REG}/dual-pods-controller:${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          echo "requester_image=${CONTAINER_IMG_REG}/requester:${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          echo "launcher_image=${CONTAINER_IMG_REG}/launcher:${IMAGE_TAG}" >> $GITHUB_OUTPUT
+
+  # --------------------------------------------------------------------------
+  # E2E test with debug dumps
+  # --------------------------------------------------------------------------
+  e2e-openshift-debug:
+    runs-on: [self-hosted, openshift, vllm-d]
+    needs: [build-image]
+    # Run even when build-image is skipped (skip_build=true)
+    if: always() && (needs.build-image.result == 'success' || needs.build-image.result == 'skipped')
+    env:
+      SKIP_CLEANUP: ${{ github.event.inputs.skip_cleanup || 'false' }}
+      FMA_NAMESPACE: fma-e2e-debug-${{ github.run_id }}
+      FMA_RELEASE_NAME: fma-debug-${{ github.run_id }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Resolve image references
+        id: images
+        run: |
+          if [ "${{ github.event.inputs.skip_build }}" = "true" ]; then
+            TAG="${{ github.event.inputs.image_tag }}"
+            if [ -z "$TAG" ]; then
+              echo "::error::image_tag is required when skip_build=true"
+              exit 1
+            fi
+            reg="${{ github.repository }}"
+            REG="ghcr.io/${reg@L}"
+          else
+            TAG="${{ needs.build-image.outputs.image_tag }}"
+            REG="${{ needs.build-image.outputs.controller_image }}"
+            REG="${REG%/dual-pods-controller:*}"
+          fi
+
+          echo "controller_image=${REG}/dual-pods-controller:${TAG}" >> $GITHUB_OUTPUT
+          echo "requester_image=${REG}/requester:${TAG}" >> $GITHUB_OUTPUT
+          echo "launcher_image=${REG}/launcher:${TAG}" >> $GITHUB_OUTPUT
+
+          echo "Resolved images:"
+          echo "  Controller: ${REG}/dual-pods-controller:${TAG}"
+          echo "  Requester:  ${REG}/requester:${TAG}"
+          echo "  Launcher:   ${REG}/launcher:${TAG}"
+
+      - name: Install tools (kubectl, oc, helm)
+        run: |
+          KUBECTL_VERSION="v1.31.0"
+          echo "Installing kubectl version: $KUBECTL_VERSION"
+          curl -fsSL --retry 3 --retry-delay 5 -o kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          curl -fsSL --retry 3 --retry-delay 5 -o kubectl.sha256 "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl.sha256"
+          echo "$(cat kubectl.sha256)  kubectl" | sha256sum --check
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
+          rm -f kubectl.sha256
+
+          curl -fsSL --retry 3 --retry-delay 5 -O "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/openshift-client-linux.tar.gz"
+          tar -xzf openshift-client-linux.tar.gz
+          sudo mv oc /usr/local/bin/
+          rm -f openshift-client-linux.tar.gz kubectl README.md
+
+          curl -fsSL --retry 3 --retry-delay 5 https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+      - name: Verify cluster access
+        run: |
+          echo "=== Cluster Info ==="
+          kubectl cluster-info
+          echo ""
+          echo "=== Nodes ==="
+          kubectl get nodes -o wide
+          echo ""
+          echo "=== GPU Nodes ==="
+          kubectl get nodes -l nvidia.com/gpu.present=true -o wide || echo "No GPU nodes found"
+
+      - name: Detect cluster type
+        run: |
+          CLUSTER_DOMAIN=$(oc get ingress.config cluster -o jsonpath='{.spec.domain}')
+          echo "Cluster domain: $CLUSTER_DOMAIN"
+          if echo "$CLUSTER_DOMAIN" | grep -q "pokprod"; then
+            echo "Detected pokprod cluster"
+            echo "CLUSTER_TYPE=pokprod" >> $GITHUB_ENV
+          fi
+
+      # -- Debug dump: GPU node details --
+      - name: Debug - GPU node details
+        run: |
+          echo "=== GPU Node Details ==="
+          for nodename in $(kubectl get nodes -l nvidia.com/gpu.present=true -o jsonpath='{.items[*].metadata.name}'); do
+            echo ""
+            echo "--- Node: ${nodename} ---"
+            echo "Labels:"
+            kubectl get node "$nodename" -o jsonpath='{.metadata.labels}' | jq .
+            echo ""
+            echo "Taints: $(kubectl get node "$nodename" -o jsonpath='{.spec.taints}')"
+            echo "Conditions:"
+            kubectl get node "$nodename" -o jsonpath='{.status.conditions}' | jq .
+            echo "Allocatable GPU:"
+            kubectl get node "$nodename" -o jsonpath='{.status.allocatable.nvidia\.com/gpu}'
+            echo ""
+            echo "FMA images on node:"
+            kubectl get node "$nodename" -o jsonpath='{.status.images}' | jq '[ .[] | select(.names | any(contains("fast-model-actuation"))) | {"names":.names, "sizeMB":(.sizeBytes/1048576|floor) } ]'
+            echo ""
+          done
+        continue-on-error: true
+
+      # -- Cleanup from previous runs --
+      - name: Clean up resources from previous runs
+        run: |
+          echo "Cleaning up FMA resources..."
+          if kubectl get namespace "$FMA_NAMESPACE" &>/dev/null; then
+            echo "=== Cleaning up namespace: $FMA_NAMESPACE ==="
+            for release in $(helm list -n "$FMA_NAMESPACE" -q 2>/dev/null); do
+              echo "  Uninstalling helm release: $release"
+              helm uninstall "$release" -n "$FMA_NAMESPACE" --ignore-not-found --wait --timeout 60s || true
+            done
+            # Remove dual-pods finalizers
+            for pod in $(kubectl get pods -n "$FMA_NAMESPACE" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+              all_finalizers=$(kubectl get pod "$pod" -n "$FMA_NAMESPACE" \
+                -o jsonpath='{range .metadata.finalizers[*]}{@}{"\n"}{end}' 2>/dev/null || true)
+              if ! echo "$all_finalizers" | grep -q '^dual-pods\.llm-d\.ai/'; then
+                continue
+              fi
+              echo "    Patching pod $pod to remove dual-pods finalizers"
+              keep_entries=$(echo "$all_finalizers" \
+                | grep -v '^dual-pods\.llm-d\.ai/' \
+                | awk 'NR>1{printf ","} {printf "\"%s\"", $0}')
+              kubectl patch pod "$pod" -n "$FMA_NAMESPACE" --type=merge \
+                -p="{\"metadata\":{\"finalizers\":[${keep_entries}]}}" 2>/dev/null || true
+            done
+            kubectl delete namespace "$FMA_NAMESPACE" --ignore-not-found --timeout=120s || true
+          fi
+          kubectl delete clusterrole        "${FMA_RELEASE_NAME}-node-view" --ignore-not-found || true
+          kubectl delete clusterrolebinding "${FMA_RELEASE_NAME}-node-view" --ignore-not-found || true
+          echo "Cleanup complete"
+
+      - name: Create namespace
+        run: |
+          if kubectl get namespace "$FMA_NAMESPACE" &>/dev/null; then
+            echo "Waiting for namespace $FMA_NAMESPACE to be deleted..."
+            while kubectl get namespace "$FMA_NAMESPACE" &>/dev/null; do
+              sleep 2
+            done
+          fi
+          echo "Creating namespace $FMA_NAMESPACE..."
+          kubectl create namespace "$FMA_NAMESPACE"
+
+      - name: Create GHCR image pull secret
+        env:
+          CR_USER: ${{ secrets.CR_USER }}
+          CR_TOKEN: ${{ secrets.CR_TOKEN }}
+        run: |
+          echo "Creating GHCR pull secret in $FMA_NAMESPACE..."
+          kubectl create secret docker-registry ghcr-pull-secret \
+            --docker-server=ghcr.io \
+            --docker-username="$CR_USER" \
+            --docker-password="$CR_TOKEN" \
+            -n "$FMA_NAMESPACE"
+          kubectl patch serviceaccount default -n "$FMA_NAMESPACE" \
+            -p '{"imagePullSecrets": [{"name": "ghcr-pull-secret"}]}'
+          echo "Pull secret created"
+
+      # -- Debug dump: pre-deploy state --
+      - name: Debug - Pre-deploy namespace state
+        run: |
+          echo "=== Pre-deploy namespace state ==="
+          echo ""
+          echo "--- Namespace ---"
+          kubectl get namespace "$FMA_NAMESPACE" -o yaml
+          echo ""
+          echo "--- ServiceAccounts ---"
+          kubectl get sa -n "$FMA_NAMESPACE"
+          echo ""
+          echo "--- Secrets (names only) ---"
+          kubectl get secrets -n "$FMA_NAMESPACE"
+          echo ""
+          echo "--- All resources ---"
+          kubectl get all -n "$FMA_NAMESPACE"
+
+      # -- Deploy FMA --
+      - name: Deploy FMA
+        id: deploy-fma
+        env:
+          FMA_NAMESPACE: ${{ env.FMA_NAMESPACE }}
+          FMA_RELEASE_NAME: ${{ env.FMA_RELEASE_NAME }}
+          CONTROLLER_IMAGE: ${{ steps.images.outputs.controller_image }}
+          REQUESTER_IMAGE: ${{ steps.images.outputs.requester_image }}
+          LAUNCHER_IMAGE: ${{ steps.images.outputs.launcher_image }}
+          LIMIT: "600"
+        run: |
+          echo "Calling deploy_fma.sh..."
+          ./test/e2e/deploy_fma.sh
+
+      # -- Debug dump: post-deploy state --
+      - name: Debug - Post-deploy state
+        if: always()
+        run: |
+          echo "=== Post-deploy state ==="
+          echo ""
+          echo "--- All pods (with labels) ---"
+          kubectl get pods -n "$FMA_NAMESPACE" -o wide --show-labels
+          echo ""
+          echo "--- Pod descriptions ---"
+          for pod in $(kubectl get pods -n "$FMA_NAMESPACE" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+            echo ""
+            echo "=== describe pod/$pod ==="
+            kubectl describe pod "$pod" -n "$FMA_NAMESPACE"
+          done
+          echo ""
+          echo "--- InferenceServerConfigs ---"
+          kubectl get inferenceserverconfigs -n "$FMA_NAMESPACE" -o yaml 2>/dev/null || echo "None found"
+          echo ""
+          echo "--- LauncherConfigs ---"
+          kubectl get launcherconfigs -n "$FMA_NAMESPACE" -o yaml 2>/dev/null || echo "None found"
+          echo ""
+          echo "--- LauncherPopulationPolicies ---"
+          kubectl get launcherpopulationpolicies -n "$FMA_NAMESPACE" -o yaml 2>/dev/null || echo "None found"
+          echo ""
+          echo "--- ReplicaSets ---"
+          kubectl get rs -n "$FMA_NAMESPACE" -o wide
+          echo ""
+          echo "--- Events (sorted) ---"
+          kubectl get events -n "$FMA_NAMESPACE" --sort-by='.lastTimestamp'
+          echo ""
+          echo "--- Controller logs ---"
+          CTRL_POD=$(kubectl get pods -n "$FMA_NAMESPACE" \
+            -l app.kubernetes.io/component=dual-pods-controller \
+            -o jsonpath='{.items[0].metadata.name}' 2>/dev/null) || true
+          if [ -n "$CTRL_POD" ]; then
+            echo "=== Logs of $CTRL_POD ==="
+            kubectl logs "$CTRL_POD" -n "$FMA_NAMESPACE" --tail=200
+          fi
+          echo ""
+          echo "--- Launcher-populator logs ---"
+          LP_POD=$(kubectl get pods -n "$FMA_NAMESPACE" \
+            -l app.kubernetes.io/component=launcher-populator \
+            -o jsonpath='{.items[0].metadata.name}' 2>/dev/null) || true
+          if [ -n "$LP_POD" ]; then
+            echo "=== Logs of $LP_POD ==="
+            kubectl logs "$LP_POD" -n "$FMA_NAMESPACE" --tail=200
+          fi
+
+      # -- Run E2E tests --
+      - name: Run E2E tests
+        env:
+          NAMESPACE: ${{ env.FMA_NAMESPACE }}
+          INST: ${{ steps.deploy-fma.outputs.INST }}
+          ISC: ${{ steps.deploy-fma.outputs.ISC }}
+          LC: ${{ steps.deploy-fma.outputs.LC }}
+          RS: ${{ steps.deploy-fma.outputs.RS }}
+          POLICIES_ENABLED: "false"
+          LIMIT: "600"
+        run: |
+          echo "Running E2E tests..."
+          echo "  NAMESPACE: $NAMESPACE"
+          echo "  INST: $INST"
+          echo "  ISC: $ISC"
+          echo "  LC: $LC"
+          echo "  RS: $RS"
+          if [ -f ./test/e2e/deploy_fma_e2e_tests.sh ]; then
+            ./test/e2e/deploy_fma_e2e_tests.sh
+          else
+            echo "WARNING: deploy_fma_e2e_tests.sh not found (expected from PR #332)"
+            echo "Skipping E2E test execution"
+          fi
+
+      # -- Debug dump: post-test state --
+      - name: Debug - Post-test state
+        if: always()
+        run: |
+          echo "=== Post-test state ==="
+          echo ""
+          echo "--- All pods (with labels) ---"
+          kubectl get pods -n "$FMA_NAMESPACE" -o wide --show-labels
+          echo ""
+          echo "--- All pods YAML ---"
+          kubectl get pods -n "$FMA_NAMESPACE" -o yaml
+          echo ""
+          echo "--- Events (sorted) ---"
+          kubectl get events -n "$FMA_NAMESPACE" --sort-by='.lastTimestamp'
+
+      - name: Debug - Pod logs
+        if: always()
+        run: |
+          echo "=== Pod logs ==="
+          for pod in $(kubectl get pods -n "$FMA_NAMESPACE" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+            echo ""
+            echo "=== Previous log of $pod ==="
+            kubectl logs -n "$FMA_NAMESPACE" "$pod" --previous || true
+            echo ""
+            echo "=== Current log of $pod ==="
+            kubectl logs -n "$FMA_NAMESPACE" "$pod" || true
+          done
+
+      - name: Debug - vLLM instance logs
+        if: always()
+        run: scripts/dump-launcher-vllm-logs.sh "$FMA_NAMESPACE"
+
+      # -- Cleanup --
+      - name: Clean up test objects
+        if: always()
+        env:
+          ISC: ${{ steps.deploy-fma.outputs.ISC }}
+          LC: ${{ steps.deploy-fma.outputs.LC }}
+          LPP: ${{ steps.deploy-fma.outputs.LPP }}
+          RS: ${{ steps.deploy-fma.outputs.RS }}
+        run: |
+          echo "Cleaning up test objects..."
+          kubectl delete rs "$RS" -n "$FMA_NAMESPACE" --ignore-not-found || true
+          kubectl delete launcherpopulationpolicy "$LPP" -n "$FMA_NAMESPACE" --ignore-not-found || true
+          kubectl delete inferenceserverconfig "$ISC" -n "$FMA_NAMESPACE" --ignore-not-found || true
+          kubectl delete launcherconfig "$LC" -n "$FMA_NAMESPACE" --ignore-not-found || true
+          sleep 10
+          echo "Test objects cleaned up"
+
+      - name: Cleanup infrastructure
+        if: always() && env.SKIP_CLEANUP != 'true'
+        run: |
+          echo "Cleaning up all FMA test infrastructure..."
+
+          for release in $(helm list -n "$FMA_NAMESPACE" -q 2>/dev/null); do
+            echo "  Uninstalling helm release: $release"
+            helm uninstall "$release" -n "$FMA_NAMESPACE" --ignore-not-found --wait --timeout 60s || true
+          done
+
+          # Remove dual-pods finalizers
+          for pod in $(kubectl get pods -n "$FMA_NAMESPACE" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+            all_finalizers=$(kubectl get pod "$pod" -n "$FMA_NAMESPACE" \
+              -o jsonpath='{range .metadata.finalizers[*]}{@}{"\n"}{end}' 2>/dev/null || true)
+            if ! echo "$all_finalizers" | grep -q '^dual-pods\.llm-d\.ai/'; then
+              continue
+            fi
+            keep_entries=$(echo "$all_finalizers" \
+              | grep -v '^dual-pods\.llm-d\.ai/' \
+              | awk 'NR>1{printf ","} {printf "\"%s\"", $0}')
+            kubectl patch pod "$pod" -n "$FMA_NAMESPACE" --type=merge \
+              -p="{\"metadata\":{\"finalizers\":[${keep_entries}]}}" 2>/dev/null || true
+          done
+
+          kubectl delete namespace "$FMA_NAMESPACE" --ignore-not-found --timeout=120s || true
+          kubectl delete clusterrole        "${FMA_RELEASE_NAME}-node-view" --ignore-not-found || true
+          kubectl delete clusterrolebinding "${FMA_RELEASE_NAME}-node-view" --ignore-not-found || true
+          echo "Cleanup complete"
+
+      - name: Remove test images from cluster nodes
+        if: always() && env.SKIP_CLEANUP != 'true'
+        run: scripts/rm-images-from-ocp-nodes.sh "${{ steps.images.outputs.launcher_image }}"
