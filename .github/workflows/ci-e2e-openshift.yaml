@@ -373,6 +373,17 @@ jobs:
           kubectl cluster-info
           kubectl get nodes
 
+      - name: Dump select info about each node with a GPU
+        run: |
+          for nodename in $(kubectl get nodes -l nvidia.com/gpu.present=true -o jsonpath='{.items[*].metadata.name}'); do
+            echo "For ${nodename}:"
+            echo "taints: $(kubectl get node $nodename -o jsonpath='{.spec.taints}')"
+            echo "conditions: $(kubectl get node $nodename -o jsonpath='{.status.conditions}' | jq .)"
+            echo "FMA images: $(kubectl get node $nodename -o jsonpath='{.status.images}' | jq '[ .[] | select(.names | any(contains("fast-model-actuation"))) | {"names":.names, "sizeMB":(.sizeBytes/1048576|floor) } ]')"
+            echo
+          done
+        continue-on-error: true
+
       - name: Detect cluster type
         run: |
           CLUSTER_DOMAIN=$(oc get ingress.config cluster -o jsonpath='{.spec.domain}')
@@ -919,8 +930,8 @@ jobs:
           echo "Test objects cleaned up"
 
       - name: Cleanup infrastructure
-        # Cleanup on success or cancellation, but NOT on failure (preserve for debugging)
-        if: (success() || cancelled()) && env.SKIP_CLEANUP != 'true'
+        # Cleanup unless told not to
+        if: always() && env.SKIP_CLEANUP != 'true'
         run: |
           echo "Cleaning up all FMA test infrastructure..."
           echo "  FMA_NAMESPACE: $FMA_NAMESPACE"
@@ -958,11 +969,9 @@ jobs:
 
           echo "Cleanup complete"
 
-      - name: Scale down controller on failure
-        if: failure()
-        run: |
-          echo "Test failed - scaling down controller to free resources while preserving for debugging..."
-          kubectl scale deployment "$FMA_RELEASE_NAME-dual-pods-controller" -n "$FMA_NAMESPACE" --replicas=0 || true
+      - name: Remove test images from cluster nodes
+        if: always() && env.SKIP_CLEANUP != 'true'
+        run: scripts/rm-images-from-ocp-nodes.sh "$LAUNCHER_IMAGE"
 
   # Report status back to PR for issue_comment triggered runs
   # This ensures fork PRs show the correct status after /ok-to-test runs complete
