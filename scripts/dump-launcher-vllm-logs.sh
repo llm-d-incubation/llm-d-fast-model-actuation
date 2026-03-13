@@ -2,15 +2,18 @@
 # Dump vLLM instance logs from all launcher pods.
 #
 # Usage: dump-launcher-vllm-logs.sh [namespace]
-#   namespace: Kubernetes namespace (default: default)
+#   namespace: Kubernetes namespace (defaults to kubectl current context)
 
 set -euo pipefail
 
-NAMESPACE="${1:-default}"
+NS_FLAG=()
+if [ -n "${1:-}" ]; then
+  NS_FLAG=(-n "$1")
+fi
 
-echo "Fetching vLLM instance logs from launcher pods in namespace: $NAMESPACE"
+echo "Fetching vLLM instance logs from launcher pods..."
 
-LAUNCHER_PODS=$(kubectl get pods -n "$NAMESPACE" \
+LAUNCHER_PODS=$(kubectl get pods "${NS_FLAG[@]}" \
   -l "dual-pods.llm-d.ai/launcher-config-name" \
   -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || true)
 
@@ -24,27 +27,27 @@ for LAUNCHER_POD in $LAUNCHER_PODS; do
   echo "=== Launcher pod: $LAUNCHER_POD ==="
   echo "=========================================="
 
-  kubectl port-forward -n "$NAMESPACE" "pod/$LAUNCHER_POD" 18001:8001 &
+  kubectl port-forward "${NS_FLAG[@]}" "pod/$LAUNCHER_POD" 18001:8001 &
   PF_PID=$!
   sleep 2
 
   # Get list of vLLM instances
   echo ""
   echo "=== vLLM instances status ==="
-  INSTANCES_JSON=$(curl -s "http://localhost:18001/v2/vllm/instances" 2>/dev/null || true)
+  INSTANCES_JSON=$(curl -s "http://localhost:18001/v2/vllm/instances" || true)
   echo "$INSTANCES_JSON" | jq . 2>/dev/null || echo "$INSTANCES_JSON"
 
   # Get instance IDs
   INSTANCE_IDS=$(echo "$INSTANCES_JSON" | jq -r '.instances[].instance_id // empty' 2>/dev/null || true)
 
   if [ -z "$INSTANCE_IDS" ]; then
-    echo "No vLLM instances found on this launcher"
+    echo "No vLLM instances found on launcher: $LAUNCHER_POD"
   else
     # Fetch logs for each instance
     for id in $INSTANCE_IDS; do
       echo ""
-      echo "=== vLLM instance $id logs ==="
-      curl -s "http://localhost:18001/v2/vllm/instances/$id/log" 2>/dev/null || true
+      echo "=== vLLM instance $id log ==="
+      curl -s "http://localhost:18001/v2/vllm/instances/$id/log" || true
       echo ""
     done
   fi

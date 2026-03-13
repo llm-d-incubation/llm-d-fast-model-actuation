@@ -106,4 +106,4 @@ jobs:
 
       - name: show vLLM instance logs from launchers
         if: always()
-        run: ./scripts/dump-launcher-vllm-logs.sh
+        run: scripts/dump-launcher-vllm-logs.sh

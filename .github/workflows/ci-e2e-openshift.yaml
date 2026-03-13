@@ -760,8 +760,6 @@ jobs:
             fi
             if [ "$ELAPSED" -ge "$LIMIT" ]; then
               echo "::error::Requester pod did not appear within ${LIMIT}s"
-              kubectl get pods -n "$FMA_NAMESPACE" -o wide
-              kubectl get events -n "$FMA_NAMESPACE" --sort-by='.lastTimestamp' | tail -20
               exit 1
             fi
             sleep 5
@@ -786,8 +784,6 @@ jobs:
             fi
             if [ "$ELAPSED" -ge "$LIMIT" ]; then
               echo "::error::Launcher-populator did not create expected $GPU_NODES launcher(s) within ${LIMIT}s (found: $COUNT)"
-              kubectl get pods -n "$FMA_NAMESPACE" -o wide
-              kubectl get events -n "$FMA_NAMESPACE" --sort-by='.lastTimestamp' | tail -20
               exit 1
             fi
             sleep 5
@@ -819,7 +815,6 @@ jobs:
             fi
             if [ "$ELAPSED" -ge "$LIMIT" ]; then
               echo "::error::Launcher-to-requester binding not established within ${LIMIT}s"
-              kubectl get pods -n "$FMA_NAMESPACE" -o wide --show-labels
               exit 1
             fi
             sleep 5
@@ -838,7 +833,6 @@ jobs:
             if [ "$ELAPSED" -ge "$LIMIT" ]; then
               echo "::error::Requester-to-launcher binding not established within ${LIMIT}s"
               echo "  Requester dual label: '$REQUESTER_DUAL' (expected: '$LAUNCHER')"
-              kubectl get pods -n "$FMA_NAMESPACE" -o wide --show-labels
               exit 1
             fi
             sleep 5
@@ -881,7 +875,7 @@ jobs:
 
       - name: Dump vLLM instance logs from launchers
         if: always()
-        run: ./scripts/dump-launcher-vllm-logs.sh "$FMA_NAMESPACE"
+        run: scripts/dump-launcher-vllm-logs.sh "$FMA_NAMESPACE"
 
       - name: Clean up test objects
         if: always()
