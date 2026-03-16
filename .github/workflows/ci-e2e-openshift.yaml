@@ -338,9 +338,9 @@ jobs:
       FMA_NAMESPACE: fma-e2e-pr-${{ needs.gate.outputs.pr_number || github.run_id }}
       # Unique release name per run to avoid conflicts
       FMA_RELEASE_NAME: fma-e2e-${{ github.run_id }}
-      # Use the images built in the previous job
-      CONTROLLER_IMAGE: ${{ needs.build-image.outputs.controller_image }}
-      REQUESTER_IMAGE: ${{ needs.build-image.outputs.requester_image }}
+      # Image registry and tag from the build job
+      IMAGE_TAG: ${{ needs.build-image.outputs.image_tag }}
+      # LAUNCHER_IMAGE is still needed by cleanup step (rm-images-from-ocp-nodes.sh)
       LAUNCHER_IMAGE: ${{ needs.build-image.outputs.launcher_image }}
     steps:
       - name: Checkout source
@@ -467,11 +467,12 @@ jobs:
       - name: Deploy FMA (CRDs, controllers, test objects)
         id: deploy-fma
         env:
-          CONTROLLER_IMAGE: ${{ env.CONTROLLER_IMAGE }}
-          REQUESTER_IMAGE: ${{ env.REQUESTER_IMAGE }}
-          LAUNCHER_IMAGE: ${{ env.LAUNCHER_IMAGE }}
+          CONTAINER_IMG_REG: ghcr.io/${{ github.repository }}
+          IMAGE_TAG: ${{ env.IMAGE_TAG }}
           LIMIT: "600"
         run: |
+          # Ensure registry is lowercase (GitHub requirement)
+          export CONTAINER_IMG_REG="${CONTAINER_IMG_REG,,}"
           echo "Running deploy_fma.sh..."
           ./test/e2e/deploy_fma.sh
 

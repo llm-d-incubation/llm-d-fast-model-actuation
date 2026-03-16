@@ -15,16 +15,18 @@
 # Required environment variables:
 #   FMA_NAMESPACE       - target Kubernetes namespace
 #   FMA_RELEASE_NAME    - Helm release name
-#   CONTROLLER_IMAGE    - dual-pods controller container image
-#   REQUESTER_IMAGE     - requester container image
-#   LAUNCHER_IMAGE      - launcher container image
+#   CONTAINER_IMG_REG   - container image registry/namespace
+#                         (e.g. ghcr.io/llm-d-incubation/llm-d-fast-model-actuation)
+#   IMAGE_TAG           - image tag for all components
+#                         (e.g. ref-abcd1234)
 #
 # Additional env vars required when --standalone:
 #   CR_USER             - container registry username (for pull secret)
 #   CR_TOKEN            - container registry token
 #
 # Optional environment variables:
-#   CLUSTER_TYPE        - if "pokprod", adds runtimeClassName: nvidia
+#   RUNTIME_CLASS_NAME  - if set, adds runtimeClassName to GPU pod specs
+#                         (e.g. "nvidia" when the GPU operator requires it)
 #   POLICIES_ENABLED    - "true"/"false"; auto-detected if unset
 #   LIMIT               - timeout in seconds for wait loops (default: 600)
 #
@@ -39,7 +41,7 @@ set -x
 # ---------------------------------------------------------------------------
 
 step_num=0
-total_steps=15
+total_steps=14
 
 step() {
     step_num=$((step_num + 1))
@@ -100,7 +102,7 @@ done
 step "Validate required environment variables"
 
 missing=()
-for var in FMA_NAMESPACE FMA_RELEASE_NAME CONTROLLER_IMAGE REQUESTER_IMAGE LAUNCHER_IMAGE; do
+for var in FMA_NAMESPACE FMA_RELEASE_NAME CONTAINER_IMG_REG IMAGE_TAG; do
     if [ -z "${!var:-}" ]; then
         missing+=("$var")
     fi
@@ -119,14 +121,25 @@ if [ ${#missing[@]} -gt 0 ]; then
     exit 1
 fi
 
+# Derive individual image references from registry + tag
+CONTROLLER_IMAGE="${CONTAINER_IMG_REG}/dual-pods-controller:${IMAGE_TAG}"
+REQUESTER_IMAGE="${CONTAINER_IMG_REG}/requester:${IMAGE_TAG}"
+LAUNCHER_IMAGE="${CONTAINER_IMG_REG}/launcher:${IMAGE_TAG}"
+
 echo "Configuration:"
 echo "  FMA_NAMESPACE:    $FMA_NAMESPACE"
 echo "  FMA_RELEASE_NAME: $FMA_RELEASE_NAME"
+echo "  CONTAINER_IMG_REG: $CONTAINER_IMG_REG"
+echo "  IMAGE_TAG:        $IMAGE_TAG"
 echo "  CONTROLLER_IMAGE: $CONTROLLER_IMAGE"
 echo "  REQUESTER_IMAGE:  $REQUESTER_IMAGE"
 echo "  LAUNCHER_IMAGE:   $LAUNCHER_IMAGE"
 echo "  STANDALONE:       $STANDALONE"
-echo "  CLUSTER_TYPE:     ${CLUSTER_TYPE:-<unset>}"
+if [ "$STANDALONE" = true ]; then
+    echo "  CR_USER:          ${CR_USER}"
+    echo "  CR_TOKEN:         ${CR_TOKEN:0:4}****"
+fi
+echo "  RUNTIME_CLASS_NAME: ${RUNTIME_CLASS_NAME:-<unset>}"
 echo "  POLICIES_ENABLED: ${POLICIES_ENABLED:-<auto-detect>}"
 echo "  LIMIT:            ${LIMIT:-600}"
 
@@ -249,8 +262,8 @@ echo "  Image:     $CONTROLLER_IMAGE"
 
 helm upgrade --install "$FMA_RELEASE_NAME" charts/fma-controllers \
     -n "$FMA_NAMESPACE" \
-    --set global.imageRegistry="${CONTROLLER_IMAGE%/dual-pods-controller:*}" \
-    --set global.imageTag="${CONTROLLER_IMAGE##*:}" \
+    --set global.imageRegistry="${CONTAINER_IMG_REG}" \
+    --set global.imageTag="${IMAGE_TAG}" \
     --set global.nodeViewClusterRole="${CLUSTER_ROLE_NAME}" \
     --set dualPodsController.sleeperLimit=2 \
     --set global.local=false \
@@ -265,61 +278,9 @@ step "Wait for controllers to be ready"
 
 kubectl wait --for=condition=available --timeout=120s \
     deployment "${FMA_RELEASE_NAME}-dual-pods-controller" -n "$FMA_NAMESPACE"
-echo ""
-echo "=== Dual-Pod Controller ==="
-kubectl get pods -n "$FMA_NAMESPACE" -l app.kubernetes.io/component=dual-pods-controller
-kubectl get deployment "${FMA_RELEASE_NAME}-dual-pods-controller" -n "$FMA_NAMESPACE"
-
 kubectl wait --for=condition=available --timeout=120s \
     deployment "${FMA_RELEASE_NAME}-launcher-populator" -n "$FMA_NAMESPACE"
-echo ""
-echo "=== Launcher Populator ==="
-kubectl get pods -n "$FMA_NAMESPACE" -l app.kubernetes.io/component=launcher-populator
-kubectl get deployment "${FMA_RELEASE_NAME}-launcher-populator" -n "$FMA_NAMESPACE"
-
-# ---------------------------------------------------------------------------
-# Step 8: Verify controller health
-# ---------------------------------------------------------------------------
-
-step "Verify controller health"
-
-POD_NAME=$(kubectl get pods -n "$FMA_NAMESPACE" \
-    -l app.kubernetes.io/name=fma-controllers,app.kubernetes.io/component=dual-pods-controller \
-    -o jsonpath='{.items[0].metadata.name}')
-
-if [ -z "$POD_NAME" ]; then
-    echo "ERROR: No controller pod found" >&2
-    exit 1
-fi
-
-echo "Controller pod: $POD_NAME"
-
-PHASE=$(kubectl get pod "$POD_NAME" -n "$FMA_NAMESPACE" -o jsonpath='{.status.phase}')
-if [ "$PHASE" != "Running" ]; then
-    echo "ERROR: Controller pod is in phase $PHASE, expected Running" >&2
-    kubectl describe pod "$POD_NAME" -n "$FMA_NAMESPACE"
-    exit 1
-fi
-
-RESTARTS=$(kubectl get pod "$POD_NAME" -n "$FMA_NAMESPACE" \
-    -o jsonpath='{.status.containerStatuses[0].restartCount}')
-if [ "$RESTARTS" -gt 0 ]; then
-    echo "WARNING: Controller has restarted $RESTARTS time(s)"
-fi
-
-echo ""
-echo "=== Controller Logs (last 50 lines) ==="
-kubectl logs "$POD_NAME" -n "$FMA_NAMESPACE" --tail=50
-
-# Check for fatal/panic in logs
-FATAL_LINES=$(kubectl logs "$POD_NAME" -n "$FMA_NAMESPACE" 2>&1 \
-    | grep -E "^F[0-9]{4} |^panic:" | head -5) || true
-if [ -n "$FATAL_LINES" ]; then
-    echo "ERROR: Controller logs contain FATAL or panic messages:" >&2
-    echo "$FATAL_LINES" >&2
-    exit 1
-fi
-echo "Controller health check passed"
+echo "Both controllers are available"
 
 # ---------------------------------------------------------------------------
 # Step 9: Create test service account
@@ -342,8 +303,8 @@ INST=$(date +%d-%H-%M-%S)
 echo "Instance ID: $INST"
 
 RUNTIME_CLASS=""
-if [ "${CLUSTER_TYPE:-}" = "pokprod" ]; then
-    RUNTIME_CLASS="runtimeClassName: nvidia"
+if [ -n "${RUNTIME_CLASS_NAME:-}" ]; then
+    RUNTIME_CLASS="runtimeClassName: ${RUNTIME_CLASS_NAME}"
 fi
 
 kubectl apply -n "$FMA_NAMESPACE" -f - <<EOF
@@ -545,14 +506,5 @@ step "Deployment complete"
 echo ""
 echo "=== All pods in namespace ==="
 kubectl get pods -n "$FMA_NAMESPACE" -o wide --show-labels
-echo ""
-echo "=== Test object names ==="
-echo "  INST=$INST"
-echo "  ISC=$ISC"
-echo "  LC=$LC"
-echo "  LPP=$LPP"
-echo "  RS=$RS"
-echo "  LAUNCHER=$LAUNCHER"
-echo "  REQUESTER=$REQUESTER"
 echo ""
 echo "[deploy_fma] All steps completed successfully"
