@@ -547,7 +547,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		}
 		return err, true
 	}
-	serverDat.Sleeping = ptr.To(false)
+	serverDat.Sleeping = nil
 	logger.V(2).Info("Created launcher-based server-providing pod", "name", echo.Name, "gpus", serverDat.GPUIDsStr, "annotations", echo.Annotations, "labels", echo.Labels, "resourceVersion", echo.ResourceVersion)
 
 	return ctl.ensureReqStatus(ctx, requestingPod, serverDat)
