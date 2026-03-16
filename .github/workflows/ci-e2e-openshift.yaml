@@ -464,7 +464,7 @@ jobs:
             -p '{"imagePullSecrets": [{"name": "ghcr-pull-secret"}]}'
           echo "GHCR pull secret created and attached to default SA"
 
-      - name: Deploy FMA (CRDs, controllers, test objects)
+      - name: Deploy FMA (CRDs and controllers)
         id: deploy-fma
         env:
           CONTAINER_IMG_REG: ghcr.io/${{ github.repository }}
@@ -503,23 +503,6 @@ jobs:
       - name: Dump vLLM instance logs from launchers
         if: always()
         run: scripts/dump-launcher-vllm-logs.sh "$FMA_NAMESPACE"
-
-      - name: Clean up test objects
-        if: always()
-        env:
-          ISC: ${{ steps.deploy-fma.outputs.ISC }}
-          LC: ${{ steps.deploy-fma.outputs.LC }}
-          LPP: ${{ steps.deploy-fma.outputs.LPP }}
-          RS: ${{ steps.deploy-fma.outputs.RS }}
-        run: |
-          echo "Cleaning up test objects..."
-          kubectl delete rs "$RS" -n "$FMA_NAMESPACE" --ignore-not-found || true
-          kubectl delete launcherpopulationpolicy "$LPP" -n "$FMA_NAMESPACE" --ignore-not-found || true
-          kubectl delete inferenceserverconfig "$ISC" -n "$FMA_NAMESPACE" --ignore-not-found || true
-          kubectl delete launcherconfig "$LC" -n "$FMA_NAMESPACE" --ignore-not-found || true
-          # Wait for test pods to terminate
-          sleep 10
-          echo "Test objects cleaned up"
 
       - name: Cleanup infrastructure
         # Cleanup unless told not to

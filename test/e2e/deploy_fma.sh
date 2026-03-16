@@ -3,9 +3,8 @@
 # Usage: $0 [--standalone]
 # Current working directory must be the root of the Git repository.
 #
-# Deploys the FMA controllers (dual-pods controller + launcher-populator),
-# creates test objects (ISC, LC, LPP, ReplicaSet), and verifies that pods
-# are created, bound, and ready.
+# Deploys the FMA controllers (dual-pods controller + launcher-populator)
+# and waits for them to be available.
 #
 # By default the script assumes it runs inside the ci-e2e-openshift.yaml
 # workflow, which has already created the namespace, GHCR pull secret, and
@@ -29,10 +28,6 @@
 #                         (e.g. "nvidia" when the GPU operator requires it)
 #   POLICIES_ENABLED    - "true"/"false"; auto-detected if unset
 #   LIMIT               - timeout in seconds for wait loops (default: 600)
-#
-# Outputs (written to $GITHUB_OUTPUT when set, and exported):
-#   INST, ISC, LC, LPP, RS
-
 set -euo pipefail
 set -x
 
@@ -41,7 +36,7 @@ set -x
 # ---------------------------------------------------------------------------
 
 step_num=0
-total_steps=14
+total_steps=7
 
 step() {
     step_num=$((step_num + 1))
@@ -50,37 +45,6 @@ step() {
     echo "[deploy_fma] Step ${step_num}/${total_steps}: $*"
     echo "========================================"
     echo ""
-}
-
-output() {
-    local key="$1" val="$2"
-    export "$key=$val"
-    if [ -n "${GITHUB_OUTPUT:-}" ]; then
-        echo "${key}=${val}" >> "$GITHUB_OUTPUT"
-    fi
-}
-
-wait_loop() {
-    local description="$1"
-    local check_cmd="$2"
-    local limit="${LIMIT:-600}"
-    local elapsed=0
-    local start
-    start=$(date)
-
-    echo "Waiting for: ${description} (limit: ${limit}s)"
-    while true; do
-        if eval "$check_cmd"; then
-            echo "OK: ${description} (after ${elapsed}s)"
-            return 0
-        fi
-        if (( elapsed >= limit )); then
-            echo "TIMEOUT: ${description} (from $start to $(date))" >&2
-            return 1
-        fi
-        sleep 5
-        elapsed=$(( elapsed + 5 ))
-    done
 }
 
 # ---------------------------------------------------------------------------
@@ -282,229 +246,5 @@ kubectl wait --for=condition=available --timeout=120s \
     deployment "${FMA_RELEASE_NAME}-launcher-populator" -n "$FMA_NAMESPACE"
 echo "Both controllers are available"
 
-# ---------------------------------------------------------------------------
-# Step 9: Create test service account
-# ---------------------------------------------------------------------------
-
-step "Create test service account"
-
-kubectl create sa testreq -n "$FMA_NAMESPACE" || true
-kubectl patch serviceaccount testreq -n "$FMA_NAMESPACE" \
-    -p '{"imagePullSecrets": [{"name": "ghcr-pull-secret"}]}'
-echo "Service account testreq ready"
-
-# ---------------------------------------------------------------------------
-# Step 10: Create test objects (ISC, LC, LPP, ReplicaSet)
-# ---------------------------------------------------------------------------
-
-step "Create test objects"
-
-INST=$(date +%d-%H-%M-%S)
-echo "Instance ID: $INST"
-
-RUNTIME_CLASS=""
-if [ -n "${RUNTIME_CLASS_NAME:-}" ]; then
-    RUNTIME_CLASS="runtimeClassName: ${RUNTIME_CLASS_NAME}"
-fi
-
-kubectl apply -n "$FMA_NAMESPACE" -f - <<EOF
-apiVersion: fma.llm-d.ai/v1alpha1
-kind: InferenceServerConfig
-metadata:
-  name: inference-server-config-${INST}
-spec:
-  modelServerConfig:
-    port: 8005
-    options: "--model TinyLlama/TinyLlama-1.1B-Chat-v1.0"
-    env_vars:
-      VLLM_SERVER_DEV_MODE: "1"
-      VLLM_USE_V1: "1"
-      VLLM_LOGGING_LEVEL: "DEBUG"
-    labels:
-      component: inference
-    annotations:
-      description: "E2E test InferenceServerConfig"
-  launcherConfigName: launcher-config-${INST}
----
-apiVersion: fma.llm-d.ai/v1alpha1
-kind: LauncherConfig
-metadata:
-  name: launcher-config-${INST}
-spec:
-  maxSleepingInstances: 3
-  podTemplate:
-    spec:
-      ${RUNTIME_CLASS}
-      imagePullSecrets:
-        - name: ghcr-pull-secret
-      containers:
-        - name: inference-server
-          image: ${LAUNCHER_IMAGE}
-          imagePullPolicy: Always
-          command:
-          - /app/launcher.py
-          - --host=0.0.0.0
-          - --log-level=info
-          - --port=8001
-          env:
-          - name: HF_HOME
-            value: "/tmp"
-          - name: VLLM_CACHE_ROOT
-            value: "/tmp"
-          - name: FLASHINFER_WORKSPACE_BASE
-            value: "/tmp"
-          - name: TRITON_CACHE_DIR
-            value: "/tmp"
-          - name: XDG_CACHE_HOME
-            value: "/tmp"
-          - name: XDG_CONFIG_HOME
-            value: "/tmp"
----
-apiVersion: fma.llm-d.ai/v1alpha1
-kind: LauncherPopulationPolicy
-metadata:
-  name: lpp-${INST}
-spec:
-  enhancedNodeSelector:
-    labelSelector:
-      matchLabels:
-        nvidia.com/gpu.present: "true"
-  countForLauncher:
-    - launcherConfigName: launcher-config-${INST}
-      launcherCount: 1
----
-apiVersion: apps/v1
-kind: ReplicaSet
-metadata:
-  name: my-request-${INST}
-  labels:
-    app: dp-example
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: dp-example
-  template:
-    metadata:
-      labels:
-        app: dp-example
-        instance: "${INST}"
-      annotations:
-        dual-pods.llm-d.ai/admin-port: "8081"
-        dual-pods.llm-d.ai/inference-server-config: "inference-server-config-${INST}"
-    spec:
-      ${RUNTIME_CLASS}
-      imagePullSecrets:
-        - name: ghcr-pull-secret
-      containers:
-        - name: inference-server
-          image: ${REQUESTER_IMAGE}
-          imagePullPolicy: Always
-          ports:
-          - name: probes
-            containerPort: 8080
-          - name: spi
-            containerPort: 8081
-          readinessProbe:
-            httpGet:
-              path: /ready
-              port: 8080
-            initialDelaySeconds: 2
-            periodSeconds: 5
-          resources:
-            limits:
-              nvidia.com/gpu: "1"
-              cpu: "200m"
-              memory: 250Mi
-      serviceAccount: testreq
-EOF
-
-ISC="inference-server-config-${INST}"
-LC="launcher-config-${INST}"
-LPP="lpp-${INST}"
-RS="my-request-${INST}"
-
-output "INST" "$INST"
-output "ISC" "$ISC"
-output "LC" "$LC"
-output "LPP" "$LPP"
-output "RS" "$RS"
-
-echo "Test objects created: ISC=$ISC LC=$LC LPP=$LPP RS=$RS"
-
-# ---------------------------------------------------------------------------
-# Step 11: Wait for launcher pod creation
-# ---------------------------------------------------------------------------
-
-step "Wait for launcher pod creation"
-
-# Count schedulable GPU nodes — launcher-populator creates one per node
-GPU_NODES=$(kubectl get nodes -l nvidia.com/gpu.present=true --field-selector spec.unschedulable!=true -o name | wc -l | tr -d ' ')
-echo "Expecting launcher-populator to create $GPU_NODES launcher(s)"
-
-wait_loop "launcher pod(s) created" \
-    '[ "$(kubectl get pods -n "$FMA_NAMESPACE" -l "dual-pods.llm-d.ai/launcher-config-name=$LC" -o json 2>/dev/null | jq ".items | length")" -ge "$GPU_NODES" ]'
-
-kubectl get pods -n "$FMA_NAMESPACE" -l "dual-pods.llm-d.ai/launcher-config-name=$LC" -o wide
-
-# ---------------------------------------------------------------------------
-# Step 12: Wait for launcher pod(s) Ready
-# ---------------------------------------------------------------------------
-
-step "Wait for launcher pod(s) Ready"
-
-# Launcher image is ~20GB, allow extra time for uncached pulls
-kubectl wait pods --for=condition=Ready -n "$FMA_NAMESPACE" \
-    -l "dual-pods.llm-d.ai/launcher-config-name=$LC" --timeout="${LIMIT:-600}s"
-echo "All launcher pods Ready"
-
-# ---------------------------------------------------------------------------
-# Step 13: Verify bidirectional launcher↔requester binding
-# ---------------------------------------------------------------------------
-
-step "Verify launcher-requester binding"
-
-# Find the requester pod
-echo "Waiting for requester pod..."
-wait_loop "requester pod exists" \
-    '[ "$(kubectl get pods -n "$FMA_NAMESPACE" -l "app=dp-example,instance=$INST" -o json 2>/dev/null | jq ".items | length")" -ge 1 ]'
-
-REQUESTER=$(kubectl get pods -n "$FMA_NAMESPACE" -l "app=dp-example,instance=$INST" -o json | jq -r '.items[0].metadata.name')
-echo "Requester pod: $REQUESTER"
-
-# Verify launcher→requester binding
-echo "Verifying launcher-to-requester binding..."
-wait_loop "launcher bound to requester" \
-    '[ -n "$(kubectl get pods -n "$FMA_NAMESPACE" -l "dual-pods.llm-d.ai/launcher-config-name=$LC,dual-pods.llm-d.ai/dual=$REQUESTER" -o json | jq -r ".items[0].metadata.name // empty")" ]'
-
-LAUNCHER=$(kubectl get pods -n "$FMA_NAMESPACE" \
-    -l "dual-pods.llm-d.ai/launcher-config-name=$LC,dual-pods.llm-d.ai/dual=$REQUESTER" \
-    -o json | jq -r '.items[0].metadata.name')
-echo "Launcher bound to requester: $LAUNCHER -> $REQUESTER"
-
-# Verify requester→launcher binding (reverse)
-echo "Verifying requester-to-launcher binding..."
-wait_loop "requester bound to launcher" \
-    '[ "$(kubectl get pod "$REQUESTER" -n "$FMA_NAMESPACE" -o json | jq -r ".metadata.labels[\"dual-pods.llm-d.ai/dual\"] // empty")" = "$LAUNCHER" ]'
-echo "Requester bound to launcher: $REQUESTER -> $LAUNCHER"
-
-# ---------------------------------------------------------------------------
-# Step 14: Wait for requester Ready
-# ---------------------------------------------------------------------------
-
-step "Wait for requester Ready"
-
-kubectl wait --for=condition=Ready "pod/$REQUESTER" -n "$FMA_NAMESPACE" --timeout=120s
-echo "Requester pod Ready"
-
-# ---------------------------------------------------------------------------
-# Step 15: Final status
-# ---------------------------------------------------------------------------
-
-step "Deployment complete"
-
-echo ""
-echo "=== All pods in namespace ==="
-kubectl get pods -n "$FMA_NAMESPACE" -o wide --show-labels
 echo ""
 echo "[deploy_fma] All steps completed successfully"
