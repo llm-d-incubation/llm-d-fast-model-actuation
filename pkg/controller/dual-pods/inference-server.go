@@ -62,27 +62,63 @@ func (ni nodeItem) process(ctx context.Context, ctl *controller) (error, bool) {
 	ctx = klog.NewContext(ctx, logger)
 	nodeDat := ctl.getNodeData(ni.NodeName)
 	items := nodeDat.yankItems()
-	var retries int
-	logger.V(4).Info("Processing items for node", "count", len(items))
+	var launcherItems []itemOnNode
+	var otherItems []itemOnNode
 	for localItem := range items {
-		logger.V(4).Info("Processing node-local item", "item", localItem)
-		err, retry := localItem.process(ctx, ctl, nodeDat)
-		if err != nil {
-			if retry {
-				logger.Info("Processing node local item suffered transient error, will retry", "item", localItem, "err", err)
-			} else {
-				logger.Error(err, "Processing node local item failed", "item", localItem)
-			}
-		} else {
-			logger.V(4).Info("Finished processing node-local item", "item", localItem, "willRetry", retry)
+		if _, ok := localItem.(launcherPodItem); ok {
+			launcherItems = append(launcherItems, localItem)
+			continue
 		}
-		if retry {
-			nodeDat.add(localItem)
-			retries++
+		otherItems = append(otherItems, localItem)
+	}
+	var retries int
+	logger.V(4).Info("Processing items for node", "count", len(items), "launcherItems", len(launcherItems), "otherItems", len(otherItems))
+	processItems := func(localItems []itemOnNode) {
+		for _, localItem := range localItems {
+			logger.V(4).Info("Processing node-local item", "item", localItem)
+			err, retry := localItem.process(ctx, ctl, nodeDat)
+			if err != nil {
+				if retry {
+					logger.Info("Processing node local item suffered transient error, will retry", "item", localItem, "err", err)
+				} else {
+					logger.Error(err, "Processing node local item failed", "item", localItem)
+				}
+			} else {
+				logger.V(4).Info("Finished processing node-local item", "item", localItem, "willRetry", retry)
+			}
+			if retry {
+				nodeDat.add(localItem)
+				retries++
+			}
 		}
 	}
+	processItems(launcherItems)
+	processItems(otherItems)
 	logger.V(4).Info("Done processing items for node", "numToRetry", retries)
 	return nil, retries > 0
+}
+
+func (item launcherPodItem) process(ctx context.Context, ctl *controller, nodeDat *nodeData) (error, bool) {
+	logger := klog.FromContext(ctx).WithValues("launcherPod", item.LauncherPodName, "node", item.NodeName)
+	ctx = klog.NewContext(ctx, logger)
+
+	launcherPod, err := ctl.podLister.Pods(ctl.namespace).Get(item.LauncherPodName)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			logger.V(2).Info("Launcher pod deleted, cleaning up launcher data")
+			ctl.clearLauncherData(nodeDat, item.LauncherPodName)
+			ctl.enqueueRequestersOnNode(ctx, item.NodeName, "launcher pod deleted")
+			return nil, false
+		}
+		return err, true
+	}
+
+	err, retry := ctl.syncLauncherInstances(ctx, nodeDat, launcherPod)
+	if err != nil || retry {
+		return err, retry
+	}
+	ctl.enqueueRequestersOnNode(ctx, item.NodeName, "launcher pod synced")
+	return nil, false
 }
 
 func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *nodeData) (error, bool) {
@@ -588,6 +624,17 @@ func (ctl *controller) selectBestLauncherPod(
 			continue
 		}
 
+		launcherDat := ctl.getLauncherData(nodeDat, launcherPod.Name)
+		if !launcherDat.Accurate {
+			nodeDat.add(launcherPodItem{
+				LauncherPodName: launcherPod.Name,
+				NodeName:        launcherPod.Spec.NodeName,
+			})
+			logger.V(4).Info("Launcher pod state is not synced yet, enqueued launcher sync item", "name", launcherPod.Name)
+			somePodsNotReady = true
+			continue
+		}
+
 		launcherBaseURL := fmt.Sprintf("http://%s:%d", launcherPod.Status.PodIP, ctlrcommon.LauncherServicePort)
 		lClient, err := NewLauncherClient(launcherBaseURL)
 		if err != nil {
@@ -595,14 +642,12 @@ func (ctl *controller) selectBestLauncherPod(
 			continue
 		}
 
-		// Query instances from this launcher
+		// Query instances from this launcher.
 		insts, err := lClient.ListInstances(ctx)
 		if err != nil {
 			logger.V(5).Info("Failed to list instances from launcher, skipping Pod", "name", launcherPod.Name, "err", err)
 			continue
 		}
-
-		launcherDat := ctl.getLauncherData(nodeDat, launcherPod.Name)
 
 		// Check if this launcher has a sleeping instance matching the iscHash
 		if _, instExists := launcherDat.Instances[iscHash]; instExists {
@@ -1236,6 +1281,52 @@ func doPost(url string) error {
 var coreScheme *k8sruntime.Scheme
 var codecFactory k8sserializer.CodecFactory
 var podDecoder k8sruntime.Decoder
+
+// syncLauncherInstances queries the launcher pod for its current instances
+// and updates the controller's internal launcherData state.
+// This is called for both bound and unbound launcher pods.
+func (ctl *controller) syncLauncherInstances(ctx context.Context, nodeDat *nodeData, launcherPod *corev1.Pod) (error, bool) {
+	logger := klog.FromContext(ctx)
+
+	if launcherPod.Status.PodIP == "" || !utils.IsPodReady(launcherPod) {
+		logger.V(5).Info("Launcher pod not ready yet, waiting for another Pod event", "name", launcherPod.Name)
+		return nil, false
+	}
+
+	launcherBaseURL := fmt.Sprintf("http://%s:%d", launcherPod.Status.PodIP, ctlrcommon.LauncherServicePort)
+	lClient, err := NewLauncherClient(launcherBaseURL)
+	if err != nil {
+		logger.Error(err, "Failed to create launcher client")
+		return err, true
+	}
+
+	insts, err := lClient.ListInstances(ctx)
+	if err != nil {
+		logger.Error(err, "Failed to list instances from launcher")
+		return err, true
+	}
+
+	launcherDat := ctl.getLauncherData(nodeDat, launcherPod.Name)
+	newInstances := make(map[string]time.Time)
+	for _, inst := range insts.Instances {
+		if lastUsed, exists := launcherDat.Instances[inst.InstanceID]; exists {
+			newInstances[inst.InstanceID] = lastUsed
+		} else {
+			newInstances[inst.InstanceID] = time.Now()
+		}
+	}
+
+	launcherDat.Instances = newInstances
+	launcherDat.Accurate = true
+
+	logger.V(2).Info("Synced launcher instances",
+		"launcherPod", launcherPod.Name,
+		"totalInstances", insts.TotalInstances,
+		"runningInstances", insts.RunningInstances,
+		"instanceCount", len(newInstances))
+
+	return nil, false
+}
 
 func init() {
 	coreScheme = k8sruntime.NewScheme()

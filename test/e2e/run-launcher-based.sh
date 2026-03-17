@@ -370,6 +370,92 @@ kubectl wait --for condition=Ready pod/$launcherlb --timeout=5s
 
 cheer Successful switching instances in one launcher
 
+: Controller Restart State Recovery
+
+# This test verifies that the controller can rebuild its internal state after restart
+# by syncing launcher instances from unbound launcher pods
+
+# Scale requester to 0 to create sleeping instances
+kubectl scale rs $rslb --replicas=0
+
+expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | wc -l | grep -w 0"
+
+# Verify launcher set is unchanged and target launcher is unbound
+launcher_count_pre_restart=$(kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | grep -c '^pod/')
+kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | sed s%pod/%% | grep -x "$launcherlb"
+expect '[ "$(kubectl get pod $launcherlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "" ]'
+
+# Verify launcher has sleeping instances before restart
+launcher_instances_before=$(kubectl exec $launcherlb -- python3 -c 'import json,urllib.request; print(json.load(urllib.request.urlopen("http://127.0.0.1:8001/v2/vllm/instances"))["total_instances"])')
+echo "Launcher has $launcher_instances_before instances before controller restart"
+[ "$launcher_instances_before" -gt "0" ]
+
+# Restart the dual-pods controller to test state recovery
+echo "Restarting dual-pods controller..."
+kubectl rollout restart deployment fma-dual-pods-controller
+kubectl rollout status deployment fma-dual-pods-controller --timeout=60s
+
+# Wait for controller to be ready
+sleep 10
+
+# Verify launcher pod set is unchanged and target launcher is still running
+expect "kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | grep -c '^pod/' | grep -w $launcher_count_pre_restart"
+kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | sed s%pod/%% | grep -x "$launcherlb"
+
+# Verify launcher still has the same instances after controller restart
+launcher_instances_after=$(kubectl exec $launcherlb -- python3 -c 'import json,urllib.request; print(json.load(urllib.request.urlopen("http://127.0.0.1:8001/v2/vllm/instances"))["total_instances"])')
+echo "Launcher has $launcher_instances_after instances after controller restart"
+[ "$launcher_instances_after" == "$launcher_instances_before" ]
+
+# Now scale up requester - controller should correctly select the launcher with sleeping instance
+# Use isc2 which should have a sleeping instance from before
+kubectl patch rs $rslb --type=json -p='[{"op": "replace", "path": "/spec/template/metadata/annotations/dual-pods.llm-d.ai~1inference-server-config", "value": "'$isc2'"}]'
+kubectl scale rs $rslb --replicas=1
+
+expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | grep -c '^pod/' | grep -w 1"
+reqlb_post_restart=$(kubectl get pods -o name -l app=dp-example,instance=$instlb | sed s%pod/%%)
+
+# Verify requester is bound to the same launcher (controller recovered state correctly)
+expect '[ "$(kubectl get pod $reqlb_post_restart -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcherlb" ]'
+expect '[ "$(kubectl get pod $launcherlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$reqlb_post_restart" ]'
+
+# Verify requester becomes ready (fast wake-up path should work)
+date
+kubectl wait --for condition=Ready pod/$reqlb_post_restart --timeout=30s
+kubectl wait --for condition=Ready pod/$launcherlb --timeout=5s
+
+cheer Successful controller restart state recovery
+
+: Unbound Launcher Deletion Cleanup
+
+# This test verifies that deleting an unbound launcher does not leave the controller
+# stuck with stale instance state.
+
+kubectl scale rs $rslb --replicas=0
+
+expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | wc -l | grep -w 0"
+expect '[ "$(kubectl get pod $launcherlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "" ]'
+
+kubectl delete pod $launcherlb --wait=true
+
+! kubectl get pod $launcherlb
+
+kubectl scale rs $rslb --replicas=1
+
+expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | grep -c '^pod/' | grep -w 1"
+reqlb_after_delete=$(kubectl get pods -o name -l app=dp-example,instance=$instlb | sed s%pod/%%)
+expect "kubectl get pods -o name -l dual-pods.llm-d.ai/dual=$reqlb_after_delete | grep -c '^pod/' | grep -w 1"
+launcherlb_after_delete=$(kubectl get pods -o name -l dual-pods.llm-d.ai/dual=$reqlb_after_delete | sed s%pod/%%)
+[ "$launcherlb_after_delete" != "$launcherlb" ]
+expect '[ "$(kubectl get pod $reqlb_after_delete -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcherlb_after_delete" ]'
+expect '[ "$(kubectl get pod $launcherlb_after_delete -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$reqlb_after_delete" ]'
+
+date
+kubectl wait --for condition=Ready pod/$reqlb_after_delete --timeout=120s
+kubectl wait --for condition=Ready pod/$launcherlb_after_delete --timeout=120s
+
+cheer Successful unbound launcher deletion cleanup
+
 : Clean up launcher-based workloads
 
 kubectl delete rs $rslb --ignore-not-found=true

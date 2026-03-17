@@ -330,6 +330,11 @@ type infSvrItem struct {
 	RequesterName string
 }
 
+type launcherPodItem struct {
+	LauncherPodName string
+	NodeName        string
+}
+
 type infSvrItemType string
 
 const (
@@ -346,7 +351,7 @@ const (
 )
 
 // careAbout returns an infSvrItem and an infSvrItemType.
-// The controller cares about server-requesting Pods, bound direct server-providing Pods, and launcher-based server-providing Pods.
+// The controller cares about server-requesting Pods, bound server-providing Pods, and unbound launcher-based server-providing Pods.
 // The controller doesn't care about unbound direct providers and other Pods.
 func careAbout(pod *corev1.Pod) (item infSvrItem, it infSvrItemType) {
 	if len(pod.Annotations[api.ServerPatchAnnotationName]) > 0 || len(pod.Annotations[api.InferenceServerConfigAnnotationName]) > 0 {
@@ -354,10 +359,17 @@ func careAbout(pod *corev1.Pod) (item infSvrItem, it infSvrItemType) {
 	}
 	requesterStr := pod.Annotations[requesterAnnotationKey]
 	requesterParts := strings.Split(requesterStr, " ")
-	if len(requesterParts) != 2 {
-		return infSvrItem{}, infSvrItemDontCare
+	if len(requesterParts) == 2 {
+		return infSvrItem{apitypes.UID(requesterParts[0]), requesterParts[1]}, infSvrItemBoundDirectProvider
 	}
-	return infSvrItem{apitypes.UID(requesterParts[0]), requesterParts[1]}, infSvrItemBoundDirectProvider
+	// Check for launcher-based server-providing Pod (bound or unbound)
+	if pod.Labels != nil {
+		if _, hasLauncherLabel := pod.Labels[ctlrcommon.LauncherConfigNameLabelKey]; hasLauncherLabel {
+			// For launcher pods, use the pod's own UID and name as the item identifier
+			return infSvrItem{pod.UID, pod.Name}, infSvrItemLauncherBasedProvider
+		}
+	}
+	return infSvrItem{}, infSvrItemDontCare
 }
 
 const inferenceServerConfigIndexName = "inferenceserverconfig"
@@ -399,9 +411,21 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 		if item, it := careAbout(typed); it == infSvrItemDontCare {
 			ctl.enqueueLogger.V(5).Info("Ignoring add of irrelevant Pod", "name", typed.Name)
 			return
+		} else if it == infSvrItemLauncherBasedProvider {
+			nodeName, err := getProviderNodeName(typed)
+			if err != nil {
+				ctl.enqueueLogger.Error(err, "Failed to determine node of launcher")
+				return
+			}
+			nd := ctl.getNodeData(nodeName)
+			launcherPodItem := launcherPodItem{LauncherPodName: typed.Name, NodeName: nodeName}
+			ctl.enqueueLogger.V(5).Info("Enqueuing launcher reference due to notification of add",
+				"nodeName", nodeName, "launcherPod", typed.Name, "isInInitialList", isInInitialList, "resourceVersion", typed.ResourceVersion)
+			nd.add(launcherPodItem)
+			ctl.Queue.Add(nodeItem{nodeName})
 		} else {
 			nodeName := typed.Spec.NodeName
-			if it == infSvrItemBoundDirectProvider || it == infSvrItemLauncherBasedProvider {
+			if it == infSvrItemBoundDirectProvider {
 				var err error
 				nodeName, err = getProviderNodeName(typed)
 				if err != nil {
@@ -440,9 +464,21 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 		if item, it := careAbout(typed); it == infSvrItemDontCare {
 			ctl.enqueueLogger.V(5).Info("Ignoring update of irrelevant Pod", "name", typed.Name)
 			return
+		} else if it == infSvrItemLauncherBasedProvider {
+			nodeName, err := getProviderNodeName(typed)
+			if err != nil {
+				ctl.enqueueLogger.Error(err, "Failed to determine node of launcher")
+				return
+			}
+			nd := ctl.getNodeData(nodeName)
+			launcherPodItem := launcherPodItem{LauncherPodName: typed.Name, NodeName: nodeName}
+			ctl.enqueueLogger.V(5).Info("Enqueuing launcher reference due to notification of update",
+				"nodeName", nodeName, "launcherPod", typed.Name, "resourceVersion", typed.ResourceVersion)
+			nd.add(launcherPodItem)
+			ctl.Queue.Add(nodeItem{nodeName})
 		} else {
 			nodeName := typed.Spec.NodeName
-			if it == infSvrItemBoundDirectProvider || it == infSvrItemLauncherBasedProvider {
+			if it == infSvrItemBoundDirectProvider {
 				var err error
 				nodeName, err = getProviderNodeName(typed)
 				if err != nil {
@@ -484,9 +520,21 @@ func (ctl *controller) OnDelete(obj any) {
 		if item, it := careAbout(typed); it == infSvrItemDontCare {
 			ctl.enqueueLogger.V(5).Info("Ignoring delete of irrelevant Pod", "name", typed.Name)
 			return
+		} else if it == infSvrItemLauncherBasedProvider {
+			nodeName, err := getProviderNodeName(typed)
+			if err != nil {
+				ctl.enqueueLogger.Error(err, "Failed to determine node of launcher")
+				return
+			}
+			nd := ctl.getNodeData(nodeName)
+			launcherPodItem := launcherPodItem{LauncherPodName: typed.Name, NodeName: nodeName}
+			ctl.enqueueLogger.V(5).Info("Enqueuing launcher reference due to notification of delete",
+				"nodeName", nodeName, "launcherPod", typed.Name, "resourceVersion", typed.ResourceVersion)
+			nd.add(launcherPodItem)
+			ctl.Queue.Add(nodeItem{nodeName})
 		} else {
 			nodeName := typed.Spec.NodeName
-			if it == infSvrItemBoundDirectProvider || it == infSvrItemLauncherBasedProvider {
+			if it == infSvrItemBoundDirectProvider {
 				var err error
 				nodeName, err = getProviderNodeName(typed)
 				if err != nil {
@@ -630,6 +678,30 @@ func (ctl *controller) enqueueRequestersByInferenceServerConfig(isc *fmav1alpha1
 	}
 }
 
+func (ctl *controller) enqueueRequestersOnNode(ctx context.Context, nodeName string, why string) {
+	logger := klog.FromContext(ctx)
+	nd := ctl.getNodeData(nodeName)
+	requesterCount := 0
+	for _, podObj := range ctl.podInformer.GetStore().List() {
+		pod := podObj.(*corev1.Pod)
+		if pod.Spec.NodeName != nodeName {
+			continue
+		}
+		item, it := careAbout(pod)
+		if it != infSvrItemRequester {
+			continue
+		}
+		nd.add(item)
+		requesterCount++
+	}
+	if requesterCount == 0 {
+		logger.V(5).Info("No server-requesting Pods to enqueue on node", "node", nodeName, "why", why)
+		return
+	}
+	logger.V(5).Info("Enqueuing server-requesting Pods on node", "node", nodeName, "why", why, "count", requesterCount)
+	ctl.Queue.Add(nodeItem{nodeName})
+}
+
 func (ctl *controller) getNodeData(nodeName string) *nodeData {
 	ctl.mutex.Lock()
 	defer ctl.mutex.Unlock()
@@ -683,6 +755,12 @@ func (ctl *controller) getLauncherData(nodeDat *nodeData, launcherPodName string
 		nodeDat.Launchers[launcherPodName] = ans
 	}
 	return ans
+}
+
+func (ctl *controller) clearLauncherData(nodeDat *nodeData, launcherPodName string) {
+	ctl.mutex.Lock()
+	defer ctl.mutex.Unlock()
+	delete(nodeDat.Launchers, launcherPodName)
 }
 
 func (ctl *controller) clearServerData(nodeDat *nodeData, uid apitypes.UID) {
