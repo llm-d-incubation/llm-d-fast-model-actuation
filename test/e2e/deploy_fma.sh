@@ -13,7 +13,7 @@
 #
 # Required environment variables:
 #   FMA_NAMESPACE       - target Kubernetes namespace
-#   FMA_RELEASE_NAME    - Helm release name
+#   FMA_CHART_INSTANCE_NAME    - Helm release name
 #   CONTAINER_IMG_REG   - container image registry/namespace
 #                         (e.g. ghcr.io/llm-d-incubation/llm-d-fast-model-actuation)
 #   IMAGE_TAG           - image tag for all components
@@ -66,7 +66,7 @@ done
 step "Validate required environment variables"
 
 missing=()
-for var in FMA_NAMESPACE FMA_RELEASE_NAME CONTAINER_IMG_REG IMAGE_TAG; do
+for var in FMA_NAMESPACE FMA_CHART_INSTANCE_NAME CONTAINER_IMG_REG IMAGE_TAG; do
     if [ -z "${!var:-}" ]; then
         missing+=("$var")
     fi
@@ -92,7 +92,7 @@ LAUNCHER_IMAGE="${CONTAINER_IMG_REG}/launcher:${IMAGE_TAG}"
 
 echo "Configuration:"
 echo "  FMA_NAMESPACE:    $FMA_NAMESPACE"
-echo "  FMA_RELEASE_NAME: $FMA_RELEASE_NAME"
+echo "  FMA_CHART_INSTANCE_NAME: $FMA_CHART_INSTANCE_NAME"
 echo "  CONTAINER_IMG_REG: $CONTAINER_IMG_REG"
 echo "  IMAGE_TAG:        $IMAGE_TAG"
 echo "  CONTROLLER_IMAGE: $CONTROLLER_IMAGE"
@@ -184,7 +184,7 @@ echo "All CRDs established"
 
 step "Create node-viewer ClusterRole"
 
-CLUSTER_ROLE_NAME="${FMA_RELEASE_NAME}-node-view"
+CLUSTER_ROLE_NAME="${FMA_CHART_INSTANCE_NAME}-node-view"
 if kubectl get clusterrole "$CLUSTER_ROLE_NAME" &>/dev/null; then
     echo "ClusterRole $CLUSTER_ROLE_NAME already exists, skipping"
 else
@@ -220,11 +220,11 @@ fi
 
 step "Deploy FMA controllers via Helm"
 
-echo "  Release:   $FMA_RELEASE_NAME"
+echo "  Release:   $FMA_CHART_INSTANCE_NAME"
 echo "  Namespace: $FMA_NAMESPACE"
 echo "  Image:     $CONTROLLER_IMAGE"
 
-helm upgrade --install "$FMA_RELEASE_NAME" charts/fma-controllers \
+helm upgrade --install "$FMA_CHART_INSTANCE_NAME" charts/fma-controllers \
     -n "$FMA_NAMESPACE" \
     --set global.imageRegistry="${CONTAINER_IMG_REG}" \
     --set global.imageTag="${IMAGE_TAG}" \
@@ -241,9 +241,9 @@ helm upgrade --install "$FMA_RELEASE_NAME" charts/fma-controllers \
 step "Wait for controllers to be ready"
 
 kubectl wait --for=condition=available --timeout=120s \
-    deployment "${FMA_RELEASE_NAME}-dual-pods-controller" -n "$FMA_NAMESPACE"
+    deployment "${FMA_CHART_INSTANCE_NAME}-dual-pods-controller" -n "$FMA_NAMESPACE"
 kubectl wait --for=condition=available --timeout=120s \
-    deployment "${FMA_RELEASE_NAME}-launcher-populator" -n "$FMA_NAMESPACE"
+    deployment "${FMA_CHART_INSTANCE_NAME}-launcher-populator" -n "$FMA_NAMESPACE"
 echo "Both controllers are available"
 
 echo ""

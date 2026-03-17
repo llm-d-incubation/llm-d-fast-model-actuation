@@ -337,7 +337,7 @@ jobs:
       # PR-specific namespace for isolation between concurrent PR tests
       FMA_NAMESPACE: fma-e2e-pr-${{ needs.gate.outputs.pr_number || github.run_id }}
       # Unique release name per run to avoid conflicts
-      FMA_RELEASE_NAME: fma-e2e-${{ github.run_id }}
+      FMA_CHART_INSTANCE_NAME: fma-e2e-${{ github.run_id }}
       # Image registry and tag from the build job
       IMAGE_TAG: ${{ needs.build-image.outputs.image_tag }}
       # LAUNCHER_IMAGE is still needed by cleanup step (rm-images-from-ocp-nodes.sh)
@@ -428,8 +428,8 @@ jobs:
 
           # Clean up cluster-scoped resources from previous runs
           echo "Cleaning up cluster-scoped resources..."
-          kubectl delete clusterrole        "${FMA_RELEASE_NAME}-node-view" --ignore-not-found || true
-          kubectl delete clusterrolebinding "${FMA_RELEASE_NAME}-node-view" --ignore-not-found || true
+          kubectl delete clusterrole        "${FMA_CHART_INSTANCE_NAME}-node-view" --ignore-not-found || true
+          kubectl delete clusterrolebinding "${FMA_CHART_INSTANCE_NAME}-node-view" --ignore-not-found || true
 
           echo "Cleanup complete"
 
@@ -510,7 +510,7 @@ jobs:
         run: |
           echo "Cleaning up all FMA test infrastructure..."
           echo "  FMA_NAMESPACE: $FMA_NAMESPACE"
-          echo "  FMA_RELEASE_NAME: $FMA_RELEASE_NAME"
+          echo "  FMA_CHART_INSTANCE_NAME: $FMA_CHART_INSTANCE_NAME"
 
           # Uninstall Helm releases
           for release in $(helm list -n "$FMA_NAMESPACE" -q 2>/dev/null); do
@@ -539,8 +539,8 @@ jobs:
             --ignore-not-found --timeout=120s || true
 
           # Delete cluster-scoped stuff for reading Node objects
-          kubectl delete clusterrole        "${FMA_RELEASE_NAME}-node-view" --ignore-not-found || true
-          kubectl delete clusterrolebinding "${FMA_RELEASE_NAME}-node-view" --ignore-not-found || true
+          kubectl delete clusterrole        "${FMA_CHART_INSTANCE_NAME}-node-view" --ignore-not-found || true
+          kubectl delete clusterrolebinding "${FMA_CHART_INSTANCE_NAME}-node-view" --ignore-not-found || true
 
           echo "Cleanup complete"
 

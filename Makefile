@@ -136,8 +136,8 @@ generate_client: $(CODE_GEN_DIR) ## (Re-)generate generated files
 
 # Deploy FMA on an existing cluster (e.g. OpenShift, kind).
 # Pass --standalone to create namespace and pull secret automatically.
-# Required env vars: FMA_NAMESPACE, FMA_RELEASE_NAME, CONTROLLER_IMAGE,
-#                    REQUESTER_IMAGE, LAUNCHER_IMAGE
+# Required env vars: FMA_NAMESPACE, FMA_CHART_INSTANCE_NAME,
+#                    CONTAINER_IMG_REG, IMAGE_TAG
 .PHONY: deploy-fma-ocp
 deploy-fma-ocp: ## Deploy FMA on OpenShift/kind cluster
 	./test/e2e/deploy_fma.sh $(DEPLOY_FMA_FLAGS)
