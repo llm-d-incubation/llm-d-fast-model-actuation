@@ -265,7 +265,7 @@ jobs:
       launcher_image: ${{ steps.build.outputs.launcher_image }}
     steps:
       - name: Checkout source
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ needs.gate.outputs.pr_head_sha }}
 
@@ -344,7 +344,7 @@ jobs:
       LAUNCHER_IMAGE: ${{ needs.build-image.outputs.launcher_image }}
     steps:
       - name: Checkout source
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ needs.gate.outputs.pr_head_sha }}
 
