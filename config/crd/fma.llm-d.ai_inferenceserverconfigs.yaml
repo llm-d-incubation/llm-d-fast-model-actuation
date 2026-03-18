@@ -72,10 +72,10 @@ spec:
                     description: |-
                       Port is the port on which the vLLM server will listen
                       Particularly, management of vLLM instances' sleep state is done through this port
+                      If not specified, the dual-pods controller will automatically assign an available port
+                      from a predefined port pool based on the LauncherConfig's maxSleepingInstances.
                     format: int32
                     type: integer
-                required:
-                - port
                 type: object
             required:
             - launcherConfigName

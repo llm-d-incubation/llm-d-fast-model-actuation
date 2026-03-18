@@ -18,6 +18,7 @@ The launcher preloads vLLM’s Python modules to accelerate the initialization o
 - [Configuration](#configuration)
 - [Key Classes](#key-classes)
 - [Best Practices](#best-practices)
+- [Dynamic Port Allocation](#dynamic-port-allocation)
 
 ## Features
 
@@ -30,6 +31,8 @@ The launcher preloads vLLM’s Python modules to accelerate the initialization o
 - **Status Monitoring**: Query status of individual instances or all instances at once
 - **Log Capture**: Retrieve stdout/stderr logs from running instances via REST API
 - **Health Checks**: Built-in health endpoint for monitoring service availability
+- **Dynamic Port Allocation**: Automatic port assignment from a predefined pool when port is not explicitly specified
+- **Gateway API Integration**: Automatic maintenance of `inference.networking.k8s.io/active-ports` annotation for gateway API inference extension
 
 > [!NOTE]
 > This is still not implemented, but the client controls the subset of the node's GPUs that get used by a given vLLM instance.
@@ -782,4 +785,121 @@ Test with small models first:
 --model meta-llama/Llama-2-13b-hf  # ~26GB
 ```
 
+## Dynamic Port Allocation
+
+### Overview
+
+The dual-pods controller supports dynamic port allocation for vLLM instances managed by the launcher. When the `port` field is not specified in the `InferenceServerConfig`, the controller automatically assigns an available port from a predefined port pool.
+
+### Port Pool Configuration
+
+The port pool is defined by:
+- **Base Port**: `8005` (configurable via `PortPoolBase` constant)
+- **Pool Size**: `N = maxSleepingInstances + 1` (from `LauncherConfig.spec.maxSleepingInstances`)
+- **Port Range**: `8005` to `8005 + N - 1`
+
+For example, if `maxSleepingInstances` is set to `3`:
+- Pool size N = 3 + 1 = 4
+- Port range: 8005, 8006, 8007, 8008
+
+### Allocation Algorithm
+
+The controller uses a **round-robin** allocation strategy:
+
+1. **Port Selection**: When allocating a new port, the controller starts from the next index in the pool (tracked by `NextPortIndex`)
+2. **Availability Check**: The selected port is checked against currently allocated ports
+3. **Assignment**: If available, the port is assigned and `NextPortIndex` is advanced
+4. **Retry**: If the port is in use, the next port in the pool is tried
+
+This ensures:
+- Even distribution of ports across the pool
+- No port conflicts within a launcher pod
+- Efficient reuse of released ports
+
+### Gateway API Inference Extension Integration
+
+The controller automatically maintains the `inference.networking.k8s.io/active-ports` annotation on launcher pods to support the [gateway-api-inference-extension](https://gateway-api-inference-extension.sigs.k8s.io/implementations/model-servers/#active-port-declaration-via-pod-annotations).
+
+**Annotation Behavior**:
+- **Value**: Comma-separated list of active port numbers (e.g., `"8005,8007"`)
+- **Update on Instance Creation**: When a new vLLM instance is created and becomes active, the annotation is updated to include the new port
+- **Update on Instance Wake**: When a sleeping instance is woken up, the annotation is updated
+- **Update on Instance Sleep**: When an instance goes to sleep, the port is removed from the annotation
+- **Removal**: When all instances are sleeping, the annotation is removed
+
+**Example**:
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: launcher-pod-1
+  annotations:
+    inference.networking.k8s.io/active-ports: "8005,8007"
+spec:
+  # ... pod spec
+```
+
+### Usage Example
+
+#### InferenceServerConfig with Explicit Port
+
+```yaml
+apiVersion: fma.llm-d.ai/v1alpha1
+kind: InferenceServerConfig
+metadata:
+  name: my-model-config
+spec:
+  launcherConfigName: my-launcher-config
+  modelServerConfig:
+    port: 8080  # Explicit port specification
+    options: "--model meta-llama/Llama-2-7b-hf"
+```
+
+#### InferenceServerConfig with Dynamic Port Allocation
+
+```yaml
+apiVersion: fma.llm-d.ai/v1alpha1
+kind: InferenceServerConfig
+metadata:
+  name: my-model-config
+spec:
+  launcherConfigName: my-launcher-config
+  modelServerConfig:
+    # port is omitted - will be automatically assigned
+    options: "--model meta-llama/Llama-2-7b-hf"
+```
+
+#### LauncherConfig Configuration
+
+```yaml
+apiVersion: fma.llm-d.ai/v1alpha1
+kind: LauncherConfig
+metadata:
+  name: my-launcher-config
+spec:
+  maxSleepingInstances: 3  # Port pool size will be 4 (3+1)
+  podTemplate:
+    # ... pod template
+```
+
+### Best Practices
+
+1. **Port Pool Sizing**: Set `maxSleepingInstances` based on your expected concurrent model workload
+2. **Port Conflicts**: When using explicit ports, ensure they don't conflict with the dynamic port pool (8005+)
+3. **Monitoring**: Monitor the `active-ports` annotation to understand which ports are currently active
+4. **Gateway Integration**: Ensure your gateway API inference extension is configured to read the `active-ports` annotation
+
+### Implementation Details
+
+**Data Structures**:
+- `launcherData.AllocatedPorts`: Maps instance ID to allocated port number
+- `launcherData.NextPortIndex`: Tracks the next port index to try for allocation
+
+**Key Functions**:
+- `allocatePort()`: Allocates a port from the pool using round-robin selection
+- `releasePort()`: Releases a port back to the pool when an instance is deleted
+- `updateActivePortsAnnotation()`: Updates the gateway API annotation based on active instances
+- `configInferenceServer()`: Configures vLLM with either explicit or dynamically allocated port
+
 ---
+

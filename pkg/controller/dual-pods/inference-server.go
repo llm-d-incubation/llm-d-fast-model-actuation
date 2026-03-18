@@ -219,7 +219,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		if providingPod.Labels != nil {
 			_, providingPodLauncherBased = providingPod.Labels[ctlrcommon.LauncherConfigNameLabelKey]
 		}
-		err := ctl.ensureUnbound(ctx, serverDat, providingPod, providingPodLauncherBased)
+		err := ctl.ensureUnbound(ctx, serverDat, providingPod, providingPodLauncherBased, nodeDat)
 		if err != nil {
 			return err, true
 		}
@@ -460,9 +460,10 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		return err, false
 	}
 
-	cfg, iscHash, err := ctl.configInferenceServer(isc, serverDat.GPUIDs)
+	// Compute the nominal hash for the InferenceServerConfig
+	iscHash, err := ctl.computeInferenceServerHash(isc, serverDat.GPUIDs)
 	if err != nil {
-		return fmt.Errorf("failed to configure inference server config: %w", err), true
+		return fmt.Errorf("failed to compute inference server hash: %w", err), true
 	}
 	logger.V(5).Info("Nominal hash of InferenceServerConfig", "hash", iscHash)
 
@@ -498,19 +499,36 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 
 			launcherDat := ctl.getLauncherData(nodeDat, launcherPod.Name)
 
+			// Configure inference server with port allocation
+			// This handles both new instance creation and existing instance wake-up
+			cfg, allocatedPort, err := ctl.configInferenceServerWithPort(
+				isc, serverDat.GPUIDs, launcherDat, lc.Spec.MaxSleepingInstances, iscHash, hasSleepingInstance)
+			if err != nil {
+				return fmt.Errorf("failed to configure inference server with port allocation: %w", err), true
+			}
+
 			if hasSleepingInstance {
 				// Fast path: wake up existing sleeping instance
-				logger.V(5).Info("Waking up existing vLLM instance", "iscHash", iscHash)
-				err := ctl.wakeupInstance(ctx, lClient, iscHash, isc.Spec.ModelServerConfig.Port)
+				// allocatedPort is already retrieved from launcherDat.AllocatedPorts
+				logger.V(5).Info("Waking up existing vLLM instance", "iscHash", iscHash, "port", allocatedPort)
+				err := ctl.wakeupInstance(ctx, lClient, iscHash, allocatedPort)
 				if err != nil {
 					return fmt.Errorf("wake up vLLM instance: %w", err), true
 				}
 				launcherDat.Instances[iscHash] = time.Now()
+				// Port is already in AllocatedPorts, no need to re-assign
+
+				// Update active-ports annotation
+				if err := ctl.updateActivePortsAnnotationForLauncher(ctx, launcherPod, lClient, launcherDat.AllocatedPorts); err != nil {
+					logger.Error(err, "Failed to update active-ports annotation", "launcherPod", launcherPod.Name)
+					// Don't fail the operation, just log the error
+				}
+
 				// TODO(waltforme): the bind method may need more revision to fully handle launcher-based server providing Pods
-				return ctl.bind(ctx, serverDat, requestingPod, launcherPod, true, int16(isc.Spec.ModelServerConfig.Port))
+				return ctl.bind(ctx, serverDat, requestingPod, launcherPod, true, int16(allocatedPort))
 			} else {
 				// Slower path: create new instance in launcher with capacity
-				logger.V(5).Info("Creating new vLLM instance", "iscHash", iscHash)
+				logger.V(5).Info("Creating new vLLM instance", "iscHash", iscHash, "allocatedPort", allocatedPort)
 				result, err := lClient.CreateNamedInstance(ctx, iscHash, *cfg)
 				if err != nil {
 					return fmt.Errorf("create vLLM instance: %w", err), true
@@ -518,10 +536,19 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				logger.V(5).Info("Created new vLLM instance",
 					"instance_id", result.InstanceID,
 					"status", result.Status,
+					"port", allocatedPort,
 				)
 				launcherDat.Instances[iscHash] = time.Now()
+				launcherDat.AllocatedPorts[iscHash] = allocatedPort
+
+				// Update active-ports annotation
+				if err := ctl.updateActivePortsAnnotationForLauncher(ctx, launcherPod, lClient, launcherDat.AllocatedPorts); err != nil {
+					logger.Error(err, "Failed to update active-ports annotation", "launcherPod", launcherPod.Name)
+					// Don't fail the operation, just log the error
+				}
+
 				// TODO(waltforme): the bind method may need more revision to fully handle launcher-based server providing Pods
-				return ctl.bind(ctx, serverDat, requestingPod, launcherPod, true, int16(isc.Spec.ModelServerConfig.Port))
+				return ctl.bind(ctx, serverDat, requestingPod, launcherPod, true, int16(allocatedPort))
 			}
 		}
 	}
@@ -643,20 +670,20 @@ func (ctl *controller) selectBestLauncherPod(
 	return nil, false, false, nil
 }
 
-func (ctl *controller) configInferenceServer(isc *fmav1alpha1.InferenceServerConfig, gpuUUIDs []string) (*VllmConfig, string, error) {
-	options := isc.Spec.ModelServerConfig.Options + " --port " + strconv.Itoa(int(isc.Spec.ModelServerConfig.Port))
-	vllmCfg := VllmConfig{
-		Options:  options,
-		GpuUUIDs: gpuUUIDs,
-		EnvVars:  make(map[string]string, len(isc.Spec.ModelServerConfig.EnvVars)),
-	}
-	for k, v := range isc.Spec.ModelServerConfig.EnvVars {
-		vllmCfg.EnvVars[k] = v
-	}
-
+// computeInferenceServerHash computes the nominal hash for an InferenceServerConfig.
+// The hash is used as the instance ID when creating vLLM instances in the launcher.
+//
+// Parameters:
+//   - isc: the InferenceServerConfig
+//   - gpuUUIDs: the GPU UUIDs assigned to this instance
+//
+// Returns:
+//   - The nominal hash (instance ID)
+//   - An error if the computation fails
+func (ctl *controller) computeInferenceServerHash(isc *fmav1alpha1.InferenceServerConfig, gpuUUIDs []string) (string, error) {
 	iscBytes, err := yaml.Marshal(isc.Spec.ModelServerConfig)
 	if err != nil {
-		return nil, "", fmt.Errorf("failed to marshal InferenceServerConfig %q: %w", isc.Name, err)
+		return "", fmt.Errorf("failed to marshal InferenceServerConfig %q: %w", isc.Name, err)
 	}
 	hasher := sha256.New()
 	hasher.Write(iscBytes)
@@ -667,7 +694,73 @@ func (ctl *controller) configInferenceServer(isc *fmav1alpha1.InferenceServerCon
 	// using Raw_URL_Encoding because this hash will be used in URLs to the launcher.
 	nominalHash := base64.RawURLEncoding.EncodeToString(hashSl)
 
-	return &vllmCfg, nominalHash, nil
+	return nominalHash, nil
+}
+
+// configInferenceServerWithPort builds the vLLM configuration with the specified or dynamically allocated port.
+// It handles three cases:
+// 1. User explicitly specified a port in InferenceServerConfig
+// 2. Instance already exists (hasSleepingInstance=true), retrieve the allocated port
+// 3. New instance, allocate a port from the pool
+//
+// Parameters:
+//   - isc: the InferenceServerConfig
+//   - gpuUUIDs: the GPU UUIDs assigned to this instance
+//   - launcherDat: the launcher data for port allocation
+//   - maxSleepingInstances: the maximum number of sleeping instances (used for port pool size)
+//   - instanceID: the instance ID (iscHash), used to retrieve existing port allocation
+//   - hasSleepingInstance: whether the instance already exists and needs to be woken up
+//
+// Returns:
+//   - The vLLM configuration
+//   - The port number (either specified, retrieved, or newly allocated)
+//   - An error if configuration fails
+func (ctl *controller) configInferenceServerWithPort(
+	isc *fmav1alpha1.InferenceServerConfig,
+	gpuUUIDs []string,
+	launcherDat *launcherData,
+	maxSleepingInstances int32,
+	instanceID string,
+	hasSleepingInstance bool,
+) (*VllmConfig, int32, error) {
+	// Determine the port to use
+	var port int32
+
+	if hasSleepingInstance {
+		// Case 1: Instance exists, retrieve the allocated port
+		if existingPort, exists := launcherDat.AllocatedPorts[instanceID]; exists {
+			port = existingPort
+		} else if isc.Spec.ModelServerConfig.Port != 0 {
+			// Fallback: use the port from ISC if explicitly specified
+			port = isc.Spec.ModelServerConfig.Port
+		} else {
+			// This should not happen - sleeping instance should have allocated port
+			return nil, 0, fmt.Errorf("sleeping instance found but no port allocated for instance %q", instanceID)
+		}
+	} else if isc.Spec.ModelServerConfig.Port != 0 {
+		// Case 2: User specified a port, use it
+		port = isc.Spec.ModelServerConfig.Port
+	} else {
+		// Case 3: Dynamically allocate a port from the port pool
+		poolSize := int(maxSleepingInstances) + 1
+		var err error
+		port, err = allocatePort(launcherDat, poolSize)
+		if err != nil {
+			return nil, 0, fmt.Errorf("failed to allocate port: %w", err)
+		}
+	}
+
+	options := isc.Spec.ModelServerConfig.Options + " --port " + strconv.Itoa(int(port))
+	vllmCfg := VllmConfig{
+		Options:  options,
+		GpuUUIDs: gpuUUIDs,
+		EnvVars:  make(map[string]string, len(isc.Spec.ModelServerConfig.EnvVars)),
+	}
+	for k, v := range isc.Spec.ModelServerConfig.EnvVars {
+		vllmCfg.EnvVars[k] = v
+	}
+
+	return &vllmCfg, port, nil
 }
 
 func (ctl *controller) wakeupInstance(ctx context.Context, lClient *LauncherClient, instanceID string, instancePort int32) error {
@@ -910,8 +1003,47 @@ func (ctl *controller) removeProviderFinalizer(ctx context.Context, providingPod
 }
 
 // Unbinds the given server-providing Pod.
-func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData, providingPod *corev1.Pod, launcherBased bool) error {
+func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData, providingPod *corev1.Pod, launcherBased bool, nodeDat *nodeData) error {
 	logger := klog.FromContext(ctx)
+	podOps := ctl.coreclient.Pods(ctl.namespace)
+
+	// For launcher-based pods, handle port release and annotation update
+	if launcherBased {
+		// Get launcher data to access allocated ports
+		launcherDat := ctl.getLauncherData(nodeDat, providingPod.Name)
+
+		// Release the port if it was allocated
+		if serverDat.ServerPort > 0 {
+			// Find the instance ID (iscHash) for this server
+			// We need to iterate through AllocatedPorts to find the matching port
+			var instanceID string
+			for instID, port := range launcherDat.AllocatedPorts {
+				if port == int32(serverDat.ServerPort) {
+					instanceID = instID
+					break
+				}
+			}
+			if instanceID != "" {
+				releasePort(launcherDat, instanceID)
+				delete(launcherDat.Instances, instanceID)
+				logger.V(2).Info("Released port for instance", "instanceID", instanceID, "port", serverDat.ServerPort)
+
+				// Update active-ports annotation after releasing the port
+				launcherIP := providingPod.Status.PodIP
+				if launcherIP != "" {
+					launcherBaseURL := fmt.Sprintf("http://%s:%d", launcherIP, ctlrcommon.LauncherServicePort)
+					lClient, err := NewLauncherClient(launcherBaseURL)
+					if err == nil {
+						if err := ctl.updateActivePortsAnnotationForLauncher(ctx, providingPod, lClient, launcherDat.AllocatedPorts); err != nil {
+							logger.Error(err, "Failed to update active-ports annotation after unbind", "launcherPod", providingPod.Name)
+							// Don't fail the operation, just log the error
+						}
+					}
+				}
+			}
+		}
+	}
+
 	// A providingPod with no IP is not scheduled, so we know that it is not awake.
 	// If providingPod is stale then the update will fail.
 	if (serverDat.Sleeping == nil || !*(serverDat.Sleeping)) && providingPod.Status.PodIP != "" { // need to put to sleep
@@ -958,7 +1090,6 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 		if providingPod.Labels != nil {
 			delete(providingPod.Labels, api.DualLabelName)
 		}
-		podOps := ctl.coreclient.Pods(ctl.namespace)
 		echo, err := podOps.Update(ctx, providingPod, metav1.UpdateOptions{FieldManager: ControllerName})
 		if err != nil {
 			return fmt.Errorf("failed to unbind server-providing Pod %s: %w", providingPod.Name, err)
@@ -1306,4 +1437,176 @@ func TimePtrToStringPtr(tp *metav1.Time) *string {
 	}
 	str := tp.String()
 	return &str
+}
+
+// allocatePort allocates a port from the port pool for a new vLLM instance.
+// It selects a port that:
+// 1. Belongs to the predefined port pool (PortPoolBase to PortPoolBase + poolSize - 1)
+// 2. Is not currently allocated to any existing vLLM instance in this launcher
+//
+// The function uses round-robin selection starting from NextPortIndex to ensure
+// even distribution of ports across the pool.
+//
+// Parameters:
+//   - launcherDat: the launcher data containing allocation state
+//   - poolSize: the size of the port pool (maxSleepingInstances + 1)
+//
+// Returns:
+//   - The allocated port number
+//   - An error if no available port is found (should not happen if poolSize is correct)
+func allocatePort(launcherDat *launcherData, poolSize int) (int32, error) {
+	// Try each port in the pool starting from NextPortIndex
+	for i := 0; i < poolSize; i++ {
+		idx := (launcherDat.NextPortIndex + i) % poolSize
+		port := PortPoolBase + int32(idx)
+
+		// Check if this port is already allocated
+		// We need to check if any instance has this port allocated
+		portInUse := false
+		for _, allocatedPort := range launcherDat.AllocatedPorts {
+			if allocatedPort == port {
+				portInUse = true
+				break
+			}
+		}
+
+		if !portInUse {
+			// Port is available, allocate it
+			launcherDat.NextPortIndex = (idx + 1) % poolSize
+			return port, nil
+		}
+	}
+
+	// No available port found - this should not happen if the caller
+	// correctly checked capacity before calling
+	return 0, fmt.Errorf("no available port in pool of size %d", poolSize)
+}
+
+// releasePort releases a previously allocated port back to the port pool.
+//
+// Parameters:
+//   - launcherDat: the launcher data containing allocation state
+//   - instanceID: the instance ID to release the port for
+func releasePort(launcherDat *launcherData, instanceID string) {
+	delete(launcherDat.AllocatedPorts, instanceID)
+}
+
+// updateActivePortsAnnotation updates the inference.networking.k8s.io/active-ports annotation
+// on the launcher pod based on the currently awake vLLM instances.
+//
+// The annotation value is a comma-separated list of port numbers for all active
+// (non-sleeping) vLLM instances managed by this launcher.
+//
+// Parameters:
+//   - ctx: context for the operation
+//   - launcherPod: the launcher pod to update
+//   - activePorts: set of port numbers that are currently active
+//
+// Returns:
+//   - error if the update fails
+func (ctl *controller) updateActivePortsAnnotation(ctx context.Context, launcherPod *corev1.Pod, activePorts sets.Set[int32]) error {
+	logger := klog.FromContext(ctx)
+
+	// Build the annotation value (comma-separated list of port numbers)
+	var desiredValue string
+	if len(activePorts) > 0 {
+		portList := activePorts.UnsortedList()
+		slices.Sort(portList)
+		portStrs := make([]string, len(portList))
+		for i, port := range portList {
+			portStrs[i] = strconv.Itoa(int(port))
+		}
+		desiredValue = strings.Join(portStrs, ",")
+	}
+
+	// Check if update is needed
+	currentValue := launcherPod.Annotations[api.ActivePortsAnnotationName]
+	if currentValue == desiredValue {
+		// Annotation is already correct
+		return nil
+	}
+
+	// Update the annotation
+	launcherPod = launcherPod.DeepCopy()
+	if desiredValue == "" {
+		// Remove the annotation if no active ports
+		delete(launcherPod.Annotations, api.ActivePortsAnnotationName)
+	} else {
+		// Set or update the annotation
+		launcherPod.Annotations = utils.MapSet(launcherPod.Annotations, api.ActivePortsAnnotationName, desiredValue)
+	}
+
+	_, err := ctl.coreclient.Pods(launcherPod.Namespace).Update(ctx, launcherPod, metav1.UpdateOptions{
+		FieldManager: ControllerName,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to update active-ports annotation on launcher pod %q: %w", launcherPod.Name, err)
+	}
+
+	if desiredValue == "" {
+		logger.V(2).Info("Removed active-ports annotation from launcher pod", "name", launcherPod.Name)
+	} else {
+		logger.V(2).Info("Updated active-ports annotation on launcher pod", "name", launcherPod.Name, "ports", desiredValue)
+	}
+	return nil
+}
+
+// getActivePortsForLauncher returns the set of active (non-sleeping) instance ports
+// for a launcher pod by querying the launcher API.
+//
+// Parameters:
+//   - ctx: context for the operation
+//   - lClient: launcher client to query
+//   - instanceToPort: map from instance ID to port number
+//
+// Returns:
+//   - A set of port numbers for all active instances
+//   - An error if the query fails
+func getActivePortsForLauncher(ctx context.Context, lClient *LauncherClient, instanceToPort map[string]int32) (sets.Set[int32], error) {
+	activePorts := sets.New[int32]()
+
+	// List all instances
+	allInstances, err := lClient.ListInstances(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list instances: %w", err)
+	}
+
+	// Check status of each instance
+	for _, inst := range allInstances.Instances {
+		// Check if instance is running (not sleeping)
+		if inst.Status == "running" {
+			if port, exists := instanceToPort[inst.InstanceID]; exists {
+				activePorts.Insert(port)
+			}
+		}
+	}
+
+	return activePorts, nil
+}
+
+// updateActivePortsAnnotationForLauncher updates the active-ports annotation on a launcher pod
+// based on the current state of vLLM instances.
+//
+// Parameters:
+//   - ctx: context for the operation
+//   - launcherPod: the launcher pod to update
+//   - lClient: launcher client to query instance states
+//   - allocatedPorts: map from instance ID to port number
+//
+// Returns:
+//   - error if the update fails
+func (ctl *controller) updateActivePortsAnnotationForLauncher(
+	ctx context.Context,
+	launcherPod *corev1.Pod,
+	lClient *LauncherClient,
+	allocatedPorts map[string]int32,
+) error {
+	// Get active ports by querying launcher API
+	activePorts, err := getActivePortsForLauncher(ctx, lClient, allocatedPorts)
+	if err != nil {
+		return fmt.Errorf("failed to get active ports: %w", err)
+	}
+
+	// Update the annotation
+	return ctl.updateActivePortsAnnotation(ctx, launcherPod, activePorts)
 }
