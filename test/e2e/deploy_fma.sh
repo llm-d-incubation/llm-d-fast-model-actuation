@@ -16,11 +16,12 @@
 #
 # Optional environment variables:
 #   NODE_VIEW_CLUSTER_ROLE - ClusterRole granting node read access.
-#                            If unset, the script creates one named
-#                            "${FMA_CHART_INSTANCE_NAME}-node-view".
-#                            If set to an existing ClusterRole name, it is
-#                            used as-is (no creation).
-#                            If set to "none", no ClusterRole is configured.
+#                            If unset or empty, no ClusterRole is configured
+#                            (consistent with the Helm chart default).
+#                            If set to "create/please", the script creates one
+#                            named "${FMA_CHART_INSTANCE_NAME}-node-view".
+#                            Any other value is used as the name of an existing
+#                            ClusterRole.
 #   RUNTIME_CLASS_NAME  - if set, adds runtimeClassName to GPU pod specs
 #                         (e.g. "nvidia" when the GPU operator requires it)
 #   POLICIES_ENABLED    - "true"/"false"; auto-detected if unset
@@ -73,7 +74,7 @@ echo "  FMA_NAMESPACE:           $FMA_NAMESPACE"
 echo "  FMA_CHART_INSTANCE_NAME: $FMA_CHART_INSTANCE_NAME"
 echo "  CONTAINER_IMG_REG:       $CONTAINER_IMG_REG"
 echo "  IMAGE_TAG:               $IMAGE_TAG"
-echo "  NODE_VIEW_CLUSTER_ROLE:  ${NODE_VIEW_CLUSTER_ROLE:-<will create>}"
+echo "  NODE_VIEW_CLUSTER_ROLE:  ${NODE_VIEW_CLUSTER_ROLE:-<none>}"
 echo "  RUNTIME_CLASS_NAME:      ${RUNTIME_CLASS_NAME:-<unset>}"
 echo "  POLICIES_ENABLED:        ${POLICIES_ENABLED:-<auto-detect>}"
 echo "  HELM_EXTRA_ARGS:         ${HELM_EXTRA_ARGS:-<none>}"
@@ -108,13 +109,10 @@ echo "All CRDs established"
 
 step "Configure node-viewer ClusterRole"
 
-if [ "${NODE_VIEW_CLUSTER_ROLE:-}" = "none" ]; then
+if [ -z "${NODE_VIEW_CLUSTER_ROLE:-}" ]; then
     CLUSTER_ROLE_NAME=""
-    echo "Skipped (NODE_VIEW_CLUSTER_ROLE=none)"
-elif [ -n "${NODE_VIEW_CLUSTER_ROLE:-}" ]; then
-    CLUSTER_ROLE_NAME="${NODE_VIEW_CLUSTER_ROLE}"
-    echo "Using existing ClusterRole: $CLUSTER_ROLE_NAME"
-else
+    echo "Skipped (NODE_VIEW_CLUSTER_ROLE not set)"
+elif [ "${NODE_VIEW_CLUSTER_ROLE}" = "create/please" ]; then
     CLUSTER_ROLE_NAME="${FMA_CHART_INSTANCE_NAME}-node-view"
     if kubectl get clusterrole "$CLUSTER_ROLE_NAME" &>/dev/null; then
         echo "ClusterRole $CLUSTER_ROLE_NAME already exists, skipping"
@@ -122,6 +120,9 @@ else
         kubectl create clusterrole "$CLUSTER_ROLE_NAME" --verb=get,list,watch --resource=nodes
         echo "ClusterRole $CLUSTER_ROLE_NAME created"
     fi
+else
+    CLUSTER_ROLE_NAME="${NODE_VIEW_CLUSTER_ROLE}"
+    echo "Using existing ClusterRole: $CLUSTER_ROLE_NAME"
 fi
 
 # ---------------------------------------------------------------------------

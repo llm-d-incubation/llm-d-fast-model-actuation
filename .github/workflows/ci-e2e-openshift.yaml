@@ -471,8 +471,10 @@ jobs:
         env:
           CONTAINER_IMG_REG: ghcr.io/${{ github.repository }}
           IMAGE_TAG: ${{ env.IMAGE_TAG }}
+          NODE_VIEW_CLUSTER_ROLE: "create/please"
         run: |
-          # Ensure registry is lowercase (GitHub requirement)
+          # Force container registry to lowercase, because this is how
+          # ghcr.io relates images to their source org/repo.
           export CONTAINER_IMG_REG="${CONTAINER_IMG_REG,,}"
           echo "Running deploy_fma.sh..."
           ./test/e2e/deploy_fma.sh
