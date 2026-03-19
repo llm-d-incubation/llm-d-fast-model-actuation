@@ -153,7 +153,6 @@ func BuildLauncherPodFromTemplate(template corev1.PodTemplateSpec, ns, nodeName,
 		pod.Labels = make(map[string]string)
 	}
 	pod.Labels[common.ComponentLabelKey] = common.LauncherComponentLabelValue
-	pod.Labels[common.LauncherGeneratedByLabelKey] = common.LauncherGeneratedByLabelValue
 	pod.Labels[common.LauncherConfigNameLabelKey] = launcherConfigName
 	pod.Labels[common.NodeNameLabelKey] = nodeName
 	pod.Labels[api.SleepingLabelName] = "false"
