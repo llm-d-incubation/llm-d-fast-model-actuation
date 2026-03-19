@@ -24,12 +24,15 @@
 #   RUNTIME_CLASS_NAME  - if set, adds runtimeClassName to GPU pod specs
 #                         (e.g. "nvidia" when the GPU operator requires it)
 #   POLICIES_ENABLED    - "true"/"false"; auto-detected if unset
+#   FMA_DEBUG            - "true" to enable shell tracing (set -x)
 #   HELM_EXTRA_ARGS     - additional Helm arguments appended to the
 #                         `helm upgrade --install` invocation
 #                         (e.g. "--set global.local=true --set dualPodsController.sleeperLimit=4")
 
 set -euo pipefail
-set -x
+if [ "${FMA_DEBUG:-false}" = "true" ]; then
+    set -x
+fi
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -148,11 +151,6 @@ fi
 # ---------------------------------------------------------------------------
 
 step "Deploy FMA controllers via Helm"
-
-echo "  Chart instance: $FMA_CHART_INSTANCE_NAME"
-echo "  Namespace:      $FMA_NAMESPACE"
-echo "  Images:         ${CONTAINER_IMG_REG}/dual-pods-controller:${IMAGE_TAG}"
-echo "                  ${CONTAINER_IMG_REG}/launcher-populator:${IMAGE_TAG}"
 
 HELM_ARGS=(
     --set global.imageRegistry="${CONTAINER_IMG_REG}"
