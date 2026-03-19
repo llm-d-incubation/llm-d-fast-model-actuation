@@ -469,7 +469,7 @@ jobs:
         env:
           CONTAINER_IMG_REG: ghcr.io/${{ github.repository }}
           IMAGE_TAG: ${{ env.IMAGE_TAG }}
-          LIMIT: "600"
+          HELM_EXTRA_ARGS: "--set dualPodsController.debugAcceleratorMemory=false"
         run: |
           # Ensure registry is lowercase (GitHub requirement)
           export CONTAINER_IMG_REG="${CONTAINER_IMG_REG,,}"

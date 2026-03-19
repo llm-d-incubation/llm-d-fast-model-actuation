@@ -1,33 +1,33 @@
 #!/usr/bin/env bash
 
-# Usage: $0 [--standalone]
+# Usage: $0
 # Current working directory must be the root of the Git repository.
 #
 # Deploys the FMA controllers (dual-pods controller + launcher-populator)
 # and waits for them to be available.
 #
-# By default the script assumes it runs inside the ci-e2e-openshift.yaml
-# workflow, which has already created the namespace, GHCR pull secret, and
-# patched the default ServiceAccount.  Pass --standalone to have the script
-# create those resources itself (useful for kind clusters or manual runs).
-#
 # Required environment variables:
-#   FMA_NAMESPACE       - target Kubernetes namespace
-#   FMA_CHART_INSTANCE_NAME    - Helm release name
-#   CONTAINER_IMG_REG   - container image registry/namespace
-#                         (e.g. ghcr.io/llm-d-incubation/llm-d-fast-model-actuation)
-#   IMAGE_TAG           - image tag for all components
-#                         (e.g. ref-abcd1234)
-#
-# Additional env vars required when --standalone:
-#   CR_USER             - container registry username (for pull secret)
-#   CR_TOKEN            - container registry token
+#   FMA_NAMESPACE              - target Kubernetes namespace
+#   FMA_CHART_INSTANCE_NAME    - Helm chart instance name
+#   CONTAINER_IMG_REG          - container image registry/namespace
+#                                (e.g. ghcr.io/llm-d-incubation/llm-d-fast-model-actuation)
+#   IMAGE_TAG                  - image tag for all components
+#                                (e.g. ref-abcd1234)
 #
 # Optional environment variables:
+#   NODE_VIEW_CLUSTER_ROLE - ClusterRole granting node read access.
+#                            If unset, the script creates one named
+#                            "${FMA_CHART_INSTANCE_NAME}-node-view".
+#                            If set to an existing ClusterRole name, it is
+#                            used as-is (no creation).
+#                            If set to "none", no ClusterRole is configured.
 #   RUNTIME_CLASS_NAME  - if set, adds runtimeClassName to GPU pod specs
 #                         (e.g. "nvidia" when the GPU operator requires it)
 #   POLICIES_ENABLED    - "true"/"false"; auto-detected if unset
-#   LIMIT               - timeout in seconds for wait loops (default: 600)
+#   HELM_EXTRA_ARGS     - additional Helm arguments appended to the
+#                         `helm upgrade --install` invocation
+#                         (e.g. "--set global.local=true --set dualPodsController.sleeperLimit=4")
+
 set -euo pipefail
 set -x
 
@@ -36,7 +36,7 @@ set -x
 # ---------------------------------------------------------------------------
 
 step_num=0
-total_steps=7
+total_steps=6
 
 step() {
     step_num=$((step_num + 1))
@@ -46,18 +46,6 @@ step() {
     echo "========================================"
     echo ""
 }
-
-# ---------------------------------------------------------------------------
-# Parse flags
-# ---------------------------------------------------------------------------
-
-STANDALONE=false
-for arg in "$@"; do
-    case "$arg" in
-        --standalone) STANDALONE=true ;;
-        *) echo "Unknown argument: $arg" >&2; exit 1 ;;
-    esac
-done
 
 # ---------------------------------------------------------------------------
 # Step 1: Validate required environment variables
@@ -72,90 +60,23 @@ for var in FMA_NAMESPACE FMA_CHART_INSTANCE_NAME CONTAINER_IMG_REG IMAGE_TAG; do
     fi
 done
 
-if [ "$STANDALONE" = true ]; then
-    for var in CR_USER CR_TOKEN; do
-        if [ -z "${!var:-}" ]; then
-            missing+=("$var")
-        fi
-    done
-fi
-
 if [ ${#missing[@]} -gt 0 ]; then
     echo "ERROR: Missing required environment variables: ${missing[*]}" >&2
     exit 1
 fi
 
-# Derive individual image references from registry + tag
-CONTROLLER_IMAGE="${CONTAINER_IMG_REG}/dual-pods-controller:${IMAGE_TAG}"
-REQUESTER_IMAGE="${CONTAINER_IMG_REG}/requester:${IMAGE_TAG}"
-LAUNCHER_IMAGE="${CONTAINER_IMG_REG}/launcher:${IMAGE_TAG}"
-
 echo "Configuration:"
-echo "  FMA_NAMESPACE:    $FMA_NAMESPACE"
+echo "  FMA_NAMESPACE:           $FMA_NAMESPACE"
 echo "  FMA_CHART_INSTANCE_NAME: $FMA_CHART_INSTANCE_NAME"
-echo "  CONTAINER_IMG_REG: $CONTAINER_IMG_REG"
-echo "  IMAGE_TAG:        $IMAGE_TAG"
-echo "  CONTROLLER_IMAGE: $CONTROLLER_IMAGE"
-echo "  REQUESTER_IMAGE:  $REQUESTER_IMAGE"
-echo "  LAUNCHER_IMAGE:   $LAUNCHER_IMAGE"
-echo "  STANDALONE:       $STANDALONE"
-if [ "$STANDALONE" = true ]; then
-    echo "  CR_USER:          ${CR_USER}"
-    echo "  CR_TOKEN:         ${CR_TOKEN:0:4}****"
-fi
-echo "  RUNTIME_CLASS_NAME: ${RUNTIME_CLASS_NAME:-<unset>}"
-echo "  POLICIES_ENABLED: ${POLICIES_ENABLED:-<auto-detect>}"
-echo "  LIMIT:            ${LIMIT:-600}"
+echo "  CONTAINER_IMG_REG:       $CONTAINER_IMG_REG"
+echo "  IMAGE_TAG:               $IMAGE_TAG"
+echo "  NODE_VIEW_CLUSTER_ROLE:  ${NODE_VIEW_CLUSTER_ROLE:-<will create>}"
+echo "  RUNTIME_CLASS_NAME:      ${RUNTIME_CLASS_NAME:-<unset>}"
+echo "  POLICIES_ENABLED:        ${POLICIES_ENABLED:-<auto-detect>}"
+echo "  HELM_EXTRA_ARGS:         ${HELM_EXTRA_ARGS:-<none>}"
 
 # ---------------------------------------------------------------------------
-# Step 2: (standalone only) Create namespace, pull secret, patch SA
-# ---------------------------------------------------------------------------
-
-step "Standalone setup (namespace, pull secret)"
-
-if [ "$STANDALONE" = true ]; then
-    # Clean up existing namespace if present
-    if kubectl get namespace "$FMA_NAMESPACE" &>/dev/null; then
-        echo "Namespace $FMA_NAMESPACE exists, deleting..."
-        # Remove dual-pods finalizers to unblock deletion
-        for pod in $(kubectl get pods -n "$FMA_NAMESPACE" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
-            all_finalizers=$(kubectl get pod "$pod" -n "$FMA_NAMESPACE" \
-                -o jsonpath='{range .metadata.finalizers[*]}{@}{"\n"}{end}' 2>/dev/null || true)
-            if echo "$all_finalizers" | grep -q '^dual-pods\.llm-d\.ai/'; then
-                keep_entries=$(echo "$all_finalizers" \
-                    | grep -v '^dual-pods\.llm-d\.ai/' \
-                    | awk 'NR>1{printf ","} {printf "\"%s\"", $0}')
-                kubectl patch pod "$pod" -n "$FMA_NAMESPACE" --type=merge \
-                    -p="{\"metadata\":{\"finalizers\":[${keep_entries}]}}" 2>/dev/null || true
-            fi
-        done
-        kubectl delete namespace "$FMA_NAMESPACE" --ignore-not-found --timeout=120s || true
-        # Wait for full deletion
-        while kubectl get namespace "$FMA_NAMESPACE" &>/dev/null; do
-            echo "  Waiting for namespace deletion..."
-            sleep 2
-        done
-    fi
-
-    echo "Creating namespace $FMA_NAMESPACE..."
-    kubectl create namespace "$FMA_NAMESPACE"
-
-    echo "Creating GHCR pull secret..."
-    kubectl create secret docker-registry ghcr-pull-secret \
-        --docker-server=ghcr.io \
-        --docker-username="$CR_USER" \
-        --docker-password="$CR_TOKEN" \
-        -n "$FMA_NAMESPACE"
-
-    kubectl patch serviceaccount default -n "$FMA_NAMESPACE" \
-        -p '{"imagePullSecrets": [{"name": "ghcr-pull-secret"}]}'
-    echo "Standalone setup complete"
-else
-    echo "Skipped (not standalone — workflow handles namespace/secrets)"
-fi
-
-# ---------------------------------------------------------------------------
-# Step 3: Apply FMA CRDs
+# Step 2: Apply FMA CRDs
 # ---------------------------------------------------------------------------
 
 step "Apply FMA CRDs"
@@ -179,21 +100,29 @@ done
 echo "All CRDs established"
 
 # ---------------------------------------------------------------------------
-# Step 4: Create node-viewer ClusterRole
+# Step 3: Create node-viewer ClusterRole
 # ---------------------------------------------------------------------------
 
-step "Create node-viewer ClusterRole"
+step "Configure node-viewer ClusterRole"
 
-CLUSTER_ROLE_NAME="${FMA_CHART_INSTANCE_NAME}-node-view"
-if kubectl get clusterrole "$CLUSTER_ROLE_NAME" &>/dev/null; then
-    echo "ClusterRole $CLUSTER_ROLE_NAME already exists, skipping"
+if [ "${NODE_VIEW_CLUSTER_ROLE:-}" = "none" ]; then
+    CLUSTER_ROLE_NAME=""
+    echo "Skipped (NODE_VIEW_CLUSTER_ROLE=none)"
+elif [ -n "${NODE_VIEW_CLUSTER_ROLE:-}" ]; then
+    CLUSTER_ROLE_NAME="${NODE_VIEW_CLUSTER_ROLE}"
+    echo "Using existing ClusterRole: $CLUSTER_ROLE_NAME"
 else
-    kubectl create clusterrole "$CLUSTER_ROLE_NAME" --verb=get,list,watch --resource=nodes
-    echo "ClusterRole $CLUSTER_ROLE_NAME created"
+    CLUSTER_ROLE_NAME="${FMA_CHART_INSTANCE_NAME}-node-view"
+    if kubectl get clusterrole "$CLUSTER_ROLE_NAME" &>/dev/null; then
+        echo "ClusterRole $CLUSTER_ROLE_NAME already exists, skipping"
+    else
+        kubectl create clusterrole "$CLUSTER_ROLE_NAME" --verb=get,list,watch --resource=nodes
+        echo "ClusterRole $CLUSTER_ROLE_NAME created"
+    fi
 fi
 
 # ---------------------------------------------------------------------------
-# Step 5: Detect and apply ValidatingAdmissionPolicies
+# Step 4: Detect and apply ValidatingAdmissionPolicies
 # ---------------------------------------------------------------------------
 
 step "ValidatingAdmissionPolicies"
@@ -215,27 +144,37 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 6: Deploy FMA controllers via Helm
+# Step 5: Deploy FMA controllers via Helm
 # ---------------------------------------------------------------------------
 
 step "Deploy FMA controllers via Helm"
 
-echo "  Release:   $FMA_CHART_INSTANCE_NAME"
-echo "  Namespace: $FMA_NAMESPACE"
-echo "  Image:     $CONTROLLER_IMAGE"
+echo "  Chart instance: $FMA_CHART_INSTANCE_NAME"
+echo "  Namespace:      $FMA_NAMESPACE"
+echo "  Images:         ${CONTAINER_IMG_REG}/dual-pods-controller:${IMAGE_TAG}"
+echo "                  ${CONTAINER_IMG_REG}/launcher-populator:${IMAGE_TAG}"
+
+HELM_ARGS=(
+    --set global.imageRegistry="${CONTAINER_IMG_REG}"
+    --set global.imageTag="${IMAGE_TAG}"
+)
+
+# Append any caller-supplied Helm arguments (e.g. --set global.local=true)
+if [ -n "${HELM_EXTRA_ARGS:-}" ]; then
+    read -ra _extra <<< "$HELM_EXTRA_ARGS"
+    HELM_ARGS+=("${_extra[@]}")
+fi
+
+if [ -n "$CLUSTER_ROLE_NAME" ]; then
+    HELM_ARGS+=(--set global.nodeViewClusterRole="${CLUSTER_ROLE_NAME}")
+fi
 
 helm upgrade --install "$FMA_CHART_INSTANCE_NAME" charts/fma-controllers \
     -n "$FMA_NAMESPACE" \
-    --set global.imageRegistry="${CONTAINER_IMG_REG}" \
-    --set global.imageTag="${IMAGE_TAG}" \
-    --set global.nodeViewClusterRole="${CLUSTER_ROLE_NAME}" \
-    --set dualPodsController.sleeperLimit=2 \
-    --set global.local=false \
-    --set dualPodsController.debugAcceleratorMemory=false \
-    --set launcherPopulator.enabled=true
+    "${HELM_ARGS[@]}"
 
 # ---------------------------------------------------------------------------
-# Step 7: Wait for controllers to be ready
+# Step 6: Wait for controllers to be ready
 # ---------------------------------------------------------------------------
 
 step "Wait for controllers to be ready"

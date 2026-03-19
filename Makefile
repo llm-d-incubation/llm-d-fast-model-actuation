@@ -134,14 +134,6 @@ generate: $(CONTROLLER_GEN_VERSION) ## Generate code containing DeepCopy, DeepCo
 generate_client: $(CODE_GEN_DIR) ## (Re-)generate generated files
 	./hack/generate-client.sh
 
-# Deploy FMA on an existing cluster (e.g. OpenShift, kind).
-# Pass --standalone to create namespace and pull secret automatically.
-# Required env vars: FMA_NAMESPACE, FMA_CHART_INSTANCE_NAME,
-#                    CONTAINER_IMG_REG, IMAGE_TAG
-.PHONY: deploy-fma-ocp
-deploy-fma-ocp: ## Deploy FMA on OpenShift/kind cluster
-	./test/e2e/deploy_fma.sh $(DEPLOY_FMA_FLAGS)
-
 # go-install-tool will 'go install' any package with custom target and name of binary, if it doesn't exist
 # $1 - target path with name of binary
 # $2 - package url which can be installed
