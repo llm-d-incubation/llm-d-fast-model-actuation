@@ -337,11 +337,13 @@ jobs:
       # PR-specific namespace for isolation between concurrent PR tests
       FMA_NAMESPACE: fma-e2e-pr-${{ needs.gate.outputs.pr_number || github.run_id }}
       # Unique release name per run to avoid conflicts
-      FMA_RELEASE_NAME: fma-e2e-${{ github.run_id }}
-      # Use the images built in the previous job
-      CONTROLLER_IMAGE: ${{ needs.build-image.outputs.controller_image }}
-      REQUESTER_IMAGE: ${{ needs.build-image.outputs.requester_image }}
+      FMA_CHART_INSTANCE_NAME: fma-e2e-${{ github.run_id }}
+      # Image registry and tag from the build job
+      IMAGE_TAG: ${{ needs.build-image.outputs.image_tag }}
+      # LAUNCHER_IMAGE and REQUESTER_IMAGE are needed by test object creation
+      # and cleanup step (rm-images-from-ocp-nodes.sh)
       LAUNCHER_IMAGE: ${{ needs.build-image.outputs.launcher_image }}
+      REQUESTER_IMAGE: ${{ needs.build-image.outputs.requester_image }}
     steps:
       - name: Checkout source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -428,8 +430,8 @@ jobs:
 
           # Clean up cluster-scoped resources from previous runs
           echo "Cleaning up cluster-scoped resources..."
-          kubectl delete clusterrole        "${FMA_RELEASE_NAME}-node-view" --ignore-not-found || true
-          kubectl delete clusterrolebinding "${FMA_RELEASE_NAME}-node-view" --ignore-not-found || true
+          kubectl delete clusterrole        "${FMA_CHART_INSTANCE_NAME}-node-view" --ignore-not-found || true
+          kubectl delete clusterrolebinding "${FMA_CHART_INSTANCE_NAME}-node-view" --ignore-not-found || true
 
           echo "Cleanup complete"
 
@@ -464,142 +466,18 @@ jobs:
             -p '{"imagePullSecrets": [{"name": "ghcr-pull-secret"}]}'
           echo "GHCR pull secret created and attached to default SA"
 
-      - name: Apply FMA CRDs
-        run: |
-          CRD_NAMES=""
-          for crd_file in config/crd/*.yaml; do
-            crd_name=$(kubectl apply --dry-run=client -f "$crd_file" -o jsonpath='{.metadata.name}')
-            CRD_NAMES="$CRD_NAMES $crd_name"
-            if kubectl get crd "$crd_name" &>/dev/null; then
-              echo "  CRD $crd_name already exists, skipping"
-            else
-              echo "  Applying $crd_file ($crd_name)"
-              kubectl apply --server-side -f "$crd_file"
-            fi
-          done
-
-          # Wait for CRDs to become Established (API servers have digested the definitions)
-          echo "Waiting for CRDs to become Established..."
-          CRD_TIMEOUT=120s
-          for crd_name in $CRD_NAMES; do
-            kubectl wait --for=condition=Established "crd/$crd_name" --timeout="$CRD_TIMEOUT"
-          done
-          echo "All CRDs established"
-
-      - name: Create node-viewer ClusterRole
-        run: |
-          echo "Creating ClusterRole ${FMA_RELEASE_NAME}-node-view..."
-          kubectl create clusterrole ${FMA_RELEASE_NAME}-node-view --verb=get,list,watch --resource=nodes
-          echo "ClusterRole created"
-
-      - name: Detect ValidatingAdmissionPolicy support
-        id: detect-vap
-        run: |
-          POLICIES_ENABLED=false
-          if kubectl api-resources --api-group=admissionregistration.k8s.io -o name 2>/dev/null \
-             | grep -q 'validatingadmissionpolicies'; then
-            POLICIES_ENABLED=true
-          fi
-          echo "ValidatingAdmissionPolicy support: $POLICIES_ENABLED"
-          echo "policies_enabled=$POLICIES_ENABLED" >> $GITHUB_OUTPUT
-
-      - name: Apply ValidatingAdmissionPolicy resources
+      - name: Deploy FMA (CRDs and controllers)
+        id: deploy-fma
         env:
-          POLICIES_ENABLED: ${{ steps.detect-vap.outputs.policies_enabled }}
+          CONTAINER_IMG_REG: ghcr.io/${{ github.repository }}
+          IMAGE_TAG: ${{ env.IMAGE_TAG }}
+          NODE_VIEW_CLUSTER_ROLE: "create/please"
         run: |
-          if [ "$POLICIES_ENABLED" = "true" ]; then
-            echo "Applying ValidatingAdmissionPolicy resources..."
-            kubectl apply -f config/validating-admission-policies/
-          else
-            echo "ValidatingAdmissionPolicy not supported, skipping."
-          fi
-
-      - name: Deploy FMA controller
-        run: |
-          echo "Deploying FMA controller..."
-          echo "  Release: $FMA_RELEASE_NAME"
-          echo "  Namespace: $FMA_NAMESPACE"
-          echo "  Image: $CONTROLLER_IMAGE"
-
-          helm upgrade --install "$FMA_RELEASE_NAME" charts/fma-controllers \
-            -n "$FMA_NAMESPACE" \
-            --set global.imageRegistry="${CONTROLLER_IMAGE%/dual-pods-controller:*}" \
-            --set global.imageTag="${CONTROLLER_IMAGE##*:}" \
-            --set global.nodeViewClusterRole=${FMA_RELEASE_NAME}-node-view \
-            --set dualPodsController.sleeperLimit=2 \
-            --set global.local=false \
-            --set dualPodsController.debugAcceleratorMemory=false \
-            --set launcherPopulator.enabled=true
-
-      - name: Wait for FMA controllers to be ready
-        run: |
-          kubectl wait --for=condition=available --timeout=120s \
-            deployment "$FMA_RELEASE_NAME-dual-pods-controller" -n "$FMA_NAMESPACE"
-          echo ""
-          echo "=== Dual-Pod Controller Pod Status ==="
-          kubectl get pods -n "$FMA_NAMESPACE" -l app.kubernetes.io/component=dual-pods-controller
-          echo ""
-          echo "=== Dual-Pod Controller Deployment ==="
-          kubectl get deployment "$FMA_RELEASE_NAME-dual-pods-controller" -n "$FMA_NAMESPACE"
-
-          kubectl wait --for=condition=available --timeout=120s \
-            deployment "$FMA_RELEASE_NAME-launcher-populator" -n "$FMA_NAMESPACE"
-          echo ""
-          echo "=== Launcher Populator Pod Status ==="
-          kubectl get pods -n "$FMA_NAMESPACE" -l app.kubernetes.io/component=launcher-populator
-          echo ""
-          echo "=== Launcher Populator Deployment ==="
-          kubectl get deployment "$FMA_RELEASE_NAME-launcher-populator" -n "$FMA_NAMESPACE"
-
-      - name: Verify controller health
-        run: |
-          echo "Checking controller pod for issues..."
-
-          # Get the controller pod name
-          POD_NAME=$(kubectl get pods -n "$FMA_NAMESPACE" \
-            -l app.kubernetes.io/name=fma-controllers,app.kubernetes.io/component=dual-pods-controller \
-            -o jsonpath='{.items[0].metadata.name}')
-
-          if [ -z "$POD_NAME" ]; then
-            echo "::error::No controller pod found"
-            exit 1
-          fi
-
-          echo "Controller pod: $POD_NAME"
-
-          # Check pod is Running
-          PHASE=$(kubectl get pod "$POD_NAME" -n "$FMA_NAMESPACE" -o jsonpath='{.status.phase}')
-          if [ "$PHASE" != "Running" ]; then
-            echo "::error::Controller pod is in phase $PHASE, expected Running"
-            kubectl describe pod "$POD_NAME" -n "$FMA_NAMESPACE"
-            exit 1
-          fi
-
-          # Check for restarts
-          RESTARTS=$(kubectl get pod "$POD_NAME" -n "$FMA_NAMESPACE" \
-            -o jsonpath='{.status.containerStatuses[0].restartCount}')
-          if [ "$RESTARTS" -gt 0 ]; then
-            echo "::warning::Controller has restarted $RESTARTS time(s)"
-          fi
-
-          # Display recent logs
-          echo ""
-          echo "=== Controller Logs (last 50 lines) ==="
-          kubectl logs "$POD_NAME" -n "$FMA_NAMESPACE" --tail=50
-
-          # Check for fatal/panic in logs
-          # klog FATAL lines: F followed by 4 digits (MMDD), e.g. "F0210 19:21:..."
-          # Go panics: line starting with "panic:" (case sensitive)
-          FATAL_LINES=$(kubectl logs "$POD_NAME" -n "$FMA_NAMESPACE" 2>&1 \
-            | grep -E "^F[0-9]{4} |^panic:" | head -5) || true
-          if [ -n "$FATAL_LINES" ]; then
-            echo "::error::Controller logs contain FATAL or panic messages:"
-            echo "$FATAL_LINES"
-            exit 1
-          fi
-
-          echo ""
-          echo "Controller health check passed"
+          # Force container registry to lowercase, because this is how
+          # ghcr.io relates images to their source org/repo.
+          export CONTAINER_IMG_REG="${CONTAINER_IMG_REG,,}"
+          echo "Running deploy_fma.sh..."
+          ./test/e2e/deploy_fma.sh
 
       - name: Set up test service account
         run: |
@@ -900,7 +778,7 @@ jobs:
         run: |
           echo "Cleaning up all FMA test infrastructure..."
           echo "  FMA_NAMESPACE: $FMA_NAMESPACE"
-          echo "  FMA_RELEASE_NAME: $FMA_RELEASE_NAME"
+          echo "  FMA_CHART_INSTANCE_NAME: $FMA_CHART_INSTANCE_NAME"
 
           # Uninstall Helm releases
           for release in $(helm list -n "$FMA_NAMESPACE" -q 2>/dev/null); do
@@ -929,8 +807,8 @@ jobs:
             --ignore-not-found --timeout=120s || true
 
           # Delete cluster-scoped stuff for reading Node objects
-          kubectl delete clusterrole        "${FMA_RELEASE_NAME}-node-view" --ignore-not-found || true
-          kubectl delete clusterrolebinding "${FMA_RELEASE_NAME}-node-view" --ignore-not-found || true
+          kubectl delete clusterrole        "${FMA_CHART_INSTANCE_NAME}-node-view" --ignore-not-found || true
+          kubectl delete clusterrolebinding "${FMA_CHART_INSTANCE_NAME}-node-view" --ignore-not-found || true
 
           echo "Cleanup complete"
 
