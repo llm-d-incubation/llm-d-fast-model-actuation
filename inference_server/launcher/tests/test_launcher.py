@@ -715,7 +715,7 @@ class TestAPIEndpoints:
         """Test getting instance logs without Range header returns 200"""
         mock_manager.get_instance_log_bytes.return_value = (
             b"Log line 1Log line 2Log line 3",
-            29,
+            30,
         )
 
         response = client.get("/v2/vllm/instances/test-id/log")
@@ -723,6 +723,7 @@ class TestAPIEndpoints:
         assert response.status_code == 200
         assert response.headers["content-type"] == "application/octet-stream"
         assert response.content == b"Log line 1Log line 2Log line 3"
+        assert response.headers["content-range"] == "bytes 0-29/30"
         mock_manager.get_instance_log_bytes.assert_called_once_with("test-id", 0, None)
 
     @patch("launcher.vllm_manager")
