@@ -184,10 +184,11 @@ class VllmInstance:
     ) -> tuple[bytes, int]:
         """
         Retrieve log bytes from the child process.
-        :param start: First byte to read (inclusive, 0-based)
-        :param end: Last byte to read (inclusive). None means up to
-                    start + MAX_LOG_RESPONSE_BYTES - 1 or EOF.
-        :return: (content_bytes, total_file_size)
+        :param start: First byte to read (inclusive, 0-based).
+        :param end: Last byte to read (inclusive, must be >= start).
+                    None means up to start + MAX_LOG_RESPONSE_BYTES - 1
+                    or EOF, whichever comes first.
+        :return: (content_bytes, current_total_log_length)
         :raises LogRangeNotAvailable: If start is beyond available content
         """
         try:
@@ -364,6 +365,7 @@ def parse_range_header(range_header: str) -> tuple[int, int | None]:
     if m is None:
         raise ValueError(f"Unsupported or malformed Range header: {range_header}")
     start = int(m.group(1))
+    # group(2) is the end value; absent in open-ended ranges like "bytes=100-"
     end = int(m.group(2)) if m.group(2) else None
     if end is not None and end < start:
         raise ValueError(f"Range end ({end}) must be >= start ({start})")
@@ -500,10 +502,13 @@ async def get_vllm_instance_logs(
     """
     Get logs from a specific vLLM instance.
 
-    Without a Range header the full log (up to 1 MB) is returned with 200 OK.
-    With ``Range: bytes=START-END`` or ``Range: bytes=START-`` the
-    requested slice is returned with 206 Partial Content and a
-    ``Content-Range`` header.
+    Supports range requests per RFC 9110 §14 (Range Requests).
+
+    Without a Range header the full log (up to 1 MB) is returned with
+    200 OK.  With ``Range: bytes=START-END`` or ``Range: bytes=START-``
+    the requested slice is returned with 206 Partial Content.  In both
+    cases the response includes a ``Content-Range`` header indicating the byte range
+    and current total log length.
     """
     try:
         if range is None:
@@ -518,10 +523,12 @@ async def get_vllm_instance_logs(
 
         data, total = vllm_manager.get_instance_log_bytes(instance_id, start, end)
 
-        actual_end = start + len(data) - 1 if data else start
-        headers = {"Accept-Ranges": "bytes"}
+        actual_end = start + len(data) - 1
+        headers = {
+            "Accept-Ranges": "bytes",
+            "Content-Range": f"bytes {start}-{actual_end}/{total}",
+        }
         if partial:
-            headers["Content-Range"] = f"bytes {start}-{actual_end}/{total}"
             status_code = HTTPStatus.PARTIAL_CONTENT
         else:
             status_code = HTTPStatus.OK
@@ -646,9 +653,27 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    # Configure root logger so launcher messages are visible before uvicorn
+    logging.basicConfig(
+        level=getattr(logging, args.log_level.upper()),
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
+
     # Get node name from environment variable
     node_name = os.getenv("NODE_NAME")
     namespace = os.getenv("NAMESPACE")
+
+    logger.info(
+        "Launcher starting with args: mock_gpus=%s, mock_gpu_count=%d, "
+        "host=%s, port=%d, log_level=%s, node_name=%s, namespace=%s",
+        args.mock_gpus,
+        args.mock_gpu_count,
+        args.host,
+        args.port,
+        args.log_level,
+        node_name,
+        namespace,
+    )
 
     # Reinitialize the global manager with mock mode settings
     vllm_manager = VllmMultiProcessManager(
