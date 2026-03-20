@@ -57,8 +57,11 @@ type VllmConfig struct {
 
 // InstanceStatus returned by status APIs.
 type InstanceStatus struct {
-	InstanceID string `json:"instance_id"`
-	Status     string `json:"status"`
+	InstanceID string            `json:"instance_id"`
+	Status     string            `json:"status"`
+	Options    string            `json:"options"`
+	GpuUUIDs   []string          `json:"gpu_uuids,omitempty"`
+	EnvVars    map[string]string `json:"env_vars,omitempty"`
 }
 
 // AllInstancesStatus response.
