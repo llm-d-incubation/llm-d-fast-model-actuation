@@ -381,8 +381,8 @@ kubectl scale rs $rslb --replicas=0
 expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | wc -l | grep -w 0"
 
 # Verify launcher set is unchanged and target launcher is unbound
-launcher_count_pre_restart=$(kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | grep -c '^pod/')
-kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | sed s%pod/%% | grep -x "$launcherlb"
+launcher_count_pre_restart=$(kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | wc -l)
+kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | grep -x "pod/$launcherlb"
 expect '[ "$(kubectl get pod $launcherlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "" ]'
 
 # Verify launcher has sleeping instances before restart
@@ -395,14 +395,16 @@ echo "Restarting dual-pods controller..."
 kubectl rollout restart deployment fma-dual-pods-controller
 kubectl rollout status deployment fma-dual-pods-controller --timeout=60s
 
-# Wait for controller to be ready
+# Wait for controller to be ready for ongoing checks
+# In detail: allow some time for the dual-pods controller to do something unexpected in the case that the controller is behaving incorrectly,
+# so that the ongoing checks have some chance to fail thus detect the incorrectness, instead of just quickly and coincidentally passing.
 sleep 10
 
 # Verify launcher pod set is unchanged and target launcher is still running
-expect "kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | grep -c '^pod/' | grep -w $launcher_count_pre_restart"
-kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | sed s%pod/%% | grep -x "$launcherlb"
+expect "kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | wc -l | grep -w $launcher_count_pre_restart"
+kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | grep -x "pod/$launcherlb"
 
-# Verify launcher still has the same instances after controller restart
+# Verify launcher still has the same number of instances after controller restart
 launcher_instances_after=$(kubectl exec $launcherlb -- python3 -c 'import json,urllib.request; print(json.load(urllib.request.urlopen("http://127.0.0.1:8001/v2/vllm/instances"))["total_instances"])')
 echo "Launcher has $launcher_instances_after instances after controller restart"
 [ "$launcher_instances_after" == "$launcher_instances_before" ]
@@ -412,7 +414,7 @@ echo "Launcher has $launcher_instances_after instances after controller restart"
 kubectl patch rs $rslb --type=json -p='[{"op": "replace", "path": "/spec/template/metadata/annotations/dual-pods.llm-d.ai~1inference-server-config", "value": "'$isc2'"}]'
 kubectl scale rs $rslb --replicas=1
 
-expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | grep -c '^pod/' | grep -w 1"
+expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | wc -l | grep -w 1"
 reqlb_post_restart=$(kubectl get pods -o name -l app=dp-example,instance=$instlb | sed s%pod/%%)
 
 # Verify requester is bound to the same launcher (controller recovered state correctly)
@@ -442,9 +444,9 @@ kubectl delete pod $launcherlb --wait=true
 
 kubectl scale rs $rslb --replicas=1
 
-expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | grep -c '^pod/' | grep -w 1"
+expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | wc -l | grep -w 1"
 reqlb_after_delete=$(kubectl get pods -o name -l app=dp-example,instance=$instlb | sed s%pod/%%)
-expect "kubectl get pods -o name -l dual-pods.llm-d.ai/dual=$reqlb_after_delete | grep -c '^pod/' | grep -w 1"
+expect "kubectl get pods -o name -l dual-pods.llm-d.ai/dual=$reqlb_after_delete | wc -l | grep -w 1"
 launcherlb_after_delete=$(kubectl get pods -o name -l dual-pods.llm-d.ai/dual=$reqlb_after_delete | sed s%pod/%%)
 [ "$launcherlb_after_delete" != "$launcherlb" ]
 expect '[ "$(kubectl get pod $reqlb_after_delete -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcherlb_after_delete" ]'

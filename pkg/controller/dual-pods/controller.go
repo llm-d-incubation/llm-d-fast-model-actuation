@@ -259,6 +259,7 @@ type nodeData struct {
 	InferenceServers map[apitypes.UID]*serverData
 
 	// Launchers maps name of launcher-based server-providing Pod to launcherData.
+	// Access only inside the calling hierarchy that `nodeItem.process()` is the root caller.
 	Launchers map[string]*launcherData
 
 	// ItemsMutex may be acquired while holding controller mutex, not vice-versa.
@@ -692,10 +693,10 @@ func (ctl *controller) enqueueRequestersByInferenceServerConfig(isc *fmav1alpha1
 	}
 }
 
-func (ctl *controller) enqueueRequestersOnNode(ctx context.Context, nodeName string, why string) {
+func (ctl *controller) enqueueUnboundInfSvrItemsOnNode(ctx context.Context, nodeName string, why string) {
 	logger := klog.FromContext(ctx)
 	nd := ctl.getNodeData(nodeName)
-	requesterCount := 0
+	itemCount := 0
 	podObjs, err := ctl.podInformer.GetIndexer().ByIndex(nodeNameIndexName, nodeName)
 	if err != nil {
 		logger.Error(err, "Failed to list Pods by nodeName index", "nodeName", nodeName, "why", why)
@@ -707,14 +708,22 @@ func (ctl *controller) enqueueRequestersOnNode(ctx context.Context, nodeName str
 		if it != infSvrItemRequester {
 			continue
 		}
+		// skip bound Inference Servers
+		// a podObj could be either a server-requesting Pod or a server-providing Pod
+		// but after the `it != infSvrItemRequester`` check above, it must be a server-requesting Pod here, and we want to skip it if it's bound to a server-providing Pod
+		// we can use the controller's data to check whether it's bound or not
+		serverDat := ctl.getServerData(nd, pod.Name, pod.UID)
+		if serverDat.ProvidingPodName != "" {
+			continue
+		}
 		nd.add(item)
-		requesterCount++
+		itemCount++
 	}
-	if requesterCount == 0 {
-		logger.V(5).Info("No server-requesting Pods to enqueue on node", "node", nodeName, "why", why)
+	if itemCount == 0 {
+		logger.V(5).Info("No unbound infSvrItems to enqueue on node", "node", nodeName, "why", why)
 		return
 	}
-	logger.V(5).Info("Enqueuing server-requesting Pods on node", "node", nodeName, "why", why, "count", requesterCount)
+	logger.V(5).Info("Enqueuing unbound infSvrItems on node", "node", nodeName, "why", why, "itemCount", itemCount)
 	ctl.Queue.Add(nodeItem{nodeName})
 }
 
