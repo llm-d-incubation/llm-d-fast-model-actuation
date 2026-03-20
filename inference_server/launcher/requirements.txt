@@ -1,8 +1,3 @@
-fastapi
-pydantic
-uvicorn
-uvloop
-nvidia-ml-py
-kubernetes==31.0.0
+-r requirements-sans-vllm.txt
 # WARNING: vllm must be built from source on a macOS Silicon
 vllm; sys_platform != "darwin" or platform_machine != "arm64"
