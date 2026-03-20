@@ -259,7 +259,6 @@ type nodeData struct {
 	InferenceServers map[apitypes.UID]*serverData
 
 	// Launchers maps name of launcher-based server-providing Pod to launcherData.
-	// Access only while holding controller mutex.
 	Launchers map[string]*launcherData
 
 	// ItemsMutex may be acquired while holding controller mutex, not vice-versa.
@@ -759,8 +758,6 @@ func (ctl *controller) getServerData(nodeDat *nodeData, reqName string, reqUID a
 }
 
 func (ctl *controller) getLauncherData(nodeDat *nodeData, launcherPodName string) *launcherData {
-	ctl.mutex.Lock()
-	defer ctl.mutex.Unlock()
 	ans := nodeDat.Launchers[launcherPodName]
 	if ans == nil {
 		ans = &launcherData{
@@ -772,8 +769,6 @@ func (ctl *controller) getLauncherData(nodeDat *nodeData, launcherPodName string
 }
 
 func (ctl *controller) clearLauncherData(nodeDat *nodeData, launcherPodName string) {
-	ctl.mutex.Lock()
-	defer ctl.mutex.Unlock()
 	delete(nodeDat.Launchers, launcherPodName)
 }
 
