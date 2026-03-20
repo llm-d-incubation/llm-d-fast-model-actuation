@@ -258,11 +258,14 @@ class TestVllmInstance:
         instance.start()
         status = instance.get_status()
         assert status["status"] == "running"
+        assert status["options"] == vllm_config.options
+        assert status["env_vars"] == vllm_config.env_vars
 
         # Stopped
         mock_process._is_alive = False
         status = instance.get_status()
         assert status["status"] == "stopped"
+        assert status["options"] == vllm_config.options
 
     @patch("launcher.multiprocessing.Process")
     def test_instance_uuid_to_index_translation(
@@ -473,6 +476,8 @@ class TestVllmMultiProcessManager:
 
         assert status["status"] == "running"
         assert status["instance_id"] == "test-id"
+        assert status["options"] == vllm_config.options
+        assert status["env_vars"] == vllm_config.env_vars
 
     @patch("launcher.multiprocessing.Process")
     def test_get_instance_status_nonexistent(self, mock_process_class, manager):
@@ -494,6 +499,9 @@ class TestVllmMultiProcessManager:
         assert status["total_instances"] == 2
         assert status["running_instances"] == 2
         assert len(status["instances"]) == 2
+        for inst in status["instances"]:
+            assert inst["options"] == vllm_config.options
+            assert inst["env_vars"] == vllm_config.env_vars
 
     @patch("launcher.multiprocessing.Process")
     def test_list_instances(self, mock_process_class, manager, vllm_config):
@@ -693,6 +701,9 @@ class TestAPIEndpoints:
         mock_manager.get_instance_status.return_value = {
             "status": "running",
             "instance_id": "test-id",
+            "options": "--model test-model",
+            "gpu_uuids": None,
+            "env_vars": {"KEY": "val"},
         }
 
         response = client.get("/v2/vllm/instances/test-id")
@@ -700,6 +711,8 @@ class TestAPIEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "running"
+        assert data["options"] == "--model test-model"
+        assert data["env_vars"] == {"KEY": "val"}
 
     @patch("launcher.vllm_manager")
     def test_get_nonexistent_instance_status(self, mock_manager, client):

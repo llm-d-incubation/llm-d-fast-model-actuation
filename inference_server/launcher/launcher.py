@@ -177,6 +177,7 @@ class VllmInstance:
         return {
             "status": "running" if self.process.is_alive() else "stopped",
             "instance_id": self.instance_id,
+            **self.config.model_dump(),
         }
 
     def get_log_bytes(
