@@ -1,0 +1,7 @@
+fastapi==0.135.1
+pydantic==2.12.5
+uvicorn==0.42.0
+uvloop==0.22.1
+httpx==0.28.1
+nvidia-ml-py==13.590.48
+kubernetes==31.0.0

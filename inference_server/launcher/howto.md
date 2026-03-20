@@ -1,13 +1,14 @@
 1- HOW TO RUN THE UNIT TEST:
 
-Install all the necessary packages:
+Install all the necessary packages (feel free to use a later version of pytest if you prefer):
 ```bash
-pip install -r requirements.txt
+pip install pytest==9.0.2 -r requirements-sans-vllm.txt
 ```
 
 Run the unit test doing:
 ```bash
-python -m pytest test_launcher.py -v
+python -m pytest tests/test_launcher.py -v
+python -m pytest tests/test_gputranslator.py -v
 ```
 
 2- RUN E2E TEST:
