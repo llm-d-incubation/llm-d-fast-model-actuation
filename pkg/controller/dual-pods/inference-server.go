@@ -62,38 +62,25 @@ func (ni nodeItem) process(ctx context.Context, ctl *controller) (error, bool) {
 	ctx = klog.NewContext(ctx, logger)
 	nodeDat := ctl.getNodeData(ni.NodeName)
 	items := nodeDat.yankItems()
-	var launcherItems []itemOnNode
-	var otherItems []itemOnNode
-	for localItem := range items {
-		if _, ok := localItem.(launcherPodItem); ok {
-			launcherItems = append(launcherItems, localItem)
-			continue
-		}
-		otherItems = append(otherItems, localItem)
-	}
 	var retries int
-	logger.V(4).Info("Processing items for node", "count", len(items), "launcherItems", len(launcherItems), "otherItems", len(otherItems))
-	processItems := func(localItems []itemOnNode) {
-		for _, localItem := range localItems {
-			logger.V(4).Info("Processing node-local item", "item", localItem)
-			err, retry := localItem.process(ctx, ctl, nodeDat)
-			if err != nil {
-				if retry {
-					logger.Info("Processing node local item suffered transient error, will retry", "item", localItem, "err", err)
-				} else {
-					logger.Error(err, "Processing node local item failed", "item", localItem)
-				}
-			} else {
-				logger.V(4).Info("Finished processing node-local item", "item", localItem, "willRetry", retry)
-			}
+	logger.V(4).Info("Processing items for node", "count", len(items))
+	for localItem := range items {
+		logger.V(4).Info("Processing node-local item", "item", localItem)
+		err, retry := localItem.process(ctx, ctl, nodeDat)
+		if err != nil {
 			if retry {
-				nodeDat.add(localItem)
-				retries++
+				logger.Info("Processing node local item suffered transient error, will retry", "item", localItem, "err", err)
+			} else {
+				logger.Error(err, "Processing node local item failed", "item", localItem)
 			}
+		} else {
+			logger.V(4).Info("Finished processing node-local item", "item", localItem, "willRetry", retry)
+		}
+		if retry {
+			nodeDat.add(localItem)
+			retries++
 		}
 	}
-	processItems(launcherItems)
-	processItems(otherItems)
 	logger.V(4).Info("Done processing items for node", "numToRetry", retries)
 	return nil, retries > 0
 }
@@ -102,22 +89,18 @@ func (item launcherPodItem) process(ctx context.Context, ctl *controller, nodeDa
 	logger := klog.FromContext(ctx).WithValues("launcherPod", item.LauncherPodName, "node", item.NodeName)
 	ctx = klog.NewContext(ctx, logger)
 
-	launcherPod, err := ctl.podLister.Pods(ctl.namespace).Get(item.LauncherPodName)
+	_, err := ctl.podLister.Pods(ctl.namespace).Get(item.LauncherPodName)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			logger.V(2).Info("Launcher pod deleted, cleaning up launcher data")
 			ctl.clearLauncherData(nodeDat, item.LauncherPodName)
-			ctl.enqueueRequestersOnNode(ctx, item.NodeName, "launcher pod deleted")
+			ctl.enqueueUnboundInfSvrItemsOnNode(ctx, item.NodeName, fmt.Sprintf("launcher pod %s deleted", item.LauncherPodName))
 			return nil, false
 		}
 		return err, true
 	}
 
-	err, retry := ctl.syncLauncherInstances(ctx, nodeDat, launcherPod)
-	ctl.enqueueRequestersOnNode(ctx, item.NodeName, "launcher pod synced")
-	if err != nil || retry {
-		return err, retry
-	}
+	ctl.enqueueUnboundInfSvrItemsOnNode(ctx, item.NodeName, fmt.Sprintf("launcher pod %s changed", item.LauncherPodName))
 	return nil, false
 }
 
