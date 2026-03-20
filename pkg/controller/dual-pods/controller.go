@@ -340,19 +340,22 @@ type infSvrItemType string
 const (
 	// infSvrItemRequester is for a server-requesting Pod.
 	infSvrItemRequester infSvrItemType = "requester"
-	// infSvrItemBoundDirectProvider is for a server-providing Pod that
-	// is 'direct' (i.e. not launcher-based), and bound to a server-requesting Pod.
-	infSvrItemBoundDirectProvider infSvrItemType = "bound_direct_provider"
-	// infSvrItemLauncherBasedProvider is for a server-providing Pod that is launcher-based.
-	infSvrItemLauncherBasedProvider infSvrItemType = "launcher_based_provider"
+	// infSvrItemBoundProvider is for a server-providing Pod that
+	// is bound to a server-requesting Pod.
+	infSvrItemBoundProvider infSvrItemType = "bound_direct_provider"
+	// infSvrItemUnboundLauncherBasedProvider is for a server-providing Pod that
+	// is launcher-based and not bound to any server-requesting Pods.
+	infSvrItemUnboundLauncherBasedProvider infSvrItemType = "launcher_based_provider"
 	// infSvrItemDontCare is not a real infSvrItemType but only a placeholder
 	// saying the corresponding infSvrItem is not relevant to the controller.
 	infSvrItemDontCare infSvrItemType = "dont_care"
 )
 
 // careAbout returns an infSvrItem and an infSvrItemType.
-// The controller cares about server-requesting Pods, bound direct server-providing Pods,
-// and launcher-based server-providing Pods.
+// The controller cares about
+// - server-requesting Pods,
+// - bound server-providing Pods,
+// - unbound launcher-based server-providing Pods.
 // The controller doesn't care about unbound direct providers and other Pods.
 func careAbout(pod *corev1.Pod) (item infSvrItem, it infSvrItemType) {
 	if len(pod.Annotations[api.ServerPatchAnnotationName]) > 0 || len(pod.Annotations[api.InferenceServerConfigAnnotationName]) > 0 {
@@ -361,13 +364,13 @@ func careAbout(pod *corev1.Pod) (item infSvrItem, it infSvrItemType) {
 	requesterStr := pod.Annotations[requesterAnnotationKey]
 	requesterParts := strings.Split(requesterStr, " ")
 	if len(requesterParts) == 2 {
-		return infSvrItem{apitypes.UID(requesterParts[0]), requesterParts[1]}, infSvrItemBoundDirectProvider
+		return infSvrItem{apitypes.UID(requesterParts[0]), requesterParts[1]}, infSvrItemBoundProvider
 	}
 	// Check for unbound launcher-based server-providing Pod.
 	if pod.Labels != nil {
 		if _, hasLauncherLabel := pod.Labels[ctlrcommon.LauncherConfigNameLabelKey]; hasLauncherLabel {
-			// For launcher pods, use the pod's own UID and name as the item identifier
-			return infSvrItem{pod.UID, pod.Name}, infSvrItemLauncherBasedProvider
+			// For an unbound launcher-based server-providing Pod, use the Pod's own UID and name
+			return infSvrItem{pod.UID, pod.Name}, infSvrItemUnboundLauncherBasedProvider
 		}
 	}
 	return infSvrItem{}, infSvrItemDontCare
@@ -400,7 +403,7 @@ const requesterIndexName = "requester"
 func requesterIndexFunc(obj any) ([]string, error) {
 	pod := obj.(*corev1.Pod)
 	item, it := careAbout(pod)
-	if it == infSvrItemBoundDirectProvider {
+	if it == infSvrItemBoundProvider {
 		return []string{string(item.UID)}, nil
 	}
 	return []string{}, nil
@@ -422,7 +425,7 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 		if item, it := careAbout(typed); it == infSvrItemDontCare {
 			ctl.enqueueLogger.V(5).Info("Ignoring add of irrelevant Pod", "name", typed.Name)
 			return
-		} else if it == infSvrItemLauncherBasedProvider {
+		} else if it == infSvrItemUnboundLauncherBasedProvider {
 			nodeName, err := getProviderNodeName(typed)
 			if err != nil {
 				ctl.enqueueLogger.Error(err, "Failed to determine node of launcher")
@@ -436,7 +439,7 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 			ctl.Queue.Add(nodeItem{nodeName})
 		} else {
 			nodeName := typed.Spec.NodeName
-			if it == infSvrItemBoundDirectProvider {
+			if it == infSvrItemBoundProvider {
 				var err error
 				nodeName, err = getProviderNodeName(typed)
 				if err != nil {
@@ -475,7 +478,7 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 		if item, it := careAbout(typed); it == infSvrItemDontCare {
 			ctl.enqueueLogger.V(5).Info("Ignoring update of irrelevant Pod", "name", typed.Name)
 			return
-		} else if it == infSvrItemLauncherBasedProvider {
+		} else if it == infSvrItemUnboundLauncherBasedProvider {
 			nodeName, err := getProviderNodeName(typed)
 			if err != nil {
 				ctl.enqueueLogger.Error(err, "Failed to determine node of launcher")
@@ -489,7 +492,7 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 			ctl.Queue.Add(nodeItem{nodeName})
 		} else {
 			nodeName := typed.Spec.NodeName
-			if it == infSvrItemBoundDirectProvider {
+			if it == infSvrItemBoundProvider {
 				var err error
 				nodeName, err = getProviderNodeName(typed)
 				if err != nil {
@@ -531,7 +534,7 @@ func (ctl *controller) OnDelete(obj any) {
 		if item, it := careAbout(typed); it == infSvrItemDontCare {
 			ctl.enqueueLogger.V(5).Info("Ignoring delete of irrelevant Pod", "name", typed.Name)
 			return
-		} else if it == infSvrItemLauncherBasedProvider {
+		} else if it == infSvrItemUnboundLauncherBasedProvider {
 			nodeName, err := getProviderNodeName(typed)
 			if err != nil {
 				ctl.enqueueLogger.Error(err, "Failed to determine node of launcher")
@@ -545,7 +548,7 @@ func (ctl *controller) OnDelete(obj any) {
 			ctl.Queue.Add(nodeItem{nodeName})
 		} else {
 			nodeName := typed.Spec.NodeName
-			if it == infSvrItemBoundDirectProvider {
+			if it == infSvrItemBoundProvider {
 				var err error
 				nodeName, err = getProviderNodeName(typed)
 				if err != nil {
