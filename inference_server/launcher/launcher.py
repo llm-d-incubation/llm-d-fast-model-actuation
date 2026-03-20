@@ -506,8 +506,8 @@ async def get_vllm_instance_logs(
 
     Without a Range header the full log (up to 1 MB) is returned with
     200 OK.  With ``Range: bytes=START-END`` or ``Range: bytes=START-``
-    the requested slice is returned with 206 Partial Content.  Both
-    cases include a ``Content-Range`` header indicating the byte range
+    the requested slice is returned with 206 Partial Content.  In both
+    cases the response includes a ``Content-Range`` header indicating the byte range
     and current total log length.
     """
     try:
