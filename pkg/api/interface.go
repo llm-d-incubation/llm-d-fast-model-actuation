@@ -114,6 +114,14 @@ const DualLabelName string = "dual-pods.llm-d.ai/dual"
 // (it does not rely on this label for anything).
 const SleepingLabelName string = "dual-pods.llm-d.ai/sleeping"
 
+// ActivePortsAnnotationName is the name of an annotation used by gateway api inference extension
+// to declare the active ports of model server processes.
+// The dual-pods controller maintains this annotation on launcher-based server-providing Pods
+// to indicate which ports are currently active (i.e., associated with awake vLLM instances).
+// The value is a comma-separated list of port numbers.
+// See: https://gateway-api-inference-extension.sigs.k8s.io/implementations/model-servers/#active-port-declaration-via-pod-annotations
+const ActivePortsAnnotationName string = "inference.networking.k8s.io/active-ports"
+
 // SleepState is what HTTP GET /is_sleeping on an inference server
 // returns (as JSON).
 type SleepState struct {

@@ -133,6 +133,29 @@ func nominalHashIndexFunc(obj any) ([]string, error) {
 	return []string{nominalHash}, nil
 }
 
+// Port pool configuration
+// PortPoolBase is the starting port number for the dynamic port allocation pool
+const PortPoolBase int32 = 8005
+
+// launcherData tracks the state of a launcher pod
+type launcherData struct {
+	// Instances is a map,
+	// where key is an instance's ID which is the instance' nominal hash,
+	// and value is the last used time of the instance.
+	Instances map[string]time.Time
+
+	// Accurate indicates whether the set of nominal hash in Instances is accurate.
+	Accurate bool
+
+	// AllocatedPorts is a map of instance ID to port number.
+	// Key is the instance ID (nominal hash), value is the allocated port number.
+	AllocatedPorts map[string]int32
+
+	// NextPortIndex is the next index in the port pool to try for allocation
+	// This helps with round-robin allocation across the port pool
+	NextPortIndex int
+}
+
 type ControllerConfig struct {
 	SleeperLimit                      int
 	NumWorkers                        int
@@ -305,15 +328,6 @@ type serverData struct {
 	RequesterDeleteRequested bool
 }
 
-type launcherData struct {
-	// Instances is a map,
-	// where key is an instance's ID which is the instance' nominal hash,
-	// and value is the last used time of the instance.
-	Instances map[string]time.Time
-
-	// Accurate indicates whether the set of nominal hash in Instances is accurate.
-	Accurate bool
-}
 type queueItem interface {
 	// process returns (err error, retry bool).
 	// There will be a retry iff `retry`, error logged if `err != nil`.
@@ -678,7 +692,9 @@ func (ctl *controller) getLauncherData(nodeDat *nodeData, launcherPodName string
 	ans := nodeDat.Launchers[launcherPodName]
 	if ans == nil {
 		ans = &launcherData{
-			Instances: make(map[string]time.Time),
+			Instances:      make(map[string]time.Time),
+			AllocatedPorts: make(map[string]int32),
+			NextPortIndex:  0,
 		}
 		nodeDat.Launchers[launcherPodName] = ans
 	}
