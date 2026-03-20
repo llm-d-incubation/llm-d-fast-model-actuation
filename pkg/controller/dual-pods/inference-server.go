@@ -114,10 +114,10 @@ func (item launcherPodItem) process(ctx context.Context, ctl *controller, nodeDa
 	}
 
 	err, retry := ctl.syncLauncherInstances(ctx, nodeDat, launcherPod)
+	ctl.enqueueRequestersOnNode(ctx, item.NodeName, "launcher pod synced")
 	if err != nil || retry {
 		return err, retry
 	}
-	ctl.enqueueRequestersOnNode(ctx, item.NodeName, "launcher pod synced")
 	return nil, false
 }
 
@@ -386,8 +386,13 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		if err != nil {
 			return err, true
 		}
-		// Relay readiness if not already done
+		// Relay readiness if not already done.
+		// For launcher-based providers, readiness follows the bound instance's
+		// sleeping state rather than the launcher's Pod readiness.
 		ready := utils.IsPodReady(providingPod)
+		if launcherBased {
+			ready = !*serverDat.Sleeping
+		}
 		if serverDat.ReadinessRelayed == nil || ready != *serverDat.ReadinessRelayed {
 			url, readiness := fmt.Sprintf("http://%s:%s", requestingPod.Status.PodIP, adminPort), ""
 			if ready {
@@ -626,13 +631,11 @@ func (ctl *controller) selectBestLauncherPod(
 
 		launcherDat := ctl.getLauncherData(nodeDat, launcherPod.Name)
 		if !launcherDat.Accurate {
-			nodeDat.add(launcherPodItem{
-				LauncherPodName: launcherPod.Name,
-				NodeName:        launcherPod.Spec.NodeName,
-			})
-			logger.V(4).Info("Launcher pod state is not synced yet, enqueued launcher sync item", "name", launcherPod.Name)
-			somePodsNotReady = true
-			continue
+			err, retry := ctl.syncLauncherInstances(ctx, nodeDat, launcherPod)
+			if err != nil || retry {
+				somePodsNotReady = true
+				continue
+			}
 		}
 
 		launcherBaseURL := fmt.Sprintf("http://%s:%d", launcherPod.Status.PodIP, ctlrcommon.LauncherServicePort)

@@ -178,6 +178,7 @@ func (config ControllerConfig) NewController(
 		inferenceServerConfigIndexName: inferenceServerConfigIndexFunc,
 		launcherConfigHashIndexName:    launcherConfigHashIndexFunc,
 		requesterIndexName:             requesterIndexFunc,
+		nodeNameIndexName:              nodeNameIndexFunc,
 		nominalHashIndexName:           nominalHashIndexFunc,
 		GPUIndexName:                   GPUIndexFunc})
 	if err != nil { //impossible
@@ -351,7 +352,8 @@ const (
 )
 
 // careAbout returns an infSvrItem and an infSvrItemType.
-// The controller cares about server-requesting Pods, bound server-providing Pods, and unbound launcher-based server-providing Pods.
+// The controller cares about server-requesting Pods, bound direct server-providing Pods,
+// and launcher-based server-providing Pods.
 // The controller doesn't care about unbound direct providers and other Pods.
 func careAbout(pod *corev1.Pod) (item infSvrItem, it infSvrItemType) {
 	if len(pod.Annotations[api.ServerPatchAnnotationName]) > 0 || len(pod.Annotations[api.InferenceServerConfigAnnotationName]) > 0 {
@@ -362,7 +364,7 @@ func careAbout(pod *corev1.Pod) (item infSvrItem, it infSvrItemType) {
 	if len(requesterParts) == 2 {
 		return infSvrItem{apitypes.UID(requesterParts[0]), requesterParts[1]}, infSvrItemBoundDirectProvider
 	}
-	// Check for launcher-based server-providing Pod (bound or unbound)
+	// Check for unbound launcher-based server-providing Pod.
 	if pod.Labels != nil {
 		if _, hasLauncherLabel := pod.Labels[ctlrcommon.LauncherConfigNameLabelKey]; hasLauncherLabel {
 			// For launcher pods, use the pod's own UID and name as the item identifier
@@ -403,6 +405,16 @@ func requesterIndexFunc(obj any) ([]string, error) {
 		return []string{string(item.UID)}, nil
 	}
 	return []string{}, nil
+}
+
+const nodeNameIndexName = "nodeName"
+
+func nodeNameIndexFunc(obj any) ([]string, error) {
+	pod := obj.(*corev1.Pod)
+	if pod.Spec.NodeName == "" {
+		return []string{}, nil
+	}
+	return []string{pod.Spec.NodeName}, nil
 }
 
 func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
@@ -682,11 +694,13 @@ func (ctl *controller) enqueueRequestersOnNode(ctx context.Context, nodeName str
 	logger := klog.FromContext(ctx)
 	nd := ctl.getNodeData(nodeName)
 	requesterCount := 0
-	for _, podObj := range ctl.podInformer.GetStore().List() {
+	podObjs, err := ctl.podInformer.GetIndexer().ByIndex(nodeNameIndexName, nodeName)
+	if err != nil {
+		logger.Error(err, "Failed to list Pods by nodeName index", "nodeName", nodeName, "why", why)
+		return
+	}
+	for _, podObj := range podObjs {
 		pod := podObj.(*corev1.Pod)
-		if pod.Spec.NodeName != nodeName {
-			continue
-		}
 		item, it := careAbout(pod)
 		if it != infSvrItemRequester {
 			continue
