@@ -612,31 +612,21 @@ func (ctl *controller) selectBestLauncherPod(
 			continue
 		}
 
-		launcherDat := ctl.getLauncherData(nodeDat, launcherPod.Name)
-		if !launcherDat.Accurate {
-			err, retry := ctl.syncLauncherInstances(ctx, nodeDat, launcherPod)
-			if err != nil || retry {
-				somePodsNotReady = true
-				continue
-			}
-		}
-
-		launcherBaseURL := fmt.Sprintf("http://%s:%d", launcherPod.Status.PodIP, ctlrcommon.LauncherServicePort)
-		lClient, err := NewLauncherClient(launcherBaseURL)
-		if err != nil {
-			logger.V(5).Info("Failed to create launcher client, skipping Pod", "name", launcherPod.Name, "err", err)
-			continue
-		}
-
-		// Query instances from this launcher.
-		insts, err := lClient.ListInstances(ctx)
-		if err != nil {
-			logger.V(5).Info("Failed to list instances from launcher, skipping Pod", "name", launcherPod.Name, "err", err)
+		insts, err, retry := ctl.syncLauncherInstances(ctx, nodeDat, launcherPod)
+		if err != nil || retry {
+			somePodsNotReady = true
 			continue
 		}
 
 		// Check if this launcher has a sleeping instance matching the iscHash
-		if _, instExists := launcherDat.Instances[iscHash]; instExists {
+		hasSleepingInstance := false
+		for _, inst := range insts.Instances {
+			if inst.InstanceID == iscHash {
+				hasSleepingInstance = true
+				break
+			}
+		}
+		if hasSleepingInstance {
 			// Priority 1: Found a sleeping instance
 			logger.V(5).Info("Found launcher with sleeping instance (fastest path)",
 				"name", launcherPod.Name,
@@ -1268,28 +1258,28 @@ var coreScheme *k8sruntime.Scheme
 var codecFactory k8sserializer.CodecFactory
 var podDecoder k8sruntime.Decoder
 
-// syncLauncherInstances queries the launcher pod for its current instances
-// and updates the controller's internal launcherData state.
-// This is called for both bound and unbound launcher pods.
-func (ctl *controller) syncLauncherInstances(ctx context.Context, nodeDat *nodeData, launcherPod *corev1.Pod) (error, bool) {
+// syncLauncherInstances queries the launcher pod for its current instances,
+// updates the controller's internal launcherData state, and returns the fresh
+// launcher response used for the update.
+func (ctl *controller) syncLauncherInstances(ctx context.Context, nodeDat *nodeData, launcherPod *corev1.Pod) (*AllInstancesStatus, error, bool) {
 	logger := klog.FromContext(ctx)
 
 	if launcherPod.Status.PodIP == "" || !utils.IsPodReady(launcherPod) {
 		logger.V(5).Info("Launcher pod not ready yet, waiting for another Pod event", "name", launcherPod.Name)
-		return nil, false
+		return nil, nil, true
 	}
 
 	launcherBaseURL := fmt.Sprintf("http://%s:%d", launcherPod.Status.PodIP, ctlrcommon.LauncherServicePort)
 	lClient, err := NewLauncherClient(launcherBaseURL)
 	if err != nil {
 		logger.Error(err, "Failed to create launcher client")
-		return err, true
+		return nil, err, true
 	}
 
 	insts, err := lClient.ListInstances(ctx)
 	if err != nil {
 		logger.Error(err, "Failed to list instances from launcher")
-		return err, true
+		return nil, err, true
 	}
 
 	launcherDat := ctl.getLauncherData(nodeDat, launcherPod.Name)
@@ -1311,7 +1301,7 @@ func (ctl *controller) syncLauncherInstances(ctx context.Context, nodeDat *nodeD
 		"runningInstances", insts.RunningInstances,
 		"instanceCount", len(newInstances))
 
-	return nil, false
+	return insts, nil, false
 }
 
 func init() {
