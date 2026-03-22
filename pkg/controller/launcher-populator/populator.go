@@ -121,11 +121,19 @@ type lppItem struct {
 	cache.ObjectName
 }
 
+type lcItem struct {
+	cache.ObjectName
+}
+
 func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 	switch typed := obj.(type) {
 	case *fmav1alpha1.LauncherPopulationPolicy:
 		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherPopulationPolicy reference due to notification of add", "name", typed.Name)
 		item := lppItem{cache.MetaObjectToName(typed)}
+		ctl.Queue.Add(item)
+	case *fmav1alpha1.LauncherConfig:
+		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherConfig reference due to notification of add", "name", typed.Name)
+		item := lcItem{cache.MetaObjectToName(typed)}
 		ctl.Queue.Add(item)
 	default:
 		ctl.enqueueLogger.V(5).Info("Notified of add of type of ignored object", "type", fmt.Sprintf("%T", obj))
@@ -138,6 +146,10 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 	case *fmav1alpha1.LauncherPopulationPolicy:
 		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherPopulationPolicy reference due to notification of update", "name", typed.Name)
 		item := lppItem{cache.MetaObjectToName(typed)}
+		ctl.Queue.Add(item)
+	case *fmav1alpha1.LauncherConfig:
+		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherConfig reference due to notification of update", "name", typed.Name)
+		item := lcItem{cache.MetaObjectToName(typed)}
 		ctl.Queue.Add(item)
 	default:
 		ctl.enqueueLogger.V(5).Info("Notified of update of type of ignored object", "type", fmt.Sprintf("%T", obj))
@@ -154,7 +166,10 @@ func (ctl *controller) OnDelete(obj any) {
 		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherPopulationPolicy reference due to notification of delete", "name", typed.Name)
 		item := lppItem{cache.MetaObjectToName(typed)}
 		ctl.Queue.Add(item)
-
+	case *fmav1alpha1.LauncherConfig:
+		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherConfig reference due to notification of delete", "name", typed.Name)
+		item := lcItem{cache.MetaObjectToName(typed)}
+		ctl.Queue.Add(item)
 	default:
 		ctl.enqueueLogger.V(5).Info("Notified of delete of type of ignored object", "type", fmt.Sprintf("%T", obj))
 		return
@@ -232,6 +247,63 @@ func (item lppItem) process(ctx context.Context, ctl *controller) (error, bool) 
 		logger.Error(err, "Failed to reconcile launchers")
 		return err, true
 	}
+	return nil, false
+}
+
+func (item lcItem) process(ctx context.Context, ctl *controller) (error, bool) {
+	logger := klog.FromContext(ctx)
+
+	// Get the LauncherConfig
+	lc, err := ctl.lcLister.LauncherConfigs(ctl.namespace).Get(item.Name)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			logger.Info("LauncherConfig no longer exists, skipping reconciliation", "name", item.Name)
+			return nil, false
+		}
+		logger.Error(err, "Failed to get LauncherConfig", "name", item.Name)
+		return err, true
+	}
+
+	// Get all LauncherPopulationPolicies that reference this LauncherConfig
+	policies, err := ctl.lppLister.List(labels.Everything())
+	if err != nil {
+		logger.Error(err, "Failed to list LauncherPopulationPolicies")
+		return err, true
+	}
+
+	// Build desired state for this LauncherConfig across all nodes
+	desired := make(map[NodeLauncherKey]int32)
+	for _, lpp := range policies {
+		nodes, err := ctl.getMatchingNodes(ctx, lpp.Spec.EnhancedNodeSelector)
+		if err != nil {
+			logger.Error(err, "Failed to get matching nodes for policy", "policy", lpp.Name)
+			continue
+		}
+
+		for _, countRule := range lpp.Spec.CountForLauncher {
+			if countRule.LauncherConfigName != lc.Name {
+				continue
+			}
+			for _, node := range nodes {
+				key := NodeLauncherKey{
+					NodeName:           node.Name,
+					LauncherConfigName: lc.Name,
+				}
+				// Take the maximum count if multiple rules apply
+				if current, exists := desired[key]; !exists || countRule.LauncherCount > current {
+					desired[key] = countRule.LauncherCount
+				}
+			}
+		}
+	}
+
+	// Reconcile launchers for this LauncherConfig
+	if err := ctl.reconcileAllLaunchers(ctx, desired); err != nil {
+		logger.Error(err, "Failed to reconcile launchers for LauncherConfig", "name", lc.Name)
+		return err, true
+	}
+
+	logger.Info("Successfully reconciled launchers for LauncherConfig", "name", lc.Name)
 	return nil, false
 }
 
