@@ -178,6 +178,7 @@ func (config ControllerConfig) NewController(
 		inferenceServerConfigIndexName: inferenceServerConfigIndexFunc,
 		launcherConfigHashIndexName:    launcherConfigHashIndexFunc,
 		requesterIndexName:             requesterIndexFunc,
+		nodeNameIndexName:              nodeNameIndexFunc,
 		nominalHashIndexName:           nominalHashIndexFunc,
 		GPUIndexName:                   GPUIndexFunc})
 	if err != nil { //impossible
@@ -258,7 +259,7 @@ type nodeData struct {
 	InferenceServers map[apitypes.UID]*serverData
 
 	// Launchers maps name of launcher-based server-providing Pod to launcherData.
-	// Access only while holding controller mutex.
+	// Access only inside the calling hierarchy that `nodeItem.process()` is the root caller.
 	Launchers map[string]*launcherData
 
 	// ItemsMutex may be acquired while holding controller mutex, not vice-versa.
@@ -330,23 +331,32 @@ type infSvrItem struct {
 	RequesterName string
 }
 
+type launcherPodItem struct {
+	LauncherPodName string
+	NodeName        string
+}
+
 type infSvrItemType string
 
 const (
 	// infSvrItemRequester is for a server-requesting Pod.
 	infSvrItemRequester infSvrItemType = "requester"
-	// infSvrItemBoundDirectProvider is for a server-providing Pod that
-	// is 'direct' (i.e. not launcher-based), and bound to a server-requesting Pod.
-	infSvrItemBoundDirectProvider infSvrItemType = "bound_direct_provider"
-	// infSvrItemLauncherBasedProvider is for a server-providing Pod that is launcher-based.
-	infSvrItemLauncherBasedProvider infSvrItemType = "launcher_based_provider"
+	// infSvrItemBoundProvider is for a server-providing Pod that
+	// is bound to a server-requesting Pod.
+	infSvrItemBoundProvider infSvrItemType = "bound_direct_provider"
+	// infSvrItemUnboundLauncherBasedProvider is for a server-providing Pod that
+	// is launcher-based and not bound to any server-requesting Pods.
+	infSvrItemUnboundLauncherBasedProvider infSvrItemType = "launcher_based_provider"
 	// infSvrItemDontCare is not a real infSvrItemType but only a placeholder
 	// saying the corresponding infSvrItem is not relevant to the controller.
 	infSvrItemDontCare infSvrItemType = "dont_care"
 )
 
 // careAbout returns an infSvrItem and an infSvrItemType.
-// The controller cares about server-requesting Pods, bound direct server-providing Pods, and launcher-based server-providing Pods.
+// The controller cares about
+// - server-requesting Pods,
+// - bound server-providing Pods,
+// - unbound launcher-based server-providing Pods.
 // The controller doesn't care about unbound direct providers and other Pods.
 func careAbout(pod *corev1.Pod) (item infSvrItem, it infSvrItemType) {
 	if len(pod.Annotations[api.ServerPatchAnnotationName]) > 0 || len(pod.Annotations[api.InferenceServerConfigAnnotationName]) > 0 {
@@ -354,10 +364,17 @@ func careAbout(pod *corev1.Pod) (item infSvrItem, it infSvrItemType) {
 	}
 	requesterStr := pod.Annotations[requesterAnnotationKey]
 	requesterParts := strings.Split(requesterStr, " ")
-	if len(requesterParts) != 2 {
-		return infSvrItem{}, infSvrItemDontCare
+	if len(requesterParts) == 2 {
+		return infSvrItem{apitypes.UID(requesterParts[0]), requesterParts[1]}, infSvrItemBoundProvider
 	}
-	return infSvrItem{apitypes.UID(requesterParts[0]), requesterParts[1]}, infSvrItemBoundDirectProvider
+	// Check for unbound launcher-based server-providing Pod.
+	if pod.Labels != nil {
+		if _, hasLauncherLabel := pod.Labels[ctlrcommon.LauncherConfigNameLabelKey]; hasLauncherLabel {
+			// For an unbound launcher-based server-providing Pod, use the Pod's own UID and name
+			return infSvrItem{pod.UID, pod.Name}, infSvrItemUnboundLauncherBasedProvider
+		}
+	}
+	return infSvrItem{}, infSvrItemDontCare
 }
 
 const inferenceServerConfigIndexName = "inferenceserverconfig"
@@ -387,10 +404,20 @@ const requesterIndexName = "requester"
 func requesterIndexFunc(obj any) ([]string, error) {
 	pod := obj.(*corev1.Pod)
 	item, it := careAbout(pod)
-	if it == infSvrItemBoundDirectProvider {
+	if it == infSvrItemBoundProvider {
 		return []string{string(item.UID)}, nil
 	}
 	return []string{}, nil
+}
+
+const nodeNameIndexName = "nodeName"
+
+func nodeNameIndexFunc(obj any) ([]string, error) {
+	pod := obj.(*corev1.Pod)
+	if pod.Spec.NodeName == "" {
+		return []string{}, nil
+	}
+	return []string{pod.Spec.NodeName}, nil
 }
 
 func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
@@ -399,9 +426,21 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 		if item, it := careAbout(typed); it == infSvrItemDontCare {
 			ctl.enqueueLogger.V(5).Info("Ignoring add of irrelevant Pod", "name", typed.Name)
 			return
+		} else if it == infSvrItemUnboundLauncherBasedProvider {
+			nodeName, err := getProviderNodeName(typed)
+			if err != nil {
+				ctl.enqueueLogger.Error(err, "Failed to determine node of launcher")
+				return
+			}
+			nd := ctl.getNodeData(nodeName)
+			launcherPodItem := launcherPodItem{LauncherPodName: typed.Name, NodeName: nodeName}
+			ctl.enqueueLogger.V(5).Info("Enqueuing launcher reference due to notification of add",
+				"nodeName", nodeName, "launcherPod", typed.Name, "isInInitialList", isInInitialList, "resourceVersion", typed.ResourceVersion)
+			nd.add(launcherPodItem)
+			ctl.Queue.Add(nodeItem{nodeName})
 		} else {
 			nodeName := typed.Spec.NodeName
-			if it == infSvrItemBoundDirectProvider || it == infSvrItemLauncherBasedProvider {
+			if it == infSvrItemBoundProvider {
 				var err error
 				nodeName, err = getProviderNodeName(typed)
 				if err != nil {
@@ -440,9 +479,21 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 		if item, it := careAbout(typed); it == infSvrItemDontCare {
 			ctl.enqueueLogger.V(5).Info("Ignoring update of irrelevant Pod", "name", typed.Name)
 			return
+		} else if it == infSvrItemUnboundLauncherBasedProvider {
+			nodeName, err := getProviderNodeName(typed)
+			if err != nil {
+				ctl.enqueueLogger.Error(err, "Failed to determine node of launcher")
+				return
+			}
+			nd := ctl.getNodeData(nodeName)
+			launcherPodItem := launcherPodItem{LauncherPodName: typed.Name, NodeName: nodeName}
+			ctl.enqueueLogger.V(5).Info("Enqueuing launcher reference due to notification of update",
+				"nodeName", nodeName, "launcherPod", typed.Name, "resourceVersion", typed.ResourceVersion)
+			nd.add(launcherPodItem)
+			ctl.Queue.Add(nodeItem{nodeName})
 		} else {
 			nodeName := typed.Spec.NodeName
-			if it == infSvrItemBoundDirectProvider || it == infSvrItemLauncherBasedProvider {
+			if it == infSvrItemBoundProvider {
 				var err error
 				nodeName, err = getProviderNodeName(typed)
 				if err != nil {
@@ -484,9 +535,21 @@ func (ctl *controller) OnDelete(obj any) {
 		if item, it := careAbout(typed); it == infSvrItemDontCare {
 			ctl.enqueueLogger.V(5).Info("Ignoring delete of irrelevant Pod", "name", typed.Name)
 			return
+		} else if it == infSvrItemUnboundLauncherBasedProvider {
+			nodeName, err := getProviderNodeName(typed)
+			if err != nil {
+				ctl.enqueueLogger.Error(err, "Failed to determine node of launcher")
+				return
+			}
+			nd := ctl.getNodeData(nodeName)
+			launcherPodItem := launcherPodItem{LauncherPodName: typed.Name, NodeName: nodeName}
+			ctl.enqueueLogger.V(5).Info("Enqueuing launcher reference due to notification of delete",
+				"nodeName", nodeName, "launcherPod", typed.Name, "resourceVersion", typed.ResourceVersion)
+			nd.add(launcherPodItem)
+			ctl.Queue.Add(nodeItem{nodeName})
 		} else {
 			nodeName := typed.Spec.NodeName
-			if it == infSvrItemBoundDirectProvider || it == infSvrItemLauncherBasedProvider {
+			if it == infSvrItemBoundProvider {
 				var err error
 				nodeName, err = getProviderNodeName(typed)
 				if err != nil {
@@ -630,6 +693,40 @@ func (ctl *controller) enqueueRequestersByInferenceServerConfig(isc *fmav1alpha1
 	}
 }
 
+func (ctl *controller) enqueueUnboundInfSvrItemsOnNode(ctx context.Context, nodeName string, why string) {
+	logger := klog.FromContext(ctx)
+	nd := ctl.getNodeData(nodeName)
+	itemCount := 0
+	podObjs, err := ctl.podInformer.GetIndexer().ByIndex(nodeNameIndexName, nodeName)
+	if err != nil {
+		logger.Error(err, "Failed to list Pods by nodeName index", "nodeName", nodeName, "why", why)
+		return
+	}
+	for _, podObj := range podObjs {
+		pod := podObj.(*corev1.Pod)
+		item, it := careAbout(pod)
+		if it != infSvrItemRequester {
+			continue
+		}
+		// skip bound Inference Servers
+		// a podObj could be either a server-requesting Pod or a server-providing Pod
+		// but after the `it != infSvrItemRequester`` check above, it must be a server-requesting Pod here, and we want to skip it if it's bound to a server-providing Pod
+		// we can use the controller's data to check whether it's bound or not
+		serverDat := ctl.getServerData(nd, pod.Name, pod.UID)
+		if serverDat.ProvidingPodName != "" {
+			continue
+		}
+		nd.add(item)
+		itemCount++
+	}
+	if itemCount == 0 {
+		logger.V(5).Info("No unbound infSvrItems to enqueue on node", "node", nodeName, "why", why)
+		return
+	}
+	logger.V(5).Info("Enqueuing unbound infSvrItems on node", "node", nodeName, "why", why, "itemCount", itemCount)
+	ctl.Queue.Add(nodeItem{nodeName})
+}
+
 func (ctl *controller) getNodeData(nodeName string) *nodeData {
 	ctl.mutex.Lock()
 	defer ctl.mutex.Unlock()
@@ -673,8 +770,6 @@ func (ctl *controller) getServerData(nodeDat *nodeData, reqName string, reqUID a
 }
 
 func (ctl *controller) getLauncherData(nodeDat *nodeData, launcherPodName string) *launcherData {
-	ctl.mutex.Lock()
-	defer ctl.mutex.Unlock()
 	ans := nodeDat.Launchers[launcherPodName]
 	if ans == nil {
 		ans = &launcherData{
@@ -683,6 +778,10 @@ func (ctl *controller) getLauncherData(nodeDat *nodeData, launcherPodName string
 		nodeDat.Launchers[launcherPodName] = ans
 	}
 	return ans
+}
+
+func (ctl *controller) clearLauncherData(nodeDat *nodeData, launcherPodName string) {
+	delete(nodeDat.Launchers, launcherPodName)
 }
 
 func (ctl *controller) clearServerData(nodeDat *nodeData, uid apitypes.UID) {

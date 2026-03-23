@@ -85,6 +85,25 @@ func (ni nodeItem) process(ctx context.Context, ctl *controller) (error, bool) {
 	return nil, retries > 0
 }
 
+func (item launcherPodItem) process(ctx context.Context, ctl *controller, nodeDat *nodeData) (error, bool) {
+	logger := klog.FromContext(ctx).WithValues("launcherPod", item.LauncherPodName, "node", item.NodeName)
+	ctx = klog.NewContext(ctx, logger)
+
+	_, err := ctl.podLister.Pods(ctl.namespace).Get(item.LauncherPodName)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			logger.V(2).Info("Launcher pod deleted, cleaning up launcher data")
+			ctl.clearLauncherData(nodeDat, item.LauncherPodName)
+			ctl.enqueueUnboundInfSvrItemsOnNode(ctx, item.NodeName, fmt.Sprintf("launcher pod %s deleted", item.LauncherPodName))
+			return nil, false
+		}
+		return err, true
+	}
+
+	ctl.enqueueUnboundInfSvrItemsOnNode(ctx, item.NodeName, fmt.Sprintf("launcher pod %s changed", item.LauncherPodName))
+	return nil, false
+}
+
 func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *nodeData) (error, bool) {
 	logger := klog.FromContext(urCtx).WithValues("serverUID", item.UID, "requesterName", item.RequesterName)
 	ctx := klog.NewContext(urCtx, logger)
@@ -350,8 +369,13 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		if err != nil {
 			return err, true
 		}
-		// Relay readiness if not already done
+		// Relay readiness if not already done.
+		// For launcher-based providers, readiness follows the bound instance's
+		// sleeping state rather than the launcher's Pod readiness.
 		ready := utils.IsPodReady(providingPod)
+		if launcherBased {
+			ready = !*serverDat.Sleeping
+		}
 		if serverDat.ReadinessRelayed == nil || ready != *serverDat.ReadinessRelayed {
 			url, readiness := fmt.Sprintf("http://%s:%s", requestingPod.Status.PodIP, adminPort), ""
 			if ready {
@@ -588,24 +612,21 @@ func (ctl *controller) selectBestLauncherPod(
 			continue
 		}
 
-		launcherBaseURL := fmt.Sprintf("http://%s:%d", launcherPod.Status.PodIP, ctlrcommon.LauncherServicePort)
-		lClient, err := NewLauncherClient(launcherBaseURL)
-		if err != nil {
-			logger.V(5).Info("Failed to create launcher client, skipping Pod", "name", launcherPod.Name, "err", err)
+		insts, err, retry := ctl.syncLauncherInstances(ctx, nodeDat, launcherPod)
+		if err != nil || retry {
+			somePodsNotReady = true
 			continue
 		}
-
-		// Query instances from this launcher
-		insts, err := lClient.ListInstances(ctx)
-		if err != nil {
-			logger.V(5).Info("Failed to list instances from launcher, skipping Pod", "name", launcherPod.Name, "err", err)
-			continue
-		}
-
-		launcherDat := ctl.getLauncherData(nodeDat, launcherPod.Name)
 
 		// Check if this launcher has a sleeping instance matching the iscHash
-		if _, instExists := launcherDat.Instances[iscHash]; instExists {
+		hasSleepingInstance := false
+		for _, inst := range insts.Instances {
+			if inst.InstanceID == iscHash {
+				hasSleepingInstance = true
+				break
+			}
+		}
+		if hasSleepingInstance {
 			// Priority 1: Found a sleeping instance
 			logger.V(5).Info("Found launcher with sleeping instance (fastest path)",
 				"name", launcherPod.Name,
@@ -1236,6 +1257,52 @@ func doPost(url string) error {
 var coreScheme *k8sruntime.Scheme
 var codecFactory k8sserializer.CodecFactory
 var podDecoder k8sruntime.Decoder
+
+// syncLauncherInstances queries the launcher pod for its current instances,
+// updates the controller's internal launcherData state, and returns the fresh
+// launcher response used for the update.
+func (ctl *controller) syncLauncherInstances(ctx context.Context, nodeDat *nodeData, launcherPod *corev1.Pod) (*AllInstancesStatus, error, bool) {
+	logger := klog.FromContext(ctx)
+
+	if launcherPod.Status.PodIP == "" || !utils.IsPodReady(launcherPod) {
+		logger.V(5).Info("Launcher pod not ready yet, waiting for another Pod event", "name", launcherPod.Name)
+		return nil, nil, true
+	}
+
+	launcherBaseURL := fmt.Sprintf("http://%s:%d", launcherPod.Status.PodIP, ctlrcommon.LauncherServicePort)
+	lClient, err := NewLauncherClient(launcherBaseURL)
+	if err != nil {
+		logger.Error(err, "Failed to create launcher client")
+		return nil, err, true
+	}
+
+	insts, err := lClient.ListInstances(ctx)
+	if err != nil {
+		logger.Error(err, "Failed to list instances from launcher")
+		return nil, err, true
+	}
+
+	launcherDat := ctl.getLauncherData(nodeDat, launcherPod.Name)
+	newInstances := make(map[string]time.Time)
+	for _, inst := range insts.Instances {
+		if lastUsed, exists := launcherDat.Instances[inst.InstanceID]; exists {
+			newInstances[inst.InstanceID] = lastUsed
+		} else {
+			newInstances[inst.InstanceID] = time.Now()
+		}
+	}
+
+	launcherDat.Instances = newInstances
+	launcherDat.Accurate = true
+
+	logger.V(2).Info("Synced launcher instances",
+		"launcherPod", launcherPod.Name,
+		"totalInstances", insts.TotalInstances,
+		"runningInstances", insts.RunningInstances,
+		"instanceCount", len(newInstances))
+
+	return insts, nil, false
+}
 
 func init() {
 	coreScheme = k8sruntime.NewScheme()
