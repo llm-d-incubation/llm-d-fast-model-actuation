@@ -152,6 +152,7 @@ Response:
 {
   "status": "started",
   "instance_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "options": "--model facebook/opt-125m --port 8000"
 }
 ```
 
@@ -244,6 +245,7 @@ Create a new vLLM instance with an auto-generated UUID.
 ```json
 {
   "options": "--model MODEL_NAME --port PORT",
+  "gpu_uuids": ["GPU-33", "GPU-86"],
   "env_vars": {
     "VAR_NAME": "value"
   }
@@ -253,6 +255,7 @@ Create a new vLLM instance with an auto-generated UUID.
 **Parameters:**
 
 - `options` (required): Command-line options for vLLM
+- `gpu_uuids` (optional): List of GPU UUIDs
 - `env_vars` (optional): Dictionary of environment variables
 
 **Response (201 Created):**
@@ -261,6 +264,11 @@ Create a new vLLM instance with an auto-generated UUID.
 {
   "status": "started",
   "instance_id": "uuid-string",
+  "options": "--model MODEL_NAME --port PORT",
+  "gpu_uuids": ["GPU-33", "GPU-86"],
+  "env_vars": {
+    "VAR_NAME": "value"
+  }
 }
 ```
 
@@ -307,6 +315,11 @@ Stop and delete a specific vLLM instance.
 {
   "status": "terminated",
   "instance_id": "instance-id",
+  "options": "--model MODEL_NAME --port PORT",
+  "gpu_uuids": ["GPU-33", "GPU-86"],
+  "env_vars": {
+    "VAR_NAME": "value"
+  }
 }
 ```
 
@@ -408,14 +421,23 @@ Get status information for all instances. `Detail` is `True` by default.
     {
       "status": "running",
       "instance_id": "id-1",
+      "options": <options 1>,
+      "gpu_uuids": <gpus 1>,
+      "env_vars": <envars 1>
     },
     {
       "status": "stopped",
       "instance_id": "id-2",
+      "options": <options 2>,
+      "gpu_uuids": <gpus 2>,
+      "env_vars": <envars 2>
     },
     {
       "status": "running",
       "instance_id": "id-3",
+      "options": <options 3>,
+      "gpu_uuids": <gpus 3>,
+      "env_vars": <envars 3>
     }
   ]
 }
@@ -444,6 +466,11 @@ Get status information for a specific instance.
 {
   "status": "running",
   "instance_id": "instance-id",
+  "options": "--model MODEL_NAME --port PORT",
+  "gpu_uuids": ["GPU-33", "GPU-86"],
+  "env_vars": {
+    "VAR_NAME": "value"
+  }
 }
 ```
 
@@ -510,6 +537,7 @@ curl -X POST http://localhost:8001/v2/vllm/instances \
   -H "Content-Type: application/json" \
   -d '{
     "options": "--model meta-llama/Llama-2-7b-hf --port 8000 --tensor-parallel-size 2",
+    "gpu_uuids": ["GPU-33", "GPU-86"],
     "env_vars": {
       "CUDA_VISIBLE_DEVICES": "0,1",
       "VLLM_ATTENTION_BACKEND": "FLASHINFER",
@@ -640,6 +668,7 @@ Pydantic model (data class) defining the configuration for a vLLM instance.
 **Attributes:**
 
 - `options` (str): Command-line options passed to vLLM (e.g., `"--model meta-llama/Llama-2-7b --port 8000"`)
+- `gpu_uuids` (Optional[List[str]]): UUIDs of GPUs
 - `env_vars` (Optional[Dict[str, Any]]): Environment variables to set for the vLLM process
 
 Ex:
@@ -647,6 +676,7 @@ Ex:
 ```yaml
 {
   "options": "--model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --port 8005",
+  "gpu_uuids": ["GPU-33", "GPU-86"],
   "env_vars": {
     "VLLM_USE_V1": "1",
     "VLLM_LOGGING_LEVEL": "DEBUG"
