@@ -210,11 +210,8 @@ class TestVllmInstance:
         instance = VllmInstance(
             "test-id", vllm_config, gpu_translator, log_dir=tmp_log_dir
         )
-        try:
+        with pytest.raises(HalfMade):
             _ = instance.stop()
-            assert False
-        except HalfMade:
-            assert True
 
     @patch("launcher.os.killpg")
     @patch("launcher.multiprocessing.Process")
