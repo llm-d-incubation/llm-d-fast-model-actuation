@@ -149,10 +149,7 @@ class VllmInstance:
             raise HalfMade(self.instance_id)
         if not self.process.is_alive():
             self._cleanup_log_file()
-            return {
-                "status": "not_running",
-                "instance_id": self.instance_id,
-            }
+            return self._make_state("not_running")
 
         # Graceful termination — send SIGTERM to the vLLM process,
         # which will propagate shutdown to the EngineCore via vLLM's
