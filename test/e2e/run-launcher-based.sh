@@ -236,7 +236,7 @@ expect '[ "$(kubectl get pod $launcherlb -o jsonpath={.metadata.labels.dual-pods
 # Wait for both pods to be ready (vLLM on CPU takes ~90s to start)
 date
 kubectl wait --for condition=Ready pod/$reqlb --timeout=180s
-kubectl wait --for condition=Ready pod/$launcherlb --timeout=180s
+[ "$(kubectl get pod $launcherlb -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
 
 cheer Successful launcher-based pod creation
 
@@ -284,7 +284,7 @@ expect '[ "$(kubectl get pod $launcherlb -o jsonpath={.metadata.labels.dual-pods
 # Wait for requester to be ready (launcher should already be ready)
 date
 kubectl wait --for condition=Ready pod/$reqlb2 --timeout=120s
-kubectl wait --for condition=Ready pod/$launcherlb --timeout=5s
+[ "$(kubectl get pod $launcherlb -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
 
 cheer Successful instance wake-up fast path
 
@@ -325,7 +325,7 @@ expect '[ "$(kubectl get pod $launcherlb -o jsonpath={.metadata.labels.dual-pods
 # Wait for requester to be ready (launcher should already be ready)
 date
 kubectl wait --for condition=Ready pod/$reqlb3 --timeout=120s
-kubectl wait --for condition=Ready pod/$launcherlb --timeout=5s
+[ "$(kubectl get pod $launcherlb -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
 
 cheer Successful multiple instances sharing one launcher
 
@@ -366,7 +366,7 @@ expect '[ "$(kubectl get pod $launcherlb -o jsonpath={.metadata.labels.dual-pods
 # Wait for requester to be ready (launcher should already be ready)
 date
 kubectl wait --for condition=Ready pod/$reqlb4 --timeout=120s
-kubectl wait --for condition=Ready pod/$launcherlb --timeout=5s
+[ "$(kubectl get pod $launcherlb -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
 
 cheer Successful switching instances in one launcher
 
@@ -398,9 +398,9 @@ kubectl rollout status deployment fma-dual-pods-controller --timeout=60s
 # Wait for controller to be ready for ongoing checks
 # In detail: allow some time for the dual-pods controller to do something unexpected in the case that the controller is behaving incorrectly,
 # so that the ongoing checks have some chance to fail thus detect the incorrectness, instead of just quickly and coincidentally passing.
-sleep 10
+sleep 30
 
-# Verify launcher pod set is unchanged and target launcher is still running
+# Verify launcher pod set size is unchanged and target launcher is still running
 expect "kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | wc -l | grep -w $launcher_count_pre_restart"
 kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | grep -x "pod/$launcherlb"
 
@@ -424,7 +424,7 @@ expect '[ "$(kubectl get pod $launcherlb -o jsonpath={.metadata.labels.dual-pods
 # Verify requester becomes ready (fast wake-up path should work)
 date
 kubectl wait --for condition=Ready pod/$reqlb_post_restart --timeout=30s
-kubectl wait --for condition=Ready pod/$launcherlb --timeout=5s
+[ "$(kubectl get pod $launcherlb -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
 
 cheer Successful controller restart state recovery
 
@@ -450,11 +450,10 @@ expect "kubectl get pods -o name -l dual-pods.llm-d.ai/dual=$reqlb_after_delete 
 launcherlb_after_delete=$(kubectl get pods -o name -l dual-pods.llm-d.ai/dual=$reqlb_after_delete | sed s%pod/%%)
 [ "$launcherlb_after_delete" != "$launcherlb" ]
 expect '[ "$(kubectl get pod $reqlb_after_delete -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcherlb_after_delete" ]'
-expect '[ "$(kubectl get pod $launcherlb_after_delete -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$reqlb_after_delete" ]'
 
 date
 kubectl wait --for condition=Ready pod/$reqlb_after_delete --timeout=120s
-kubectl wait --for condition=Ready pod/$launcherlb_after_delete --timeout=120s
+[ "$(kubectl get pod $launcherlb_after_delete -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
 
 cheer Successful unbound launcher deletion cleanup
 

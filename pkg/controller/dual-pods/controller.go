@@ -710,7 +710,7 @@ func (ctl *controller) enqueueUnboundInfSvrItemsOnNode(ctx context.Context, node
 		}
 		// skip bound Inference Servers
 		// a podObj could be either a server-requesting Pod or a server-providing Pod
-		// but after the `it != infSvrItemRequester`` check above, it must be a server-requesting Pod here, and we want to skip it if it's bound to a server-providing Pod
+		// but after the `it != infSvrItemRequester` check above, it must be a server-requesting Pod here, and we want to skip it if it's bound to a server-providing Pod
 		// we can use the controller's data to check whether it's bound or not
 		serverDat := ctl.getServerData(nd, pod.Name, pod.UID)
 		if serverDat.ProvidingPodName != "" {
