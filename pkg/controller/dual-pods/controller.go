@@ -343,10 +343,10 @@ const (
 	infSvrItemRequester infSvrItemType = "requester"
 	// infSvrItemBoundProvider is for a server-providing Pod that
 	// is bound to a server-requesting Pod.
-	infSvrItemBoundProvider infSvrItemType = "bound_direct_provider"
+	infSvrItemBoundProvider infSvrItemType = "bound_provider"
 	// infSvrItemUnboundLauncherBasedProvider is for a server-providing Pod that
 	// is launcher-based and not bound to any server-requesting Pods.
-	infSvrItemUnboundLauncherBasedProvider infSvrItemType = "launcher_based_provider"
+	infSvrItemUnboundLauncherBasedProvider infSvrItemType = "unbound_launcher_based_provider"
 	// infSvrItemDontCare is not a real infSvrItemType but only a placeholder
 	// saying the corresponding infSvrItem is not relevant to the controller.
 	infSvrItemDontCare infSvrItemType = "dont_care"
@@ -367,12 +367,9 @@ func careAbout(pod *corev1.Pod) (item infSvrItem, it infSvrItemType) {
 	if len(requesterParts) == 2 {
 		return infSvrItem{apitypes.UID(requesterParts[0]), requesterParts[1]}, infSvrItemBoundProvider
 	}
-	// Check for unbound launcher-based server-providing Pod.
-	if pod.Labels != nil {
-		if _, hasLauncherLabel := pod.Labels[ctlrcommon.LauncherConfigNameLabelKey]; hasLauncherLabel {
-			// For an unbound launcher-based server-providing Pod, use the Pod's own UID and name
-			return infSvrItem{pod.UID, pod.Name}, infSvrItemUnboundLauncherBasedProvider
-		}
+	if _, hasLauncherLabel := pod.Labels[ctlrcommon.LauncherConfigNameLabelKey]; hasLauncherLabel {
+		// For an unbound launcher-based server-providing Pod, use the Pod's own UID and name
+		return infSvrItem{pod.UID, pod.Name}, infSvrItemUnboundLauncherBasedProvider
 	}
 	return infSvrItem{}, infSvrItemDontCare
 }
@@ -693,13 +690,13 @@ func (ctl *controller) enqueueRequestersByInferenceServerConfig(isc *fmav1alpha1
 	}
 }
 
-func (ctl *controller) enqueueUnboundInfSvrItemsOnNode(ctx context.Context, nodeName string, why string) {
+func (ctl *controller) enqueueUnboundInfSvrItemsOnNode(ctx context.Context, nodeName string, whyEnqueue string) {
 	logger := klog.FromContext(ctx)
 	nd := ctl.getNodeData(nodeName)
 	itemCount := 0
 	podObjs, err := ctl.podInformer.GetIndexer().ByIndex(nodeNameIndexName, nodeName)
 	if err != nil {
-		logger.Error(err, "Failed to list Pods by nodeName index", "nodeName", nodeName, "why", why)
+		logger.Error(err, "Failed to list Pods by nodeName index", "nodeName", nodeName, "whyEnqueue", whyEnqueue)
 		return
 	}
 	for _, podObj := range podObjs {
@@ -720,10 +717,10 @@ func (ctl *controller) enqueueUnboundInfSvrItemsOnNode(ctx context.Context, node
 		itemCount++
 	}
 	if itemCount == 0 {
-		logger.V(5).Info("No unbound infSvrItems to enqueue on node", "node", nodeName, "why", why)
+		logger.V(5).Info("No unbound infSvrItems to enqueue on node", "node", nodeName, "whyEnqueue", whyEnqueue)
 		return
 	}
-	logger.V(5).Info("Enqueuing unbound infSvrItems on node", "node", nodeName, "why", why, "itemCount", itemCount)
+	logger.V(5).Info("Enqueuing unbound infSvrItems on node", "node", nodeName, "whyEnqueue", whyEnqueue, "itemCount", itemCount)
 	ctl.Queue.Add(nodeItem{nodeName})
 }
 
