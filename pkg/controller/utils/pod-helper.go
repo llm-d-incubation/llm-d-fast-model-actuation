@@ -224,8 +224,10 @@ func BuildLauncherPodFromTemplate(template corev1.PodTemplateSpec, ns, nodeName,
 		delete(pod.Spec.Overhead, corev1.ResourceName("nvidia.com/gpu"))
 	}
 
-	// Assign to specific node
-	pod.Spec.NodeName = nodeName
+	if pod.Spec.NodeSelector == nil {
+		pod.Spec.NodeSelector = make(map[string]string)
+	}
+	pod.Spec.NodeSelector["kubernetes.io/hostname"] = nodeName
 	return pod, nil
 }
 
