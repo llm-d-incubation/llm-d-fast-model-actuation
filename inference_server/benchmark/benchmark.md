@@ -19,7 +19,7 @@ direct scope but is referenced for completeness and handoff to other frameworks.
 
 | Layer | Focus | Metrics | Measured By |
 | ----- | ----- | ------- | ----------- |
-| **L1: Actuation** | Pod readiness | T_actuation (deploy-to-ready), T_wake (sleep-to-serving), Hit_rate (% GPU hits), T_launcher (instance creation) | FMA benchmark tooling |
+| **L1: Actuation** | Pod readiness | T_actuation (deploy-to-ready), T_wake (sleep-to-serving), Hit_rate (% GPU hits), T_launcher (instance creation) | llm-d-benchmark new harness |
 | **L2: Inference Readiness** | First response | T_first_token (ready-to-first-response), T_e2e (request-to-first-response) | FMA + llm-d-benchmark nop/inference-perf harness |
 | **L3: Steady-State** | Throughput/latency | TPOT, throughput, queue depth, KV cache usage, replica stability | llm-d-benchmark / WVA |
 
