@@ -1,0 +1,304 @@
+name: Fast-Forward Merge
+
+# Permissions for posting comments and closing PRs
+# Note: actual push to main uses FF_MERGE_TOKEN (PAT), not GITHUB_TOKEN
+permissions:
+  contents: write
+  pull-requests: write
+
+# Serialize /ff-merge commands to prevent race conditions on main
+# /ff-check gets a unique group per run (never serialized)
+concurrency:
+  group: >-
+    ${{
+      github.event_name == 'issue_comment' &&
+      contains(github.event.comment.body, '/ff-merge')
+      && 'ff-merge-main'
+      || format('ff-check-{0}', github.run_id)
+    }}
+  cancel-in-progress: false
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  # Route: parse command, check permissions (for /ff-merge), gather PR metadata
+  route:
+    runs-on: ubuntu-latest
+    outputs:
+      command: ${{ steps.parse.outputs.command }}
+      pr_number: ${{ steps.parse.outputs.pr_number }}
+      pr_head_sha: ${{ steps.parse.outputs.pr_head_sha }}
+      should_run: ${{ steps.parse.outputs.should_run }}
+    steps:
+      - name: Parse command and validate
+        id: parse
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const comment = context.payload.comment;
+            const body = comment.body.trim();
+
+            // Must be a PR comment
+            if (!issue.pull_request) {
+              console.log('Comment is not on a PR, skipping');
+              core.setOutput('should_run', 'false');
+              return;
+            }
+
+            // Detect command from first line
+            const firstLine = body.split('\n')[0].trim();
+            let command = '';
+            if (firstLine.startsWith('/ff-check')) {
+              command = 'ff-check';
+            } else if (firstLine.startsWith('/ff-merge')) {
+              command = 'ff-merge';
+            } else {
+              console.log(`Comment "${firstLine}" is not an ff command, skipping`);
+              core.setOutput('should_run', 'false');
+              return;
+            }
+
+            core.setOutput('command', command);
+            const commenter = comment.user.login;
+            const prNumber = issue.number;
+
+            // Get PR details
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
+
+            core.setOutput('pr_number', prNumber.toString());
+            core.setOutput('pr_head_sha', pr.head.sha);
+
+            // Helper to check write access
+            async function hasWriteAccess(username) {
+              try {
+                const { data: permission } = await github.rest.repos.getCollaboratorPermissionLevel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  username: username
+                });
+                const privilegedRoles = ['admin', 'maintain', 'write'];
+                return privilegedRoles.includes(permission.permission);
+              } catch (e) {
+                console.log(`Could not get permissions for ${username}: ${e.message}`);
+                return false;
+              }
+            }
+
+            // /ff-check: no permission or approval requirements
+            if (command === 'ff-check') {
+              console.log(`/ff-check requested by ${commenter} on PR #${prNumber}`);
+              core.setOutput('should_run', 'true');
+
+              await github.rest.reactions.createForIssueComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: comment.id,
+                content: 'eyes'
+              });
+              return;
+            }
+
+            // /ff-merge: require write access + approved review
+            console.log(`/ff-merge requested by ${commenter} on PR #${prNumber}`);
+
+            // Check permissions
+            const hasAccess = await hasWriteAccess(commenter);
+            if (!hasAccess) {
+              console.log(`User ${commenter} does not have write access`);
+              await github.rest.reactions.createForIssueComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: comment.id,
+                content: '-1'
+              });
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body: `@${commenter} Only users with write access or above can run \`/ff-merge\`.`
+              });
+              core.setOutput('should_run', 'false');
+              return;
+            }
+
+            // Check PR approval status
+            const { data: reviews } = await github.rest.pulls.listReviews({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
+            const approved = reviews.some(r => r.state === 'APPROVED');
+            if (!approved) {
+              console.log('PR does not have an approved review');
+              await github.rest.reactions.createForIssueComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: comment.id,
+                content: '-1'
+              });
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body: `@${commenter} Cannot \`/ff-merge\`: this PR does not have an approved review yet.`
+              });
+              core.setOutput('should_run', 'false');
+              return;
+            }
+
+            // All checks passed
+            console.log(`/ff-merge approved for PR #${prNumber} by ${commenter}`);
+            core.setOutput('should_run', 'true');
+
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: comment.id,
+              content: 'rocket'
+            });
+
+  # Check if PR branch is fast-forward eligible
+  ff-check:
+    needs: route
+    if: needs.route.outputs.command == 'ff-check' && needs.route.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Fetch PR head
+        run: git fetch origin refs/pull/${{ needs.route.outputs.pr_number }}/head:pr-head
+
+      - name: Check fast-forward eligibility
+        id: check
+        run: |
+          if git merge-base --is-ancestor HEAD pr-head; then
+            echo "eligible=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Post result
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        with:
+          script: |
+            const prNumber = parseInt('${{ needs.route.outputs.pr_number }}');
+            const eligible = '${{ steps.check.outputs.eligible }}' === 'true';
+
+            let body;
+            if (eligible) {
+              body = '**Fast-forward check: eligible** :white_check_mark:\n\nThis PR can be fast-forward merged into `main`. A maintainer can run `/ff-merge` to merge it.';
+            } else {
+              body = [
+                '**Fast-forward check: not eligible** :x:',
+                '',
+                'The PR branch is not a direct descendant of `main`. Please rebase:',
+                '',
+                '```bash',
+                'git fetch upstream',
+                'git rebase --signoff -S upstream/main',
+                'git push --force-with-lease',
+                '```',
+                '',
+                'Then run `/ff-check` again to verify.'
+              ].join('\n');
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body: body
+            });
+
+  # Perform fast-forward merge to main
+  ff-merge:
+    needs: route
+    if: needs.route.outputs.command == 'ff-merge' && needs.route.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.FF_MERGE_TOKEN }}
+
+      - name: Fetch PR head
+        run: git fetch origin refs/pull/${{ needs.route.outputs.pr_number }}/head:pr-head
+
+      - name: Fast-forward merge
+        run: git merge --ff-only pr-head
+
+      - name: Push to main
+        run: git push origin main
+
+      - name: Close PR and label
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        with:
+          script: |
+            const prNumber = parseInt('${{ needs.route.outputs.pr_number }}');
+            const commenter = context.payload.comment.user.login;
+
+            // Add merged-ff label
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              labels: ['merged-ff']
+            });
+
+            // Close the PR (GitHub doesn't auto-detect ff merges)
+            await github.rest.pulls.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+              state: 'closed'
+            });
+
+            // Post success comment
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body: `This PR was merged via fast-forward by @${commenter}.\n\nCommit(s) are now on \`main\` with original signatures preserved.`
+            });
+
+      - name: Report failure
+        if: failure()
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        with:
+          script: |
+            const prNumber = parseInt('${{ needs.route.outputs.pr_number }}');
+            const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body: [
+                '**Fast-forward merge failed** :x:',
+                '',
+                `[View workflow run](${runUrl})`,
+                '',
+                'The PR branch may need rebasing:',
+                '',
+                '```bash',
+                'git fetch upstream',
+                'git rebase --signoff -S upstream/main',
+                'git push --force-with-lease',
+                '```',
+                '',
+                'Then try `/ff-merge` again.'
+              ].join('\n')
+            });
