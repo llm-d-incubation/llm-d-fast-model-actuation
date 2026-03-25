@@ -61,6 +61,14 @@ class VllmConfig(BaseModel):
     env_vars: Optional[Dict[str, str]] = None
 
 
+class HalfMade(Exception):
+    """Raised when something other than start is the first op on a VllmInstance"""
+
+    def __init__(self, instance_id):
+        super().__init__()
+        self.instance_id = instance_id
+
+
 class VllmInstance:
     """Represents a single vLLM instance"""
 
@@ -106,13 +114,20 @@ class VllmInstance:
             f"launcher-{os.getpid()}-vllm-{instance_id}.log",
         )
 
+    def _make_state(self, status: str) -> dict:
+        return {
+            "status": status,
+            "instance_id": self.instance_id,
+            **self.config.model_dump(exclude_none=True),
+        }
+
     def start(self) -> dict:
         """
         Start this vLLM instance
         :return: Status of the process.
         """
         if self.process and self.process.is_alive():
-            return {"status": "already_running", "instance_id": self.instance_id}
+            return self._make_state("already_running")
 
         # Create empty log file before spawning the child process
         open(self._log_file_path, "wb").close()
@@ -122,10 +137,7 @@ class VllmInstance:
         )
         self.process.start()
 
-        return {
-            "status": "started",
-            "instance_id": self.instance_id,
-        }
+        return self._make_state("started")
 
     def stop(self, timeout: int = 10) -> dict:
         """
@@ -133,12 +145,11 @@ class VllmInstance:
         :param timeout: waits for the process to stop, defaults to 10
         :return: a dictionary with the status "terminated"
         """
-        if not self.process or not self.process.is_alive():
+        if self.process is None:
+            raise HalfMade(self.instance_id)
+        if not self.process.is_alive():
             self._cleanup_log_file()
-            return {
-                "status": "not_running",
-                "instance_id": self.instance_id,
-            }
+            return self._make_state("not_running")
 
         # Graceful termination — send SIGTERM to the vLLM process,
         # which will propagate shutdown to the EngineCore via vLLM's
@@ -156,10 +167,7 @@ class VllmInstance:
             self.process.join()
 
         self._cleanup_log_file()
-        return {
-            "status": "terminated",
-            "instance_id": self.instance_id,
-        }
+        return self._make_state("terminated")
 
     def _cleanup_log_file(self):
         """Remove the log file if it exists."""
@@ -173,11 +181,9 @@ class VllmInstance:
         Returns the status of the process
         :return: Status of the running process.
         """
-
-        return {
-            "status": "running" if self.process.is_alive() else "stopped",
-            "instance_id": self.instance_id,
-        }
+        if self.process is None:
+            raise HalfMade(self.instance_id)
+        return self._make_state("running" if self.process.is_alive() else "stopped")
 
     def get_log_bytes(
         self, start: int = 0, end: int | None = None
@@ -245,6 +251,9 @@ class VllmMultiProcessManager:
         )
         self.instances[instance_id] = instance
 
+        # Because start() is always the first method called on a VllmInstance,
+        # the other methods of VllmMultiProcessManager do not need to handle
+        # the HalfMade exception.
         return instance.start()
 
     def stop_instance(self, instance_id: str, timeout: int = 10) -> dict:

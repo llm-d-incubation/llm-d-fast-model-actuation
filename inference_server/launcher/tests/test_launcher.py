@@ -37,6 +37,7 @@ sys.modules["vllm.entrypoints.utils"] = MagicMock()
 # Import the application and classes
 from launcher import (  # noqa: E402
     MAX_LOG_RESPONSE_BYTES,
+    HalfMade,
     LogRangeNotAvailable,
     VllmConfig,
     VllmInstance,
@@ -147,7 +148,7 @@ class TestVllmInstance:
 
     @patch("launcher.multiprocessing.Process")
     def test_instance_start(
-        self, mock_process_class, vllm_config, gpu_translator, tmp_log_dir
+        self, mock_process_class, vllm_config: VllmConfig, gpu_translator, tmp_log_dir
     ):
         """Test starting a vLLM instance"""
         mock_process = MockProcess()
@@ -160,11 +161,13 @@ class TestVllmInstance:
 
         assert result["status"] == "started"
         assert result["instance_id"] == "test-id"
+        for key, val in vllm_config.model_dump(exclude_none=True).items():
+            assert result[key] == val
         assert os.path.exists(instance._log_file_path)
 
     @patch("launcher.multiprocessing.Process")
     def test_instance_start_already_running(
-        self, mock_process_class, vllm_config, gpu_translator, tmp_log_dir
+        self, mock_process_class, vllm_config: VllmConfig, gpu_translator, tmp_log_dir
     ):
         """Test starting an instance that's already running"""
         mock_process = MockProcess()
@@ -178,10 +181,12 @@ class TestVllmInstance:
 
         assert result["status"] == "already_running"
         assert result["instance_id"] == "test-id"
+        for key, val in vllm_config.model_dump(exclude_none=True).items():
+            assert result[key] == val
 
     @patch("launcher.multiprocessing.Process")
     def test_instance_stop(
-        self, mock_process_class, vllm_config, gpu_translator, tmp_log_dir
+        self, mock_process_class, vllm_config: VllmConfig, gpu_translator, tmp_log_dir
     ):
         """Test stopping a running instance"""
         mock_process = MockProcess()
@@ -195,6 +200,8 @@ class TestVllmInstance:
 
         assert result["status"] == "terminated"
         assert result["instance_id"] == "test-id"
+        for key, val in vllm_config.model_dump(exclude_none=True).items():
+            assert result[key] == val
         assert mock_process.terminated is True
 
     @patch("launcher.multiprocessing.Process")
@@ -203,10 +210,8 @@ class TestVllmInstance:
         instance = VllmInstance(
             "test-id", vllm_config, gpu_translator, log_dir=tmp_log_dir
         )
-        result = instance.stop()
-
-        assert result["status"] == "not_running"
-        assert result["instance_id"] == "test-id"
+        with pytest.raises(HalfMade):
+            _ = instance.stop()
 
     @patch("launcher.os.killpg")
     @patch("launcher.multiprocessing.Process")
@@ -244,7 +249,7 @@ class TestVllmInstance:
 
     @patch("launcher.multiprocessing.Process")
     def test_instance_get_status(
-        self, mock_process_class, vllm_config, gpu_translator, tmp_log_dir
+        self, mock_process_class, vllm_config: VllmConfig, gpu_translator, tmp_log_dir
     ):
         """Test getting instance status"""
         mock_process = MockProcess()
@@ -258,11 +263,15 @@ class TestVllmInstance:
         instance.start()
         status = instance.get_status()
         assert status["status"] == "running"
+        for key, val in vllm_config.model_dump(exclude_none=True).items():
+            assert status[key] == val
 
         # Stopped
         mock_process._is_alive = False
         status = instance.get_status()
         assert status["status"] == "stopped"
+        for key, val in vllm_config.model_dump(exclude_none=True).items():
+            assert status[key] == val
 
     @patch("launcher.multiprocessing.Process")
     def test_instance_uuid_to_index_translation(
@@ -463,7 +472,9 @@ class TestVllmMultiProcessManager:
         assert len(manager.instances) == 0
 
     @patch("launcher.multiprocessing.Process")
-    def test_get_instance_status(self, mock_process_class, manager, vllm_config):
+    def test_get_instance_status(
+        self, mock_process_class, manager, vllm_config: VllmConfig
+    ):
         """Test getting status of specific instance"""
         mock_process = MockProcess()
         mock_process_class.return_value = mock_process
@@ -473,6 +484,8 @@ class TestVllmMultiProcessManager:
 
         assert status["status"] == "running"
         assert status["instance_id"] == "test-id"
+        for key, val in vllm_config.model_dump(exclude_none=True).items():
+            assert status[key] == val
 
     @patch("launcher.multiprocessing.Process")
     def test_get_instance_status_nonexistent(self, mock_process_class, manager):
@@ -494,6 +507,9 @@ class TestVllmMultiProcessManager:
         assert status["total_instances"] == 2
         assert status["running_instances"] == 2
         assert len(status["instances"]) == 2
+        for inst in status["instances"]:
+            for key, val in vllm_config.model_dump(exclude_none=True).items():
+                assert inst[key] == val
 
     @patch("launcher.multiprocessing.Process")
     def test_list_instances(self, mock_process_class, manager, vllm_config):
@@ -693,6 +709,9 @@ class TestAPIEndpoints:
         mock_manager.get_instance_status.return_value = {
             "status": "running",
             "instance_id": "test-id",
+            "options": "--model test-model",
+            "gpu_uuids": None,
+            "env_vars": {"KEY": "val"},
         }
 
         response = client.get("/v2/vllm/instances/test-id")
@@ -700,6 +719,8 @@ class TestAPIEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "running"
+        assert data["options"] == "--model test-model"
+        assert data["env_vars"] == {"KEY": "val"}
 
     @patch("launcher.vllm_manager")
     def test_get_nonexistent_instance_status(self, mock_manager, client):
@@ -1055,19 +1076,6 @@ class TestLogFileCleanup:
 
         instance = self._make_instance(gpu_translator, tmp_log_dir)
         instance.start()
-        assert os.path.exists(instance._log_file_path)
-
-        instance.stop()
-        assert not os.path.exists(instance._log_file_path)
-
-    @patch("launcher.multiprocessing.Process")
-    def test_stop_not_running_cleans_up_log_file(
-        self, mock_process_class, gpu_translator, tmp_log_dir
-    ):
-        """Test that stop() removes the log file when process is not running"""
-        instance = self._make_instance(gpu_translator, tmp_log_dir)
-        # Create a log file manually
-        open(instance._log_file_path, "wb").close()
         assert os.path.exists(instance._log_file_path)
 
         instance.stop()
