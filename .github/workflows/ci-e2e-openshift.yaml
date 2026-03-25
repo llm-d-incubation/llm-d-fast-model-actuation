@@ -392,7 +392,7 @@ jobs:
           echo "Cluster domain: $CLUSTER_DOMAIN"
           if echo "$CLUSTER_DOMAIN" | grep -q "pokprod"; then
             echo "Detected pokprod cluster"
-            echo "CLUSTER_TYPE=pokprod" >> $GITHUB_ENV
+            echo "RUNTIME_CLASS_NAME=nvidia" >> $GITHUB_ENV
           fi
 
       - name: Clean up resources for this PR
@@ -449,303 +449,18 @@ jobs:
           echo "Creating namespace $FMA_NAMESPACE..."
           kubectl create namespace "$FMA_NAMESPACE"
 
-      - name: Create GHCR image pull secret
-        env:
-          CR_USER: ${{ secrets.CR_USER }}
-          CR_TOKEN: ${{ secrets.CR_TOKEN }}
-        run: |
-          echo "Creating GHCR image pull secret in $FMA_NAMESPACE..."
-          kubectl create secret docker-registry ghcr-pull-secret \
-            --docker-server=ghcr.io \
-            --docker-username="$CR_USER" \
-            --docker-password="$CR_TOKEN" \
-            -n "$FMA_NAMESPACE"
-
-          # Patch default SA so all pods in the namespace can pull from GHCR
-          kubectl patch serviceaccount default -n "$FMA_NAMESPACE" \
-            -p '{"imagePullSecrets": [{"name": "ghcr-pull-secret"}]}'
-          echo "GHCR pull secret created and attached to default SA"
-
-      - name: Deploy FMA (CRDs and controllers)
-        id: deploy-fma
+      - name: Deploy FMA
         env:
           CONTAINER_IMG_REG: ghcr.io/${{ github.repository }}
-          IMAGE_TAG: ${{ env.IMAGE_TAG }}
           NODE_VIEW_CLUSTER_ROLE: "create/please"
         run: |
-          # Force container registry to lowercase, because this is how
-          # ghcr.io relates images to their source org/repo.
           export CONTAINER_IMG_REG="${CONTAINER_IMG_REG,,}"
-          echo "Running deploy_fma.sh..."
           ./test/e2e/deploy_fma.sh
 
-      - name: Set up test service account
-        run: |
-          echo "Creating service account for test workloads..."
-          # The real requester does not interact with the Kubernetes API.
-          # The service account is only needed for imagePullSecrets.
-          # NOTE: If the launcher populator is later integrated into this e2e test
-          # and shares this SA, a Role with access to launcherconfigs and
-          # launcherpopulationpolicies will need to be added back.
-          kubectl create sa testreq -n "$FMA_NAMESPACE" || true
-          kubectl patch serviceaccount testreq -n "$FMA_NAMESPACE" \
-            -p '{"imagePullSecrets": [{"name": "ghcr-pull-secret"}]}'
-          echo "Service account created"
-
-      - name: Create test objects
-        id: test-objects
-        run: |
-          INST=$(date +%d-%H-%M-%S)
-          echo "Creating test objects with instance: $INST"
-
-          RUNTIME_CLASS=""
-          if [ "$CLUSTER_TYPE" = "pokprod" ]; then
-            RUNTIME_CLASS="runtimeClassName: nvidia"
-          fi
-
-          kubectl apply -n "$FMA_NAMESPACE" -f - <<EOF
-          apiVersion: fma.llm-d.ai/v1alpha1
-          kind: InferenceServerConfig
-          metadata:
-            name: inference-server-config-${INST}
-          spec:
-            modelServerConfig:
-              port: 8005
-              options: "--model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --enable-sleep-mode"
-              env_vars:
-                VLLM_SERVER_DEV_MODE: "1"
-                VLLM_USE_V1: "1"
-                VLLM_LOGGING_LEVEL: "DEBUG"
-              labels:
-                component: inference
-              annotations:
-                description: "E2E test InferenceServerConfig"
-            launcherConfigName: launcher-config-${INST}
-          ---
-          apiVersion: fma.llm-d.ai/v1alpha1
-          kind: LauncherConfig
-          metadata:
-            name: launcher-config-${INST}
-          spec:
-            maxSleepingInstances: 3
-            podTemplate:
-              spec:
-                ${RUNTIME_CLASS}
-                imagePullSecrets:
-                  - name: ghcr-pull-secret
-                containers:
-                  - name: inference-server
-                    image: ${LAUNCHER_IMAGE}
-                    imagePullPolicy: Always
-                    command:
-                    - /app/launcher.py
-                    - --host=0.0.0.0
-                    - --log-level=info
-                    - --port=8001
-                    env:
-                    - name: HF_HOME
-                      value: "/tmp"
-                    - name: VLLM_CACHE_ROOT
-                      value: "/tmp"
-                    - name: FLASHINFER_WORKSPACE_BASE
-                      value: "/tmp"
-                    - name: TRITON_CACHE_DIR
-                      value: "/tmp"
-                    - name: XDG_CACHE_HOME
-                      value: "/tmp"
-                    - name: XDG_CONFIG_HOME
-                      value: "/tmp"
-          ---
-          apiVersion: fma.llm-d.ai/v1alpha1
-          kind: LauncherPopulationPolicy
-          metadata:
-            name: lpp-${INST}
-          spec:
-            enhancedNodeSelector:
-              labelSelector:
-                matchLabels:
-                  nvidia.com/gpu.present: "true"
-            countForLauncher:
-              - launcherConfigName: launcher-config-${INST}
-                launcherCount: 1
-          ---
-          apiVersion: apps/v1
-          kind: ReplicaSet
-          metadata:
-            name: my-request-${INST}
-            labels:
-              app: dp-example
-          spec:
-            replicas: 1
-            selector:
-              matchLabels:
-                app: dp-example
-            template:
-              metadata:
-                labels:
-                  app: dp-example
-                  instance: "${INST}"
-                annotations:
-                  dual-pods.llm-d.ai/admin-port: "8081"
-                  dual-pods.llm-d.ai/inference-server-config: "inference-server-config-${INST}"
-              spec:
-                ${RUNTIME_CLASS}
-                imagePullSecrets:
-                  - name: ghcr-pull-secret
-                containers:
-                  - name: inference-server
-                    image: ${REQUESTER_IMAGE}
-                    imagePullPolicy: Always
-                    ports:
-                    - name: probes
-                      containerPort: 8080
-                    - name: spi
-                      containerPort: 8081
-                    readinessProbe:
-                      httpGet:
-                        path: /ready
-                        port: 8080
-                      initialDelaySeconds: 2
-                      periodSeconds: 5
-                    resources:
-                      limits:
-                        nvidia.com/gpu: "1"
-                        cpu: "200m"
-                        memory: 250Mi
-                serviceAccount: testreq
-          EOF
-
-          echo "instance=${INST}" >> $GITHUB_OUTPUT
-          echo "isc=inference-server-config-${INST}" >> $GITHUB_OUTPUT
-          echo "lc=launcher-config-${INST}" >> $GITHUB_OUTPUT
-          echo "lpp=lpp-${INST}" >> $GITHUB_OUTPUT
-          echo "rs=my-request-${INST}" >> $GITHUB_OUTPUT
-          echo "Test objects created"
-
-      - name: Verify launcher pod creation and binding
+      - name: Run E2E tests
         env:
-          INST: ${{ steps.test-objects.outputs.instance }}
-          LC: ${{ steps.test-objects.outputs.lc }}
-        run: |
-          echo "Waiting for requester pod..."
-          ELAPSED=0
-          LIMIT=300
-          while true; do
-            COUNT=$(kubectl get pods -n "$FMA_NAMESPACE" -l "app=dp-example,instance=$INST" -o json 2>/dev/null | jq '.items | length')
-            if [ "$COUNT" -ge 1 ]; then
-              echo "Requester pod found"
-              break
-            fi
-            if [ "$ELAPSED" -ge "$LIMIT" ]; then
-              echo "::error::Requester pod did not appear within ${LIMIT}s"
-              exit 1
-            fi
-            sleep 5
-            ELAPSED=$((ELAPSED + 5))
-          done
-
-          REQUESTER=$(kubectl get pods -n "$FMA_NAMESPACE" -l "app=dp-example,instance=$INST" -o json | jq -r '.items[0].metadata.name')
-          echo "Requester pod: $REQUESTER"
-
-          # LauncherPopulationPolicy specifies launcherCount per node with nvidia.com/gpu.present=true
-          GPU_NODES=$(kubectl get nodes -l nvidia.com/gpu.present=true --field-selector spec.unschedulable!=true -o name | wc -l | tr -d ' ')
-          echo "Expecting launcher-populator to create $GPU_NODES launcher(s)"
-
-          echo "Waiting for launcher-populator to create launcher pods..."
-          ELAPSED=0
-          while true; do
-            COUNT=$(kubectl get pods -n "$FMA_NAMESPACE" -l "dual-pods.llm-d.ai/launcher-config-name=$LC" -o json 2>/dev/null | jq '.items | length')
-            if [ "$COUNT" -ge "$GPU_NODES" ]; then
-              echo "Launcher-populator created $COUNT launcher(s) successfully"
-              kubectl get pods -n "$FMA_NAMESPACE" -l "dual-pods.llm-d.ai/launcher-config-name=$LC" -o wide
-              break
-            fi
-            if [ "$ELAPSED" -ge "$LIMIT" ]; then
-              echo "::error::Launcher-populator did not create expected $GPU_NODES launcher(s) within ${LIMIT}s (found: $COUNT)"
-              exit 1
-            fi
-            sleep 5
-            ELAPSED=$((ELAPSED + 5))
-          done
-
-          # 1. Wait for at least two launcher pods to be Ready.
-          # The controller will not bind until a launcher is ready, so waiting here
-          # makes it easier to diagnose problems that prevent readiness.
-          # Launcher image is ~20GB, so allow extra time for uncached pulls.
-          # Some GPU nodes may be ineligible for scheduling on shared clusters, so
-          # require a smaller healthy subset instead of every created launcher pod.
-          echo "Waiting for at least two launcher pod(s) to be Ready..."
-          ELAPSED=0
-          READY_LAUNCHERS=0
-          # Temporary workaround: require only two ready launchers until the
-          # test accounts for tainted or otherwise ineligible GPU nodes.
-          READY_TARGET=2
-          while true; do
-            READY_LAUNCHERS=$(kubectl get pods -n "$FMA_NAMESPACE" \
-              -l "dual-pods.llm-d.ai/launcher-config-name=$LC" -o json \
-              | jq '[.items[] | select(.status.conditions[]? | select(.type == "Ready" and .status == "True"))] | length')
-            if [ "$READY_LAUNCHERS" -ge "$READY_TARGET" ]; then
-              echo "$READY_LAUNCHERS launcher pod(s) are Ready"
-              kubectl get pods -n "$FMA_NAMESPACE" \
-                -l "dual-pods.llm-d.ai/launcher-config-name=$LC" -o wide
-              break
-            fi
-            if [ "$ELAPSED" -ge 600 ]; then
-              echo "::error::Fewer than ${READY_TARGET} launcher pod(s) became Ready within 600s (ready: $READY_LAUNCHERS)"
-              exit 1
-            fi
-            sleep 5
-            ELAPSED=$((ELAPSED + 5))
-          done
-
-          # 2. Verify launcher-to-requester binding.
-          # After launcher is ready, the controller binds by setting dual labels.
-          # Use the dual label to find the launcher bound to our requester.
-          echo "Verifying launcher-to-requester binding..."
-          ELAPSED=0
-          while true; do
-            LAUNCHER=$(kubectl get pods -n "$FMA_NAMESPACE" \
-              -l "dual-pods.llm-d.ai/launcher-config-name=$LC,dual-pods.llm-d.ai/dual=$REQUESTER" \
-              -o json | jq -r '.items[0].metadata.name // empty')
-            if [ -n "$LAUNCHER" ]; then
-              echo "Launcher bound to requester: $LAUNCHER -> $REQUESTER"
-              break
-            fi
-            if [ "$ELAPSED" -ge "$LIMIT" ]; then
-              echo "::error::Launcher-to-requester binding not established within ${LIMIT}s"
-              exit 1
-            fi
-            sleep 5
-            ELAPSED=$((ELAPSED + 5))
-          done
-
-          # 3. Verify requester-to-launcher binding (reverse direction).
-          echo "Verifying requester-to-launcher binding..."
-          ELAPSED=0
-          while true; do
-            REQUESTER_DUAL=$(kubectl get pod "$REQUESTER" -n "$FMA_NAMESPACE" -o json | jq -r '.metadata.labels["dual-pods.llm-d.ai/dual"] // empty')
-            if [ "$REQUESTER_DUAL" = "$LAUNCHER" ]; then
-              echo "Requester bound to launcher: $REQUESTER -> $LAUNCHER"
-              break
-            fi
-            if [ "$ELAPSED" -ge "$LIMIT" ]; then
-              echo "::error::Requester-to-launcher binding not established within ${LIMIT}s"
-              echo "  Requester dual label: '$REQUESTER_DUAL' (expected: '$LAUNCHER')"
-              exit 1
-            fi
-            sleep 5
-            ELAPSED=$((ELAPSED + 5))
-          done
-
-          # 4. Wait for requester to be Ready.
-          # The controller ordering is: launcher ready -> binding -> instance created
-          # -> inference server ready -> requester ready.
-          echo "Waiting for requester pod to be Ready..."
-          kubectl wait --for=condition=Ready "pod/$REQUESTER" -n "$FMA_NAMESPACE" --timeout=120s
-
-          echo ""
-          echo "=== Launcher test passed: pods Ready and bound ==="
-          kubectl get pods -n "$FMA_NAMESPACE" -o wide --show-labels
+          MKOBJS_SCRIPT: ./test/e2e/mkobjs-openshift.sh
+        run: ./test/e2e/run-launcher-e2e.sh
 
       - name: List objects of category all
         if: always()
@@ -777,17 +492,12 @@ jobs:
 
       - name: Clean up test objects
         if: always()
-        env:
-          ISC: ${{ steps.test-objects.outputs.isc }}
-          LC: ${{ steps.test-objects.outputs.lc }}
-          LPP: ${{ steps.test-objects.outputs.lpp }}
-          RS: ${{ steps.test-objects.outputs.rs }}
         run: |
           echo "Cleaning up test objects..."
-          kubectl delete rs "$RS" -n "$FMA_NAMESPACE" --ignore-not-found || true
-          kubectl delete launcherpopulationpolicy "$LPP" -n "$FMA_NAMESPACE" --ignore-not-found || true
-          kubectl delete inferenceserverconfig "$ISC" -n "$FMA_NAMESPACE" --ignore-not-found || true
-          kubectl delete launcherconfig "$LC" -n "$FMA_NAMESPACE" --ignore-not-found || true
+          kubectl delete rs -n "$FMA_NAMESPACE" -l fma-e2e-instance --ignore-not-found || true
+          kubectl delete launcherpopulationpolicy -n "$FMA_NAMESPACE" -l fma-e2e-instance --ignore-not-found || true
+          kubectl delete inferenceserverconfig -n "$FMA_NAMESPACE" -l fma-e2e-instance --ignore-not-found || true
+          kubectl delete launcherconfig -n "$FMA_NAMESPACE" -l fma-e2e-instance --ignore-not-found || true
           # Wait for test pods to terminate
           sleep 10
           echo "Test objects cleaned up"
