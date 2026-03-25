@@ -668,15 +668,35 @@ jobs:
             ELAPSED=$((ELAPSED + 5))
           done
 
-          # 1. Wait for launcher to be Ready.
-          # The controller will not bind until the launcher is ready, so waiting here
+          # 1. Wait for at least two launcher pods to be Ready.
+          # The controller will not bind until a launcher is ready, so waiting here
           # makes it easier to diagnose problems that prevent readiness.
           # Launcher image is ~20GB, so allow extra time for uncached pulls.
-          # There may be more than one launcher pod if the controller created extras,
-          # so wait for all of them using the label selector.
-          echo "Waiting for launcher pod(s) to be Ready..."
-          kubectl wait pods --for=condition=Ready -n "$FMA_NAMESPACE" \
-            -l "dual-pods.llm-d.ai/launcher-config-name=$LC" --timeout=600s
+          # Some GPU nodes may be ineligible for scheduling on shared clusters, so
+          # require a smaller healthy subset instead of every created launcher pod.
+          echo "Waiting for at least two launcher pod(s) to be Ready..."
+          ELAPSED=0
+          READY_LAUNCHERS=0
+          # Temporary workaround: require only two ready launchers until the
+          # test accounts for tainted or otherwise ineligible GPU nodes.
+          READY_TARGET=2
+          while true; do
+            READY_LAUNCHERS=$(kubectl get pods -n "$FMA_NAMESPACE" \
+              -l "dual-pods.llm-d.ai/launcher-config-name=$LC" -o json \
+              | jq '[.items[] | select(.status.conditions[]? | select(.type == "Ready" and .status == "True"))] | length')
+            if [ "$READY_LAUNCHERS" -ge "$READY_TARGET" ]; then
+              echo "$READY_LAUNCHERS launcher pod(s) are Ready"
+              kubectl get pods -n "$FMA_NAMESPACE" \
+                -l "dual-pods.llm-d.ai/launcher-config-name=$LC" -o wide
+              break
+            fi
+            if [ "$ELAPSED" -ge 600 ]; then
+              echo "::error::Fewer than ${READY_TARGET} launcher pod(s) became Ready within 600s (ready: $READY_LAUNCHERS)"
+              exit 1
+            fi
+            sleep 5
+            ELAPSED=$((ELAPSED + 5))
+          done
 
           # 2. Verify launcher-to-requester binding.
           # After launcher is ready, the controller binds by setting dual labels.
