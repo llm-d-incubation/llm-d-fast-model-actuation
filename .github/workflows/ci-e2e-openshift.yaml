@@ -460,11 +460,23 @@ jobs:
       - name: Run E2E tests
         env:
           MKOBJS_SCRIPT: ./test/e2e/mkobjs-openshift.sh
-        run: ./test/e2e/run-launcher-e2e.sh
+        run: ./test/e2e/test-cases.sh
 
       - name: List objects of category all
         if: always()
         run: kubectl get all -n "$FMA_NAMESPACE"
+
+      - name: Dump InferenceServerConfig objects
+        if: always()
+        run: kubectl get inferenceserverconfigs -n "$FMA_NAMESPACE" -o yaml
+
+      - name: Dump LauncherConfig objects
+        if: always()
+        run: kubectl get launcherconfigs -n "$FMA_NAMESPACE" -o yaml
+
+      - name: Dump LauncherPopulationPolicy objects
+        if: always()
+        run: kubectl get launcherpopulationpolicies -n "$FMA_NAMESPACE" -o yaml
 
       - name: Dump all Pods
         if: always()

@@ -106,10 +106,13 @@ func (item launcherPodItem) process(ctx context.Context, ctl *controller, nodeDa
 
 func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *nodeData) (error, bool) {
 	logger := klog.FromContext(urCtx).WithValues("serverUID", item.UID, "requesterName", item.RequesterName)
+	serverDat := ctl.getServerData(nodeDat, item.RequesterName, item.UID)
+	if serverDat.InstanceID != "" {
+		logger = logger.WithValues("instanceID", serverDat.InstanceID)
+	}
 	ctx := klog.NewContext(urCtx, logger)
 	requesterRV := "(non existent)"
 	providerRV := "(non existent)"
-	serverDat := ctl.getServerData(nodeDat, item.RequesterName, item.UID)
 	var requesterDeletionTimestamp, providerDeletionTimestamp *string
 	var requesterRCS, providerRCS *reducedContainerState
 
@@ -356,11 +359,10 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 			serverDat.Sleeping = &sleeping
 		}
 		if *(serverDat.Sleeping) {
-			err = ctl.wakeSleeper(ctx, serverDat, requestingPod, providingPod, serverPort)
+			err = ctl.wakeSleeper(ctx, serverDat, requestingPod, providingPod, serverPort, "discovered-bound")
 			if err != nil {
 				return err, true
 			}
-			logger.V(2).Info("Woke discovered-bound inference server")
 		}
 		if err := ctl.ensureSleepingLabel(ctx, providingPod, *(serverDat.Sleeping)); err != nil {
 			return err, true
@@ -433,7 +435,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				logger.V(2).Info("Unexpected: multiple sleeping Pods match; using the first", "requesterName", requestingPod.Name)
 			}
 			providingPod = sleepingAnys[0].(*corev1.Pod)
-			return ctl.bind(ctx, serverDat, requestingPod, providingPod, false, -1)
+			return ctl.bind(ctx, serverDat, requestingPod, providingPod, nil, -1)
 		}
 		// What remains is to make a new server-providing Pod --- if the sleeper budget allows.
 
@@ -531,7 +533,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				}
 				launcherDat.Instances[iscHash] = time.Now()
 				// TODO(waltforme): the bind method may need more revision to fully handle launcher-based server providing Pods
-				return ctl.bind(ctx, serverDat, requestingPod, launcherPod, true, int16(isc.Spec.ModelServerConfig.Port))
+				return ctl.bind(ctx, serverDat, requestingPod, launcherPod, &iscHash, int16(isc.Spec.ModelServerConfig.Port))
 			} else {
 				// Slower path: create new instance in launcher with capacity
 				logger.V(5).Info("Creating new vLLM instance", "iscHash", iscHash)
@@ -545,7 +547,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				)
 				launcherDat.Instances[iscHash] = time.Now()
 				// TODO(waltforme): the bind method may need more revision to fully handle launcher-based server providing Pods
-				return ctl.bind(ctx, serverDat, requestingPod, launcherPod, true, int16(isc.Spec.ModelServerConfig.Port))
+				return ctl.bind(ctx, serverDat, requestingPod, launcherPod, &iscHash, int16(isc.Spec.ModelServerConfig.Port))
 			}
 		}
 	}
@@ -693,11 +695,12 @@ func (ctl *controller) configInferenceServer(isc *fmav1alpha1.InferenceServerCon
 
 func (ctl *controller) wakeupInstance(ctx context.Context, lClient *LauncherClient, instanceID string, instancePort int32) error {
 	logger := klog.FromContext(ctx)
-	err := doPost("http://" + lClient.baseURL.Hostname() + ":" + strconv.Itoa(int(instancePort)) + "/wake_up")
+	endpoint := lClient.baseURL.Hostname() + ":" + strconv.Itoa(int(instancePort))
+	err := doPost("http://" + endpoint + "/wake_up")
 	if err != nil {
-		return fmt.Errorf("failed to wake up vLLM instance %q: %w", instanceID, err)
+		return fmt.Errorf("failed to wake up vLLM instance %q (at %s): %w", instanceID, endpoint, err)
 	}
-	logger.V(2).Info("Woke up vLLM instance", "instanceID", instanceID)
+	logger.V(2).Info("Woke up vLLM instance", "instanceID", instanceID, "endpoint", endpoint)
 	return nil
 }
 
@@ -794,7 +797,8 @@ func (ctl *controller) enforceSleeperBudget(ctx context.Context, serverDat *serv
 }
 
 // Note: instPort is used only for launcher-based server-providing Pods.
-func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requestingPod, providingPod *corev1.Pod, launcherBased bool, instPort int16) (error, bool) {
+// instanceID is non-nil iff launcher-based
+func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requestingPod, providingPod *corev1.Pod, instanceID *string, instPort int16) (error, bool) {
 	logger := klog.FromContext(ctx)
 	providingPod = providingPod.DeepCopy()
 	providingPod.Annotations[requesterAnnotationKey] = string(requestingPod.UID) + " " + requestingPod.Name
@@ -807,8 +811,12 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 	if err != nil {
 		return fmt.Errorf("failed to bind server-providing Pod %s: %w", providingPod.Name, err), true
 	}
+	launcherBased := instanceID != nil
 	serverDat.ProvidingPodName = providingPod.Name
-	logger.V(2).Info("Bound server-providing Pod", "name", providingPod.Name, "node", requestingPod.Spec.NodeName, "gpus", serverDat.GPUIDsStr, "newResourceVersion", echo.ResourceVersion)
+	if launcherBased {
+		serverDat.InstanceID = *instanceID
+	}
+	logger.V(2).Info("Bound server-providing Pod", "name", providingPod.Name, "node", requestingPod.Spec.NodeName, "gpus", serverDat.GPUIDsStr, "newResourceVersion", echo.ResourceVersion, "instanceID", serverDat.InstanceID)
 	var serverPort int16
 	if launcherBased {
 		serverPort = instPort
@@ -824,25 +832,27 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 	if launcherBased {
 		serverDat.ServerPort = serverPort
 	}
-	err = ctl.wakeSleeper(ctx, serverDat, requestingPod, providingPod, serverPort)
+	err = ctl.wakeSleeper(ctx, serverDat, requestingPod, providingPod, serverPort, "freshly-bound")
 	if err != nil {
 		return err, true
 	}
-	logger.V(2).Info("Woke freshly-bound inference server", "providingPod", providingPod.Name)
 	return ctl.ensureReqState(ctx, requestingPod, serverDat, !slices.Contains(requestingPod.Finalizers, requesterFinalizer), false)
 }
 
-func (ctl *controller) wakeSleeper(ctx context.Context, serverDat *serverData, requestingPod, providingPod *corev1.Pod, serverPort int16) error {
+func (ctl *controller) wakeSleeper(ctx context.Context, serverDat *serverData, requestingPod, providingPod *corev1.Pod, serverPort int16, description string) error {
 	if ctl.debugAccelMemory {
 		if err := ctl.accelMemoryIsLowEnough(ctx, requestingPod, serverDat); err != nil {
 			return err
 		}
 	}
-	wakeURL := fmt.Sprintf("http://%s:%d/wake_up", providingPod.Status.PodIP, serverPort)
+	endpoint := fmt.Sprintf("%s:%d", providingPod.Status.PodIP, serverPort)
+	wakeURL := "http://" + endpoint + "/wake_up"
 	err := doPost(wakeURL)
 	if err != nil {
 		return err
 	}
+	logger := klog.FromContext(ctx)
+	logger.V(2).Info("Woke inference server", "endpoint", endpoint, "description", description)
 	if err := ctl.ensureSleepingLabel(ctx, providingPod, false); err != nil {
 		return err
 	}
@@ -949,7 +959,8 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 				}
 			}
 		}
-		sleepURL := fmt.Sprintf("http://%s:%d/sleep", providingPod.Status.PodIP, serverPort)
+		endpoint := fmt.Sprintf("%s:%d", providingPod.Status.PodIP, serverPort)
+		sleepURL := "http://" + endpoint + "/sleep"
 		resp, err := http.Post(sleepURL, "", nil)
 		if err != nil {
 			return fmt.Errorf("failed to put provider %q to sleep, POST %s got error: %w", serverDat.ProvidingPodName, sleepURL, err)
@@ -958,7 +969,7 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 			return fmt.Errorf("failed to put provider %q to sleep, POST %s returned status %d", serverDat.ProvidingPodName, sleepURL, sc)
 		}
 		serverDat.Sleeping = ptr.To(true)
-		logger.V(2).Info("Put inference server to sleep")
+		logger.V(2).Info("Put inference server to sleep", "endpoint", endpoint)
 	}
 	providingPod = providingPod.DeepCopy()
 	var aChange, fChange bool

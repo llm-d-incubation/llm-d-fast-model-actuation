@@ -5,8 +5,13 @@ ns_flag=()
 while [ $# -gt 0 ]; do
     case "$1" in
         -n|--namespace)
-            ns_flag=(-n "$2")
-            shift 2
+            if [ $# -gt 1 ] ; then
+                ns_flag=(-n "$2")
+                shift 2
+            else
+                echo "Missing --namespace argument" >&2
+                exit 1
+            fi
             ;;
         *)
             echo "Unknown argument: $1" >&2
@@ -144,6 +149,7 @@ spec:
   selector:
     matchLabels:
       app: dp-example
+      instance: "$inst"
   template:
     metadata:
       labels:

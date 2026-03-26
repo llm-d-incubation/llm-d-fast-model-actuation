@@ -2,7 +2,7 @@
 
 # Runs all launcher-based E2E test scenarios.
 #
-# Usage: run-launcher-e2e.sh
+# Usage: test-cases.sh
 # Current working directory must be the root of the Git repository.
 #
 # Required environment variables:
@@ -12,6 +12,7 @@
 # Optional environment variables:
 #   FMA_CHART_INSTANCE_NAME - Helm release name prefix (default: fma)
 #   READY_TARGET            - minimum ready launchers before proceeding (default: 2)
+#   POLICIES_ENABLED        - "true"/"false"; auto-detected if unset
 #   POLL_LIMIT_SECS         - polling timeout seconds (default: 600)
 #   FMA_DEBUG               - "true" to enable shell tracing (set -x)
 
@@ -43,12 +44,21 @@ cheer() {
     echo
 }
 
+intro_case() {
+    echo
+    echo "====== Test case: $* ======"
+    echo
+}
+
 expect() {
     local elapsed=0
     local start=$(date)
     local limit=${POLL_LIMIT_SECS}
+    echo "Expecting $1" >&2
     while true; do
-        kubectl get pods -n "$NS" -L dual-pods.llm-d.ai/dual,dual-pods.llm-d.ai/sleeping
+        if (( elapsed < 7 || elapsed+7 > POLL_LIMIT_SECS )); then
+            kubectl get pods -n "$NS" -L dual-pods.llm-d.ai/dual,dual-pods.llm-d.ai/sleeping
+        fi
         if eval "$1"; then return; fi
         if (( elapsed > limit )); then
             echo "Did not become true (from $start to $(date)): $1" >&2
@@ -63,7 +73,7 @@ expect() {
 # Create test objects
 # ---------------------------------------------------------------------------
 
-: Basic Launcher Pod Creation
+intro_case Basic Launcher Pod Creation
 
 objs=$("$MKOBJS_SCRIPT" -n "$NS")
 isc=$(echo $objs | awk '{print $1}')
@@ -87,14 +97,30 @@ expect "[ \$(kubectl get pods -n $NS -l dual-pods.llm-d.ai/launcher-config-name=
 echo "At least $READY_TARGET launcher pod(s) are Ready"
 kubectl get pods -n "$NS" -l dual-pods.llm-d.ai/launcher-config-name=$lc -o wide
 
+trap 'echo "
+reqlb=${reqlb:-}
+reqlb2=${reqlb2:-}
+reqlb3=${reqlb3:-}
+reqlb4=${reqlb4:-}
+launcherlb=${launcherlb:-}
+launcherlb2=${launcherlb2:-}
+launcherlb3=${launcherlb3:-}
+launcherlb4=${launcherlb4:-}
+testnode=${testnode:-}
+"' EXIT
+
 # Expect requester pod to be created
 expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$instlb | wc -l | grep -w 1"
 
 export reqlb=$(kubectl get pods -n "$NS" -o name -l app=dp-example,instance=$instlb | sed s%pod/%%)
+echo "Server-requesting Pod is $reqlb"
+testnode=$(kubectl get pod $reqlb -n "$NS" -o jsonpath='{.spec.nodeName}')
+echo "The test Pods run on Node $testnode"
 
 # Wait for launcher-to-requester binding, then capture the launcher name
 expect "kubectl get pods -n $NS -o name -l dual-pods.llm-d.ai/dual=$reqlb | wc -l | grep -w 1"
 export launcherlb=$(kubectl get pods -n "$NS" -o name -l dual-pods.llm-d.ai/dual=$reqlb | sed s%pod/%%)
+echo "Launcher Pod is $launcherlb"
 
 # Verify requester is bound to launcher (bidirectional check)
 expect '[ "$(kubectl get pod -n '"$NS"' $reqlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcherlb" ]'
@@ -110,8 +136,17 @@ cheer Successful launcher-based pod creation
 # CEL policy verification (if enabled)
 # ---------------------------------------------------------------------------
 
-POLICIES_ENABLED="${POLICIES_ENABLED:-false}"
+if [ -z "${POLICIES_ENABLED:-}" ]; then
+    POLICIES_ENABLED=false
+    if kubectl api-resources --api-group=admissionregistration.k8s.io -o name 2>/dev/null \
+       | grep -q 'validatingadmissionpolicies'; then
+        POLICIES_ENABLED=true
+    fi
+    echo "Auto-detected POLICIES_ENABLED=$POLICIES_ENABLED"
+fi
+
 if [ "$POLICIES_ENABLED" = true ]; then
+  intro_case Admission policy enforcement
   if ! test/e2e/validate.sh; then
     echo "ERROR: CEL policy tests failed!" >&2
     exit 1
@@ -123,12 +158,15 @@ fi
 # Instance Wake-up Fast Path
 # ---------------------------------------------------------------------------
 
-: Instance Wake-up Fast Path
+intro_case Instance Wake-up Fast Path
 
 # Scale requester to 0 (instance should sleep in launcher)
 kubectl scale rs $rslb -n "$NS" --replicas=0
 
 expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$instlb | wc -l | grep -w 0"
+
+# Patch requester ReplicaSet to stick to testnode
+kubectl patch rs $rslb -n "$NS" -p '{"spec": {"template": {"spec": {"nodeSelector": {"kubernetes.io/hostname": "'$testnode'"} }} }}'
 
 # Launcher should remain
 kubectl get pod $launcherlb -n "$NS"
@@ -142,6 +180,7 @@ kubectl scale rs $rslb -n "$NS" --replicas=1
 expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$instlb | wc -l | grep -w 1"
 
 reqlb2=$(kubectl get pods -n "$NS" -o name -l app=dp-example,instance=$instlb | sed s%pod/%%)
+echo "Server-requesting Pod2 is $reqlb2"
 
 # Should still be using the same launcher pod
 expect "kubectl get pods -n $NS -o name -l dual-pods.llm-d.ai/dual=$reqlb2 | wc -l | grep -w 1"
@@ -162,7 +201,7 @@ cheer Successful instance wake-up fast path
 # Multiple Instances Share One Launcher
 # ---------------------------------------------------------------------------
 
-: Multiple Instances Share One Launcher
+intro_case Multiple Instances Share One Launcher
 
 # Scale requester to 0 again
 kubectl scale rs $rslb -n "$NS" --replicas=0
@@ -184,6 +223,7 @@ kubectl scale rs $rslb -n "$NS" --replicas=1
 expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$instlb | wc -l | grep -w 1"
 
 reqlb3=$(kubectl get pods -n "$NS" -o name -l app=dp-example,instance=$instlb | sed s%pod/%%)
+echo "Server-requesting Pod3 is $reqlb3"
 
 # Should still be using the same launcher pod
 expect "kubectl get pods -n $NS -o name -l dual-pods.llm-d.ai/dual=$reqlb3 | wc -l | grep -w 1"
@@ -204,7 +244,7 @@ cheer Successful multiple instances sharing one launcher
 # Switch Instances In One Launcher
 # ---------------------------------------------------------------------------
 
-: Switch Instances In One Launcher
+intro_case Switch Instances In One Launcher
 
 # Scale requester to 0 again
 kubectl scale rs $rslb -n "$NS" --replicas=0
@@ -226,6 +266,7 @@ kubectl scale rs $rslb -n "$NS" --replicas=1
 expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$instlb | wc -l | grep -w 1"
 
 reqlb4=$(kubectl get pods -n "$NS" -o name -l app=dp-example,instance=$instlb | sed s%pod/%%)
+echo "Server-requesting Pod4 is $reqlb4"
 
 # Should still be using the same launcher pod
 expect "kubectl get pods -n $NS -o name -l dual-pods.llm-d.ai/dual=$reqlb4 | wc -l | grep -w 1"
@@ -246,7 +287,7 @@ cheer Successful switching instances in one launcher
 # Controller Restart State Recovery
 # ---------------------------------------------------------------------------
 
-: Controller Restart State Recovery
+intro_case Controller Restart State Recovery
 
 # This test verifies that the controller can rebuild its internal state after restart
 # by syncing launcher instances from unbound launcher pods
@@ -258,6 +299,7 @@ expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$instlb | wc 
 
 # Verify launcher set is unchanged and target launcher is unbound
 launcher_count_pre_restart=$(kubectl get pods -n "$NS" -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | wc -l)
+echo launcher_count_pre_restart = $launcher_count_pre_restart
 kubectl get pods -n "$NS" -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | grep -x "pod/$launcherlb"
 expect '[ "$(kubectl get pod -n '"$NS"' $launcherlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "" ]'
 
@@ -309,7 +351,7 @@ cheer Successful controller restart state recovery
 # Unbound Launcher Deletion Cleanup
 # ---------------------------------------------------------------------------
 
-: Unbound Launcher Deletion Cleanup
+intro_case Unbound Launcher Deletion Cleanup
 
 # This test verifies that deleting an unbound launcher does not leave the controller
 # stuck with stale instance state.
@@ -321,14 +363,18 @@ expect '[ "$(kubectl get pod -n '"$NS"' $launcherlb -o jsonpath={.metadata.label
 
 kubectl delete pod $launcherlb -n "$NS" --wait=true
 
-! kubectl get pod $launcherlb -n "$NS"
+! kubectl get pods -n "$NS" -o name | grep -qw pod/$launcherlb
 
 kubectl scale rs $rslb -n "$NS" --replicas=1
 
 expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$instlb | wc -l | grep -w 1"
 reqlb_after_delete=$(kubectl get pods -n "$NS" -o name -l app=dp-example,instance=$instlb | sed s%pod/%%)
+echo "Server-requesting Pod after delete = $reqlb_after_delete"
+
 expect "kubectl get pods -n $NS -o name -l dual-pods.llm-d.ai/dual=$reqlb_after_delete | wc -l | grep -w 1"
 launcherlb_after_delete=$(kubectl get pods -n "$NS" -o name -l dual-pods.llm-d.ai/dual=$reqlb_after_delete | sed s%pod/%%)
+echo "Launcher after delete = $launcherlb_after_delete"
+
 [ "$launcherlb_after_delete" != "$launcherlb" ]
 expect '[ "$(kubectl get pod -n '"$NS"' $reqlb_after_delete -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcherlb_after_delete" ]'
 
