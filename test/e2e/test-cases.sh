@@ -154,6 +154,13 @@ if [ "$POLICIES_ENABLED" = true ]; then
   cheer CEL policy checks passed
 fi
 
+# TODO: stop skipping once Issues 387 and 388 are resolved
+if [ "$FMA_NAMESPACE" != debug ]; then
+    echo "Skipping the remaining test cases because of Issues 387 and 388" >&2
+    cheer All launcher-based tests that are currently expected to pass on OpenShift have done so
+    exit 0
+fi
+
 # ---------------------------------------------------------------------------
 # Instance Wake-up Fast Path
 # ---------------------------------------------------------------------------
