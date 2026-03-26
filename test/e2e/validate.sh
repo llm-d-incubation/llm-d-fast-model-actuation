@@ -9,7 +9,7 @@ set -euo pipefail
 #   launcherlb
 
 # Verify required variables are set
-if [ -z "${reqlb:-}" ] || [ -z "${launcherlb:-}" ] || [ -z "${FMA_NAMESPACE}" ]; then
+if [ -z "${reqlb:-}" ] || [ -z "${launcherlb:-}" ] || [ -z "${FMA_NAMESPACE:-}" ]; then
   echo "ERROR: This script must be called with environment variables FMA_NAMESPACE, reqlb, and launcherlb defined" >&2
   exit 1
 fi
@@ -97,6 +97,10 @@ else
   exit 10
 fi
 
+if [ "${FMA_NAMESPACE}" != default ]; then
+    echo "Tests 7 and 8 need work before they can run on OpenShift"
+else
+    
 requester_img=$(make echo-var VAR=TEST_REQUESTER_IMG)
 
 cat <<EOF | kubectl apply -n "$FMA_NAMESPACE" -f -
@@ -147,6 +151,8 @@ else
   echo "kubectl output: ${output}"
   exit 14
 fi
+
+fi # [ -n "$RUNTIME_CLASS_NAME" ]
 
 cat <<EOF | kubectl apply -n "$FMA_NAMESPACE" -f -
 apiVersion: v1
