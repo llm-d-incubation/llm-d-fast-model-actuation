@@ -228,7 +228,7 @@ func BuildLauncherPodFromTemplate(template corev1.PodTemplateSpec, ns, nodeName,
 		pod.Spec.NodeSelector = make(map[string]string)
 	}
 	pod.Spec.NodeSelector["kubernetes.io/hostname"] = nodeName
-	ensureLauncherNotifierSidecar(pod, container.Image, container.ImagePullPolicy)
+	addLauncherNotifierSidecar(pod, container.Image, container.ImagePullPolicy)
 	return pod, nil
 }
 
@@ -273,8 +273,8 @@ func removeGPUResourceLimits(container *corev1.Container) {
 	}
 }
 
-func ensureLauncherNotifierSidecar(pod *corev1.Pod, launcherImage string, pullPolicy corev1.PullPolicy) {
-	const sidecarName = "vllm-instance-notifier"
+func addLauncherNotifierSidecar(pod *corev1.Pod, launcherImage string, pullPolicy corev1.PullPolicy) {
+	const sidecarName = "state-change-reflector"
 	idx := slices.IndexFunc(pod.Spec.Containers, func(c corev1.Container) bool {
 		return c.Name == sidecarName
 	})

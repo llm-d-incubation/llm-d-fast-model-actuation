@@ -49,6 +49,42 @@ if [ -n "${RUNTIME_CLASS_NAME:-}" ]; then
 fi
 
 if out=$(kubectl apply "${ns_flag[@]}" -f - 2>&1 <<EOF
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: launcher-sa-$inst
+  labels:
+    fma-e2e-instance: "$inst"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: launcher-pod-state-writer-$inst
+  labels:
+    fma-e2e-instance: "$inst"
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: launcher-pod-state-writer-$inst
+  labels:
+    fma-e2e-instance: "$inst"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: launcher-pod-state-writer-$inst
+subjects:
+- kind: ServiceAccount
+  name: launcher-sa-$inst
+---
 apiVersion: fma.llm-d.ai/v1alpha1
 kind: InferenceServerConfig
 metadata:
@@ -120,6 +156,7 @@ spec:
   podTemplate:
     spec:
       ${runtime_class}
+      serviceAccountName: launcher-sa-$inst
       containers:
         - name: inference-server
           image: ${LAUNCHER_IMAGE}

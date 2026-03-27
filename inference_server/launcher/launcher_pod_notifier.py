@@ -61,28 +61,24 @@ def fetch_launcher_state(base_url: str) -> dict[str, Any]:
     return payload
 
 
-def canonicalize_launcher_state(payload: dict[str, Any]) -> dict[str, Any]:
+def canonicalize_launcher_state(payload: dict[str, Any]) -> list[tuple[str, str]]:
     instances = payload.get("instances", [])
-    canonical_instances: list[dict[str, str]] = []
+    if not isinstance(instances, list):
+        raise ValueError(f"instances must be a list, got {type(instances).__name__}")
+    canonical_instances: list[tuple[str, str]] = []
     for instance in instances:
         if not isinstance(instance, dict):
             raise ValueError(f"unexpected instance entry: {instance!r}")
         instance_id = str(instance.get("instance_id", ""))
         status = str(instance.get("status", ""))
-        canonical_instances.append({"instance_id": instance_id, "status": status})
-    canonical_instances.sort(key=lambda item: (item["instance_id"], item["status"]))
-    return {
-        "total_instances": int(
-            payload.get("total_instances", len(canonical_instances))
-        ),
-        "running_instances": int(payload.get("running_instances", 0)),
-        "instances": canonical_instances,
-    }
+        canonical_instances.append((instance_id, status))
+    canonical_instances.sort()
+    return canonical_instances
 
 
 def compute_signature(payload: dict[str, Any]) -> str:
     canonical = canonicalize_launcher_state(payload)
-    blob = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    blob = json.dumps(canonical, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(blob).hexdigest()
 
 
@@ -115,13 +111,9 @@ def patch_pod_annotations(
     api.patch_namespaced_pod(name=pod_name, namespace=namespace, body=body)
 
 
-def publish_if_changed(
+def patch_pod_signature(
     api: client.CoreV1Api, namespace: str, pod_name: str, signature: str
 ) -> None:
-    annotations = get_pod_annotations(api, namespace, pod_name)
-    if annotations.get(SIGNATURE_ANNOTATION, "") == signature:
-        return
-
     patch_pod_annotations(api, namespace, pod_name, signature=signature)
     logger.info(
         "Published launcher state change",
@@ -156,10 +148,14 @@ def main() -> int:
         base_url,
     )
 
+    last_published_signature: str | None = None
+
     while True:
         try:
             signature = compute_signature(fetch_launcher_state(base_url))
-            publish_if_changed(api, namespace, pod_name, signature)
+            if signature != last_published_signature:
+                patch_pod_signature(api, namespace, pod_name, signature)
+                last_published_signature = signature
             time.sleep(poll_interval)
         except (
             ApiException,
