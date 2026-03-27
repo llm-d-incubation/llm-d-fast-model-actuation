@@ -15,11 +15,11 @@ if [ -z "${reqlb:-}" ] || [ -z "${launcherlb:-}" ] || [ -z "${FMA_NAMESPACE:-}" 
 fi
 
 if ! kubectl get -n "$FMA_NAMESPACE" pod "${reqlb}" > /dev/null ; then
-    echo "ERROR: Pod $reqlb does not exist in namespace $FMA_NAMESPACE!" >&2
+    echo "ERROR: server-requesting Pod $reqlb does not exist in namespace $FMA_NAMESPACE!" >&2
     exit 1
 fi
 if ! kubectl get -n "$FMA_NAMESPACE" pod "${launcherlb}" > /dev/null ; then
-    echo "ERROR: Pod $launcherlb does not exist in namespace $FMA_NAMESPACE!" >&2
+    echo "ERROR: launcher Pod $launcherlb does not exist in namespace $FMA_NAMESPACE!" >&2
     exit 1
 fi
 

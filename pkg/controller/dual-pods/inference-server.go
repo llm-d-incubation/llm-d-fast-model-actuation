@@ -818,19 +818,17 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 	}
 	logger.V(2).Info("Bound server-providing Pod", "name", providingPod.Name, "node", requestingPod.Spec.NodeName, "gpus", serverDat.GPUIDsStr, "newResourceVersion", echo.ResourceVersion, "instanceID", serverDat.InstanceID)
 	var serverPort int16
+	// For launcher-based server-providing Pods, ServerPort is written when binding.
+	// For direct server-providing Pods, ServerPort is written (earlier) when
+	// constructing the server-providing Pod's spec in getNominalServerProvidingPod.
 	if launcherBased {
 		serverPort = instPort
+		serverDat.ServerPort = serverPort
 	} else {
 		_, serverPort, err = utils.GetInferenceServerContainerIndexAndPort(providingPod)
 		if err != nil { // Impossible, because such a providingPod would never be created by this controller
 			return fmt.Errorf("unable to wake up server because port not known: %w", err), true
 		}
-	}
-	// For launcher-based server-providing Pods, ServerPort is written when binding.
-	// For direct server-providing Pods, ServerPort is written (earlier) when
-	// constructingthe server-providing Pod's spec in getNominalServerProvidingPod.
-	if launcherBased {
-		serverDat.ServerPort = serverPort
 	}
 	err = ctl.wakeSleeper(ctx, serverDat, requestingPod, providingPod, serverPort, "freshly-bound")
 	if err != nil {
