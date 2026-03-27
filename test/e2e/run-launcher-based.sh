@@ -8,31 +8,7 @@ set -euo pipefail
 
 set -x
 
-green=$'\033[0;32m'
-nocolor=$'\033[0m'
 nl=$'\n'
-
-function cheer() {
-    echo
-    echo "${nl}${green}✔${nocolor} $*"
-    echo
-}
-
-function expect() {
-    local elapsed=0
-    local start=$(date)
-    local limit=${LIMIT:-600}
-    while true; do
-        kubectl get pods -L dual-pods.llm-d.ai/dual,dual-pods.llm-d.ai/sleeping
-        if eval "$1"; then return; fi
-        if (( elapsed > limit )); then
-            echo "Did not become true (from $start to $(date)): $1" >&2
-            exit 99
-        fi
-        sleep 5
-        elapsed=$(( elapsed+5 ))
-    done
-}
 
 function clear_img_repo() (
     set +o pipefail
@@ -159,28 +135,6 @@ make load-test-launcher-local
 make load-controller-local
 make load-populator-local
 
-: Detect whether API server supports ValidatingAdmissionPolicy
-
-POLICIES_ENABLED=false
-if kubectl api-resources --api-group=admissionregistration.k8s.io -o name | grep -q 'validatingadmissionpolicies'; then
-  POLICIES_ENABLED=true
-  kubectl apply -f config/validating-admission-policies
-fi
-
-: Deploy the FMA controllers in the cluster
-
-img_reg=$(make echo-var VAR=CONTAINER_IMG_REG)
-img_tag=$(make echo-var VAR=IMAGE_TAG)
-
-helm upgrade --install fma charts/fma-controllers \
-  --set global.imageRegistry="$img_reg" \
-  --set global.imageTag="$img_tag" \
-  --set global.nodeViewClusterRole=node-viewer \
-  --set dualPodsController.sleeperLimit=2 \
-  --set global.local=true \
-  --set dualPodsController.debugAcceleratorMemory=false \
-  --set launcherPopulator.enabled=true
-
 : Populate GPU map for testing
 
 gi=0
@@ -190,276 +144,20 @@ kubectl get nodes -o name | sed 's%^node/%%' | while read node; do
     let gi=gi1+1
 done
 
-: Wait for FMA controllers to be ready
-
-kubectl wait --for=condition=available deployment/fma-dual-pods-controller --timeout=120s
-kubectl get pods -l app.kubernetes.io/component=dual-pods-controller
-
-kubectl wait --for=condition=available deployment/fma-launcher-populator --timeout=120s
-kubectl get pods -l app.kubernetes.io/component=launcher-populator
-
-: Test launcher-based server-providing pods
-
-: Basic Launcher Pod Creation
-
-objs=$(test/e2e/mkobjs.sh)
-isc=$(echo $objs | awk '{print $1}')
-lc=$(echo $objs | awk '{print $2}')
-rslb=$(echo $objs | awk '{print $3}')
-isc2=$(echo $objs | awk '{print $4}')
-lpp=$(echo $objs | awk '{print $5}')
-instlb=${rslb#my-request-}
-
-# LauncherPopulationPolicy specifies launcherCount per node with nvidia.com/gpu.present=true
-GPU_NODES=$(kubectl get nodes -l nvidia.com/gpu.present=true --field-selector spec.unschedulable!=true -o name | wc -l | tr -d ' ')
-echo "Expecting launcher-populator to create $GPU_NODES launcher(s) (one per schedulable GPU node)"
-expect "[ \$(kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | wc -l | tr -d ' ') -ge $GPU_NODES ]"
-echo "Launcher-populator created launchers successfully"
-kubectl get pods -l dual-pods.llm-d.ai/launcher-config-name=$lc
-
-# Expect requester pod to be created
-expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | wc -l | grep -w 1"
-
-export reqlb=$(kubectl get pods -o name -l app=dp-example,instance=$instlb | sed s%pod/%%)
-
-# Expect launcher pod to be created (not a direct provider)
-expect "kubectl get pods -o name -l dual-pods.llm-d.ai/dual=$reqlb | wc -l | grep -w 1"
-
-export launcherlb=$(kubectl get pods -o name -l dual-pods.llm-d.ai/dual=$reqlb | sed s%pod/%%)
-
-# Verify requester is bound to launcher
-expect '[ "$(kubectl get pod $reqlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcherlb" ]'
-
-# Verify launcher is bound to requester
-expect '[ "$(kubectl get pod $launcherlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$reqlb" ]'
-
-# Wait for both pods to be ready (vLLM on CPU takes ~90s to start)
-date
-kubectl wait --for condition=Ready pod/$reqlb --timeout=180s
-[ "$(kubectl get pod $launcherlb -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
-
-cheer Successful launcher-based pod creation
-
-: Test CEL policy verification if enabled
-
-if [ "${POLICIES_ENABLED}" = true ]; then
-  if ! test/e2e/validate.sh; then
-    echo "ERROR: CEL policy tests failed!" >&2
-    exit 1
-  fi
-  cheer CEL policy checks passed
-fi
-
-: Instance Wake-up Fast Path
-
-# Scale requester to 0 (instance should sleep in launcher)
-kubectl scale rs $rslb --replicas=0
-
-expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | wc -l | grep -w 0"
-
-# Launcher should remain
-kubectl get pod $launcherlb
-
-# Verify launcher is unbound (no dual label pointing to requester)
-expect '[ "$(kubectl get pod $launcherlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "" ]'
-
-# Scale back up (should reuse same launcher and wake sleeping instance)
-kubectl scale rs $rslb --replicas=1
-
-expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | wc -l | grep -w 1"
-
-reqlb2=$(kubectl get pods -o name -l app=dp-example,instance=$instlb | sed s%pod/%%)
-
-# Should still be using the same launcher pod
-expect "kubectl get pods -o name -l dual-pods.llm-d.ai/dual=$reqlb2 | wc -l | grep -w 1"
-launcherlb2=$(kubectl get pods -o name -l dual-pods.llm-d.ai/dual=$reqlb2 | sed s%pod/%%)
-[ "$launcherlb2" == "$launcherlb" ]
-
-# Verify new requester is bound to same launcher
-expect '[ "$(kubectl get pod $reqlb2 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcherlb" ]'
-
-# Verify launcher is bound to new requester
-expect '[ "$(kubectl get pod $launcherlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$reqlb2" ]'
-
-# Wait for requester to be ready (launcher should already be ready)
-date
-kubectl wait --for condition=Ready pod/$reqlb2 --timeout=120s
-[ "$(kubectl get pod $launcherlb -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
-
-cheer Successful instance wake-up fast path
-
-: Multiple Instances Share One Launcher
-
-# Scale requester to 0 again
-kubectl scale rs $rslb --replicas=0
-
-expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | wc -l | grep -w 0"
-
-# Launcher should remain
-kubectl get pod $launcherlb
-
-# Verify launcher is unbound
-expect '[ "$(kubectl get pod $launcherlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "" ]'
-
-# Patch ReplicaSet to use isc2 instead of isc
-kubectl patch rs $rslb -p='{"spec":{"template":{"metadata":{"annotations":{"dual-pods.llm-d.ai/inference-server-config":"'$isc2'"}}}}}'
-
-# Scale back up (should reuse same launcher and create 2nd instance)
-kubectl scale rs $rslb --replicas=1
-
-expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | wc -l | grep -w 1"
-
-reqlb3=$(kubectl get pods -o name -l app=dp-example,instance=$instlb | sed s%pod/%%)
-
-# Should still be using the same launcher pod
-expect "kubectl get pods -o name -l dual-pods.llm-d.ai/dual=$reqlb3 | wc -l | grep -w 1"
-launcherlb3=$(kubectl get pods -o name -l dual-pods.llm-d.ai/dual=$reqlb3 | sed s%pod/%%)
-[ "$launcherlb3" == "$launcherlb" ]
-
-# Verify new requester is bound to same launcher
-expect '[ "$(kubectl get pod $reqlb3 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcherlb" ]'
-
-# Verify launcher is bound to new requester
-expect '[ "$(kubectl get pod $launcherlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$reqlb3" ]'
-
-# Wait for requester to be ready (launcher should already be ready)
-date
-kubectl wait --for condition=Ready pod/$reqlb3 --timeout=120s
-[ "$(kubectl get pod $launcherlb -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
-
-cheer Successful multiple instances sharing one launcher
-
-: Switch Instances In One Launcher
-
-# Scale requester to 0 again
-kubectl scale rs $rslb --replicas=0
-
-expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | wc -l | grep -w 0"
-
-# Launcher should remain
-kubectl get pod $launcherlb
-
-# Verify launcher is unbound
-expect '[ "$(kubectl get pod $launcherlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "" ]'
-
-# Patch ReplicaSet back to use original isc
-kubectl patch rs $rslb -p='{"spec":{"template":{"metadata":{"annotations":{"dual-pods.llm-d.ai/inference-server-config":"'$isc'"}}}}}'
-
-# Scale back up (should reuse same launcher and wake first instance)
-kubectl scale rs $rslb --replicas=1
-
-expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | wc -l | grep -w 1"
-
-reqlb4=$(kubectl get pods -o name -l app=dp-example,instance=$instlb | sed s%pod/%%)
-
-# Should still be using the same launcher pod
-expect "kubectl get pods -o name -l dual-pods.llm-d.ai/dual=$reqlb4 | wc -l | grep -w 1"
-launcherlb4=$(kubectl get pods -o name -l dual-pods.llm-d.ai/dual=$reqlb4 | sed s%pod/%%)
-[ "$launcherlb4" == "$launcherlb" ]
-
-# Verify new requester is bound to same launcher
-expect '[ "$(kubectl get pod $reqlb4 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcherlb" ]'
-
-# Verify launcher is bound to new requester
-expect '[ "$(kubectl get pod $launcherlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$reqlb4" ]'
-
-# Wait for requester to be ready (launcher should already be ready)
-date
-kubectl wait --for condition=Ready pod/$reqlb4 --timeout=120s
-[ "$(kubectl get pod $launcherlb -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
-
-cheer Successful switching instances in one launcher
-
-: Controller Restart State Recovery
-
-# This test verifies that the controller can rebuild its internal state after restart
-# by syncing launcher instances from unbound launcher pods
-
-# Scale requester to 0 to create sleeping instances
-kubectl scale rs $rslb --replicas=0
-
-expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | wc -l | grep -w 0"
-
-# Verify launcher set is unchanged and target launcher is unbound
-launcher_count_pre_restart=$(kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | wc -l)
-kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | grep -x "pod/$launcherlb"
-expect '[ "$(kubectl get pod $launcherlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "" ]'
-
-# Verify launcher has sleeping instances before restart
-launcher_instances_before=$(kubectl exec $launcherlb -- python3 -c 'import json,urllib.request; print(json.load(urllib.request.urlopen("http://127.0.0.1:8001/v2/vllm/instances"))["total_instances"])')
-echo "Launcher has $launcher_instances_before instances before controller restart"
-[ "$launcher_instances_before" -gt "0" ]
-
-# Restart the dual-pods controller to test state recovery
-echo "Restarting dual-pods controller..."
-kubectl rollout restart deployment fma-dual-pods-controller
-kubectl rollout status deployment fma-dual-pods-controller --timeout=60s
-
-# Wait for controller to be ready for ongoing checks
-# In detail: allow some time for the dual-pods controller to do something unexpected in the case that the controller is behaving incorrectly,
-# so that the ongoing checks have some chance to fail thus detect the incorrectness, instead of just quickly and coincidentally passing.
-sleep 30
-
-# Verify launcher pod set size is unchanged and target launcher is still running
-expect "kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | wc -l | grep -w $launcher_count_pre_restart"
-kubectl get pods -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | grep -x "pod/$launcherlb"
-
-# Verify launcher still has the same number of instances after controller restart
-launcher_instances_after=$(kubectl exec $launcherlb -- python3 -c 'import json,urllib.request; print(json.load(urllib.request.urlopen("http://127.0.0.1:8001/v2/vllm/instances"))["total_instances"])')
-echo "Launcher has $launcher_instances_after instances after controller restart"
-[ "$launcher_instances_after" == "$launcher_instances_before" ]
-
-# Now scale up requester - controller should correctly select the launcher with sleeping instance
-# Use isc2 which should have a sleeping instance from before
-kubectl patch rs $rslb --type=json -p='[{"op": "replace", "path": "/spec/template/metadata/annotations/dual-pods.llm-d.ai~1inference-server-config", "value": "'$isc2'"}]'
-kubectl scale rs $rslb --replicas=1
-
-expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | wc -l | grep -w 1"
-reqlb_post_restart=$(kubectl get pods -o name -l app=dp-example,instance=$instlb | sed s%pod/%%)
-
-# Verify requester is bound to the same launcher (controller recovered state correctly)
-expect '[ "$(kubectl get pod $reqlb_post_restart -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcherlb" ]'
-expect '[ "$(kubectl get pod $launcherlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$reqlb_post_restart" ]'
-
-# Verify requester becomes ready (fast wake-up path should work)
-date
-kubectl wait --for condition=Ready pod/$reqlb_post_restart --timeout=30s
-[ "$(kubectl get pod $launcherlb -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
-
-cheer Successful controller restart state recovery
-
-: Unbound Launcher Deletion Cleanup
-
-# This test verifies that deleting an unbound launcher does not leave the controller
-# stuck with stale instance state.
-
-kubectl scale rs $rslb --replicas=0
-
-expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | wc -l | grep -w 0"
-expect '[ "$(kubectl get pod $launcherlb -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "" ]'
-
-kubectl delete pod $launcherlb --wait=true
-
-! kubectl get pod $launcherlb
-
-kubectl scale rs $rslb --replicas=1
-
-expect "kubectl get pods -o name -l app=dp-example,instance=$instlb | wc -l | grep -w 1"
-reqlb_after_delete=$(kubectl get pods -o name -l app=dp-example,instance=$instlb | sed s%pod/%%)
-expect "kubectl get pods -o name -l dual-pods.llm-d.ai/dual=$reqlb_after_delete | wc -l | grep -w 1"
-launcherlb_after_delete=$(kubectl get pods -o name -l dual-pods.llm-d.ai/dual=$reqlb_after_delete | sed s%pod/%%)
-[ "$launcherlb_after_delete" != "$launcherlb" ]
-expect '[ "$(kubectl get pod $reqlb_after_delete -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcherlb_after_delete" ]'
-
-date
-kubectl wait --for condition=Ready pod/$reqlb_after_delete --timeout=120s
-[ "$(kubectl get pod $launcherlb_after_delete -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
-
-cheer Successful unbound launcher deletion cleanup
-
-: Clean up launcher-based workloads
-
-kubectl scale rs $rslb --replicas=0
-expect '[ $(kubectl get pods -o name | grep "^pod/my-request-" | wc -l) == "0" ]'
-
-cheer All launcher-based tests passed
+: Deploy FMA controllers
+
+FMA_NAMESPACE=default \
+FMA_CHART_INSTANCE_NAME=fma \
+CONTAINER_IMG_REG=$(make echo-var VAR=CONTAINER_IMG_REG) \
+IMAGE_TAG=$(make echo-var VAR=IMAGE_TAG) \
+NODE_VIEW_CLUSTER_ROLE=node-viewer \
+HELM_EXTRA_ARGS="--set global.local=true" \
+./test/e2e/deploy_fma.sh
+
+: Run launcher-based E2E tests
+
+FMA_NAMESPACE=default \
+MKOBJS_SCRIPT=./test/e2e/mkobjs.sh \
+FMA_CHART_INSTANCE_NAME=fma \
+READY_TARGET=1 \
+./test/e2e/test-cases.sh

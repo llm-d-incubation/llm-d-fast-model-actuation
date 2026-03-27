@@ -295,6 +295,7 @@ type serverData struct {
 	GPUIndicesStr *string
 
 	ProvidingPodName string
+	InstanceID       string // if provider launcher-based
 
 	ReadinessRelayed *bool
 
