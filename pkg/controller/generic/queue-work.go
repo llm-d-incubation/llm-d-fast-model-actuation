@@ -26,6 +26,10 @@ import (
 	"k8s.io/klog/v2"
 )
 
+const (
+	controllerQueuePerItemRetryMaxDelay = 20 * time.Second
+)
+
 // QueueAndWorkers is generic code for a typical controller's workqueue and worker goroutines
 // that pull from that queue.
 type QueueAndWorkers[Item comparable] struct {
@@ -62,7 +66,10 @@ func newQueueAndWorkers[Item comparable](
 	ans := QueueAndWorkers[Item]{
 		ControllerName: controllerName,
 		Queue: workqueue.NewTypedRateLimitingQueueWithConfig(
-			workqueue.DefaultTypedControllerRateLimiter[Item](),
+			workqueue.NewTypedWithMaxWaitRateLimiter(
+				workqueue.DefaultTypedControllerRateLimiter[Item](),
+				controllerQueuePerItemRetryMaxDelay,
+			),
 			workqueue.TypedRateLimitingQueueConfig[Item]{
 				Name: controllerName,
 			}),
