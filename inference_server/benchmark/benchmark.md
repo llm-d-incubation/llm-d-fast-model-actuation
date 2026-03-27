@@ -21,7 +21,7 @@ direct scope but is referenced for completeness and handoff to other frameworks.
 | ----- | ----- | ------- | ----------- |
 | **L1: Actuation** | Requester pod readiness | T_actuation (requester creation to readiness), T_wake (launcher wakes sleeping vLLM instance), Hit_rate (% GPU hits), T_launcher (launcher creates new vLLM instance) | llm-d-benchmark new harness |
 | **L2: Inference Readiness** | First inference response | T_first_token (requester ready to first inference response), T_e2e (requester creation to first inference response) | FMA + llm-d-benchmark nop/inference-perf harness |
-| **L3: Steady-State** | Throughput/latency | TPOT, throughput, queue depth, KV cache usage, replica stability | llm-d-benchmark / WVA |
+| **L3: Steady-State** | Throughput/latency | TPOT (time per output token), throughput, queue depth, KV cache usage, replica stability | llm-d-benchmark / WVA |
 
 **Metric definitions:**
 
