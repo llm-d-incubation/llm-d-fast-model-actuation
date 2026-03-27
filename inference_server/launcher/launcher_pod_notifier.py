@@ -28,7 +28,6 @@ from typing import Any
 from kubernetes import client, config
 from kubernetes.client import ApiException
 
-
 SIGNATURE_ANNOTATION = "dual-pods.llm-d.ai/vllm-instance-signature"
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8001"
@@ -73,7 +72,9 @@ def canonicalize_launcher_state(payload: dict[str, Any]) -> dict[str, Any]:
         canonical_instances.append({"instance_id": instance_id, "status": status})
     canonical_instances.sort(key=lambda item: (item["instance_id"], item["status"]))
     return {
-        "total_instances": int(payload.get("total_instances", len(canonical_instances))),
+        "total_instances": int(
+            payload.get("total_instances", len(canonical_instances))
+        ),
         "running_instances": int(payload.get("running_instances", 0)),
         "instances": canonical_instances,
     }
@@ -90,7 +91,9 @@ def load_incluster_client() -> client.CoreV1Api:
     return client.CoreV1Api()
 
 
-def get_pod_annotations(api: client.CoreV1Api, namespace: str, pod_name: str) -> dict[str, str]:
+def get_pod_annotations(
+    api: client.CoreV1Api, namespace: str, pod_name: str
+) -> dict[str, str]:
     pod = api.read_namespaced_pod(name=pod_name, namespace=namespace)
     return pod.metadata.annotations or {}
 
@@ -112,7 +115,9 @@ def patch_pod_annotations(
     api.patch_namespaced_pod(name=pod_name, namespace=namespace, body=body)
 
 
-def publish_if_changed(api: client.CoreV1Api, namespace: str, pod_name: str, signature: str) -> None:
+def publish_if_changed(
+    api: client.CoreV1Api, namespace: str, pod_name: str, signature: str
+) -> None:
     annotations = get_pod_annotations(api, namespace, pod_name)
     if annotations.get(SIGNATURE_ANNOTATION, "") == signature:
         return
