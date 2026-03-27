@@ -459,11 +459,7 @@ cheer Successful unbound launcher deletion cleanup
 
 : Clean up launcher-based workloads
 
-kubectl delete rs $rslb --ignore-not-found=true
-kubectl delete launcherpopulationpolicy $lpp --ignore-not-found=true
-kubectl delete inferenceserverconfig $isc --ignore-not-found=true
-kubectl delete inferenceserverconfig $isc2 --ignore-not-found=true
-kubectl delete launcherconfig $lc --ignore-not-found=true
-expect '[ $(kubectl get pods -o name | grep -c "^pod/my-request-") == "0" ]'
+kubectl scale rs $rslb --replicas=0
+expect '[ $(kubectl get pods -o name | grep "^pod/my-request-" | wc -l) == "0" ]'
 
 cheer All launcher-based tests passed
