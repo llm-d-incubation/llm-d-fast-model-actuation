@@ -490,12 +490,15 @@ jobs:
         if: always()
         run: |
           for pod in $(kubectl get pods -n "$FMA_NAMESPACE" -o 'jsonpath={.items[*].metadata.name} ') ; do
-            echo ""
-            echo "=== Previous log of $pod ==="
-            kubectl logs -n "$FMA_NAMESPACE" $pod --previous || true
-            echo ""
-            echo "=== Log of $pod ==="
-            kubectl logs -n "$FMA_NAMESPACE" $pod || true
+            containers=$(kubectl get pod -n "$FMA_NAMESPACE" "$pod" -o 'jsonpath={.spec.containers[*].name}')
+            for container in $containers ; do
+              echo ""
+              echo "=== Previous log of $pod (container: $container) ==="
+              kubectl logs -n "$FMA_NAMESPACE" "$pod" -c "$container" --previous || true
+              echo ""
+              echo "=== Log of $pod (container: $container) ==="
+              kubectl logs -n "$FMA_NAMESPACE" "$pod" -c "$container" || true
+            done
           done
 
       - name: Dump vLLM instance logs from launchers
