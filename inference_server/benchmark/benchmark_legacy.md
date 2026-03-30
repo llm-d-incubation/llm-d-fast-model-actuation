@@ -43,7 +43,7 @@ Measure the time from **deployment (server-request submission)** to **dual-pod r
 
 **Example Usage**
 ```bash
-python3 inference_server/benchmark/bechmark_base.py --namespace <str> --yaml <str> --cleanup <bool,default:True> --iterations <int, default:1> --cluster-domain <str> --model-path <str> --scenario <str, default:scaling> --image <str> --tag <str>
+python3 inference_server/benchmark/benchmark_base.py --namespace <str> --yaml <str> --cleanup <bool,default:True> --iterations <int, default:1> --cluster-domain <str> --model-path <str> --scenario <str, default:scaling> --image <str> --tag <str>
 ```
 
 <details>
