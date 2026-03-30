@@ -513,9 +513,6 @@ jobs:
           kubectl delete launcherpopulationpolicy -n "$FMA_NAMESPACE" -l fma-e2e-instance --ignore-not-found || true
           kubectl delete inferenceserverconfig -n "$FMA_NAMESPACE" -l fma-e2e-instance --ignore-not-found || true
           kubectl delete launcherconfig -n "$FMA_NAMESPACE" -l fma-e2e-instance --ignore-not-found || true
-          kubectl delete rolebinding -n "$FMA_NAMESPACE" -l fma-e2e-instance --ignore-not-found || true
-          kubectl delete role -n "$FMA_NAMESPACE" -l fma-e2e-instance --ignore-not-found || true
-          kubectl delete sa -n "$FMA_NAMESPACE" -l fma-e2e-instance --ignore-not-found || true
           # Wait for test pods to terminate
           sleep 10
           echo "Test objects cleaned up"

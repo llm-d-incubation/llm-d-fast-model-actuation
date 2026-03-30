@@ -94,12 +94,8 @@ def get_pod_annotations(
     return pod.metadata.annotations or {}
 
 
-def patch_pod_annotations(
-    api: client.CoreV1Api,
-    namespace: str,
-    pod_name: str,
-    *,
-    signature: str,
+def patch_pod_signature(
+    api: client.CoreV1Api, namespace: str, pod_name: str, signature: str
 ) -> None:
     body = {
         "metadata": {
@@ -109,12 +105,6 @@ def patch_pod_annotations(
         }
     }
     api.patch_namespaced_pod(name=pod_name, namespace=namespace, body=body)
-
-
-def patch_pod_signature(
-    api: client.CoreV1Api, namespace: str, pod_name: str, signature: str
-) -> None:
-    patch_pod_annotations(api, namespace, pod_name, signature=signature)
     logger.info(
         "Published launcher state change",
         extra={"pod": pod_name, "signature": signature},

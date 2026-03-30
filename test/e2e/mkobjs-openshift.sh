@@ -52,7 +52,7 @@ if out=$(kubectl apply "${ns_flag[@]}" -f - 2>&1 <<EOF
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: launcher-sa-$inst
+  name: launcher-$inst
   labels:
     fma-e2e-instance: "$inst"
 ---
@@ -83,7 +83,7 @@ roleRef:
   name: launcher-pod-state-writer-$inst
 subjects:
 - kind: ServiceAccount
-  name: launcher-sa-$inst
+  name: launcher-$inst
 ---
 apiVersion: fma.llm-d.ai/v1alpha1
 kind: InferenceServerConfig
@@ -156,7 +156,7 @@ spec:
   podTemplate:
     spec:
       ${runtime_class}
-      serviceAccountName: launcher-sa-$inst
+      serviceAccountName: launcher-$inst
       containers:
         - name: inference-server
           image: ${LAUNCHER_IMAGE}
