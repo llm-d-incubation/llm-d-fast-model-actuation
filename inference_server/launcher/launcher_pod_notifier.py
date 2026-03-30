@@ -33,6 +33,7 @@ SIGNATURE_ANNOTATION = "dual-pods.llm-d.ai/vllm-instance-signature"
 DEFAULT_BASE_URL = "http://127.0.0.1:8001"
 DEFAULT_POLL_INTERVAL_SECONDS = 2.0
 DEFAULT_ERROR_BACKOFF_SECONDS = 5.0
+INFERENCE_SERVER_CONTAINER_NAME = "inference-server"
 
 
 logger = logging.getLogger("launcher_pod_notifier")
@@ -52,7 +53,33 @@ def get_required_env(name: str) -> str:
     return value
 
 
-def fetch_launcher_state(base_url: str) -> dict[str, Any]:
+def is_inference_server_ready(
+    api: client.CoreV1Api, namespace: str, pod_name: str
+) -> bool:
+    """Check if the inference-server container is ready in the pod."""
+    try:
+        pod = api.read_namespaced_pod(name=pod_name, namespace=namespace)
+        if not pod.status or not pod.status.container_statuses:
+            return False
+
+        for container_status in pod.status.container_statuses:
+            if container_status.name == INFERENCE_SERVER_CONTAINER_NAME:
+                return container_status.ready or False
+
+        # inference-server container not found
+        return False
+    except Exception as exc:
+        logger.warning("Failed to check inference-server readiness: %s", exc)
+        return False
+
+
+def fetch_launcher_state(
+    base_url: str, api: client.CoreV1Api, namespace: str, pod_name: str
+) -> dict[str, Any]:
+    """Fetch launcher state only if inference-server container is ready."""
+    if not is_inference_server_ready(api, namespace, pod_name):
+        raise RuntimeError("inference-server container is not ready yet")
+
     url = f"{base_url}/v2/vllm/instances"
     with urllib.request.urlopen(url, timeout=5) as response:
         payload = json.load(response)
@@ -142,7 +169,9 @@ def main() -> int:
 
     while True:
         try:
-            signature = compute_signature(fetch_launcher_state(base_url))
+            signature = compute_signature(
+                fetch_launcher_state(base_url, api, namespace, pod_name)
+            )
             if signature != last_published_signature:
                 patch_pod_signature(api, namespace, pod_name, signature)
                 last_published_signature = signature
@@ -150,6 +179,7 @@ def main() -> int:
         except (
             ApiException,
             OSError,
+            RuntimeError,
             TimeoutError,
             ValueError,
             urllib.error.HTTPError,
