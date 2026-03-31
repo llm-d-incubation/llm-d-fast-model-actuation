@@ -168,7 +168,9 @@ def main() -> int:
                 if not is_inference_server_ready(api, namespace, pod_name):
                     raise RuntimeError("inference-server container is not ready yet")
                 inference_server_ready = True
-                logger.info("Inference-server container is ready; starting notifier polling")
+                logger.info(
+                    "Inference-server container is ready; starting notifier polling"
+                )
 
             signature = compute_signature(fetch_launcher_state(base_url))
             if signature != last_published_signature:
@@ -184,7 +186,7 @@ def main() -> int:
             urllib.error.HTTPError,
             urllib.error.URLError,
         ) as exc:
-            logger.warning("Notifier loop failed: %s", exc)
+            logger.warning("Notifier failure: %s", exc)
             time.sleep(error_backoff)
         except Exception as exc:
             logger.exception("Unexpected notifier failure: %s", exc)
