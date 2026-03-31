@@ -73,13 +73,7 @@ def is_inference_server_ready(
         return False
 
 
-def fetch_launcher_state(
-    base_url: str, api: client.CoreV1Api, namespace: str, pod_name: str
-) -> dict[str, Any]:
-    """Fetch launcher state only if inference-server container is ready."""
-    if not is_inference_server_ready(api, namespace, pod_name):
-        raise RuntimeError("inference-server container is not ready yet")
-
+def fetch_launcher_state(base_url: str) -> dict[str, Any]:
     url = f"{base_url}/v2/vllm/instances"
     with urllib.request.urlopen(url, timeout=5) as response:
         payload = json.load(response)
@@ -166,12 +160,17 @@ def main() -> int:
     )
 
     last_published_signature: str | None = None
+    inference_server_ready = False
 
     while True:
         try:
-            signature = compute_signature(
-                fetch_launcher_state(base_url, api, namespace, pod_name)
-            )
+            if not inference_server_ready:
+                if not is_inference_server_ready(api, namespace, pod_name):
+                    raise RuntimeError("inference-server container is not ready yet")
+                inference_server_ready = True
+                logger.info("Inference-server container is ready; starting notifier polling")
+
+            signature = compute_signature(fetch_launcher_state(base_url))
             if signature != last_published_signature:
                 patch_pod_signature(api, namespace, pod_name, signature)
                 last_published_signature = signature
