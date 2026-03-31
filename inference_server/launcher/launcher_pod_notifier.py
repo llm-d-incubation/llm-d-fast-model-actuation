@@ -166,7 +166,9 @@ def main() -> int:
         try:
             if not inference_server_ready:
                 if not is_inference_server_ready(api, namespace, pod_name):
-                    raise RuntimeError("inference-server container is not ready yet")
+                    logger.info("Inference-server container is not ready yet; retrying")
+                    time.sleep(error_backoff)
+                    continue
                 inference_server_ready = True
                 logger.info(
                     "Inference-server container is ready; starting notifier polling"
@@ -180,7 +182,6 @@ def main() -> int:
         except (
             ApiException,
             OSError,
-            RuntimeError,
             TimeoutError,
             ValueError,
             urllib.error.HTTPError,
