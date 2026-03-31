@@ -228,6 +228,7 @@ func BuildLauncherPodFromTemplate(template corev1.PodTemplateSpec, ns, nodeName,
 		pod.Spec.NodeSelector = make(map[string]string)
 	}
 	pod.Spec.NodeSelector["kubernetes.io/hostname"] = nodeName
+	addLauncherNotifierSidecar(pod, container.Image, container.ImagePullPolicy)
 	return pod, nil
 }
 
@@ -270,4 +271,52 @@ func removeGPUResourceLimits(container *corev1.Container) {
 	if container.Resources.Requests != nil {
 		container.Resources.Requests[corev1.ResourceName("nvidia.com/gpu")] = resource.MustParse("0")
 	}
+}
+
+func addLauncherNotifierSidecar(pod *corev1.Pod, launcherImage string, pullPolicy corev1.PullPolicy) {
+	const sidecarName = "state-change-reflector"
+	idx := slices.IndexFunc(pod.Spec.Containers, func(c corev1.Container) bool {
+		return c.Name == sidecarName
+	})
+
+	notifier := corev1.Container{
+		Name:            sidecarName,
+		Image:           launcherImage,
+		ImagePullPolicy: pullPolicy,
+		Command:         []string{"python3", "/app/launcher_pod_notifier.py"},
+		Env: []corev1.EnvVar{
+			{
+				Name:  "LAUNCHER_BASE_URL",
+				Value: fmt.Sprintf("http://127.0.0.1:%d", common.LauncherServicePort),
+			},
+			{
+				Name: "POD_NAME",
+				ValueFrom: &corev1.EnvVarSource{
+					FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"},
+				},
+			},
+			{
+				Name: "NAMESPACE",
+				ValueFrom: &corev1.EnvVarSource{
+					FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"},
+				},
+			},
+		},
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("10m"),
+				corev1.ResourceMemory: resource.MustParse("64Mi"),
+			},
+			Limits: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("100m"),
+				corev1.ResourceMemory: resource.MustParse("128Mi"),
+			},
+		},
+	}
+
+	if idx >= 0 {
+		pod.Spec.Containers[idx] = notifier
+		return
+	}
+	pod.Spec.Containers = append(pod.Spec.Containers, notifier)
 }

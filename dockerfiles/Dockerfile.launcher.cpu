@@ -14,7 +14,7 @@ FROM base-${TARGETARCH} AS final
 
 WORKDIR /app
 
-COPY inference_server/launcher/launcher.py inference_server/launcher/gputranslator.py /app/
+COPY inference_server/launcher/launcher.py inference_server/launcher/gputranslator.py inference_server/launcher/launcher_pod_notifier.py /app/
 RUN chmod a+x /app/launcher.py
 
 # Install uvicorn for serving the launcher API and nvidia-ml-py for gputranslator
