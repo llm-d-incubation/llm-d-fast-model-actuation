@@ -1,8 +1,8 @@
 # End-to-end test recipe
 
 This is a recipe that a contributor can follow to do end-to-end
-testing, using a container registry and GPU-ful Kubernetes cluster
-that the contributor is authorized to use.
+testing, using a container registry and a GPU-bearing Kubernetes
+cluster that the contributor is authorized to use.
 
 ## Setup
 
