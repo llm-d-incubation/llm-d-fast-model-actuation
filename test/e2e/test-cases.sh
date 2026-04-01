@@ -216,6 +216,8 @@ collision_gpus=$(kubectl get pod "$collision_req" -n "$NS" -o jsonpath='{.metada
 
 kubectl delete rs "$collision_rs" -n "$NS" --wait=true
 expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$collision_inst | wc -l | grep -w 0"
+kubectl delete pod "$collision_launcher" -n "$NS" --wait=true
+expect '! kubectl get pods -n '"$NS"' -o name | grep -qw pod/'"$collision_launcher"
 
 cheer Successful same-node collision handling
 
