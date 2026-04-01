@@ -20,17 +20,17 @@ direct scope but is referenced for completeness and handoff to other frameworks.
 | Layer | Focus | Metrics | Measured By |
 | ----- | ----- | ------- | ----------- |
 | **L1: Actuation** | Requester pod readiness | T_actuation (requester creation to readiness), T_wake (DPC wakes sleeping vLLM instance), Hit_rate (GPU hits), T_launcher (launcher creates new vLLM instance) | llm-d-benchmark new harness |
-| **L2: Inference Readiness** | First inference response | T_first_token (requester ready to first inference response), T_e2e (requester creation to first inference response) | llm-d-benchmark nop/inference-perf harness |
+| **L2: Inference Readiness** | First inference response | T_e2e (requester creation to first inference response), T_first_token (requester ready to first inference response) | llm-d-benchmark nop/inference-perf harness |
 | **L3: Steady-State** | Throughput/latency | T_actuation (requester creation to readiness), TPOT (time per output token), throughput, queue depth, KV cache usage, replica stability | llm-d-benchmark / WVA |
 
 **Metric definitions:**
 
 - **T_actuation**: Time from requester pod creation (ReplicaSet scale-up) to requester pod readiness (`/ready` probe passes), which implies the DPC has bound the requester to a server-providing pod and the vLLM instance is serving.
 - **T_wake**: Time from the DPC sending `/wake_up` to a sleeping vLLM instance on the server-providing pod to that instance reporting ready to serve. A part of T_actuation when a GPU hit occurs.
-- **Hit_rate**: Fraction of requesters that get bound to an existing sleeping pod on the correct GPU (hit) vs. requiring a cold start (miss).
+- **Hit_rate**: Fraction of requesters that get bound to an existing sleeping pod on the correct GPU (hit) vs. requiring a cold start (i.e., new vLLM instance in existing launcher pod or new launcher pod + new vLLM instance).
 - **T_launcher**: Time from the launcher receiving a create request to the new vLLM instance reporting healthy. Includes the benefit of vLLM module preloading.
-- **T_first_token**: Time from requester pod readiness to first successful inference response received through the server-providing pod's vLLM instance (time-to-first-token, post-actuation).
 - **T_e2e**: Total time from requester pod creation to first successful inference response. Spans the full path: requester scheduling, DPC binding, instance wake-up or launcher instance creation, vLLM ready, first inference (T_actuation + T_first_token).
+- **T_first_token**: Time from requester pod readiness to first successful inference response received through the server-providing pod's vLLM instance (time-to-first-token, post-actuation).
 
 ## Benchmarking Scenarios
 
