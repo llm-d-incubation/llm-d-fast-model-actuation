@@ -13,6 +13,7 @@
 #   FMA_CHART_INSTANCE_NAME - Helm release name prefix (default: fma)
 #   READY_TARGET            - minimum ready launchers before proceeding (default: 2)
 #   POLICIES_ENABLED        - "true"/"false"; auto-detected if unset
+#   E2E_PLATFORM            - "openshift" or "kind" (default: openshift)
 #   POLL_LIMIT_SECS         - polling timeout seconds (default: 600)
 #   FMA_DEBUG               - "true" to enable shell tracing (set -x)
 
@@ -27,6 +28,7 @@ fi
 POLL_LIMIT_SECS="${POLL_LIMIT_SECS:-600}"
 READY_TARGET="${READY_TARGET:-2}"
 FMA_CHART_INSTANCE_NAME="${FMA_CHART_INSTANCE_NAME:-fma}"
+E2E_PLATFORM="${E2E_PLATFORM:-openshift}"
 
 NS="$FMA_NAMESPACE"
 
@@ -154,12 +156,68 @@ if [ "$POLICIES_ENABLED" = true ]; then
   cheer CEL policy checks passed
 fi
 
-# TODO: stop skipping once Issues 387 and 388 are resolved
-if [ "$FMA_NAMESPACE" != debug ]; then
-    echo "Skipping the remaining test cases because of Issues 387 and 388" >&2
+# TODO: stop skipping once Issues 387 is resolved
+if [ "$E2E_PLATFORM" = "openshift" ]; then
+    echo "Skipping the remaining test cases on OpenShift because Issue 387 is not resolved there yet" >&2
     cheer All launcher-based tests that are currently expected to pass on OpenShift have done so
     exit 0
 fi
+
+# ---------------------------------------------------------------------------
+# Same-Node Port Collision
+# ---------------------------------------------------------------------------
+
+intro_case Same-Node Port Collision Creates New Launcher
+
+collision_inst="${instlb}-collision"
+collision_rs="my-request-collision-$instlb"
+
+kubectl get rs "$rslb" -n "$NS" -o json \
+  | jq \
+      --arg collision_rs "$collision_rs" \
+      --arg collision_inst "$collision_inst" \
+      --arg testnode "$testnode" \
+      --arg isc "$isc" \
+      '
+      .metadata.name = $collision_rs |
+      del(.metadata.uid, .metadata.resourceVersion, .metadata.creationTimestamp, .metadata.annotations, .metadata.ownerReferences, .status) |
+      .spec.replicas = 1 |
+      .spec.selector.matchLabels.instance = $collision_inst |
+      .spec.template.metadata.labels.instance = $collision_inst |
+      .spec.template.spec.nodeSelector = {"kubernetes.io/hostname": $testnode} |
+      .spec.template.metadata.annotations["dual-pods.llm-d.ai/inference-server-config"] = $isc
+    ' \
+  | kubectl apply -n "$NS" -f -
+
+expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$collision_inst | wc -l | grep -w 1"
+
+collision_req=$(kubectl get pods -n "$NS" -o name -l app=dp-example,instance=$collision_inst | sed s%pod/%%)
+echo "Collision requester Pod is $collision_req"
+
+expect '[ "$(kubectl get pod -n '"$NS"' '"$collision_req"' -o jsonpath={.spec.nodeName})" == "'"$testnode"'" ]'
+expect "kubectl get pods -n $NS -o name -l dual-pods.llm-d.ai/dual=$collision_req | wc -l | grep -w 1"
+
+collision_launcher=$(kubectl get pods -n "$NS" -o name -l dual-pods.llm-d.ai/dual=$collision_req | sed s%pod/%%)
+echo "Collision launcher Pod is $collision_launcher"
+
+[ "$collision_launcher" != "$launcherlb" ]
+
+expect '[ "$(kubectl get pod -n '"$NS"' '"$collision_req"' -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "'"$collision_launcher"'" ]'
+
+date
+kubectl wait --for condition=Ready pod/$collision_req -n "$NS" --timeout=120s
+[ "$(kubectl get pod $collision_launcher -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
+
+req_gpus=$(kubectl get pod "$reqlb" -n "$NS" -o jsonpath='{.metadata.annotations.dual-pods\.llm-d\.ai/accelerators}')
+collision_gpus=$(kubectl get pod "$collision_req" -n "$NS" -o jsonpath='{.metadata.annotations.dual-pods\.llm-d\.ai/accelerators}')
+[ -n "$req_gpus" ]
+[ -n "$collision_gpus" ]
+[ "$req_gpus" != "$collision_gpus" ]
+
+kubectl delete rs "$collision_rs" -n "$NS" --wait=true
+expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$collision_inst | wc -l | grep -w 0"
+
+cheer Successful same-node collision handling
 
 # ---------------------------------------------------------------------------
 # Instance Wake-up Fast Path
