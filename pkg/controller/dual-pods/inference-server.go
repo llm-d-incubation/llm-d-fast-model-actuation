@@ -490,6 +490,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	if err != nil {
 		return fmt.Errorf("failed to configure inference server config: %w", err), true
 	}
+	desiredPort := isc.Spec.ModelServerConfig.Port
 	logger.V(5).Info("Nominal hash of InferenceServerConfig", "hash", iscHash)
 
 	if len(launcherPodAnys) > 0 {
@@ -498,7 +499,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		// then those with capacity for new instances.
 		// Note that multiple vLLM instances could exist in one launcher Pod, but at most one instance could be awake at a time.
 
-		launcherPod, hasSleepingInstance, someNotReady, err := ctl.selectBestLauncherPod(ctx, launcherPodAnys, iscHash, int(lc.Spec.MaxSleepingInstances), nodeDat)
+		launcherPod, hasSleepingInstance, someNotReady, err := ctl.selectBestLauncherPod(ctx, launcherPodAnys, iscHash, desiredPort, int(lc.Spec.MaxSleepingInstances), nodeDat)
 		if err != nil {
 			return err, true
 		}
@@ -591,6 +592,7 @@ func (ctl *controller) selectBestLauncherPod(
 	ctx context.Context,
 	launcherPodAnys []interface{},
 	iscHash string,
+	desiredPort int32,
 	maxOthers int,
 	nodeDat *nodeData,
 ) (*corev1.Pod, bool, bool, error) {
@@ -603,6 +605,11 @@ func (ctl *controller) selectBestLauncherPod(
 		launcherPod := podAny.(*corev1.Pod)
 
 		if launcherPod.Status.Phase == corev1.PodFailed || launcherPod.DeletionTimestamp != nil {
+			continue
+		}
+		requesterParts := strings.Split(launcherPod.Annotations[requesterAnnotationKey], " ")
+		if len(requesterParts) == 2 {
+			logger.V(5).Info("Launcher Pod already bound to another requester, skipping", "name", launcherPod.Name, "boundRequester", requesterParts[1])
 			continue
 		}
 
@@ -622,11 +629,32 @@ func (ctl *controller) selectBestLauncherPod(
 
 		// Check if this launcher has a sleeping instance matching the iscHash
 		hasSleepingInstance := false
+		hasPortConflict := false
 		for _, inst := range insts.Instances {
-			if inst.InstanceID == iscHash {
-				hasSleepingInstance = true
+			instPort, err := getVLLMInstancePort(inst.Options)
+			if err != nil {
+				logger.V(5).Info("Skipping launcher Pod because an instance has unparseable options",
+					"name", launcherPod.Name,
+					"instanceID", inst.InstanceID,
+					"options", inst.Options,
+					"err", err)
+				hasPortConflict = true
 				break
 			}
+			if instPort == desiredPort && inst.InstanceID != iscHash {
+				logger.V(5).Info("Skipping launcher Pod because a different instance already uses the desired port",
+					"name", launcherPod.Name,
+					"instanceID", inst.InstanceID,
+					"port", desiredPort)
+				hasPortConflict = true
+				break
+			}
+			if inst.InstanceID == iscHash {
+				hasSleepingInstance = true
+			}
+		}
+		if hasPortConflict {
+			continue
 		}
 		if hasSleepingInstance {
 			// Priority 1: Found a sleeping instance
@@ -691,6 +719,30 @@ func (ctl *controller) configInferenceServer(isc *fmav1alpha1.InferenceServerCon
 	nominalHash := base64.RawURLEncoding.EncodeToString(hashSl)
 
 	return &vllmCfg, nominalHash, nil
+}
+
+func getVLLMInstancePort(options string) (int32, error) {
+	parts := strings.Fields(options)
+	for idx, part := range parts {
+		if part == "--port" {
+			if idx+1 >= len(parts) {
+				return 0, fmt.Errorf("missing value for --port")
+			}
+			port, err := strconv.ParseInt(parts[idx+1], 10, 32)
+			if err != nil {
+				return 0, fmt.Errorf("parse --port value %q: %w", parts[idx+1], err)
+			}
+			return int32(port), nil
+		}
+		if value, ok := strings.CutPrefix(part, "--port="); ok {
+			port, err := strconv.ParseInt(value, 10, 32)
+			if err != nil {
+				return 0, fmt.Errorf("parse --port value %q: %w", value, err)
+			}
+			return int32(port), nil
+		}
+	}
+	return 0, fmt.Errorf("missing --port in options %q", options)
 }
 
 func (ctl *controller) wakeupInstance(ctx context.Context, lClient *LauncherClient, instanceID string, instancePort int32) error {
