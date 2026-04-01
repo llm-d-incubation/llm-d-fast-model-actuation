@@ -378,7 +378,8 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 		if diff < 0 {
 			// Need to delete some pods for this config
 			numToDelete := int(-diff)
-			for i := 0; i < numToDelete && i < len(currentLaunchers); i++ {
+			collectedForDeletion := 0
+			for i := 0; i < len(currentLaunchers) && collectedForDeletion < numToDelete; i++ {
 				pod := currentLaunchers[len(currentLaunchers)-1-i]
 				isBound, requesterPodName := ctl.isLauncherBoundToServerRequestingPod(pod)
 				if isBound {
@@ -391,6 +392,7 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 					pod:    pod,
 					reason: "excess launcher",
 				})
+				collectedForDeletion++
 			}
 		} else if diff > 0 {
 			// Need to create some pods for this config
