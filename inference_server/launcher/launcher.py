@@ -59,6 +59,7 @@ class VllmConfig(BaseModel):
     options: str
     gpu_uuids: Optional[List[str]] = None
     env_vars: Optional[Dict[str, str]] = None
+    annotations: Optional[Dict[str, str]] = None
 
 
 class HalfMade(Exception):

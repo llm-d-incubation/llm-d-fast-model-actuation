@@ -25,6 +25,8 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	"k8s.io/klog/v2"
 )
 
 type LauncherClient struct {
@@ -50,25 +52,24 @@ func NewLauncherClient(baseURL string) (*LauncherClient, error) {
 
 // VllmConfig matches the launcher API schema.
 type VllmConfig struct {
-	Options  string            `json:"options"`
-	GpuUUIDs []string          `json:"gpu_uuids,omitempty"`
-	EnvVars  map[string]string `json:"env_vars,omitempty"`
+	Options     string            `json:"options"`
+	GpuUUIDs    []string          `json:"gpu_uuids,omitempty"`
+	EnvVars     map[string]string `json:"env_vars,omitempty"`
+	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
-// InstanceStatus returned by status APIs.
-type InstanceStatus struct {
-	InstanceID string            `json:"instance_id"`
-	Status     string            `json:"status"`
-	Options    string            `json:"options"`
-	GpuUUIDs   []string          `json:"gpu_uuids,omitempty"`
-	EnvVars    map[string]string `json:"env_vars,omitempty"`
+// InstanceState returned by launcher API.
+type InstanceState struct {
+	InstanceID string `json:"instance_id"`
+	Status     string `json:"status"`
+	VllmConfig `json:",inline"`
 }
 
-// AllInstancesStatus response.
-type AllInstancesStatus struct {
-	TotalInstances   int              `json:"total_instances"`
-	RunningInstances int              `json:"running_instances"`
-	Instances        []InstanceStatus `json:"instances"`
+// AllInstancesState response.
+type AllInstancesState struct {
+	TotalInstances   int             `json:"total_instances"`
+	RunningInstances int             `json:"running_instances"`
+	Instances        []InstanceState `json:"instances"`
 }
 
 // Generic response for creation and deletion.
@@ -95,13 +96,13 @@ func (c *LauncherClient) CreateNamedInstance(
 	return c.create(ctx, path, http.MethodPut, cfg)
 }
 
-// GetInstanceStatus returns the status of a single instance.
-func (c *LauncherClient) GetInstanceStatus(
+// GetInstanceState returns the state of a single instance.
+func (c *LauncherClient) GetInstanceState(
 	ctx context.Context,
 	instanceID string,
-) (*InstanceStatus, error) {
+) (*InstanceState, error) {
 	path := fmt.Sprintf("/v2/vllm/instances/%s", instanceID)
-	var out InstanceStatus
+	var out InstanceState
 	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
 		return nil, err
 	}
@@ -111,8 +112,8 @@ func (c *LauncherClient) GetInstanceStatus(
 // ListInstances returns all instances with status.
 func (c *LauncherClient) ListInstances(
 	ctx context.Context,
-) (*AllInstancesStatus, error) {
-	var out AllInstancesStatus
+) (*AllInstancesState, error) {
+	var out AllInstancesState
 	if err := c.do(ctx, http.MethodGet, "/v2/vllm/instances", nil, &out); err != nil {
 		return nil, err
 	}
@@ -216,8 +217,11 @@ func (c *LauncherClient) do(
 	}
 
 	if out != nil {
-		return json.NewDecoder(resp.Body).Decode(out)
+		respBytes, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		err = json.NewDecoder(bytes.NewReader(respBytes)).Decode(out)
+		klog.FromContext(ctx).V(6).Info("Decoded response body", "body", string(respBytes), "decoded", out, "err", err)
 	}
 
-	return nil
+	return err
 }
