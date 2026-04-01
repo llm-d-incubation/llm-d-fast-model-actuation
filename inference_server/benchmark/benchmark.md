@@ -4,9 +4,15 @@ latency of model-serving pods within the LLM-D Fast Model Actuation workflow.
 
 ## Purpose
 The goal is to quantify and compare how quickly a model-serving duo (server-requesting
-and server-providing pods) becomes available under different actuation conditions such
-as cold starts, wake-ups from a sleeping state, using prewarmed pods, etc. These metrics
-will guide future optimizations for the **Dual-Pods Controller (DPC)**. Ultimately, the goal
+and server-providing pods), when integrated with the Workload Variant Autoscaler (WVA),
+becomes available under three different actuation conditions in order of decreasing
+latency:
+
+- **Cold start**: creating a new vLLM instance without using a launcher
+- **Warm start**: creating a new vLLM instance in an existing launcher pod
+- **Hot start**: waking a sleeping vLLM instance on an existing launcher pod
+
+These metrics will guide future optimizations for the **Dual-Pods Controller (DPC)**. Ultimately, the goal
 is *high predictability*, which is defined as achieving close to 100% hit rate of awakening
 available, sleeping pods on cluster GPUs as function of total inference server
 requests for common user scenarios.
@@ -14,7 +20,8 @@ requests for common user scenarios.
 ## Measurement Layers
 
 FMA benchmarking uses a layered measurement model. Layer 1 is what FMA benchmarks own
-directly. Layer 2 bridges actuation to inference readiness. Layer 3 is out of FMA's
+directly. Layer 2 bridges actuation to inference readiness (i.e., latency for inference
+requests to get responses back in an FMA-enabled context). Layer 3 is out of FMA's
 direct scope but is referenced for completeness and handoff to other frameworks.
 
 | Layer | Focus | Metrics | Measured By |
@@ -26,7 +33,7 @@ direct scope but is referenced for completeness and handoff to other frameworks.
 **Metric definitions:**
 
 - **T_actuation**: Time from requester pod creation (ReplicaSet scale-up) to requester pod readiness (`/ready` probe passes), which implies the DPC has bound the requester to a server-providing pod and the vLLM instance is serving.
-- **T_wake**: Time from the DPC sending `/wake_up` to a sleeping vLLM instance on the server-providing pod to that instance reporting ready to serve. A part of T_actuation when a GPU hit occurs.
+- **T_wake**: Request-response time for the DPC's `/wake_up` call to a sleeping vLLM instance on the server-providing pod. A part of T_actuation when a hot start occurs.
 - **Hit_rate**: Fraction of requesters that get bound to an existing sleeping pod on the correct GPU (hit) vs. requiring a cold start (i.e., new vLLM instance in existing launcher pod or new launcher pod + new vLLM instance).
 - **T_launcher**: Time from the launcher receiving a create request to the new vLLM instance reporting healthy. Includes the benefit of vLLM module preloading.
 - **T_e2e**: Total time from requester pod creation to first successful inference response. Spans the full path: requester scheduling, DPC binding, instance wake-up or launcher instance creation, vLLM ready, first inference (T_actuation + T_first_token).
@@ -38,7 +45,6 @@ direct scope but is referenced for completeness and handoff to other frameworks.
 | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | **Fast Replica Scale Up**          | As a ModelService Owner, I can scale up the number of active replicas for a variant from 0 to 1 or 1 to N with minimal latency         |
 | **Introducing New Variant**        | As a ModelService Owner, I can deploy a newly released variant in anticipation of user requests                                         |
-| **Free Up Cluster Resources**      | As a Cluster Operator, I can reduce/deactivate resource intensive variants to make space for numerous smaller model variants             |
 | **Resource Request Justification** | As a Workload Owner, I can stress-test my namespace's resources to justify more resource requests (routes, gateways, GPUs) from cluster operator |
 | **Maintenance Planning**           | As a Cluster Operator, I can validate the cluster performance is similar or better after node maintenance schedules and upgrades         |
 
@@ -47,20 +53,24 @@ direct scope but is referenced for completeness and handoff to other frameworks.
 
 ### Actuation Paths (columns)
 
-The columns represent the different paths FMA can take to satisfy a new server-requesting pod:
+The columns represent the different paths FMA can take to satisfy a new server-requesting pod,
+using the team's established terminology:
 
-| Actuation Path                          | What It Measures | llm-d-benchmark Config |
-| --------------------------------------- | ---------------- | ---------------------- |
-| **Cold Start (Standalone)**             | No launcher, no sleeping pods. Raw Kubernetes deploy-to-ready latency. Baseline for all other paths. | `-t standalone` comparison baseline |
-| **Cold Start (w/ Launcher)**            | Launcher is present and pre-loads vLLM Python modules. Measures the launcher's contribution to reducing cold start latency vs. standalone. | `-t fma` with default `LLMDBENCH_FMA_LAUNCHER_*` env vars |
-| **Wake Sleeping Instance**              | A sleeping vLLM instance exists on the correct GPU. DPC sends `/wake_up`. Measures the best-case actuation path. | `-t fma` with `LLMDBENCH_VLLM_COMMON_ENABLE_SLEEP_MODE=true`, `LLMDBENCH_FMA_DUAL_POD_SLEEPER_LIMIT>=1` |
-| **Create Instance (Existing Launcher)** | No sleeping instance available on the assigned GPU, but a launcher pod exists. Launcher creates a new vLLM instance. | `-t fma`, no sleeping instances pre-provisioned |
-| **Model Swap (Launcher)**               | Launcher swaps the model on an existing vLLM instance without restarting the process. Tests the launcher's dynamic model management capability. | `-t fma`, sequential model deployment via `07_deploy_fma_models.py` |
-| **Cached Model (PVC)**                  | Model weights pre-cached on a PersistentVolumeClaim, eliminating download time. Isolates the non-download portion of actuation latency. | `-t fma` with `LLMDBENCH_VLLM_COMMON_EXTRA_PVC_NAME` + `LLMDBENCH_VLLM_COMMON_VLLM_CACHE_ROOT` (configured in `fma.sh`) |
+| Actuation Path            | What It Measures | llm-d-benchmark Config |
+| ------------------------- | ---------------- | ---------------------- |
+| **Cold Start**            | No launcher, no sleeping pods. Raw Kubernetes deploy-to-ready latency (non-FMA baseline, or FMA milestone 2 without launcher). | `-t standalone` comparison baseline |
+| **Warm Start**            | A launcher pod exists (pre-created by the LPC) but no sleeping instance is available on the assigned GPU. Launcher creates a new vLLM instance with the benefit of module preloading. | `-t fma` with default `LLMDBENCH_FMA_LAUNCHER_*` env vars |
+| **Hot Start**             | A sleeping vLLM instance exists on the correct GPU. DPC sends `/wake_up`. Best-case actuation path. | `-t fma` with `LLMDBENCH_VLLM_COMMON_ENABLE_SLEEP_MODE=true`, `LLMDBENCH_FMA_DUAL_POD_SLEEPER_LIMIT>=1` |
 
 > **Note on simulation:** Any of the above paths can be exercised with mock GPUs
 > (`llm-d-inference-sim` image or launcher `--mock-mode`) for CI pipelines and scenario
 > prototyping. Simulation is an orthogonal testing mode, not a separate actuation path.
+>
+> **Note on caching:** Model tensor caching (via PVC) and CUDA graph compilation caching
+> are orthogonal to the actuation paths above. Either or both can be enabled for any path
+> besides Hot Start (where the instance is already loaded). Caching configuration is
+> controlled via `LLMDBENCH_VLLM_COMMON_EXTRA_PVC_NAME` and `LLMDBENCH_VLLM_COMMON_VLLM_CACHE_ROOT`
+> in the `fma.sh` scenario.
 
 ### Matrix
 
@@ -70,13 +80,12 @@ Cell annotations indicate which measurement layers apply:
 - **P** -- Planned but not yet implemented
 - **--** -- Not applicable to this combination
 
-| Scenario                           | Cold Start (Standalone) | Cold Start (Launcher) | Wake Sleeping Instance | Create Instance (Existing Launcher) | Model Swap (Launcher) | Cached Model (PVC) |
-| ---------------------------------- | :---------------------: | :-------------------: | :--------------------: | :---------------------------------: | :-------------------: | :-----------------: |
-| **Fast Replica Scale Up**          | L1                      | L1+L2                 | L1+L2                  | L1+L2                               | --                    | L1+L2               |
-| **Introducing New Variant**        | L1                      | L1+L2                 | --                     | L1+L2                               | L1+L2                 | L1+L2               |
-| **Free Up Cluster Resources**      | --                      | P                     | P                      | --                                  | P                     | --                  |
-| **Resource Request Justification** | L1                      | L1                    | L1                     | L1                                  | P                     | L1                  |
-| **Maintenance Planning**           | L1                      | L1+L2                 | L1+L2                  | L1+L2                               | P                     | L1+L2               |
+| Scenario                           | Cold Start | Warm Start | Hot Start |
+| ---------------------------------- | :--------: | :--------: | :-------: |
+| **Fast Replica Scale Up**          | L1+L2      | L1+L2      | L1+L2     |
+| **Introducing New Variant**        | L1+L2      | L1+L2      | --        |
+| **Resource Request Justification** | L1         | L1         | L1        |
+| **Maintenance Planning**           | L1+L2      | L1+L2      | L1+L2     |
 
 
 ### Scenario Rationale
@@ -84,21 +93,17 @@ Cell annotations indicate which measurement layers apply:
 | FMA Scenario                       | Why Included | llm-d-benchmark Applicability |
 | ---------------------------------- | ------------ | ----------------------------- |
 | **Fast Replica Scale Up**          | Core FMA value proposition: how fast can the DPC bring replicas online? Directly measures the benefit of sleep/wake and launcher preloading over cold starts. | `fma.sh` scenario with varying `LLMDBENCH_VLLM_COMMON_REPLICAS`; `inference-scheduling` guide with `-t fma` |
-| **Introducing New Variant**        | Tests the full FMA deployment path: InferenceServerConfig + LauncherConfig + LauncherPopulationPolicy creation, followed by requester ReplicaSet. Captures model download, launcher instance creation, and dual-pod binding. | `fma.sh` with `LLMDBENCH_DEPLOY_MODEL_LIST` variations; nop harness for pure actuation timing |
-| **Free Up Cluster Resources**      | Validates the reverse path: sleeping/deactivating variants. Important for cluster operators managing GPU capacity across tenants. Measures GPU release latency. | FMA-specific: scale down + verify GPU release via Prometheus. Not yet in llm-d-benchmark |
+| **Introducing New Variant**        | Measures actuation latency for a previously unseen model (cold cache, no sleeping instances for this model). Assumes the LPC has already created the needed launchers. Captures the "day 1" deployment experience. | `fma.sh` with `LLMDBENCH_DEPLOY_MODEL_LIST` variations; nop harness for pure actuation timing |
 | **Resource Request Justification** | Stress-tests namespace resources across multiple concurrent models/variants to produce data for capacity planning and resource justification to cluster operators. | `fma.sh` with multi-model list; DoE experiment with replica/model treatments |
 | **Maintenance Planning**           | Regression baseline: run the same scenarios before and after node maintenance or upgrades. Detects performance regressions in actuation latency. | Any guide scenario as regression baseline with `-t fma`; compare pre/post results |
 
 ### Actuation Path Rationale
 
-| Actuation Path                          | Why Included |
-| --------------------------------------- | ------------ |
-| **Cold Start (Standalone)**             | Baseline without FMA. Establishes the raw Kubernetes deploy-to-ready latency that all FMA paths should improve upon. |
-| **Cold Start (w/ Launcher)**            | Measures the launcher's contribution (vLLM module preloading) to reducing cold start latency vs. standalone. |
-| **Wake Sleeping Instance**              | Best-case FMA path. DPC sends `/wake_up` to a sleeping vLLM instance on the correct GPU. Measures sleep-to-wake latency. |
-| **Create Instance (Existing Launcher)** | Fallback when no sleeping instance is available on the assigned GPU, but a launcher pod exists. Launcher creates a new vLLM instance. |
-| **Model Swap (Launcher)**               | Tests the launcher's dynamic model management: swapping the model on an existing vLLM instance without restarting the process. |
-| **Cached Model (PVC)**                  | Isolates the non-download portion of actuation latency by pre-caching model weights on a PersistentVolumeClaim. Demonstrates that FMA benefits from PVC caching. |
+| Actuation Path   | Why Included |
+| ---------------- | ------------ |
+| **Cold Start**   | Baseline without FMA (or FMA milestone 2 without launcher). Establishes the raw Kubernetes deploy-to-ready latency that all FMA paths should improve upon. |
+| **Warm Start**   | Measures the launcher's contribution when no sleeping instance is available. LPC has pre-created launcher pods, and the launcher creates a new vLLM instance with module preloading benefit. |
+| **Hot Start**    | Best-case FMA path. DPC sends `/wake_up` to a sleeping vLLM instance on the correct GPU. Measures sleep-to-wake latency. |
 
 
 ## Integration Strategy
