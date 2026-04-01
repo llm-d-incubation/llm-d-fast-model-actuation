@@ -607,8 +607,9 @@ func (ctl *controller) selectBestLauncherPod(
 		if launcherPod.Status.Phase == corev1.PodFailed || launcherPod.DeletionTimestamp != nil {
 			continue
 		}
-		if launcherPod.Labels[api.DualLabelName] != "" {
-			logger.V(5).Info("Launcher Pod already bound to another requester, skipping", "name", launcherPod.Name, "boundRequester", launcherPod.Labels[api.DualLabelName])
+		requesterParts := strings.Split(launcherPod.Annotations[requesterAnnotationKey], " ")
+		if len(requesterParts) == 2 {
+			logger.V(5).Info("Launcher Pod already bound to another requester, skipping", "name", launcherPod.Name, "boundRequester", requesterParts[1])
 			continue
 		}
 
