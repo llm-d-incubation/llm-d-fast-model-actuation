@@ -91,6 +91,8 @@ type ProviderData struct {
 // maintains on both server-requesting and server-providing Pods.
 // This annotation is purely FYI emitted by the dual-pods controller
 // (it does not rely on this label for anything).
+// External consumers may read it for their own purposes; for example,
+// the launcher-based e2e test reads it to pin the GPU UUID when running on OpenShift.
 const AcceleratorsAnnotationName string = "dual-pods.llm-d.ai/accelerators"
 
 // LauncherBasedAnnotationName is the name of an annotation that indicates that
