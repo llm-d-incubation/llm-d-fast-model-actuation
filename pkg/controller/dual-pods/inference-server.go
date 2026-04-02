@@ -698,11 +698,16 @@ func (ctl *controller) selectBestLauncherPod(
 // `isc` and `gpuUUIDs` are deeply immutable.
 // The result is deeply immutable.
 func (ctl *controller) configInferenceServer(isc *fmav1alpha1.InferenceServerConfig, gpuUUIDs []string) (*VllmConfig, string, error) {
-	options := isc.Spec.ModelServerConfig.Options + " --port " + strconv.Itoa(int(isc.Spec.ModelServerConfig.Port))
+	portS := strconv.Itoa(int(isc.Spec.ModelServerConfig.Port))
+	options := isc.Spec.ModelServerConfig.Options + " --port " + portS
 	vllmCfg := VllmConfig{
 		Options:  options,
 		GpuUUIDs: gpuUUIDs,
 		EnvVars:  isc.Spec.ModelServerConfig.EnvVars,
+		Annotations: map[string]string{
+			"isc-name":       isc.Name,
+			"inference-port": portS,
+		},
 	}
 	iscBytes, err := yaml.Marshal(isc.Spec.ModelServerConfig)
 	if err != nil {
@@ -1321,7 +1326,7 @@ var podDecoder k8sruntime.Decoder
 // syncLauncherInstances queries the launcher pod for its current instances,
 // updates the controller's internal launcherData state, and returns the fresh
 // launcher response used for the update.
-func (ctl *controller) syncLauncherInstances(ctx context.Context, nodeDat *nodeData, launcherPod *corev1.Pod) (*AllInstancesStatus, error, bool) {
+func (ctl *controller) syncLauncherInstances(ctx context.Context, nodeDat *nodeData, launcherPod *corev1.Pod) (*AllInstancesState, error, bool) {
 	logger := klog.FromContext(ctx)
 
 	if launcherPod.Status.PodIP == "" || !utils.IsPodReady(launcherPod) {
