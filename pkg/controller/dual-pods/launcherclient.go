@@ -34,6 +34,11 @@ type LauncherClient struct {
 	httpClient *http.Client
 }
 
+const (
+	VllmConfigISCNameAnnotationKey       = "isc-name"
+	VllmConfigInferencePortAnnotationKey = "inference-port"
+)
+
 func NewLauncherClient(baseURL string) (*LauncherClient, error) {
 	parsedURL, err := url.Parse(baseURL)
 	if err != nil {

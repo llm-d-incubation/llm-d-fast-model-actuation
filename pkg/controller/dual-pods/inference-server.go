@@ -706,8 +706,8 @@ func (ctl *controller) configInferenceServer(isc *fmav1alpha1.InferenceServerCon
 		GpuUUIDs: gpuUUIDs,
 		EnvVars:  isc.Spec.ModelServerConfig.EnvVars,
 		Annotations: map[string]string{
-			"isc-name":       isc.Name,
-			"inference-port": portS,
+			VllmConfigISCNameAnnotationKey:       isc.Name,
+			VllmConfigInferencePortAnnotationKey: portS,
 		},
 	}
 	iscBytes, err := yaml.Marshal(isc.Spec.ModelServerConfig)
@@ -727,14 +727,14 @@ func (ctl *controller) configInferenceServer(isc *fmav1alpha1.InferenceServerCon
 }
 
 func getVLLMInstancePort(inst InstanceState) (int32, error) {
-	if value, ok := inst.Annotations["inference-port"]; ok {
+	if value, ok := inst.Annotations[VllmConfigInferencePortAnnotationKey]; ok {
 		port, err := strconv.ParseInt(value, 10, 32)
 		if err != nil {
-			return 0, fmt.Errorf("parse annotations[inference-port] value %q: %w", value, err)
+			return 0, fmt.Errorf("parse annotations[%s] value %q: %w", VllmConfigInferencePortAnnotationKey, value, err)
 		}
 		return int32(port), nil
 	}
-	return 0, fmt.Errorf("missing annotations[inference-port]")
+	return 0, fmt.Errorf("missing annotations[%s]", VllmConfigInferencePortAnnotationKey)
 }
 
 func (ctl *controller) wakeupInstance(ctx context.Context, lClient *LauncherClient, instanceID string, instancePort int32) error {
