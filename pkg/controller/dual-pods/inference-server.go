@@ -694,17 +694,16 @@ func (ctl *controller) selectBestLauncherPod(
 	return nil, false, false, nil
 }
 
+// configInferenceServer computes the VllmConfig.
+// `isc` and `gpuUUIDs` are deeply immutable.
+// The result is deeply immutable.
 func (ctl *controller) configInferenceServer(isc *fmav1alpha1.InferenceServerConfig, gpuUUIDs []string) (*VllmConfig, string, error) {
 	options := isc.Spec.ModelServerConfig.Options + " --port " + strconv.Itoa(int(isc.Spec.ModelServerConfig.Port))
 	vllmCfg := VllmConfig{
 		Options:  options,
 		GpuUUIDs: gpuUUIDs,
-		EnvVars:  make(map[string]string, len(isc.Spec.ModelServerConfig.EnvVars)),
+		EnvVars:  isc.Spec.ModelServerConfig.EnvVars,
 	}
-	for k, v := range isc.Spec.ModelServerConfig.EnvVars {
-		vllmCfg.EnvVars[k] = v
-	}
-
 	iscBytes, err := yaml.Marshal(isc.Spec.ModelServerConfig)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to marshal InferenceServerConfig %q: %w", isc.Name, err)
