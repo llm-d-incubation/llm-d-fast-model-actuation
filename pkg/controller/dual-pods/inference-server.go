@@ -631,11 +631,12 @@ func (ctl *controller) selectBestLauncherPod(
 		hasSleepingInstance := false
 		hasPortConflict := false
 		for _, inst := range insts.Instances {
-			instPort, err := getVLLMInstancePort(inst.Options)
+			instPort, err := getVLLMInstancePort(inst)
 			if err != nil {
-				logger.V(5).Info("Skipping launcher Pod because an instance has unparseable options",
+				logger.V(5).Info("Skipping launcher Pod because an instance has no usable inference port",
 					"name", launcherPod.Name,
 					"instanceID", inst.InstanceID,
+					"annotations", inst.Annotations,
 					"options", inst.Options,
 					"err", err)
 				hasPortConflict = true
@@ -705,8 +706,8 @@ func (ctl *controller) configInferenceServer(isc *fmav1alpha1.InferenceServerCon
 		GpuUUIDs: gpuUUIDs,
 		EnvVars:  isc.Spec.ModelServerConfig.EnvVars,
 		Annotations: map[string]string{
-			"isc-name":       isc.Name,
-			"inference-port": portS,
+			VllmConfigISCNameAnnotationKey:       isc.Name,
+			VllmConfigInferencePortAnnotationKey: portS,
 		},
 	}
 	iscBytes, err := yaml.Marshal(isc.Spec.ModelServerConfig)
@@ -725,28 +726,15 @@ func (ctl *controller) configInferenceServer(isc *fmav1alpha1.InferenceServerCon
 	return &vllmCfg, nominalHash, nil
 }
 
-func getVLLMInstancePort(options string) (int32, error) {
-	parts := strings.Fields(options)
-	for idx, part := range parts {
-		if part == "--port" {
-			if idx+1 >= len(parts) {
-				return 0, fmt.Errorf("missing value for --port")
-			}
-			port, err := strconv.ParseInt(parts[idx+1], 10, 32)
-			if err != nil {
-				return 0, fmt.Errorf("parse --port value %q: %w", parts[idx+1], err)
-			}
-			return int32(port), nil
+func getVLLMInstancePort(inst InstanceState) (int32, error) {
+	if value, ok := inst.Annotations[VllmConfigInferencePortAnnotationKey]; ok {
+		port, err := strconv.ParseInt(value, 10, 32)
+		if err != nil {
+			return 0, fmt.Errorf("parse annotations[%s] value %q: %w", VllmConfigInferencePortAnnotationKey, value, err)
 		}
-		if value, ok := strings.CutPrefix(part, "--port="); ok {
-			port, err := strconv.ParseInt(value, 10, 32)
-			if err != nil {
-				return 0, fmt.Errorf("parse --port value %q: %w", value, err)
-			}
-			return int32(port), nil
-		}
+		return int32(port), nil
 	}
-	return 0, fmt.Errorf("missing --port in options %q", options)
+	return 0, fmt.Errorf("missing annotations[%s]", VllmConfigInferencePortAnnotationKey)
 }
 
 func (ctl *controller) wakeupInstance(ctx context.Context, lClient *LauncherClient, instanceID string, instancePort int32) error {
