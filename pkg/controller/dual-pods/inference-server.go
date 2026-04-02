@@ -343,7 +343,21 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	if providingPod != nil {
 		var serverPort int16
 		if launcherBased {
-			serverPort = int16(isc.Spec.ModelServerConfig.Port)
+			// If port is not specified in InferenceServerConfig, retrieve the allocated port
+			// from launcherData.AllocatedPorts using the instance ID (iscHash)
+			if isc.Spec.ModelServerConfig.Port != 0 {
+				serverPort = int16(isc.Spec.ModelServerConfig.Port)
+			} else {
+				// Dynamically allocated port: need to retrieve from launcher API
+				iscHash, err := ctl.computeInferenceServerHash(isc, serverDat.GPUIDs)
+				if err != nil {
+					return fmt.Errorf("failed to compute InferenceServer hash for port lookup: %w", err), true
+				}
+				serverPort, err = getInstancePort(ctx, providingPod.Status.PodIP, iscHash)
+				if err != nil {
+					return fmt.Errorf("failed to get port for instance %q: %w", iscHash, err), true
+				}
+			}
 		} else {
 			_, serverPort, err = utils.GetInferenceServerContainerIndexAndPort(providingPod)
 			if err != nil { // Impossible, because such a providingPod would never be created by this controller
@@ -486,9 +500,10 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		return err, false
 	}
 
-	cfg, iscHash, err := ctl.configInferenceServer(isc, serverDat.GPUIDs)
+	// Compute the nominal hash for the InferenceServerConfig
+	iscHash, err := ctl.computeInferenceServerHash(isc, serverDat.GPUIDs)
 	if err != nil {
-		return fmt.Errorf("failed to configure inference server config: %w", err), true
+		return fmt.Errorf("failed to compute inference server hash: %w", err), true
 	}
 	desiredPort := isc.Spec.ModelServerConfig.Port
 	logger.V(5).Info("Nominal hash of InferenceServerConfig", "hash", iscHash)
@@ -525,16 +540,36 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 
 			launcherDat := ctl.getLauncherData(nodeDat, launcherPod.Name)
 
+			// Configure inference server with port allocation
+			// This handles both new instance creation and existing instance wake-up
+			// Note: iscHash is used as instanceID here because it uniquely identifies
+			// the inference server config + GPU combination. For hasSleepingInstance=true,
+			// we need iscHash to look up the allocated port; for false, we use it to
+			// register the new instance. serverDat.InstanceID may be empty if the
+			// requesting Pod was recreated with a different UID.
+			cfg, allocatedPort, err := ctl.configInferenceServerWithPort(ctx, isc, launcherIP, serverDat.GPUIDs, iscHash, hasSleepingInstance)
+			if err != nil {
+				return fmt.Errorf("failed to configure inference server with port allocation: %w", err), true
+			}
+
+			url := fmt.Sprintf("http://%s:%s%s", requestingPod.Status.PodIP, adminPort, stubapi.InitProxy)
+			if err := doPostWithData(url, bytes.NewReader([]byte(fmt.Sprintf("{\"address\":\"%s\",\"port\":%d}",
+				launcherIP, allocatedPort)))); err != nil {
+				logger.Error(err, "Failed to init requester proxy")
+				return err, true
+			}
+
 			if hasSleepingInstance {
 				// Fast path: wake up existing sleeping instance
-				logger.V(5).Info("Waking up existing vLLM instance", "iscHash", iscHash)
-				err := ctl.wakeupInstance(ctx, lClient, iscHash, isc.Spec.ModelServerConfig.Port)
+				// allocatedPort is already retrieved from launcherDat.AllocatedPorts
+				logger.V(5).Info("Waking up existing vLLM instance", "iscHash", iscHash, "port", allocatedPort)
+				err := ctl.wakeupInstance(ctx, lClient, iscHash, int32(allocatedPort))
 				if err != nil {
 					return fmt.Errorf("wake up vLLM instance: %w", err), true
 				}
 				launcherDat.Instances[iscHash] = time.Now()
 				// TODO(waltforme): the bind method may need more revision to fully handle launcher-based server providing Pods
-				return ctl.bind(ctx, serverDat, requestingPod, launcherPod, &iscHash, int16(isc.Spec.ModelServerConfig.Port))
+				return ctl.bind(ctx, serverDat, requestingPod, launcherPod, &iscHash, int16(allocatedPort))
 			} else {
 				// Slower path: create new instance in launcher with capacity
 				logger.V(5).Info("Creating new vLLM instance", "iscHash", iscHash)
@@ -548,7 +583,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				)
 				launcherDat.Instances[iscHash] = time.Now()
 				// TODO(waltforme): the bind method may need more revision to fully handle launcher-based server providing Pods
-				return ctl.bind(ctx, serverDat, requestingPod, launcherPod, &iscHash, int16(isc.Spec.ModelServerConfig.Port))
+				return ctl.bind(ctx, serverDat, requestingPod, launcherPod, &iscHash, int16(allocatedPort))
 			}
 		}
 	}
@@ -694,20 +729,12 @@ func (ctl *controller) selectBestLauncherPod(
 	return nil, false, false, nil
 }
 
-func (ctl *controller) configInferenceServer(isc *fmav1alpha1.InferenceServerConfig, gpuUUIDs []string) (*VllmConfig, string, error) {
-	options := isc.Spec.ModelServerConfig.Options + " --port " + strconv.Itoa(int(isc.Spec.ModelServerConfig.Port))
-	vllmCfg := VllmConfig{
-		Options:  options,
-		GpuUUIDs: gpuUUIDs,
-		EnvVars:  make(map[string]string, len(isc.Spec.ModelServerConfig.EnvVars)),
-	}
-	for k, v := range isc.Spec.ModelServerConfig.EnvVars {
-		vllmCfg.EnvVars[k] = v
-	}
-
+// computeInferenceServerHash computes the nominal hash for an InferenceServerConfig.
+// The hash is used as the instance ID when creating vLLM instances in the launcher.
+func (ctl *controller) computeInferenceServerHash(isc *fmav1alpha1.InferenceServerConfig, gpuUUIDs []string) (string, error) {
 	iscBytes, err := yaml.Marshal(isc.Spec.ModelServerConfig)
 	if err != nil {
-		return nil, "", fmt.Errorf("failed to marshal InferenceServerConfig %q: %w", isc.Name, err)
+		return "", fmt.Errorf("failed to marshal InferenceServerConfig %q: %w", isc.Name, err)
 	}
 	hasher := sha256.New()
 	hasher.Write(iscBytes)
@@ -718,7 +745,59 @@ func (ctl *controller) configInferenceServer(isc *fmav1alpha1.InferenceServerCon
 	// using Raw_URL_Encoding because this hash will be used in URLs to the launcher.
 	nominalHash := base64.RawURLEncoding.EncodeToString(hashSl)
 
-	return &vllmCfg, nominalHash, nil
+	return nominalHash, nil
+}
+
+// configInferenceServerWithPort builds the vLLM configuration with the specified or dynamically allocated port.
+// It handles three cases:
+// 1. User explicitly specified a port in InferenceServerConfig
+// 2. Instance already exists (hasSleepingInstance=true), retrieve the allocated port
+// 3. New instance, allocate a port from the pool
+func (ctl *controller) configInferenceServerWithPort(
+	ctx context.Context,
+	isc *fmav1alpha1.InferenceServerConfig,
+	launcherAddress string,
+	gpuUUIDs []string,
+	instanceID string,
+	hasSleepingInstance bool,
+) (*VllmConfig, int16, error) {
+	// Determine the port to use
+	var port int16
+	if isc.Spec.ModelServerConfig.Port != 0 {
+		// Case 1: User specified a port, use it
+		port = int16(isc.Spec.ModelServerConfig.Port)
+	} else {
+		portsOnLauncher, err := getInstancePorts(ctx, launcherAddress)
+		if err != nil {
+			return nil, 0, fmt.Errorf("failed to retrieve ports from launcher: %w", err)
+		}
+		if hasSleepingInstance {
+			// Case 2: Instance already exists, retrieve the allocated port
+			port = portsOnLauncher[instanceID]
+			if port == 0 {
+				// Should not happen
+				return nil, 0, fmt.Errorf("instance %q has no port allocated", instanceID)
+			}
+		} else {
+			// Case 3: New instance, allocate a port from the pool
+			port, err = allocatePort(portsOnLauncher)
+			if err != nil {
+				return nil, 0, fmt.Errorf("failed to allocate port: %w", err)
+			}
+		}
+	}
+
+	options := isc.Spec.ModelServerConfig.Options + " --port " + strconv.Itoa(int(port))
+	vllmCfg := VllmConfig{
+		Options:  options,
+		GpuUUIDs: gpuUUIDs,
+		EnvVars:  make(map[string]string, len(isc.Spec.ModelServerConfig.EnvVars)),
+	}
+	for k, v := range isc.Spec.ModelServerConfig.EnvVars {
+		vllmCfg.EnvVars[k] = v
+	}
+
+	return &vllmCfg, port, nil
 }
 
 func getVLLMInstancePort(options string) (int32, error) {
@@ -1297,11 +1376,15 @@ func (ctl *controller) ensureReqState(ctx context.Context, requestingPod *corev1
 
 // doPost does the HTTP POST request/response to the given URL.
 func doPost(url string) error {
+	return doPostWithData(url, nil)
+}
+
+func doPostWithData(url string, data io.Reader) error {
 	client := &http.Client{
 		Timeout: 5 * time.Second,
 	}
 
-	resp, err := client.Post(url, "application/json", nil)
+	resp, err := client.Post(url, "application/json", data)
 	if err != nil {
 		return fmt.Errorf("http post %q: %w", url, err)
 	}
@@ -1434,4 +1517,64 @@ func TimePtrToStringPtr(tp *metav1.Time) *string {
 	}
 	str := tp.String()
 	return &str
+}
+
+func getInstancePorts(ctx context.Context, launcherAddress string) (map[string]int16, error) {
+	launcherBaseURL := fmt.Sprintf("http://%s:%d", launcherAddress, ctlrcommon.LauncherServicePort)
+	lClient, err := NewLauncherClient(launcherBaseURL)
+	if err != nil {
+		return nil, err
+	}
+	// Query all instances to find the port for this iscHash
+	allInstances, err := lClient.ListInstances(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list instances: %w", err)
+	}
+
+	// Find the instance with matching ID and get its port
+	portMap := make(map[string]int16, len(allInstances.Instances))
+	for _, inst := range allInstances.Instances {
+		re := regexp.MustCompile(`--port\s+(\d+)`)
+		matches := re.FindStringSubmatch(inst.Options)
+		if len(matches) > 1 {
+			portNum, err := strconv.ParseInt(matches[1], 10, 16)
+			if err == nil {
+				port := int16(portNum)
+				portMap[inst.InstanceID] = port
+			} else {
+				return nil, fmt.Errorf("failed to parse port number from options: %w", err)
+			}
+		}
+	}
+	return portMap, nil
+}
+
+func getInstancePort(ctx context.Context, launcherAddress string, iscHash string) (int16, error) {
+	portsOnLauncher, err := getInstancePorts(ctx, launcherAddress)
+	if err != nil {
+		return 0, err
+	}
+	port, found := portsOnLauncher[iscHash]
+	if !found {
+		return 0, fmt.Errorf("instance %q not found or has no port %q", iscHash, port)
+	}
+	return port, nil
+}
+
+// Port pool configuration
+// PortPoolBase is the starting port number for the dynamic port allocation pool
+const PortPoolBase int16 = 8005
+
+// allocatePort allocates a port from the port pool for a new vLLM instance.
+func allocatePort(existingPorts map[string]int16) (int16, error) {
+	ports := sets.New[int16]()
+	for _, port := range existingPorts {
+		ports.Insert(port)
+	}
+	for port := PortPoolBase; port < PortPoolBase+8; port++ {
+		if !ports.Has(port) {
+			return port, nil
+		}
+	}
+	return 0, fmt.Errorf("no available port found")
 }

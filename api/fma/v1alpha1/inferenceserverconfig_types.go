@@ -35,7 +35,10 @@ type InferenceServerConfigSpec struct {
 type ModelServerConfig struct {
 	// Port is the port on which the vLLM server will listen
 	// Particularly, management of vLLM instances' sleep state is done through this port
-	Port int32 `json:"port"`
+	// If not specified, the dual-pods controller will automatically assign an available port
+	// from a predefined port pool based on the LauncherConfig's maxSleepingInstances.
+	// +optional
+	Port int32 `json:"port,omitempty"`
 
 	// Options are the vLLM startup options, excluding Port
 	// +optional
