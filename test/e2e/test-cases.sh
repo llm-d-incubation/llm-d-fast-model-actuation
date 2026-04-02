@@ -71,6 +71,37 @@ expect() {
     done
 }
 
+# pin_gpu patches the ReplicaSet to bypass OpenShift's GPU assignment.
+# Sets nvidia.com/gpu limit/request to 0 and injects NVIDIA_VISIBLE_DEVICES
+# so subsequent pods reuse the same GPU UUID without going through the device plugin.
+# Uses global $assigned_gpu_uuids and $NS.
+# Arguments: <rs-name>
+pin_gpu() {
+    local rs="$1"
+    echo "Pinning GPU for ReplicaSet $rs: NVIDIA_VISIBLE_DEVICES=$assigned_gpu_uuids" >&2
+    local patch
+    patch=$(printf \
+        '{"spec":{"template":{"spec":{"containers":[{"name":"inference-server","resources":{"limits":{"nvidia.com/gpu":"0"},"requests":{"nvidia.com/gpu":"0"}},"env":[{"name":"NVIDIA_VISIBLE_DEVICES","value":"%s"}]}]}}}}' \
+        "$assigned_gpu_uuids")
+    kubectl patch rs "$rs" -n "$NS" -p "$patch"
+}
+
+# check_gpu_pin waits for the pod's accelerators annotation and verifies it
+# matches $assigned_gpu_uuids, ensuring the same GPU is reused after scale-up.
+# Uses global $assigned_gpu_uuids and $NS.
+# Arguments: <pod-name>
+check_gpu_pin() {
+    local pod="$1"
+    expect '[ -n "$(kubectl get pod -n '"$NS"' '"$pod"' -o jsonpath={.metadata.annotations.dual-pods\\.llm-d\\.ai/accelerators})" ]'
+    local actual_uuids
+    actual_uuids=$(kubectl get pod "$pod" -n "$NS" -o jsonpath='{.metadata.annotations.dual-pods\.llm-d\.ai/accelerators}')
+    if [ "$actual_uuids" != "$assigned_gpu_uuids" ]; then
+        echo "ERROR: GPU UUID mismatch on pod $pod: expected=$assigned_gpu_uuids actual=$actual_uuids" >&2
+        exit 1
+    fi
+    echo "GPU UUID(s) verified on pod $pod: $actual_uuids"
+}
+
 # ---------------------------------------------------------------------------
 # Create test objects
 # ---------------------------------------------------------------------------
@@ -132,6 +163,16 @@ date
 kubectl wait --for condition=Ready pod/$reqlb -n "$NS" --timeout=180s
 [ "$(kubectl get pod $launcherlb -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
 
+# On OpenShift, record the GPU UUID assigned by the cluster so we can pin it later.
+# The controller writes the UUID(s) to the dual-pods.llm-d.ai/accelerators annotation
+# after querying the requester's SPI endpoint; it is guaranteed to be set by the time
+# the pod is Ready.
+if [ "$E2E_PLATFORM" = "openshift" ]; then
+    expect '[ -n "$(kubectl get pod -n '"$NS"' $reqlb -o jsonpath={.metadata.annotations.dual-pods\\.llm-d\\.ai/accelerators})" ]'
+    assigned_gpu_uuids=$(kubectl get pod "$reqlb" -n "$NS" -o jsonpath='{.metadata.annotations.dual-pods\.llm-d\.ai/accelerators}')
+    echo "Assigned GPU UUID(s) on OpenShift: $assigned_gpu_uuids"
+fi
+
 cheer Successful launcher-based pod creation
 
 # ---------------------------------------------------------------------------
@@ -154,13 +195,6 @@ if [ "$POLICIES_ENABLED" = true ]; then
     exit 1
   fi
   cheer CEL policy checks passed
-fi
-
-# TODO: stop skipping once Issues 387 is resolved
-if [ "$E2E_PLATFORM" = "openshift" ]; then
-    echo "Skipping the remaining test cases on OpenShift because Issue 387 is not resolved there yet" >&2
-    cheer All launcher-based tests that are currently expected to pass on OpenShift have done so
-    exit 0
 fi
 
 # ---------------------------------------------------------------------------
@@ -232,6 +266,9 @@ kubectl scale rs $rslb -n "$NS" --replicas=0
 
 expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$instlb | wc -l | grep -w 0"
 
+# On OpenShift, pin the GPU so the next scale-up reuses the same GPU.
+if [ "$E2E_PLATFORM" = "openshift" ]; then pin_gpu $rslb; fi
+
 # Patch requester ReplicaSet to stick to testnode
 kubectl patch rs $rslb -n "$NS" -p '{"spec": {"template": {"spec": {"nodeSelector": {"kubernetes.io/hostname": "'$testnode'"} }} }}'
 
@@ -261,6 +298,9 @@ expect '[ "$(kubectl get pod -n '"$NS"' $reqlb2 -o jsonpath={.metadata.labels.du
 date
 kubectl wait --for condition=Ready pod/$reqlb2 -n "$NS" --timeout=120s
 [ "$(kubectl get pod $launcherlb -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
+
+# On OpenShift, verify the same GPU UUID was assigned after wake-up.
+if [ "$E2E_PLATFORM" = "openshift" ]; then check_gpu_pin $reqlb2; fi
 
 cheer Successful instance wake-up fast path
 
@@ -305,6 +345,8 @@ date
 kubectl wait --for condition=Ready pod/$reqlb3 -n "$NS" --timeout=120s
 [ "$(kubectl get pod $launcherlb -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
 
+if [ "$E2E_PLATFORM" = "openshift" ]; then check_gpu_pin $reqlb3; fi
+
 cheer Successful multiple instances sharing one launcher
 
 # ---------------------------------------------------------------------------
@@ -347,6 +389,8 @@ expect '[ "$(kubectl get pod -n '"$NS"' $reqlb4 -o jsonpath={.metadata.labels.du
 date
 kubectl wait --for condition=Ready pod/$reqlb4 -n "$NS" --timeout=120s
 [ "$(kubectl get pod $launcherlb -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
+
+if [ "$E2E_PLATFORM" = "openshift" ]; then check_gpu_pin $reqlb4; fi
 
 cheer Successful switching instances in one launcher
 
@@ -412,6 +456,8 @@ date
 kubectl wait --for condition=Ready pod/$reqlb_post_restart -n "$NS" --timeout=30s
 [ "$(kubectl get pod $launcherlb -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
 
+if [ "$E2E_PLATFORM" = "openshift" ]; then check_gpu_pin $reqlb_post_restart; fi
+
 cheer Successful controller restart state recovery
 
 # ---------------------------------------------------------------------------
@@ -448,6 +494,8 @@ expect '[ "$(kubectl get pod -n '"$NS"' $reqlb_after_delete -o jsonpath={.metada
 date
 kubectl wait --for condition=Ready pod/$reqlb_after_delete -n "$NS" --timeout=120s
 [ "$(kubectl get pod $launcherlb_after_delete -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
+
+if [ "$E2E_PLATFORM" = "openshift" ]; then check_gpu_pin $reqlb_after_delete; fi
 
 cheer Successful unbound launcher deletion cleanup
 
