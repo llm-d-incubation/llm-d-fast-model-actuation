@@ -4,9 +4,8 @@ latency of model-serving pods within the LLM-D Fast Model Actuation workflow.
 
 ## Purpose
 The goal is to quantify and compare how quickly a model-serving duo (server-requesting
-and server-providing pods), when integrated with the Workload Variant Autoscaler (WVA),
-becomes available under three different actuation conditions in order of decreasing
-latency:
+and server-providing pods) becomes available under three different actuation conditions
+in order of decreasing latency:
 
 - **Cold start**: creating a new vLLM instance without using a launcher
 - **Warm start**: creating a new vLLM instance in an existing launcher pod
@@ -17,11 +16,16 @@ is *high predictability*, which is defined as achieving close to 100% hit rate o
 available, sleeping pods on cluster GPUs as function of total inference server
 requests for common user scenarios.
 
+FMA benchmarking is also intended to work alongside the
+[Workload Variant Autoscaler (WVA)](https://github.com/llm-d/llm-d-workload-variant-autoscaler):
+some benchmarking scenarios may involve WVA-triggered scaling, and we want to
+demonstrate FMA working with WVA as an integrated system.
+
 ## Measurement Layers
 
 FMA benchmarking uses a layered measurement model. Layer 1 is what FMA benchmarks own
-directly. Layer 2 bridges actuation to inference readiness (i.e., latency for inference
-requests to get responses back in an FMA-enabled context). Layer 3 is out of FMA's
+directly. Layer 2 bridges actuation to inference readiness (i.e., latency for streaming
+inference requests to receive their first response chunk in an FMA-enabled context). Layer 3 is out of FMA's
 direct scope but is referenced for completeness and handoff to other frameworks.
 
 | Layer | Focus | Metrics | Measured By |
@@ -34,10 +38,10 @@ direct scope but is referenced for completeness and handoff to other frameworks.
 
 - **T_actuation**: Time from requester pod creation (ReplicaSet scale-up) to requester pod readiness (`/ready` probe passes), which implies the DPC has bound the requester to a server-providing pod and the vLLM instance is serving.
 - **T_wake**: Request-response time for the DPC's `/wake_up` call to a sleeping vLLM instance on the server-providing pod. A part of T_actuation when a hot start occurs.
-- **Hit_rate**: Fraction of requesters that get bound to an existing sleeping pod on the correct GPU (hit) vs. requiring a cold start (i.e., new vLLM instance in existing launcher pod or new launcher pod + new vLLM instance).
+- **Hit_rate**: Fraction of server-requesting Pods that get satisfied by waking a sleeping vLLM instance.
 - **T_launcher**: Time from the launcher receiving a create request to the new vLLM instance reporting healthy. Includes the benefit of vLLM module preloading.
 - **T_e2e**: Total time from requester pod creation to first successful inference response. Spans the full path: requester scheduling, DPC binding, instance wake-up or launcher instance creation, vLLM ready, first inference (T_actuation + T_first_token).
-- **T_first_token**: Time from requester pod readiness to first successful inference response received through the server-providing pod's vLLM instance (time-to-first-token, post-actuation).
+- **T_first_token**: Time from requester pod readiness to receiving the first streamed token from the server-providing pod's vLLM instance (time-to-first-token, post-actuation). Requires streaming inference requests.
 
 ## Benchmarking Scenarios
 
@@ -45,7 +49,7 @@ direct scope but is referenced for completeness and handoff to other frameworks.
 | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | **Fast Replica Scale Up**          | As a ModelService Owner, I can scale up the number of active replicas for a variant from 0 to 1 or 1 to N with minimal latency         |
 | **Introducing New Variant**        | As a ModelService Owner, I can deploy a newly released variant in anticipation of user requests                                         |
-| **Resource Request Justification** | As a Workload Owner, I can stress-test my namespace's resources to justify more resource requests (routes, gateways, GPUs) from cluster operator |
+| **Resource Request Justification** | As a Workload Owner, I can stress-test my namespace's resource capacity at scale (many models, many requesters) to produce data justifying more resource requests (routes, gateways, GPUs) from the cluster operator |
 | **Maintenance Planning**           | As a Cluster Operator, I can validate the cluster performance is similar or better after node maintenance schedules and upgrades         |
 
 
