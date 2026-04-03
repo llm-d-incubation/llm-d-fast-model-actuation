@@ -5,21 +5,21 @@ set -euo pipefail
 
 # Required environment variables:
 #   FMA_NAMESPACE
-#   reqlb
-#   launcherlb
+#   req1
+#   launcher1
 
 # Verify required variables are set
-if [ -z "${reqlb:-}" ] || [ -z "${launcherlb:-}" ] || [ -z "${FMA_NAMESPACE:-}" ]; then
-  echo "ERROR: This script must be called with environment variables FMA_NAMESPACE, reqlb, and launcherlb defined" >&2
+if [ -z "${req1:-}" ] || [ -z "${launcher1:-}" ] || [ -z "${FMA_NAMESPACE:-}" ]; then
+  echo "ERROR: This script must be called with environment variables FMA_NAMESPACE, req1, and launcher1 defined" >&2
   exit 1
 fi
 
-if ! kubectl get -n "$FMA_NAMESPACE" pod "${reqlb}" > /dev/null ; then
-    echo "ERROR: server-requesting Pod $reqlb does not exist in namespace $FMA_NAMESPACE!" >&2
+if ! kubectl get -n "$FMA_NAMESPACE" pod "${req1}" > /dev/null ; then
+    echo "ERROR: server-requesting Pod $req1 does not exist in namespace $FMA_NAMESPACE!" >&2
     exit 1
 fi
-if ! kubectl get -n "$FMA_NAMESPACE" pod "${launcherlb}" > /dev/null ; then
-    echo "ERROR: launcher Pod $launcherlb does not exist in namespace $FMA_NAMESPACE!" >&2
+if ! kubectl get -n "$FMA_NAMESPACE" pod "${launcher1}" > /dev/null ; then
+    echo "ERROR: launcher Pod $launcher1 does not exist in namespace $FMA_NAMESPACE!" >&2
     exit 1
 fi
 
@@ -44,7 +44,7 @@ fi
 echo "=== Running ValidatingAdmissionPolicy Tests ==="
 
 echo "Test 1: Attempting to change immutable annotation 'dual-pods.llm-d.ai/requester' on launcher pod — expect rejection"
-if output=$(kubectl annotate -n "$FMA_NAMESPACE" pod "${launcherlb}" "dual-pods.llm-d.ai/requester=xyz patched-requester" --overwrite 2>&1); then
+if output=$(kubectl annotate -n "$FMA_NAMESPACE" pod "${launcher1}" "dual-pods.llm-d.ai/requester=xyz patched-requester" --overwrite 2>&1); then
   echo "ERROR: annotation change succeeded but should have been rejected"
   echo "kubectl output: ${output}"
   exit 5
@@ -53,7 +53,7 @@ else
 fi
 
 echo "Test 2: Attempting to change immutable label 'dual-pods.llm-d.ai/dual' on launcher pod — expect rejection"
-if output=$(kubectl label -n "$FMA_NAMESPACE" pod "${launcherlb}" "dual-pods.llm-d.ai/dual=patched-pod" --overwrite 2>&1); then
+if output=$(kubectl label -n "$FMA_NAMESPACE" pod "${launcher1}" "dual-pods.llm-d.ai/dual=patched-pod" --overwrite 2>&1); then
   echo "ERROR: label change succeeded but should have been rejected"
   echo "kubectl output: ${output}"
   exit 6
@@ -62,7 +62,7 @@ else
 fi
 
 echo "Test 3: Attempting to delete immutable label 'dual-pods.llm-d.ai/dual' on launcher pod — expect rejection"
-if output=$(kubectl label -n "$FMA_NAMESPACE" pod "${launcherlb}" "dual-pods.llm-d.ai/dual-" 2>&1); then
+if output=$(kubectl label -n "$FMA_NAMESPACE" pod "${launcher1}" "dual-pods.llm-d.ai/dual-" 2>&1); then
   echo "ERROR: label deletion succeeded but should have been rejected"
   echo "kubectl output: ${output}"
   exit 7
@@ -71,7 +71,7 @@ else
 fi
 
 echo "Test 4: Attempting to change immutable annotation 'dual-pods.llm-d.ai/inference-server-config' on bound pod — expect rejection"
-if output=$(kubectl annotate -n "$FMA_NAMESPACE" pod "${reqlb}" "dual-pods.llm-d.ai/inference-server-config=patched-config" --overwrite 2>&1); then
+if output=$(kubectl annotate -n "$FMA_NAMESPACE" pod "${req1}" "dual-pods.llm-d.ai/inference-server-config=patched-config" --overwrite 2>&1); then
   echo "ERROR: bound pod annotation change succeeded but should have been rejected"
   echo "kubectl output: ${output}"
   exit 8
@@ -80,7 +80,7 @@ else
 fi
 
 echo "Test 5: Attempting to delete 'dual-pods.llm-d.ai/inference-server-config' annotation — expect rejection"
-if output=$(kubectl annotate -n "$FMA_NAMESPACE" pod "${reqlb}" "dual-pods.llm-d.ai/inference-server-config-" 2>&1); then
+if output=$(kubectl annotate -n "$FMA_NAMESPACE" pod "${req1}" "dual-pods.llm-d.ai/inference-server-config-" 2>&1); then
   echo "ERROR: annotation deletion succeeded but should have been rejected"
   echo "kubectl output: ${output}"
   exit 9
@@ -89,7 +89,7 @@ else
 fi
 
 echo "Test 6: Attempting to change non-protected label on bound pod — expect no rejection"
-if output=$(kubectl label -n "$FMA_NAMESPACE" pod "${reqlb}" "regular-label=yes" --overwrite 2>&1); then
+if output=$(kubectl label -n "$FMA_NAMESPACE" pod "${req1}" "regular-label=yes" --overwrite 2>&1); then
   echo "✓ SUCCESS: non-protected label update on bound pod allowed, as expected"
 else
   echo "ERROR: non-protected label update on bound pod was rejected but should have been allowed"
