@@ -40,7 +40,7 @@ type LauncherConfigStatus struct {
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:shortName=ist
+// +kubebuilder:resource:shortName=lcfg
 
 // LauncherConfig is the Schema for the LauncherConfigs API.
 // It represents the configuration to manage the nominal server-providing pod definition.
