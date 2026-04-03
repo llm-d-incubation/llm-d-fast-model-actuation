@@ -12,7 +12,7 @@ spec:
     listKind: LauncherConfigList
     plural: launcherconfigs
     shortNames:
-    - ist
+    - lcfg
     singular: launcherconfig
   scope: Namespaced
   versions:

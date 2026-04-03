@@ -2,7 +2,6 @@
 ded = "ded"
 
 [default.extend-identifiers]
-ist = "ist"
 nd = "nd"
 
 [type.drawio_svg]
