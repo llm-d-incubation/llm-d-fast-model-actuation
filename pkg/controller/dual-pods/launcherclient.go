@@ -24,6 +24,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"k8s.io/klog/v2"
@@ -37,6 +38,10 @@ type LauncherClient struct {
 const (
 	VllmConfigISCNameAnnotationKey       = "isc-name"
 	VllmConfigInferencePortAnnotationKey = "inference-port"
+
+	// InstanceStatusStopped is the status value reported by the launcher
+	// when a vLLM instance's process has terminated.
+	InstanceStatusStopped = "stopped"
 )
 
 func NewLauncherClient(baseURL string) (*LauncherClient, error) {
@@ -182,6 +187,12 @@ func (c *LauncherClient) create(
 		return nil, err
 	}
 	return &out, nil
+}
+
+// IsLauncherNotFoundError returns true if the error from the launcher client
+// indicates a 404 Not Found response (e.g., instance does not exist).
+func IsLauncherNotFoundError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "launcher error 404:")
 }
 
 func (c *LauncherClient) do(

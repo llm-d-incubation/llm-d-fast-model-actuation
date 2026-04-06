@@ -89,7 +89,7 @@ func (item launcherPodItem) process(ctx context.Context, ctl *controller, nodeDa
 	logger := klog.FromContext(ctx).WithValues("launcherPod", item.LauncherPodName, "node", item.NodeName)
 	ctx = klog.NewContext(ctx, logger)
 
-	_, err := ctl.podLister.Pods(ctl.namespace).Get(item.LauncherPodName)
+	launcherPod, err := ctl.podLister.Pods(ctl.namespace).Get(item.LauncherPodName)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			logger.V(2).Info("Launcher pod deleted, cleaning up launcher data")
@@ -100,8 +100,19 @@ func (item launcherPodItem) process(ctx context.Context, ctl *controller, nodeDa
 		return err, true
 	}
 
+	// Sync launcher instances to keep internal state fresh and clean up stopped instances.
+	// This is triggered by annotation changes from the sidecar notifier.
+	_, syncErr, syncRetry := ctl.syncLauncherInstances(ctx, nodeDat, launcherPod)
+	if syncErr != nil {
+		if syncRetry {
+			logger.V(4).Info("Failed to sync launcher instances, will retry", "err", syncErr)
+		} else {
+			logger.Error(syncErr, "Failed to sync launcher instances")
+		}
+	}
+
 	ctl.enqueueUnboundInfSvrItemsOnNode(ctx, item.NodeName, fmt.Sprintf("launcher pod %s changed", item.LauncherPodName))
-	return nil, false
+	return nil, syncRetry
 }
 
 func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *nodeData) (error, bool) {
@@ -348,6 +359,58 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 			_, serverPort, err = utils.GetInferenceServerContainerIndexAndPort(providingPod)
 			if err != nil { // Impossible, because such a providingPod would never be created by this controller
 				return fmt.Errorf("unable to wake up server because port not known: %w", err), true
+			}
+		}
+		// For launcher-based providers, check whether the bound instance is still alive.
+		// The sidecar notifier updates the Pod annotation when instance status changes,
+		// which triggers reconciliation through the informer.
+		if launcherBased && serverDat.InstanceID != "" && providingPod.Status.PodIP != "" {
+			launcherBaseURL := fmt.Sprintf("http://%s:%d", providingPod.Status.PodIP, ctlrcommon.LauncherServicePort)
+			lClient, err := NewLauncherClient(launcherBaseURL)
+			if err != nil {
+				return fmt.Errorf("failed to create launcher client for instance status check: %w", err), true
+			}
+			instState, err := lClient.GetInstanceState(ctx, serverDat.InstanceID)
+			instanceStopped := false
+			if err != nil {
+				if IsLauncherNotFoundError(err) {
+					// Instance is gone from the launcher entirely.
+					logger.V(2).Info("Bound instance not found in launcher, treating as stopped", "instanceID", serverDat.InstanceID)
+					instanceStopped = true
+				} else {
+					return fmt.Errorf("failed to get instance state from launcher: %w", err), true
+				}
+			} else if instState.Status == InstanceStatusStopped {
+				logger.V(2).Info("Bound instance is stopped", "instanceID", serverDat.InstanceID)
+				instanceStopped = true
+			}
+			if instanceStopped {
+				// Clean up the stopped instance from the launcher.
+				_, delErr := lClient.DeleteInstance(ctx, serverDat.InstanceID)
+				if delErr != nil && !IsLauncherNotFoundError(delErr) {
+					logger.V(3).Info("Failed to delete stopped instance from launcher", "instanceID", serverDat.InstanceID, "err", delErr)
+				}
+				// Mark as sleeping so that ensureUnbound (called during requester deletion)
+				// does not attempt to POST /sleep on the dead instance.
+				// The instance process is dead — this is not a real sleeping state,
+				// but it prevents ensureUnbound from hitting a dead endpoint and retrying forever.
+				serverDat.Sleeping = ptr.To(true)
+				// Delete the server-requesting Pod.
+				// This is analogous to the direct-provider case where a providing Pod's
+				// deletion is reflected to deletion of the server-requesting Pod.
+				// The ReplicaSet will recreate the requesting Pod, triggering a fresh bind.
+				err = podOps.Delete(ctx, requestingPod.Name, metav1.DeleteOptions{
+					PropagationPolicy: ptr.To(metav1.DeletePropagationBackground),
+					Preconditions:     &metav1.Preconditions{UID: &item.UID, ResourceVersion: &requestingPod.ResourceVersion}})
+				if err == nil {
+					logger.V(2).Info("Requested deletion of server-requesting Pod because bound instance stopped")
+				} else if apierrors.IsGone(err) || apierrors.IsNotFound(err) {
+					logger.V(5).Info("The server-requesting Pod is already gone")
+				} else {
+					return fmt.Errorf("failed to delete server-requesting Pod for stopped instance: %w", err), true
+				}
+				serverDat.RequesterDeleteRequested = true
+				return nil, false
 			}
 		}
 		if serverDat.Sleeping == nil {
@@ -1337,13 +1400,42 @@ func (ctl *controller) syncLauncherInstances(ctx context.Context, nodeDat *nodeD
 
 	launcherDat := ctl.getLauncherData(nodeDat, launcherPod.Name)
 	newInstances := make(map[string]time.Time)
+	remainingInstances := make([]InstanceState, 0, len(insts.Instances))
 	for _, inst := range insts.Instances {
+		if inst.Status == InstanceStatusStopped {
+			// Clean up stopped instances from the launcher.
+			_, delErr := lClient.DeleteInstance(ctx, inst.InstanceID)
+			if delErr != nil && !IsLauncherNotFoundError(delErr) {
+				logger.V(3).Info("Failed to delete stopped instance from launcher during sync",
+					"instanceID", inst.InstanceID, "err", delErr)
+				// Deletion failed — the instance still occupies a slot in the launcher.
+				// Include it in remainingInstances so capacity accounting stays accurate.
+				remainingInstances = append(remainingInstances, inst)
+			} else {
+				logger.V(2).Info("Deleted stopped instance from launcher during sync",
+					"instanceID", inst.InstanceID)
+			}
+			continue
+		}
+		remainingInstances = append(remainingInstances, inst)
 		if lastUsed, exists := launcherDat.Instances[inst.InstanceID]; exists {
 			newInstances[inst.InstanceID] = lastUsed
 		} else {
 			newInstances[inst.InstanceID] = time.Now()
 		}
 	}
+
+	// Replace the returned instance list and counts with the filtered view
+	// so that callers (e.g. selectBestLauncherPod) see accurate capacity.
+	insts.Instances = remainingInstances
+	insts.TotalInstances = len(remainingInstances)
+	runningCount := 0
+	for _, inst := range remainingInstances {
+		if inst.Status == "running" {
+			runningCount++
+		}
+	}
+	insts.RunningInstances = runningCount
 
 	launcherDat.Instances = newInstances
 	launcherDat.Accurate = true
