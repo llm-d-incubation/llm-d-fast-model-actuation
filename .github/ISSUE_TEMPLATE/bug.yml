@@ -34,7 +34,12 @@ body:
       description: What version of our software are you running?
       options:
         - main (please specify commit below)
-        - v0.5.1-alpha.1
+        - non-main branch (please specify below)
+        - v0.5.1-alpha.6
+        - v0.5.1-alpha.5
+        - v0.5.1-alpha.4
+        - v0.5.1-alpha.3
+        - v0.5.1-alpha.2
         - v0.5.1-alpha
         - v0.2.5
         - v0.2.0
@@ -43,10 +48,18 @@ body:
     validations:
       required: true
   - type: input
+    id: branch
+    attributes:
+      label: Branch name
+      description: If running a non-tagged commit from a branch other than main, please provide the branch name.
+      placeholder: ex. fix-bug-x
+    validations:
+      required: false
+  - type: input
     id: commit
     attributes:
       label: Commit SHA
-      description: If running from main, please provide the commit SHA.
+      description: If running from a non-tagged commit, please provide the commit SHA.
       placeholder: ex. abc1234
     validations:
       required: false
