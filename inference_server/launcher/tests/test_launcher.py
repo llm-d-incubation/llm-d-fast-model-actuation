@@ -17,6 +17,8 @@ Unit tests for Multi-Instance vLLM Launcher
 Run as:
 python -m pytest tests/test_launcher.py -v
 """
+
+import asyncio
 import os
 import signal
 import sys
@@ -37,11 +39,13 @@ sys.modules["vllm.entrypoints.utils"] = MagicMock()
 # Import the application and classes
 from launcher import (  # noqa: E402
     MAX_LOG_RESPONSE_BYTES,
+    EventBroadcaster,
     HalfMade,
     LogRangeNotAvailable,
     VllmConfig,
     VllmInstance,
     VllmMultiProcessManager,
+    WatchEvent,
     app,
     parse_range_header,
     set_env_vars,
@@ -96,6 +100,10 @@ class MockProcess:
         self.terminated = False
         self.killed = False
         self.pid = 12345
+        self.exitcode = None
+        # sentinel is a readable fd when the process exits
+        self._sentinel_r, self._sentinel_w = os.pipe()
+        self.sentinel = self._sentinel_r
 
     def start(self):
         pass
@@ -106,6 +114,7 @@ class MockProcess:
     def terminate(self):
         self.terminated = True
         self._is_alive = False
+        self.exitcode = -15
 
     def join(self, timeout=None):
         pass
@@ -113,6 +122,21 @@ class MockProcess:
     def kill(self):
         self.killed = True
         self._is_alive = False
+        self.exitcode = -9
+
+    def simulate_exit(self, exitcode=0):
+        """Simulate process termination by making sentinel fd readable."""
+        self._is_alive = False
+        self.exitcode = exitcode
+        os.write(self._sentinel_w, b"\x00")
+
+    def close_sentinel(self):
+        """Clean up pipe fds."""
+        for fd in (self._sentinel_r, self._sentinel_w):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
 
 # Tests for VllmConfig
@@ -593,7 +617,7 @@ class TestAPIEndpoints:
         assert data["name"] == "Multi-Instance vLLM Management API"
         assert data["version"] == "2.0"
         assert "endpoints" in data
-        assert len(data["endpoints"]) == 9
+        assert len(data["endpoints"]) == 10
 
     @patch("launcher.vllm_manager")
     def test_create_vllm_instance(self, mock_manager, client, vllm_config):
@@ -1004,6 +1028,229 @@ class TestLogFile:
         data, total = instance.get_log_bytes(start=0, end=44)
         assert data == b"A" * 20 + b"B" * 20 + b"C" * 5
         assert total == 60
+
+
+# Tests for EventBroadcaster
+class TestEventBroadcaster:
+    """Test suite for the EventBroadcaster pub/sub mechanism."""
+
+    def test_publish_and_watch(self):
+        """Published events are yielded by the watch async generator."""
+
+        async def run():
+            broadcaster = EventBroadcaster()
+            event = WatchEvent(
+                type="CREATED",
+                object={"instance_id": "abc", "status": "started"},
+            )
+            await broadcaster.publish(event)
+
+            received = []
+            async for ev in broadcaster.watch(since_revision=0):
+                received.append(ev)
+                break  # only expect one event
+            assert len(received) == 1
+            assert received[0].type == "CREATED"
+            assert received[0].object["instance_id"] == "abc"
+
+        asyncio.run(run())
+
+    def test_multiple_watchers(self):
+        """Two concurrent watchers both receive the same events."""
+
+        async def run():
+            broadcaster = EventBroadcaster()
+
+            results_a = []
+            results_b = []
+
+            async def watcher(results):
+                async for ev in broadcaster.watch():
+                    results.append(ev)
+                    if len(results) == 2:
+                        break
+
+            task_a = asyncio.create_task(watcher(results_a))
+            task_b = asyncio.create_task(watcher(results_b))
+
+            await asyncio.sleep(0)  # let watchers start
+
+            await broadcaster.publish(
+                WatchEvent(type="CREATED", object={"instance_id": "1"})
+            )
+            await broadcaster.publish(
+                WatchEvent(type="STOPPED", object={"instance_id": "1"})
+            )
+
+            await asyncio.gather(task_a, task_b)
+
+            assert len(results_a) == 2
+            assert len(results_b) == 2
+            assert results_a[0].type == "CREATED"
+            assert results_a[1].type == "STOPPED"
+
+        asyncio.run(run())
+
+    def test_watch_since_revision(self):
+        """A watcher joining late catches up from a given revision."""
+
+        async def run():
+            broadcaster = EventBroadcaster()
+            await broadcaster.publish(
+                WatchEvent(type="CREATED", object={"instance_id": "1"})
+            )
+            await broadcaster.publish(
+                WatchEvent(type="STOPPED", object={"instance_id": "1"})
+            )
+            await broadcaster.publish(
+                WatchEvent(type="CREATED", object={"instance_id": "2"})
+            )
+
+            received = []
+            async for ev in broadcaster.watch(since_revision=1):
+                received.append(ev)
+                if len(received) == 2:
+                    break
+
+            assert len(received) == 2
+            assert received[0].type == "STOPPED"
+            assert received[1].object["instance_id"] == "2"
+
+        asyncio.run(run())
+
+
+# Tests for sentinel watcher
+class TestSentinelWatcher:
+    """Test suite for VllmInstance sentinel-based process exit detection."""
+
+    def test_sentinel_publishes_stopped_event(self, gpu_translator, tmp_log_dir):
+        """When a process exits, the sentinel watcher publishes a STOPPED event."""
+
+        async def run():
+            broadcaster = EventBroadcaster()
+            config = VllmConfig(options="--model test --port 8000")
+            instance = VllmInstance("test-id", config, gpu_translator, tmp_log_dir)
+            mock_proc = MockProcess()
+            instance.process = mock_proc
+
+            instance.start_sentinel_watcher(broadcaster)
+            assert instance._sentinel_active is True
+
+            # Simulate process exit
+            mock_proc.simulate_exit(exitcode=-9)
+
+            # Give the event loop a chance to fire the reader callback
+            await asyncio.sleep(0.05)
+
+            assert broadcaster._revision == 1
+            event = broadcaster._events[0]
+            assert event.type == "STOPPED"
+            assert event.object["instance_id"] == "test-id"
+            assert event.object["exit_code"] == -9
+            assert instance._sentinel_active is False
+
+            mock_proc.close_sentinel()
+
+        asyncio.run(run())
+
+    def test_sentinel_cancelled_on_explicit_stop(self, gpu_translator, tmp_log_dir):
+        """When stop is called explicitly, sentinel is cancelled (no STOPPED event)."""
+
+        async def run():
+            broadcaster = EventBroadcaster()
+            config = VllmConfig(options="--model test --port 8000")
+            instance = VllmInstance("test-id", config, gpu_translator, tmp_log_dir)
+            mock_proc = MockProcess()
+            instance.process = mock_proc
+            # Create log file so stop() cleanup doesn't fail
+            open(instance._log_file_path, "wb").close()
+
+            instance.start_sentinel_watcher(broadcaster)
+            assert instance._sentinel_active is True
+
+            instance.cancel_sentinel_watcher()
+            assert instance._sentinel_active is False
+
+            # No events should have been published
+            assert broadcaster._revision == 0
+
+            mock_proc.close_sentinel()
+
+        asyncio.run(run())
+
+
+# Tests for watch API endpoint
+class TestWatchAPIEndpoint:
+    """Test suite for the GET /v2/vllm/instances/watch endpoint."""
+
+    def test_watch_endpoint_content_type(self, client):
+        """The watch endpoint returns application/x-ndjson."""
+        mock_manager = MagicMock()
+        mock_broadcaster = MagicMock()
+
+        event = WatchEvent(
+            type="CREATED",
+            object={"instance_id": "abc", "status": "started"},
+        )
+
+        async def mock_watch(since_revision=0):
+            yield event
+
+        mock_broadcaster.watch = mock_watch
+        mock_manager.broadcaster = mock_broadcaster
+
+        with patch("launcher.vllm_manager", mock_manager):
+            response = client.get("/v2/vllm/instances/watch")
+            assert response.status_code == 200
+            assert "application/x-ndjson" in response.headers["content-type"]
+
+    def test_watch_endpoint_streams_events(self, client):
+        """The watch endpoint streams NDJSON events."""
+        import json
+
+        mock_manager = MagicMock()
+        mock_broadcaster = MagicMock()
+
+        events = [
+            WatchEvent(
+                type="CREATED",
+                object={"instance_id": "abc", "status": "started"},
+            ),
+            WatchEvent(
+                type="STOPPED",
+                object={"instance_id": "abc", "status": "stopped", "exit_code": 0},
+            ),
+        ]
+
+        async def mock_watch(since_revision=0):
+            for ev in events:
+                yield ev
+
+        mock_broadcaster.watch = mock_watch
+        mock_manager.broadcaster = mock_broadcaster
+
+        with patch("launcher.vllm_manager", mock_manager):
+            response = client.get("/v2/vllm/instances/watch")
+            lines = response.text.strip().split("\n")
+            assert len(lines) == 2
+
+            first = json.loads(lines[0])
+            assert first["type"] == "CREATED"
+            assert first["object"]["instance_id"] == "abc"
+
+            second = json.loads(lines[1])
+            assert second["type"] == "STOPPED"
+            assert second["object"]["exit_code"] == 0
+
+
+class TestLogStartOffset:
+    """Test suite for log retrieval with start offsets."""
+
+    def _make_instance(self, gpu_translator, log_dir):
+        """Helper to create a VllmInstance without starting a real process"""
+        config = VllmConfig(options="--model test --port 8000")
+        instance = VllmInstance("test-id", config, gpu_translator, log_dir=log_dir)
+        return instance
 
     def test_start_offset(self, gpu_translator, tmp_log_dir):
         """Test that start returns bytes from exact position"""

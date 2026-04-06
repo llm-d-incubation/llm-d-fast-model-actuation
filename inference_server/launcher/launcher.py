@@ -18,6 +18,7 @@
 vLLM Launcher
 """
 
+import asyncio
 import logging
 import multiprocessing
 import os
@@ -31,7 +32,7 @@ from typing import Dict, List, Optional
 
 import uvloop
 from fastapi import FastAPI, Header, HTTPException, Path
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from gputranslator import GpuTranslator
 from pydantic import BaseModel
 from vllm.entrypoints.openai.api_server import run_server
@@ -40,6 +41,7 @@ from vllm.entrypoints.utils import cli_env_setup
 from vllm.utils.argparse_utils import FlexibleArgumentParser
 
 MAX_LOG_RESPONSE_BYTES = 1 * 1024 * 1024  # 1 MB default for API response
+_MAX_BROADCASTER_EVENTS = 1000
 
 
 class LogRangeNotAvailable(Exception):
@@ -60,6 +62,47 @@ class VllmConfig(BaseModel):
     gpu_uuids: Optional[List[str]] = None
     env_vars: Optional[Dict[str, str]] = None
     annotations: Optional[Dict[str, str]] = None
+
+
+class WatchEvent(BaseModel):
+    """Represents an instance lifecycle event for the watch stream."""
+
+    type: str  # "CREATED", "STOPPED", "DELETED"
+    object: dict
+
+
+class EventBroadcaster:
+    """Fans out WatchEvents to all connected watchers using asyncio.Condition.
+
+    Each watcher maintains its own cursor (revision) so late joiners can
+    catch up with events still in the buffer.
+    """
+
+    def __init__(self):
+        self._condition = asyncio.Condition()
+        self._events: List[WatchEvent] = []
+        self._revision: int = 0
+
+    async def publish(self, event: WatchEvent):
+        async with self._condition:
+            self._events.append(event)
+            self._revision += 1
+            if len(self._events) > _MAX_BROADCASTER_EVENTS:
+                self._events = self._events[-_MAX_BROADCASTER_EVENTS:]
+            self._condition.notify_all()
+
+    async def watch(self, since_revision: int = 0):
+        """Async generator that yields WatchEvents as they arrive."""
+        pos = max(since_revision, self._revision - len(self._events))
+        while True:
+            async with self._condition:
+                while pos >= self._revision:
+                    await self._condition.wait()
+                offset = pos - (self._revision - len(self._events))
+                new_events = self._events[offset:]
+                pos = self._revision
+            for event in new_events:
+                yield event
 
 
 class HalfMade(Exception):
@@ -110,6 +153,7 @@ class VllmInstance:
         self.instance_id = instance_id
         self.config = config
         self.process: Optional[multiprocessing.Process] = None
+        self._sentinel_active = False
         self._log_file_path = os.path.join(
             log_dir or "/tmp",
             f"launcher-{os.getpid()}-vllm-{instance_id}.log",
@@ -170,6 +214,46 @@ class VllmInstance:
         self._cleanup_log_file()
         return self._make_state("terminated")
 
+    def start_sentinel_watcher(self, broadcaster: EventBroadcaster):
+        """Register a sentinel fd on the event loop to detect process exit.
+
+        When the child process terminates, the kernel makes the sentinel fd
+        readable.  The callback removes the reader, collects the exit code,
+        and publishes a STOPPED event to the broadcaster.
+        """
+        if self.process is None:
+            raise HalfMade(self.instance_id)
+
+        loop = asyncio.get_running_loop()
+        sentinel = self.process.sentinel
+
+        def _on_exit():
+            loop.remove_reader(sentinel)
+            self._sentinel_active = False
+            exitcode = self.process.exitcode
+            event = WatchEvent(
+                type="STOPPED",
+                object={
+                    "instance_id": self.instance_id,
+                    "status": "stopped",
+                    "exit_code": exitcode,
+                },
+            )
+            loop.create_task(broadcaster.publish(event))
+
+        loop.add_reader(sentinel, _on_exit)
+        self._sentinel_active = True
+
+    def cancel_sentinel_watcher(self):
+        """Remove the sentinel reader if it is still registered."""
+        if self._sentinel_active and self.process is not None:
+            try:
+                loop = asyncio.get_running_loop()
+                loop.remove_reader(self.process.sentinel)
+            except RuntimeError:
+                pass
+            self._sentinel_active = False
+
     def _cleanup_log_file(self):
         """Remove the log file if it exists."""
         try:
@@ -229,6 +313,7 @@ class VllmMultiProcessManager:
         log_dir: str = "",
     ):
         self.instances: Dict[str, VllmInstance] = {}
+        self.broadcaster = EventBroadcaster()
         self.gpu_translator = GpuTranslator(
             mock_gpus=mock_gpus,
             node_name=node_name,
@@ -255,19 +340,37 @@ class VllmMultiProcessManager:
         # Because start() is always the first method called on a VllmInstance,
         # the other methods of VllmMultiProcessManager do not need to handle
         # the HalfMade exception.
-        return instance.start()
+        result = instance.start()
+        try:
+            loop = asyncio.get_running_loop()
+            instance.start_sentinel_watcher(self.broadcaster)
+            loop.create_task(
+                self.broadcaster.publish(WatchEvent(type="CREATED", object=result))
+            )
+        except RuntimeError:
+            pass  # No running event loop (e.g. in sync tests)
+        return result
 
     def stop_instance(self, instance_id: str, timeout: int = 10) -> dict:
         """Stop a specific vLLM instance"""
         if instance_id not in self.instances:
             raise KeyError(f"Instance {instance_id} not found")
 
-        result = self.instances[instance_id].stop(timeout)
+        instance = self.instances[instance_id]
+        instance.cancel_sentinel_watcher()
+        result = instance.stop(timeout)
 
         # Clean up stopped instance
         if result["status"] in ["terminated", "not_running"]:
             del self.instances[instance_id]
 
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(
+                self.broadcaster.publish(WatchEvent(type="DELETED", object=result))
+            )
+        except RuntimeError:
+            pass  # No running event loop (e.g. in sync tests)
         return result
 
     def stop_all_instances(self, timeout: int = 10) -> dict:
@@ -411,9 +514,28 @@ async def index():
                 "get_instance_status": "GET /v2/vllm/instances/{instance_id}",
                 "get_all_instances": "GET /v2/vllm/instances",
                 "get_instance_logs": "GET /v2/vllm/instances/{instance_id}/log",
+                "watch_instances": "GET /v2/vllm/instances/watch",
             },
         },
         status_code=HTTPStatus.OK,
+    )
+
+
+######################################################################
+# WATCH ENDPOINT
+######################################################################
+@app.get("/v2/vllm/instances/watch")
+async def watch_instances():
+    """Stream instance lifecycle events as NDJSON (Kubernetes watch-style)."""
+
+    async def event_stream():
+        async for event in vllm_manager.broadcaster.watch():
+            yield event.model_dump_json() + "\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="application/x-ndjson",
+        headers={"X-Content-Type-Options": "nosniff"},
     )
 
 

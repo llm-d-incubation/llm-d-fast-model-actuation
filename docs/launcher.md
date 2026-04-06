@@ -30,6 +30,7 @@ The launcher preloads vLLM’s Python modules to accelerate the initialization o
 - **Status Monitoring**: Query status of individual instances or all instances at once
 - **Log Capture**: Retrieve stdout/stderr logs from running instances via REST API
 - **Health Checks**: Built-in health endpoint for monitoring service availability
+- **Instance Lifecycle Watch**: Stream real-time instance lifecycle events (created, stopped, deleted) via a Kubernetes watch-style NDJSON endpoint
 
 > [!NOTE]
 > This is still not implemented, but the client controls the subset of the node's GPUs that get used by a given vLLM instance.
@@ -211,7 +212,8 @@ Get service information and available endpoints.
     "delete_all_instances": "DELETE /v2/vllm/instances",
     "get_instance_status": "GET /v2/vllm/instances/{instance_id}",
     "get_all_instances": "GET /v2/vllm/instances",
-    "get_instance_logs": "GET /v2/vllm/instances/{instance_id}/log"
+    "get_instance_logs": "GET /v2/vllm/instances/{instance_id}/log",
+    "watch_instances": "GET /v2/vllm/instances/watch"
   }
 }
 ```
@@ -364,6 +366,40 @@ Content-Type: application/octet-stream
 - `400 Bad Request`: Malformed or unsupported Range header
 - `404 Not Found`: Instance not found
 - `416 Range Not Satisfiable`: The requested start position is beyond available log content. The response includes a `Content-Range: bytes */N` header (per [RFC 9110 §15.5.17](https://www.rfc-editor.org/rfc/rfc9110#status.416)) with an empty body, where `N` is the total number of bytes captured so far.
+
+---
+
+#### Watch Instance Lifecycle Events
+
+**GET** `/v2/vllm/instances/watch`
+
+Stream real-time instance lifecycle events as newline-delimited JSON (NDJSON), similar to a Kubernetes watch. The response uses chunked transfer encoding and remains open until the client disconnects.
+
+Each line is a JSON object with a `type` and an `object`:
+
+```json
+{"type": "CREATED", "object": {"status": "started", "instance_id": "abc123", "options": "--model test --port 8000"}}
+{"type": "STOPPED", "object": {"instance_id": "abc123", "status": "stopped", "exit_code": -9}}
+{"type": "DELETED", "object": {"status": "terminated", "instance_id": "abc123", "options": "--model test --port 8000"}}
+```
+
+**Event Types:**
+
+- `CREATED` — A new instance was spawned
+- `STOPPED` — An instance process terminated (detected automatically via kernel-level process monitoring, zero-polling)
+- `DELETED` — An instance was explicitly removed via the DELETE API
+
+**Response Headers:**
+
+- `Content-Type: application/x-ndjson`
+- `X-Content-Type-Options: nosniff`
+
+**Usage Example:**
+
+```bash
+# Stream events (remains open until Ctrl+C)
+curl -N http://localhost:8001/v2/vllm/instances/watch
+```
 
 ---
 
