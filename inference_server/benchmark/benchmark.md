@@ -13,7 +13,7 @@ in order of decreasing latency:
 
 These metrics will guide future optimizations for the **Dual-Pods Controller (DPC)**. Ultimately, the goal
 is *high predictability*, which is defined as achieving close to 100% hit rate of awakening
-available, sleeping pods on cluster GPUs as function of total inference server
+available, sleeping pods on cluster GPUs as a function of total inference server
 requests for common user scenarios.
 
 FMA benchmarking is also intended to work alongside the
@@ -49,7 +49,7 @@ direct scope but is referenced for completeness and handoff to other frameworks.
 | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | **Fast Replica Scale Up**          | As a ModelService Owner, I can scale up the number of active replicas for a variant from 0 to 1 or 1 to N with minimal latency         |
 | **Introducing New Variant**        | As a ModelService Owner, I can deploy a newly released variant in anticipation of user requests                                         |
-| **Resource Request Justification** | As a Workload Owner, I can stress-test my namespace's resource capacity at scale (many models, many requesters) to produce data justifying more resource requests (routes, gateways, GPUs) from the cluster operator |
+| **Resource Scaling and Stress Test** | As a Workload Owner, I can stress-test my namespace's resource capacity at scale (many models, many requesters) for numerous purposes (e.g., management reports, load characterization, future resource requests) |
 | **Maintenance Planning**           | As a Cluster Operator, I can validate the cluster performance is similar or better after node maintenance schedules and upgrades         |
 
 
@@ -63,7 +63,7 @@ using the team's established terminology:
 | Actuation Path            | What It Measures | llm-d-benchmark Config |
 | ------------------------- | ---------------- | ---------------------- |
 | **Cold Start**            | No launcher, no sleeping pods. Raw Kubernetes deploy-to-ready latency (non-FMA baseline, or FMA milestone 2 without launcher). | `-t standalone` comparison baseline |
-| **Warm Start**            | A launcher pod exists (pre-created by the LPC) but no sleeping instance is available on the assigned GPU. Launcher creates a new vLLM instance with the benefit of module preloading. | `-t fma` with default `LLMDBENCH_FMA_LAUNCHER_*` env vars |
+| **Warm Start**            | A launcher pod exists (pre-created by the launcher population controller) but no sleeping instance is available on the assigned GPU. Launcher creates a new vLLM instance with the benefit of module preloading. | `-t fma` with default `LLMDBENCH_FMA_LAUNCHER_*` env vars |
 | **Hot Start**             | A sleeping vLLM instance exists on the correct GPU. DPC sends `/wake_up`. Best-case actuation path. | `-t fma` with `LLMDBENCH_VLLM_COMMON_ENABLE_SLEEP_MODE=true`, `LLMDBENCH_FMA_DUAL_POD_SLEEPER_LIMIT>=1` |
 
 > **Note on simulation:** Any of the above paths can be exercised with mock GPUs
@@ -81,15 +81,16 @@ using the team's established terminology:
 Cell annotations indicate which measurement layers apply:
 - **L1** -- Layer 1 actuation metrics (T_actuation, T_wake, Hit_rate, T_launcher)
 - **L1+L2** -- Actuation metrics plus inference readiness (T_first_token, T_e2e)
-- **P** -- Planned but not yet implemented
+- **L1+L3** -- Actuation metrics plus steady-state performance (TPOT, throughput, queue depth, KV cache, replica stability)
+- **L1+L2+L3** -- All three layers
 - **--** -- Not applicable to this combination
 
 | Scenario                           | Cold Start | Warm Start | Hot Start |
 | ---------------------------------- | :--------: | :--------: | :-------: |
 | **Fast Replica Scale Up**          | L1+L2      | L1+L2      | L1+L2     |
 | **Introducing New Variant**        | L1+L2      | L1+L2      | --        |
-| **Resource Request Justification** | L1         | L1         | L1        |
-| **Maintenance Planning**           | L1+L2      | L1+L2      | L1+L2     |
+| **Resource Scaling and Stress Test** | L1+L3      | L1+L3      | L1+L3     |
+| **Maintenance Planning**           | L1+L2+L3   | L1+L2+L3   | L1+L2+L3  |
 
 
 ### Scenario Rationale
@@ -97,8 +98,8 @@ Cell annotations indicate which measurement layers apply:
 | FMA Scenario                       | Why Included | llm-d-benchmark Applicability |
 | ---------------------------------- | ------------ | ----------------------------- |
 | **Fast Replica Scale Up**          | Core FMA value proposition: how fast can the DPC bring replicas online? Directly measures the benefit of sleep/wake and launcher preloading over cold starts. | `fma.sh` scenario with varying `LLMDBENCH_VLLM_COMMON_REPLICAS`; `inference-scheduling` guide with `-t fma` |
-| **Introducing New Variant**        | Measures actuation latency for a previously unseen model (cold cache, no sleeping instances for this model). Assumes the LPC has already created the needed launchers. Captures the "day 1" deployment experience. | `fma.sh` with `LLMDBENCH_DEPLOY_MODEL_LIST` variations; nop harness for pure actuation timing |
-| **Resource Request Justification** | Stress-tests namespace resources across multiple concurrent models/variants to produce data for capacity planning and resource justification to cluster operators. | `fma.sh` with multi-model list; DoE experiment with replica/model treatments |
+| **Introducing New Variant**        | Measures actuation latency for a previously unseen model (cold cache, no sleeping instances for this model). Assumes the launcher population controller (LPC) has already created the needed launchers. Captures the "day 1" deployment experience. | `fma.sh` with `LLMDBENCH_DEPLOY_MODEL_LIST` variations; nop harness for pure actuation timing |
+| **Resource Scaling and Stress Test** | Stress-tests namespace resource capacity at scale (many models, many requesters) for performance characterization, cost analysis, and capacity planning. | `fma.sh` with multi-model list; DoE experiment with replica/model treatments |
 | **Maintenance Planning**           | Regression baseline: run the same scenarios before and after node maintenance or upgrades. Detects performance regressions in actuation latency. | Any guide scenario as regression baseline with `-t fma`; compare pre/post results |
 
 ### Actuation Path Rationale
