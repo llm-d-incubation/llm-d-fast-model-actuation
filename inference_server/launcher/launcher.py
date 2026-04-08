@@ -19,6 +19,7 @@ vLLM Launcher
 """
 
 import asyncio
+import json
 import logging
 import multiprocessing
 import os
@@ -31,7 +32,7 @@ from http import HTTPStatus  # HTTP Status Codes
 from typing import Dict, List, Optional
 
 import uvloop
-from fastapi import FastAPI, Header, HTTPException, Path
+from fastapi import FastAPI, Header, HTTPException, Path, Query
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from gputranslator import GpuTranslator
 from pydantic import BaseModel
@@ -69,6 +70,16 @@ class WatchEvent(BaseModel):
 
     type: str  # "CREATED", "STOPPED", "DELETED"
     object: dict
+    revision: int = 0
+
+
+class RevisionTooOld(Exception):
+    """Raised when a requested watch revision has fallen out of the buffer."""
+
+    def __init__(self, requested: int, oldest: int):
+        super().__init__()
+        self.requested = requested
+        self.oldest = oldest
 
 
 class EventBroadcaster:
@@ -83,22 +94,40 @@ class EventBroadcaster:
         self._events: List[WatchEvent] = []
         self._revision: int = 0
 
+    @property
+    def revision(self) -> int:
+        return self._revision
+
+    @property
+    def oldest_revision(self) -> int:
+        return self._revision - len(self._events)
+
     async def publish(self, event: WatchEvent):
         async with self._condition:
-            self._events.append(event)
             self._revision += 1
+            event.revision = self._revision
+            self._events.append(event)
             if len(self._events) > _MAX_BROADCASTER_EVENTS:
                 self._events = self._events[-_MAX_BROADCASTER_EVENTS:]
             self._condition.notify_all()
 
     async def watch(self, since_revision: int = 0):
-        """Async generator that yields WatchEvents as they arrive."""
-        pos = max(since_revision, self._revision - len(self._events))
+        """Async generator that yields WatchEvents as they arrive.
+
+        :param since_revision: Resume from this revision.  Events with
+            revision > since_revision are yielded.
+        :raises RevisionTooOld: If since_revision is older than the
+            oldest event still in the buffer.
+        """
+        oldest = self.oldest_revision
+        if since_revision < oldest:
+            raise RevisionTooOld(since_revision, oldest)
+        pos = since_revision
         while True:
             async with self._condition:
                 while pos >= self._revision:
                     await self._condition.wait()
-                offset = pos - (self._revision - len(self._events))
+                offset = pos - self.oldest_revision
                 new_events = self._events[offset:]
                 pos = self._revision
             for event in new_events:
@@ -522,15 +551,47 @@ async def index():
 
 
 ######################################################################
-# WATCH ENDPOINT
+# vLLM MANAGEMENT ENDPOINTS
 ######################################################################
+
+
 @app.get("/v2/vllm/instances/watch")
-async def watch_instances():
+async def watch_instances(
+    since: Optional[int] = Query(
+        None,
+        description="Resume watching from this revision. "
+        "If omitted, the stream begins with CREATED events for every "
+        "instance that currently exists, followed by live events.",
+    ),
+):
     """Stream instance lifecycle events as NDJSON (Kubernetes watch-style)."""
 
     async def event_stream():
-        async for event in vllm_manager.broadcaster.watch():
-            yield event.model_dump_json() + "\n"
+        if since is None:
+            # Initial state: emit a CREATED event for every existing instance
+            # and start streaming from the current revision.
+            start_revision = vllm_manager.broadcaster.revision
+            for instance in vllm_manager.instances.values():
+                state = instance.get_status()
+                initial = WatchEvent(
+                    type="CREATED",
+                    object=state,
+                    revision=start_revision,
+                )
+                yield initial.model_dump_json() + "\n"
+        else:
+            start_revision = since
+
+        try:
+            async for event in vllm_manager.broadcaster.watch(start_revision):
+                yield event.model_dump_json() + "\n"
+        except RevisionTooOld as exc:
+            error = {
+                "error": "revision_too_old",
+                "message": f"Requested revision {exc.requested} is no longer "
+                f"available. Oldest available: {exc.oldest}.",
+            }
+            yield json.dumps(error) + "\n"
 
     return StreamingResponse(
         event_stream(),
@@ -539,9 +600,6 @@ async def watch_instances():
     )
 
 
-######################################################################
-# vLLM MANAGEMENT ENDPOINTS
-######################################################################
 @app.post("/v2/vllm/instances")
 async def create_vllm_instance(vllm_config: VllmConfig):
     """Create a new vLLM instance with random instance ID"""

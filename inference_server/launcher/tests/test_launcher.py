@@ -42,6 +42,7 @@ from launcher import (  # noqa: E402
     EventBroadcaster,
     HalfMade,
     LogRangeNotAvailable,
+    RevisionTooOld,
     VllmConfig,
     VllmInstance,
     VllmMultiProcessManager,
@@ -1052,6 +1053,21 @@ class TestEventBroadcaster:
             assert len(received) == 1
             assert received[0].type == "CREATED"
             assert received[0].object["instance_id"] == "abc"
+            assert received[0].revision == 1
+
+        asyncio.run(run())
+
+    def test_publish_assigns_sequential_revisions(self):
+        """Each published event gets a sequential revision number."""
+
+        async def run():
+            broadcaster = EventBroadcaster()
+            for i in range(3):
+                await broadcaster.publish(WatchEvent(type="CREATED", object={"i": i}))
+            assert broadcaster.revision == 3
+            assert broadcaster._events[0].revision == 1
+            assert broadcaster._events[1].revision == 2
+            assert broadcaster._events[2].revision == 3
 
         asyncio.run(run())
 
@@ -1114,7 +1130,27 @@ class TestEventBroadcaster:
 
             assert len(received) == 2
             assert received[0].type == "STOPPED"
+            assert received[0].revision == 2
             assert received[1].object["instance_id"] == "2"
+
+        asyncio.run(run())
+
+    def test_revision_too_old_raises(self):
+        """Requesting a revision older than the buffer raises RevisionTooOld."""
+
+        async def run():
+            broadcaster = EventBroadcaster()
+            # Fill beyond buffer to force trimming
+            for i in range(_MAX_BROADCASTER_EVENTS + 10):
+                await broadcaster.publish(WatchEvent(type="CREATED", object={"i": i}))
+
+            with pytest.raises(RevisionTooOld) as exc_info:
+                async for _ in broadcaster.watch(since_revision=0):
+                    pass
+            assert exc_info.value.requested == 0
+            assert exc_info.value.oldest > 0
+
+        from launcher import _MAX_BROADCASTER_EVENTS
 
         asyncio.run(run())
 
@@ -1187,25 +1223,26 @@ class TestWatchAPIEndpoint:
         """The watch endpoint returns application/x-ndjson."""
         mock_manager = MagicMock()
         mock_broadcaster = MagicMock()
-
-        event = WatchEvent(
-            type="CREATED",
-            object={"instance_id": "abc", "status": "started"},
-        )
+        mock_broadcaster.revision = 0
 
         async def mock_watch(since_revision=0):
-            yield event
+            yield WatchEvent(
+                type="CREATED",
+                object={"instance_id": "abc", "status": "started"},
+                revision=1,
+            )
 
         mock_broadcaster.watch = mock_watch
         mock_manager.broadcaster = mock_broadcaster
+        mock_manager.instances = {}
 
         with patch("launcher.vllm_manager", mock_manager):
             response = client.get("/v2/vllm/instances/watch")
             assert response.status_code == 200
             assert "application/x-ndjson" in response.headers["content-type"]
 
-    def test_watch_endpoint_streams_events(self, client):
-        """The watch endpoint streams NDJSON events."""
+    def test_watch_with_since_streams_events(self, client):
+        """With ?since=N, the stream yields events from that revision."""
         import json
 
         mock_manager = MagicMock()
@@ -1213,12 +1250,9 @@ class TestWatchAPIEndpoint:
 
         events = [
             WatchEvent(
-                type="CREATED",
-                object={"instance_id": "abc", "status": "started"},
-            ),
-            WatchEvent(
                 type="STOPPED",
                 object={"instance_id": "abc", "status": "stopped", "exit_code": 0},
+                revision=2,
             ),
         ]
 
@@ -1230,17 +1264,46 @@ class TestWatchAPIEndpoint:
         mock_manager.broadcaster = mock_broadcaster
 
         with patch("launcher.vllm_manager", mock_manager):
+            response = client.get("/v2/vllm/instances/watch?since=1")
+            lines = response.text.strip().split("\n")
+            assert len(lines) == 1
+            event = json.loads(lines[0])
+            assert event["type"] == "STOPPED"
+            assert event["revision"] == 2
+
+    def test_watch_without_since_sends_initial_state(self, client):
+        """Without ?since, existing instances are sent as CREATED first."""
+        import json
+
+        mock_manager = MagicMock()
+        mock_broadcaster = MagicMock()
+        mock_broadcaster.revision = 5
+
+        # No new events from broadcaster
+        async def mock_watch(since_revision=0):
+            return
+            yield  # make it an async generator
+
+        mock_broadcaster.watch = mock_watch
+
+        # One existing instance
+        mock_instance = MagicMock()
+        mock_instance.get_status.return_value = {
+            "status": "running",
+            "instance_id": "existing-1",
+            "options": "--model test",
+        }
+        mock_manager.instances = {"existing-1": mock_instance}
+        mock_manager.broadcaster = mock_broadcaster
+
+        with patch("launcher.vllm_manager", mock_manager):
             response = client.get("/v2/vllm/instances/watch")
             lines = response.text.strip().split("\n")
-            assert len(lines) == 2
-
-            first = json.loads(lines[0])
-            assert first["type"] == "CREATED"
-            assert first["object"]["instance_id"] == "abc"
-
-            second = json.loads(lines[1])
-            assert second["type"] == "STOPPED"
-            assert second["object"]["exit_code"] == 0
+            assert len(lines) == 1
+            event = json.loads(lines[0])
+            assert event["type"] == "CREATED"
+            assert event["object"]["instance_id"] == "existing-1"
+            assert event["revision"] == 5
 
 
 class TestLogStartOffset:
