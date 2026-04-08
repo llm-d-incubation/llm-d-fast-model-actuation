@@ -405,6 +405,7 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 
 	// Execute Phase 1: Delete all marked pods FIRST (across all configs on this node)
 	deletedCount := 0
+	var conflictErrors []string
 	for _, del := range allDeletions {
 		if err := ctl.coreclient.Pods(del.pod.Namespace).Delete(ctx, del.pod.Name, metav1.DeleteOptions{
 			Preconditions: &metav1.Preconditions{
@@ -419,6 +420,7 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 			if apierrors.IsConflict(err) {
 				logger.Info("Launcher pod version conflict, skipping deletion",
 					"pod", del.pod.Name, "error", err)
+				conflictErrors = append(conflictErrors, del.pod.Name)
 				continue
 			}
 			return fmt.Errorf("failed to delete launcher pod %s: %w", del.pod.Name, err)
@@ -429,6 +431,11 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 			"config", del.key.LauncherConfigName,
 			"reason", del.reason)
 		deletedCount++
+	}
+
+	if len(conflictErrors) > 0 {
+		return fmt.Errorf("encountered %d version conflicts during deletion (pods: %v), will retry",
+			len(conflictErrors), conflictErrors)
 	}
 
 	if deletedCount < len(allDeletions) {
