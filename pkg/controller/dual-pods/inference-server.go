@@ -1410,6 +1410,7 @@ func (ctl *controller) syncLauncherInstances(ctx context.Context, nodeDat *nodeD
 	remainingInstances := make([]InstanceState, 0, len(insts.Instances))
 	deletedStoppedInstanceIDs := sets.New[string]()
 	failedStoppedInstanceErrs := map[string]error{}
+	runningCount := 0
 	for _, inst := range insts.Instances {
 		if inst.Status == InstanceStatusStopped {
 			// Clean up stopped instances from the launcher.
@@ -1418,18 +1419,18 @@ func (ctl *controller) syncLauncherInstances(ctx context.Context, nodeDat *nodeD
 				logger.V(3).Info("Failed to delete stopped instance from launcher during sync",
 					"instanceID", inst.InstanceID, "err", delErr)
 				// Deletion failed — the instance still occupies a slot in the launcher.
-				// Include it in remainingInstances so capacity accounting stays accurate.
 				failedStoppedInstanceErrs[inst.InstanceID] = delErr
 			} else {
 				logger.V(2).Info("Deleted stopped instance from launcher during sync",
 					"instanceID", inst.InstanceID)
 				deletedStoppedInstanceIDs.Insert(inst.InstanceID)
-			}
-			if delErr == nil || IsLauncherNotFoundError(delErr) {
 				continue
 			}
 		}
 		remainingInstances = append(remainingInstances, inst)
+		if inst.Status == "running" {
+			runningCount++
+		}
 		if lastUsed, exists := launcherDat.Instances[inst.InstanceID]; exists {
 			newInstances[inst.InstanceID] = lastUsed
 		} else {
@@ -1441,12 +1442,6 @@ func (ctl *controller) syncLauncherInstances(ctx context.Context, nodeDat *nodeD
 	// so that callers (e.g. selectBestLauncherPod) see accurate capacity.
 	insts.Instances = remainingInstances
 	insts.TotalInstances = len(remainingInstances)
-	runningCount := 0
-	for _, inst := range remainingInstances {
-		if inst.Status == "running" {
-			runningCount++
-		}
-	}
 	insts.RunningInstances = runningCount
 
 	launcherDat.Instances = newInstances
