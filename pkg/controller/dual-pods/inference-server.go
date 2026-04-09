@@ -85,7 +85,7 @@ func (ni nodeItem) process(ctx context.Context, ctl *controller) (error, bool) {
 	return nil, retries > 0
 }
 
-func (item launcherPodItem) process(ctx context.Context, ctl *controller, nodeDat *nodeData) (error, bool) {
+func (item unboundLauncherPodItem) process(ctx context.Context, ctl *controller, nodeDat *nodeData) (error, bool) {
 	logger := klog.FromContext(ctx).WithValues("launcherPod", item.LauncherPodName, "node", item.NodeName)
 	ctx = klog.NewContext(ctx, logger)
 

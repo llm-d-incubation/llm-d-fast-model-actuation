@@ -332,7 +332,7 @@ type infSvrItem struct {
 	RequesterName string
 }
 
-type launcherPodItem struct {
+type unboundLauncherPodItem struct {
 	LauncherPodName string
 	NodeName        string
 }
@@ -347,6 +347,7 @@ const (
 	infSvrItemBoundProvider infSvrItemType = "bound_provider"
 	// infSvrItemUnboundLauncherBasedProvider is for a server-providing Pod that
 	// is launcher-based and not bound to any server-requesting Pods.
+	// Note that technically an unbound launcher-based server-providing Pod is not part of any inference server (yet/anymore).
 	infSvrItemUnboundLauncherBasedProvider infSvrItemType = "unbound_launcher_based_provider"
 	// infSvrItemDontCare is not a real infSvrItemType but only a placeholder
 	// saying the corresponding infSvrItem is not relevant to the controller.
@@ -431,10 +432,10 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 				return
 			}
 			nd := ctl.getNodeData(nodeName)
-			launcherPodItem := launcherPodItem{LauncherPodName: typed.Name, NodeName: nodeName}
+			unboundLauncher := unboundLauncherPodItem{LauncherPodName: typed.Name, NodeName: nodeName}
 			ctl.enqueueLogger.V(5).Info("Enqueuing launcher reference due to notification of add",
 				"nodeName", nodeName, "launcherPod", typed.Name, "isInInitialList", isInInitialList, "resourceVersion", typed.ResourceVersion)
-			nd.add(launcherPodItem)
+			nd.add(unboundLauncher)
 			ctl.Queue.Add(nodeItem{nodeName})
 		} else {
 			nodeName := typed.Spec.NodeName
@@ -484,10 +485,10 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 				return
 			}
 			nd := ctl.getNodeData(nodeName)
-			launcherPodItem := launcherPodItem{LauncherPodName: typed.Name, NodeName: nodeName}
+			unboundLauncher := unboundLauncherPodItem{LauncherPodName: typed.Name, NodeName: nodeName}
 			ctl.enqueueLogger.V(5).Info("Enqueuing launcher reference due to notification of update",
 				"nodeName", nodeName, "launcherPod", typed.Name, "resourceVersion", typed.ResourceVersion)
-			nd.add(launcherPodItem)
+			nd.add(unboundLauncher)
 			ctl.Queue.Add(nodeItem{nodeName})
 		} else {
 			nodeName := typed.Spec.NodeName
@@ -540,10 +541,10 @@ func (ctl *controller) OnDelete(obj any) {
 				return
 			}
 			nd := ctl.getNodeData(nodeName)
-			launcherPodItem := launcherPodItem{LauncherPodName: typed.Name, NodeName: nodeName}
+			unboundLauncher := unboundLauncherPodItem{LauncherPodName: typed.Name, NodeName: nodeName}
 			ctl.enqueueLogger.V(5).Info("Enqueuing launcher reference due to notification of delete",
 				"nodeName", nodeName, "launcherPod", typed.Name, "resourceVersion", typed.ResourceVersion)
-			nd.add(launcherPodItem)
+			nd.add(unboundLauncher)
 			ctl.Queue.Add(nodeItem{nodeName})
 		} else {
 			nodeName := typed.Spec.NodeName
