@@ -389,6 +389,8 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				_, delErr := lClient.DeleteInstance(ctx, serverDat.InstanceID)
 				if delErr != nil && !IsLauncherNotFoundError(delErr) {
 					logger.V(3).Info("Failed to delete stopped instance from launcher", "instanceID", serverDat.InstanceID, "err", delErr)
+					return ctl.ensureReqStatus(ctx, requestingPod, serverDat,
+						fmt.Sprintf("failed to delete stopped instance %q from launcher: %s", serverDat.InstanceID, delErr.Error()))
 				}
 				// Mark as sleeping so that ensureUnbound (called during requester deletion)
 				// does not attempt to POST /sleep on the dead instance.
