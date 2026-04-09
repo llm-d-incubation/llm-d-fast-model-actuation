@@ -531,7 +531,6 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	lcName := isc.Spec.LauncherConfigName
 	lc, err := ctl.lcLister.LauncherConfigs(ctl.namespace).Get(lcName)
 	if err != nil {
-		// TODO(waltforme): introduce the 'enqueue requesters by launcherconfigs' logic to the controller
 		return ctl.ensureReqStatus(ctx, requestingPod, serverDat,
 			fmt.Sprintf("failed to get LauncherConfig %q: %v", lcName, err),
 		)
@@ -623,7 +622,6 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	}
 	// Sleeper budget is met. Make a new launcher Pod.
 
-	// TODO(waltforme): introduce the 'enqueue requesters by launcher pods' logic to the controller.
 	echo, err := podOps.Create(ctx, desiredLauncherPod, metav1.CreateOptions{})
 	if err != nil {
 		errMsg := err.Error()
