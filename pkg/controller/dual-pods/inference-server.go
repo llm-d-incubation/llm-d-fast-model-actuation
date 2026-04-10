@@ -382,9 +382,9 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 			}
 			if _, deletedStopped := syncResult.deletedStoppedInstanceIDs[serverDat.InstanceID]; deletedStopped || !instancePresent {
 				if deletedStopped {
-					logger.V(2).Info("Deleted stopped bound instance from launcher during sync", "instanceID", serverDat.InstanceID)
+					logger.V(2).Info("Deleted stopped bound instance from launcher during sync")
 				} else {
-					logger.V(2).Info("Bound instance not found in launcher after sync, treating as deleted", "instanceID", serverDat.InstanceID)
+					logger.V(2).Info("Bound instance not found in launcher after sync, treating as deleted")
 				}
 				// Mark as sleeping so that ensureUnbound (called during requester deletion)
 				// does not attempt to POST /sleep on the dead instance.
