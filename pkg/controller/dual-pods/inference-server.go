@@ -1412,7 +1412,7 @@ func (ctl *controller) syncLauncherInstances(ctx context.Context, nodeDat *nodeD
 		if inst.Status == InstanceStatusStopped {
 			// Clean up stopped instances from the launcher.
 			_, delErr := lClient.DeleteInstance(ctx, inst.InstanceID)
-			if delErr != nil && !IsLauncherNotFoundError(delErr) {
+			if delErr != nil && !IsInstanceNotFoundError(delErr) {
 				logger.V(3).Info("Failed to delete stopped instance from launcher during sync",
 					"instanceID", inst.InstanceID, "err", delErr)
 				// Deletion failed — the instance still occupies a slot in the launcher.

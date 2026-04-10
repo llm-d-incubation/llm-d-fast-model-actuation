@@ -20,11 +20,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 
 	"k8s.io/klog/v2"
@@ -33,6 +33,15 @@ import (
 type LauncherClient struct {
 	baseURL    *url.URL
 	httpClient *http.Client
+}
+
+type launcherError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *launcherError) Error() string {
+	return fmt.Sprintf("launcher error %d: %s", e.StatusCode, e.Body)
 }
 
 const (
@@ -189,10 +198,11 @@ func (c *LauncherClient) create(
 	return &out, nil
 }
 
-// IsLauncherNotFoundError returns true if the error from the launcher client
-// indicates a 404 Not Found response (e.g., instance does not exist).
-func IsLauncherNotFoundError(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "launcher error 404:")
+// IsInstanceNotFoundError returns true when the launcher reports the instance
+// does not exist.
+func IsInstanceNotFoundError(err error) bool {
+	var launcherErr *launcherError
+	return errors.As(err, &launcherErr) && launcherErr.StatusCode == http.StatusNotFound
 }
 
 func (c *LauncherClient) do(
@@ -229,7 +239,7 @@ func (c *LauncherClient) do(
 
 	if resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("launcher error %d: %s", resp.StatusCode, string(b))
+		return &launcherError{StatusCode: resp.StatusCode, Body: string(b)}
 	}
 
 	if out != nil {
