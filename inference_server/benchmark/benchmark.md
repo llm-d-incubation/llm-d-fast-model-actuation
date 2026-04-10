@@ -4,10 +4,11 @@ latency of model-serving pods within the LLM-D Fast Model Actuation workflow.
 
 ## Purpose
 The goal is to quantify and compare how quickly a model-serving duo (server-requesting
-and server-providing pods) becomes available under three different actuation conditions
+and server-providing pods) becomes available under four different actuation conditions
 in order of decreasing latency:
 
 - **Cold start**: creating a new vLLM instance without using a launcher
+- **Luke warm start**: DPC creates a new launcher pod, then the launcher creates a new vLLM instance
 - **Warm start**: creating a new vLLM instance in an existing launcher pod
 - **Hot start**: waking a sleeping vLLM instance on an existing launcher pod
 
@@ -30,17 +31,18 @@ direct scope but is referenced for completeness and handoff to other frameworks.
 
 | Layer | Focus | Metrics | Measured By |
 | ----- | ----- | ------- | ----------- |
-| **L1: Actuation** | Requester pod readiness | T_actuation (requester creation to readiness), T_wake (DPC wakes sleeping vLLM instance), Hit_rate (GPU hits), T_launcher (launcher creates new vLLM instance) | llm-d-benchmark new harness |
+| **L1: Actuation** | Requester pod readiness | T_actuation (requester creation to readiness), T_wake (DPC wakes sleeping vLLM instance), Hit_rate (GPU hits), T_luke_warm (DPC creates launcher pod then vLLM instance), T_launcher (launcher creates new vLLM instance) | llm-d-benchmark new harness |
 | **L2: Inference Readiness** | First inference response | T_e2e (requester creation to first inference response), T_first_token (requester ready to first inference response) | llm-d-benchmark nop/inference-perf harness |
 | **L3: Steady-State** | Throughput/latency | T_actuation (requester creation to readiness), TPOT (time per output token), throughput, queue depth, KV cache usage, replica stability | llm-d-benchmark / WVA |
 
 **Metric definitions:**
 
-- **T_actuation**: Time from requester pod creation (ReplicaSet scale-up) to requester pod readiness (`/ready` probe passes), which implies the DPC has bound the requester to a server-providing pod and the vLLM instance is serving.
+- **T_actuation**: Time from requester pod creation (ReplicaSet scale-up) to requester pod readiness (`/ready` probe passes), which implies the DPC has bound the requester to a server-providing pod and the vLLM instance is serving. Spans different sub-components depending on the actuation path: hot start (T_wake), warm start (T_launcher), or luke warm start (T_luke_warm).
 - **T_wake**: Request-response time for the DPC's `/wake_up` call to a sleeping vLLM instance on the server-providing pod. A part of T_actuation when a hot start occurs.
 - **Hit_rate**: Fraction of server-requesting Pods that get satisfied by waking a sleeping vLLM instance.
-- **T_launcher**: Time from the launcher receiving a create request to the new vLLM instance reporting healthy. Includes the benefit of vLLM module preloading.
-- **T_e2e**: Total time from requester pod creation to first successful inference response. Spans the full path: requester scheduling, DPC binding, instance wake-up or launcher instance creation, vLLM ready, first inference (T_actuation + T_first_token).
+- **T_luke_warm**: Time from the DPC requesting launcher pod creation to the new vLLM instance reporting healthy. Covers the full luke warm start span: launcher pod scheduling, launcher readiness, DPC reconciliation, and vLLM instance creation. Measured end-to-end because the boundary between launcher readiness and instance creation is not directly observable from outside the DPC.
+- **T_launcher**: Time from the launcher receiving a create request to the new vLLM instance reporting healthy. Includes the benefit of vLLM module preloading. Applies to the warm start path, where a launcher pod already exists.
+- **T_e2e**: Total time from requester pod creation to first successful inference response (T_actuation + T_first_token). Spans the full actuation and inference readiness path.
 - **T_first_token**: Time from requester pod readiness to receiving the first streamed token from the server-providing pod's vLLM instance (time-to-first-token, post-actuation). Requires streaming inference requests.
 
 ## Benchmarking Scenarios
@@ -60,12 +62,17 @@ direct scope but is referenced for completeness and handoff to other frameworks.
 The columns represent the different paths FMA can take to satisfy a new server-requesting pod,
 using the team's established terminology:
 
-| Actuation Path            | What It Measures | llm-d-benchmark Config |
-| ------------------------- | ---------------- | ---------------------- |
-| **Cold Start**            | No launcher, no sleeping pods. Raw Kubernetes deploy-to-ready latency (non-FMA baseline, or FMA milestone 2 without launcher). | `-t standalone` comparison baseline |
-| **Warm Start**            | A launcher pod exists (pre-created by the launcher population controller) but no sleeping instance is available on the assigned GPU. Launcher creates a new vLLM instance with the benefit of module preloading. | `-t fma` with default `LLMDBENCH_FMA_LAUNCHER_*` env vars |
-| **Hot Start**             | A sleeping vLLM instance exists on the correct GPU. DPC sends `/wake_up`. Best-case actuation path. | `-t fma` with `LLMDBENCH_VLLM_COMMON_ENABLE_SLEEP_MODE=true`, `LLMDBENCH_FMA_DUAL_POD_SLEEPER_LIMIT>=1` |
+| Actuation Path            | What It Measures | Why Included | llm-d-benchmark Config |
+| ------------------------- | ---------------- | ------------ | ---------------------- |
+| **Cold Start**            | No launcher, no sleeping pods. Raw Kubernetes deploy-to-ready latency (non-FMA baseline, or FMA milestone 2 without launcher). | Establishes the baseline that all FMA paths should improve upon. | `-t standalone` comparison baseline |
+| **Luke Warm Start**       | No launcher pod on the assigned GPU. The DPC creates a new launcher pod, then the launcher creates a new vLLM instance. | Worst-case FMA path, relevant for dynamic situations such as LauncherConfig rollouts or newly added nodes where the LPC has not yet populated launchers. | `-t fma` with LauncherPopulationPolicy that does not cover the target GPU node |
+| **Warm Start**            | A launcher pod exists (pre-created by the LPC) but no sleeping instance is available on the assigned GPU. Launcher creates a new vLLM instance with module preloading. | Measures the launcher's contribution when no sleeping instance is available. | `-t fma` with default `LLMDBENCH_FMA_LAUNCHER_*` env vars |
+| **Hot Start**             | A sleeping vLLM instance exists on the correct GPU. DPC sends `/wake_up`. | Best-case FMA path. Measures sleep-to-wake latency. | `-t fma` with `LLMDBENCH_VLLM_COMMON_ENABLE_SLEEP_MODE=true`, `LLMDBENCH_FMA_DUAL_POD_SLEEPER_LIMIT>=1` |
 
+> **Note on naming:** "Cold FMA Start" was considered as an alternative to "Luke Warm
+> Start", but the latter, though informal, was preferred for consistency with the
+> existing hot/warm/cold temperature metaphor.
+>
 > **Note on simulation:** Any of the above paths can be exercised with mock GPUs
 > (`llm-d-inference-sim` image or launcher `--mock-mode`) for CI pipelines and scenario
 > prototyping. Simulation is an orthogonal testing mode, not a separate actuation path.
@@ -79,18 +86,18 @@ using the team's established terminology:
 ### Matrix
 
 Cell annotations indicate which measurement layers apply:
-- **L1** -- Layer 1 actuation metrics (T_actuation, T_wake, Hit_rate, T_launcher)
+- **L1** -- Layer 1 actuation metrics (T_actuation, T_wake, Hit_rate, T_luke_warm, T_launcher)
 - **L1+L2** -- Actuation metrics plus inference readiness (T_first_token, T_e2e)
 - **L1+L3** -- Actuation metrics plus steady-state performance (TPOT, throughput, queue depth, KV cache, replica stability)
 - **L1+L2+L3** -- All three layers
 - **--** -- Not applicable to this combination
 
-| Scenario                           | Cold Start | Warm Start | Hot Start |
-| ---------------------------------- | :--------: | :--------: | :-------: |
-| **Fast Replica Scale Up**          | L1+L2      | L1+L2      | L1+L2     |
-| **Introducing New Variant**        | L1+L2      | L1+L2      | --        |
-| **Resource Scaling and Stress Test** | L1+L3      | L1+L3      | L1+L3     |
-| **Maintenance Planning**           | L1+L2+L3   | L1+L2+L3   | L1+L2+L3  |
+| Scenario                           | Cold Start | Luke Warm Start | Warm Start | Hot Start |
+| ---------------------------------- | :--------: | :-------------: | :--------: | :-------: |
+| **Fast Replica Scale Up**          | L1+L2      | L1+L2           | L1+L2      | L1+L2     |
+| **Introducing New Variant**        | L1+L2      | L1+L2           | L1+L2      | --        |
+| **Resource Scaling and Stress Test** | L1+L3    | L1+L3           | L1+L3      | L1+L3     |
+| **Maintenance Planning**           | L1+L2+L3   | L1+L2+L3        | L1+L2+L3   | L1+L2+L3  |
 
 
 ### Scenario Rationale
@@ -102,44 +109,101 @@ Cell annotations indicate which measurement layers apply:
 | **Resource Scaling and Stress Test** | Stress-tests namespace resource capacity at scale (many models, many requesters) for performance characterization, cost analysis, and capacity planning. | `fma.sh` with multi-model list; DoE experiment with replica/model treatments |
 | **Maintenance Planning**           | Regression baseline: run the same scenarios before and after node maintenance or upgrades. Detects performance regressions in actuation latency. | Any guide scenario as regression baseline with `-t fma`; compare pre/post results |
 
-### Actuation Path Rationale
-
-| Actuation Path   | Why Included |
-| ---------------- | ------------ |
-| **Cold Start**   | Baseline without FMA (or FMA milestone 2 without launcher). Establishes the raw Kubernetes deploy-to-ready latency that all FMA paths should improve upon. |
-| **Warm Start**   | Measures the launcher's contribution when no sleeping instance is available. LPC has pre-created launcher pods, and the launcher creates a new vLLM instance with module preloading benefit. |
-| **Hot Start**    | Best-case FMA path. DPC sends `/wake_up` to a sleeping vLLM instance on the correct GPU. Measures sleep-to-wake latency. |
-
-
 ## Integration Strategy
 
 ### Current State
 
 FMA is being integrated as a third deploy method (`-t fma`) in [llm-d-benchmark](https://github.com/llm-d/llm-d-benchmark),
-alongside `standalone` and `modelservice`. This work is tracked on the
-[`fma` branch](https://github.com/manoelmarques/llm-d-benchmark/tree/fma) and includes:
+alongside `standalone` and `modelservice`. The active upstream PR is
+[llm-d/llm-d-benchmark#900](https://github.com/llm-d/llm-d-benchmark/pull/900),
+which builds on the earlier `fma` branch work and aligns with the declarative Python
+architecture from [PR #848](https://github.com/llm-d/llm-d-benchmark/pull/848). Key components:
 
-- **`scenarios/examples/fma.sh`** -- Scenario configuration with sleep mode enabled, model caching PVC, and FMA image references.
-- **`setup/steps/07_deploy_fma_models.py`** -- Standup step that deploys InferenceServerConfig, LauncherConfig, LauncherPopulationPolicy, and requester ReplicaSet CRs. Installs FMA CRDs and the `fma-controllers` Helm chart. Waits for dual-pod controller and launcher-populator readiness.
-- **`setup/env.sh`** -- 35+ new `LLMDBENCH_FMA_*` environment variables covering chart version, image registry/tags, dual-pod configuration, launcher configuration, and requester resource limits.
-- **`setup/run.sh`** -- FMA endpoint discovery via Kubernetes service labels (`stood-up-via=fma`).
-- **`setup/teardown.sh`** -- Ordered teardown: FMA custom resources first, then wait for the dual-pods controller to remove finalizers, then uninstall the FMA Helm release.
+- **`step_06_fma_deploy.py`** -- Standup step that installs FMA CRDs, ClusterRole, and
+  the `fma-controllers` Helm chart, then applies a rendered deployment YAML containing
+  InferenceServerConfig, LauncherConfig, LauncherPopulationPolicy, and a ReplicaSet
+  (starting at 0 replicas). Waits for dual-pod controller and launcher-populator readiness.
+- **`fma_functions.py`** -- FMA benchmarking logic in the nop harness: scales the ReplicaSet
+  0->1, watches for requester pods to become Ready and receive the `dual-pods.llm-d.ai/dual`
+  label, discovers launcher pods, and measures TTFT (time-to-first-token) via streaming
+  `/v1/completions` requests. Iterates per `fma.iterations` config.
+- **`config/scenarios/examples/fma.yaml`** -- Example FMA scenario configuration.
+- **`config/templates/values/defaults.yaml`** -- 60+ FMA-related defaults covering chart
+  version, image registry/tags, CRD URLs, dual-pod configuration, launcher configuration,
+  and requester resource limits.
+- **`nop-analyze_results.py`** -- Analysis script that outputs FMA-specific metrics: TTRR
+  (time to requester ready), TTRD (time to requester dual-labeled), TTFT, and TTRD+TTFT.
+- **Teardown** -- Ordered cleanup: FMA custom resources (ReplicaSet, InferenceServerConfig,
+  LauncherConfig, LauncherPopulationPolicy) first, then the FMA Helm release.
 
 The existing llm-d-benchmark harnesses (nop, inference-perf, vllm-benchmark) can run after
 FMA standup to measure L2 and L3 metrics.
 
-### Next Steps
+### Integration Phases
 
-1. **Upstream the `fma` branch** into llm-d-benchmark, aligning with the declarative
-   Python architecture in [PR #848](https://github.com/llm-d/llm-d-benchmark/pull/848).
-2. **Add FMA-specific experiment YAML** for Design of Experiments (DoE) treatments:
-   replica count, sleep mode on/off, sleeper limit, model variant combinations.
-3. **Add actuation-specific metrics collection** in the nop harness: T_actuation, T_wake,
-   Hit_rate parsed from FMA pod events and DPC logs.
-4. **Consider Grafana integration** for visual actuation metrics (scale-up latency
-   dashboards), following the pattern in [WVA PR #900](https://github.com/llm-d/llm-d-workload-variant-autoscaler/pull/900).
-5. **Maintain framework-agnostic interface**: the FMA benchmark lifecycle (deploy, measure,
-   teardown) should remain pluggable into other benchmarking frameworks beyond llm-d-benchmark.
+The following phases describe a concrete plan to evolve PR #900 into full coverage of the
+benchmarking matrix above. Each phase builds on the previous one.
+
+**Phase 1: Actuation path classification and Hit_rate**
+
+PR #900 already watches pod events and queries the launcher API (`inspect_vllm_instances`),
+but does not classify which actuation path the DPC took. This phase adds classification
+logic to `fma_functions.py`:
+
+- Compare the launcher pod's creation timestamp against the requester pod's creation
+  timestamp. If the launcher was created *after* the requester, it is a luke warm start.
+- For remaining cases, check whether the vLLM instance was woken from sleep (hot start)
+  or newly created (warm start). The launcher's `/v2/vllm/instances` API returns instance
+  status, and sleep/wake metrics are already parsed from launcher logs by `nop_functions.py`.
+- Compute Hit_rate as the fraction of hot starts per scaling operation.
+- Report the actuation path classification alongside the existing TTRR/TTRD/TTFT metrics.
+
+**Phase 2: Per-path timing metrics**
+
+Once actuation paths are classified, isolate the path-specific timing components:
+
+- **T_wake** (hot): measure the `/wake_up` round-trip, approximated by the requester pod's
+  transition from creation to Ready on known-hot actuations.
+- **T_launcher** (warm): time between DPC binding and vLLM instance readiness, approximated
+  by (requester dual-label timestamp - launcher pod Ready timestamp). Includes some DPC
+  reconciliation overhead.
+- **T_luke_warm** (luke warm): end-to-end from launcher pod creation timestamp to vLLM
+  instance healthy, measured as a single span since the internal DPC boundary is not
+  directly observable from outside.
+
+**Phase 3: Multi-replica and scenario coverage**
+
+PR #900 currently scales 0->1->0 per iteration. This phase adds support for scaling
+0->N to cover the "Fast Replica Scale Up" (1->N) and "Resource Scaling and Stress Test"
+scenarios:
+
+- Add `fma.replicas` config alongside the existing `fma.iterations`.
+- Extend `benchmark_fma()` to scale to N replicas and collect per-pod actuation path
+  classifications and timing.
+
+**Phase 4: Configurable actuation paths via scenario YAML**
+
+PR #900's FMA deployment template (`24_fma-deployment.yaml.j2`) currently hardcodes vLLM
+options (`--enable-sleep-mode`, `--max-model-len`, `--gpu-memory-utilization`,
+`--tensor-parallel-size`). This phase templatizes those options so different actuation
+paths can be exercised from scenario config:
+
+- Templatize vLLM flags in the InferenceServerConfig spec from scenario YAML
+  (analogous to how the standalone template uses `standalone.vllm.additionalFlags`).
+- Add example scenario variants: `fma-hot.yaml` (sleep mode on, pre-populated launchers),
+  `fma-warm.yaml` (sleeper limit 0 to force warm starts), standalone baseline for cold
+  start comparison.
+- Add FMA-specific DoE experiment YAML for treatment combinations: replica count, sleep
+  mode on/off, sleeper limit, model variant.
+
+**Phase 5: Reporting and visualization (optional)**
+
+- Extend the nop analysis script to produce per-path timing breakdowns and Hit_rate
+  summaries.
+- Consider Grafana dashboards for actuation latency over time.
+
+Throughout all phases, the FMA benchmark lifecycle (deploy, measure, teardown) should
+remain framework-agnostic and pluggable into benchmarking frameworks beyond llm-d-benchmark.
 
 
 ## Legacy Benchmark Tooling
