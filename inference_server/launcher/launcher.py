@@ -92,6 +92,8 @@ class EventBroadcaster:
     def __init__(self):
         self._condition = asyncio.Condition()
         self._events: List[WatchEvent] = []
+        # Monotonically increasing counter; holds the revision of the
+        # most recently published event (0 = no events published yet).
         self._revision: int = 0
 
     @property
@@ -128,6 +130,8 @@ class EventBroadcaster:
                 while pos >= self._revision:
                     await self._condition.wait()
                 offset = pos - self.oldest_revision
+                if offset < 0:
+                    raise RevisionTooOld(pos, self.oldest_revision)
                 new_events = self._events[offset:]
                 pos = self._revision
             for event in new_events:
@@ -378,6 +382,7 @@ class VllmMultiProcessManager:
             )
         except RuntimeError:
             pass  # No running event loop (e.g. in sync tests)
+        result["revision"] = self.broadcaster.revision
         return result
 
     def stop_instance(self, instance_id: str, timeout: int = 10) -> dict:
@@ -400,6 +405,7 @@ class VllmMultiProcessManager:
             )
         except RuntimeError:
             pass  # No running event loop (e.g. in sync tests)
+        result["revision"] = self.broadcaster.revision
         return result
 
     def stop_all_instances(self, timeout: int = 10) -> dict:
@@ -425,20 +431,25 @@ class VllmMultiProcessManager:
         if instance_id not in self.instances:
             raise KeyError(f"Instance {instance_id} not found")
 
-        return self.instances[instance_id].get_status()
+        result = self.instances[instance_id].get_status()
+        result["revision"] = self.broadcaster.revision
+        return result
 
     def get_all_instances_status(self) -> dict:
         """Get status of all instances"""
         instances_status = []
         running_count = 0
+        revision = self.broadcaster.revision
 
         for instance in self.instances.values():
             status = instance.get_status()
+            status["revision"] = revision
             instances_status.append(status)
             if status["status"] == "running":
                 running_count += 1
 
         return {
+            "revision": revision,
             "total_instances": len(self.instances),
             "running_instances": running_count,
             "instances": instances_status,
@@ -667,7 +678,11 @@ async def get_all_vllm_instances(detail: bool = True):
         result = vllm_manager.get_all_instances_status()
     else:
         instances = vllm_manager.list_instances()
-        result = {"instance_ids": instances, "count": len(instances)}
+        result = {
+            "revision": vllm_manager.broadcaster.revision,
+            "instance_ids": instances,
+            "count": len(instances),
+        }
 
     return JSONResponse(content=result, status_code=HTTPStatus.OK)
 

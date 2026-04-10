@@ -706,6 +706,7 @@ class TestAPIEndpoints:
     def test_list_instances(self, mock_manager, client):
         """Test listing instances via API"""
         mock_manager.list_instances.return_value = ["id-1", "id-2"]
+        mock_manager.broadcaster.revision = 5
 
         response = client.get("/v2/vllm/instances?detail=False")
 
@@ -713,8 +714,10 @@ class TestAPIEndpoints:
         data = response.json()
         assert data["count"] == 2
         assert "id-1" in data["instance_ids"]
+        assert data["revision"] == 5
 
         mock_manager.get_all_instances_status.return_value = {
+            "revision": 3,
             "total_instances": 1,
             "running_instances": 1,
             "instances": {
@@ -729,6 +732,7 @@ class TestAPIEndpoints:
         data = response.json()
         assert data["total_instances"] == 1
         assert data["running_instances"] == 1
+        assert data["revision"] == 3
 
     @patch("launcher.vllm_manager")
     def test_get_instance_status(self, mock_manager, client):

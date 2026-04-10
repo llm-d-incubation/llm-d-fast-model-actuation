@@ -30,7 +30,7 @@ The launcher preloads vLLM’s Python modules to accelerate the initialization o
 - **Status Monitoring**: Query status of individual instances or all instances at once
 - **Log Capture**: Retrieve stdout/stderr logs from running instances via REST API
 - **Health Checks**: Built-in health endpoint for monitoring service availability
-- **Instance Lifecycle Watch**: Stream real-time instance lifecycle events (created, stopped, deleted) via a Kubernetes watch-style NDJSON endpoint
+- **Instance Lifecycle Watch**: Stream instance lifecycle events (created, stopped, deleted) via a Kubernetes watch-style NDJSON endpoint
 
 > [!NOTE]
 > This is still not implemented, but the client controls the subset of the node's GPUs that get used by a given vLLM instance.
@@ -153,7 +153,8 @@ Response:
 {
   "status": "started",
   "instance_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "options": "--model facebook/opt-125m --port 8000"
+  "options": "--model facebook/opt-125m --port 8000",
+  "revision": 1
 }
 ```
 
@@ -270,7 +271,8 @@ Create a new vLLM instance with an auto-generated UUID.
   "gpu_uuids": ["GPU-33", "GPU-86"],
   "env_vars": {
     "VAR_NAME": "value"
-  }
+  },
+  "revision": 1
 }
 ```
 
@@ -321,7 +323,8 @@ Stop and delete a specific vLLM instance.
   "gpu_uuids": ["GPU-33", "GPU-86"],
   "env_vars": {
     "VAR_NAME": "value"
-  }
+  },
+  "revision": 2
 }
 ```
 
@@ -440,6 +443,7 @@ List all instance IDs currently managed by the launcher.
 
 ```json
 {
+  "revision": 5,
   "instance_ids": ["id-1", "id-2", "id-3"],
   "count": 3
 }
@@ -457,6 +461,7 @@ Get status information for all instances. `Detail` is `True` by default.
 
 ```json
 {
+  "revision": 5,
   "total_instances": 3,
   "running_instances": 2,
   "instances": [
@@ -465,21 +470,24 @@ Get status information for all instances. `Detail` is `True` by default.
       "instance_id": "id-1",
       "options": <options 1>,
       "gpu_uuids": <gpus 1>,
-      "env_vars": <envars 1>
+      "env_vars": <envars 1>,
+      "revision": 5
     },
     {
       "status": "stopped",
       "instance_id": "id-2",
       "options": <options 2>,
       "gpu_uuids": <gpus 2>,
-      "env_vars": <envars 2>
+      "env_vars": <envars 2>,
+      "revision": 5
     },
     {
       "status": "running",
       "instance_id": "id-3",
       "options": <options 3>,
       "gpu_uuids": <gpus 3>,
-      "env_vars": <envars 3>
+      "env_vars": <envars 3>,
+      "revision": 5
     }
   ]
 }
@@ -512,7 +520,8 @@ Get status information for a specific instance.
   "gpu_uuids": ["GPU-33", "GPU-86"],
   "env_vars": {
     "VAR_NAME": "value"
-  }
+  },
+  "revision": 3
 }
 ```
 
