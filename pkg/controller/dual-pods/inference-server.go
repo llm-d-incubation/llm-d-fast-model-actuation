@@ -377,8 +377,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 
 			_, instancePresent := findInstanceState(syncResult.instances.Instances, serverDat.InstanceID)
 			if delErr, failedCleanup := syncResult.failedStoppedInstanceErrs[serverDat.InstanceID]; failedCleanup {
-				return ctl.ensureReqStatus(ctx, requestingPod, serverDat,
-					fmt.Sprintf("failed to delete stopped instance %q from launcher: %s", serverDat.InstanceID, delErr.Error()))
+				return fmt.Errorf("failed to delete stopped instance %q from launcher: %w", serverDat.InstanceID, delErr), true
 			}
 			if _, deletedStopped := syncResult.deletedStoppedInstanceIDs[serverDat.InstanceID]; deletedStopped || !instancePresent {
 				if deletedStopped {
