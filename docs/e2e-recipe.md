@@ -357,7 +357,7 @@ information tacked on by the dual-pods controller.
 kubectl get pods -o 'custom-columns=NAME:.metadata.name,PHASE:.status.phase,COND2:.status.conditions[2].type,VAL2:.status.conditions[2].status,DUAL:.metadata.labels.dual-pods\.llm-d\.ai/dual,GPUS:.metadata.annotations.dual-pods\.llm-d\.ai/accelerators,SLEEPING:.metadata.labels.dual-pods\.llm-d\.ai/sleeping'
 
 
-kubectl get pods -L dual-pods.llm-d.ai/dual,dual-pods.llm-d.ai/sleeping
+kubectl get pods -L dual-pods.llm-d.ai/dual,dual-pods.llm-d.ai/sleeping,dual-pods.llm-d.ai/instance
 ```
 
 The following command will query Prometheus metrics from the nvidia

@@ -186,7 +186,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 			// Reflect providingPod deletion to requestingPod deletion.
 			gonerRV := requesterRV
 			if shouldAddRequesterFinalizer { // don't let delete complete too quickly
-				gonerRV, err = ctl.addRequesterFinalizer(ctx, requestingPod, providingPod.Name)
+				gonerRV, err = ctl.addRequesterFinalizer(ctx, requestingPod, providingPod.Name, serverDat.InstanceID)
 				if err != nil {
 					return err, true
 				}
@@ -720,8 +720,10 @@ func (ctl *controller) configInferenceServer(isc *fmav1alpha1.InferenceServerCon
 	hasher.Write([]byte(strings.Join(gpuUUIDs, ",")))
 	var hash [sha256.Size]byte
 	hashSl := hasher.Sum(hash[:0])
-	// using Raw_URL_Encoding because this hash will be used in URLs to the launcher.
-	nominalHash := base64.RawURLEncoding.EncodeToString(hashSl)
+	// Using Raw_URL_Encoding because this hash will be used in URLs to the launcher.
+	// Wrapping with "I" prefix and "i" suffix to ensure the value is a valid Kubernetes
+	// label value (which must start and end with an alphanumeric character).
+	nominalHash := "I" + base64.RawURLEncoding.EncodeToString(hashSl) + "i"
 
 	return &vllmCfg, nominalHash, nil
 }
@@ -947,11 +949,14 @@ func (ctl *controller) maybeRemoveRequesterFinalizer(ctx context.Context, reques
 
 // addRequesterFinalizer does the API call to add the controller's finalizer to the server-requesting Pod.
 // Returns (newResourceVersion string, err error)
-func (ctl *controller) addRequesterFinalizer(ctx context.Context, requestingPod *corev1.Pod, providingPodName string) (string, error) {
+func (ctl *controller) addRequesterFinalizer(ctx context.Context, requestingPod *corev1.Pod, providingPodName, instanceID string) (string, error) {
 	podOps := ctl.coreclient.Pods(ctl.namespace)
 	requestingPod = requestingPod.DeepCopy()
 	if requestingPod.Labels[api.DualLabelName] != providingPodName {
 		requestingPod.Labels = utils.MapSet(requestingPod.Labels, api.DualLabelName, providingPodName)
+	}
+	if instanceID != "" {
+		requestingPod.Labels = utils.MapSet(requestingPod.Labels, api.InstanceLabelName, instanceID)
 	}
 	requestingPod.Finalizers = append(requestingPod.Finalizers, requesterFinalizer)
 	echo, err := podOps.Update(ctx, requestingPod, metav1.UpdateOptions{FieldManager: ControllerName})
@@ -1265,8 +1270,12 @@ func (ctl *controller) ensureReqState(ctx context.Context, requestingPod *corev1
 	}
 	desiredAccelerators := ptr.Deref(serverDat.GPUIDsStr, "")
 	currentAccelerators := requestingPod.Annotations[api.AcceleratorsAnnotationName]
-	if oldStatusStr == newStatusStr && desiredAccelerators == currentAccelerators && len(newFinalizers) == len(requestingPod.Finalizers) && serverDat.ProvidingPodName == requestingPod.Labels[api.DualLabelName] {
-		logger.V(5).Info("No need to update status, accelerators, boundName, or finalizers", "serverRequestingPod", requestingPod.Name, "status", status, "accelerators", desiredAccelerators, "boundName", serverDat.ProvidingPodName, "finalizers", requestingPod.Finalizers)
+	desiredInstanceID := ""
+	if serverDat.ProvidingPodName != "" {
+		desiredInstanceID = serverDat.InstanceID
+	}
+	if oldStatusStr == newStatusStr && desiredAccelerators == currentAccelerators && len(newFinalizers) == len(requestingPod.Finalizers) && serverDat.ProvidingPodName == requestingPod.Labels[api.DualLabelName] && desiredInstanceID == requestingPod.Labels[api.InstanceLabelName] {
+		logger.V(5).Info("No need to update status, accelerators, boundName, instanceID, or finalizers", "serverRequestingPod", requestingPod.Name, "status", status, "accelerators", desiredAccelerators, "boundName", serverDat.ProvidingPodName, "instanceID", desiredInstanceID, "finalizers", requestingPod.Finalizers)
 		return nil, false
 	}
 	requestingPod = requestingPod.DeepCopy()
@@ -1275,14 +1284,18 @@ func (ctl *controller) ensureReqState(ctx context.Context, requestingPod *corev1
 	requestingPod.Finalizers = newFinalizers
 	if serverDat.ProvidingPodName != "" {
 		requestingPod.Labels = utils.MapSet(requestingPod.Labels, api.DualLabelName, serverDat.ProvidingPodName)
+		if serverDat.InstanceID != "" {
+			requestingPod.Labels = utils.MapSet(requestingPod.Labels, api.InstanceLabelName, serverDat.InstanceID)
+		}
 	} else if requestingPod.Labels != nil {
 		delete(requestingPod.Labels, api.DualLabelName)
+		delete(requestingPod.Labels, api.InstanceLabelName)
 	}
 	echo, err := ctl.coreclient.Pods(requestingPod.Namespace).Update(ctx, requestingPod, metav1.UpdateOptions{FieldManager: ctl.ControllerName})
 	if err == nil {
-		logger.V(2).Info("Set status/finalizers", "serverRequestingPod", requestingPod.Name, "status", status, "accelerators", desiredAccelerators, "boundName", serverDat.ProvidingPodName, "finalizers", requestingPod.Finalizers, "newResourceVersion", echo.ResourceVersion)
+		logger.V(2).Info("Set status/finalizers", "serverRequestingPod", requestingPod.Name, "status", status, "accelerators", desiredAccelerators, "boundName", serverDat.ProvidingPodName, "instanceID", desiredInstanceID, "finalizers", requestingPod.Finalizers, "newResourceVersion", echo.ResourceVersion)
 	} else {
-		logger.V(3).Info("Failed to set status/finalizers", "serverRequestingPod", requestingPod.Name, "status", status, "accelerators", desiredAccelerators, "boundName", serverDat.ProvidingPodName, "finalizers", requestingPod.Finalizers, "resourceVersion", requestingPod.ResourceVersion)
+		logger.V(3).Info("Failed to set status/finalizers", "serverRequestingPod", requestingPod.Name, "status", status, "accelerators", desiredAccelerators, "boundName", serverDat.ProvidingPodName, "instanceID", desiredInstanceID, "finalizers", requestingPod.Finalizers, "resourceVersion", requestingPod.ResourceVersion)
 	}
 	return err, err != nil
 }
