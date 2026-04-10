@@ -528,7 +528,7 @@ echo "Running instance ID: $instance_id"
 
 # Delete the running instance from the launcher to simulate a crash.
 # The notifier sidecar will detect the change and update the Pod annotation.
-# The DPC will then query the instance, get 404, and delete the requester.
+# The dual-pods controller will then query the instance, get 404, and delete the requester.
 kubectl exec -n "$NS" $launcher_after_delete -c inference-server -- python3 -c '
 import urllib.request
 req = urllib.request.Request(
@@ -539,7 +539,7 @@ urllib.request.urlopen(req)
 print("Instance deleted from launcher")
 '
 
-# Wait for the old requester Pod to be deleted (DPC should do this)
+# Wait for the old requester Pod to be deleted (the dual-pods controller should do this)
 expect '[ "$(kubectl get pod -n '"$NS"' $req_after_delete -o jsonpath={.metadata.uid} 2>/dev/null)" != "$req_uid_before" ]'
 echo "Old requester $req_after_delete was deleted by the controller"
 

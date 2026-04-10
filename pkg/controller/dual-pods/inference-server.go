@@ -108,15 +108,12 @@ func (item unboundLauncherPodItem) process(ctx context.Context, ctl *controller,
 
 	// Sync launcher instances to keep internal state fresh and clean up stopped instances.
 	_, syncErr, syncRetry := ctl.syncLauncherInstances(ctx, nodeDat, launcherPod)
-	if syncErr != nil {
-		if syncRetry {
-			logger.V(4).Info("Failed to sync launcher instances, will retry", "err", syncErr)
-		} else {
-			logger.Error(syncErr, "Failed to sync launcher instances")
-		}
-	}
 
 	ctl.enqueueUnboundInfSvrItemsOnNode(ctx, item.NodeName, fmt.Sprintf("launcher pod %s changed", item.LauncherPodName))
+
+	if syncErr != nil {
+		return fmt.Errorf("failed to sync launcher instances: %w", syncErr), syncRetry
+	}
 	return nil, syncRetry
 }
 
