@@ -62,7 +62,7 @@ jobs:
 
       - name: show test pods with labels
         if: always()
-        run: kubectl get pods -L dual-pods.llm-d.ai/dual,dual-pods.llm-d.ai/sleeping,dual-pods.llm-d.ai/launcher-config-name
+        run: kubectl get pods -L dual-pods.llm-d.ai/dual,dual-pods.llm-d.ai/sleeping,dual-pods.llm-d.ai/instance,dual-pods.llm-d.ai/launcher-config-name
 
       - name: show ReplicaSets
         if: always()

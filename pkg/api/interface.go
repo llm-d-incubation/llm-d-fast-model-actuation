@@ -108,6 +108,16 @@ const LauncherBasedAnnotationName string = "dual-pods.llm-d.ai/launcher-based"
 // (it does not rely on this label for anything).
 const DualLabelName string = "dual-pods.llm-d.ai/dual"
 
+// InstanceLabelName is the name of a label that the dual-pods controller
+// maintains on server-requesting Pods.
+// While bound to a launcher-based server-providing Pod, this label is present
+// and its value is the instance ID of the vLLM instance;
+// while unbound, or when the server-providing Pod is not launcher-based,
+// this label is absent.
+// This label is purely FYI emitted by the dual-pods controller
+// (it does not rely on this label for anything).
+const InstanceLabelName string = "dual-pods.llm-d.ai/instance"
+
 // SleepingLabelName is the name of a label that the dual-pods controller
 // maintains on server-providing Pods.
 // This value of this label is "true" or "false",
