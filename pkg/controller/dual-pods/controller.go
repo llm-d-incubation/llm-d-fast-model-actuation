@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -460,7 +461,7 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 			ctl.Queue.Add(nodeItem{nodeName})
 		}
 	case *fmav1alpha1.InferenceServerConfig:
-		ctl.enqueueRequestersByInferenceServerConfig(typed, isInInitialList)
+		ctl.enqueueInfSvrItemsByISC(typed, isInInitialList)
 	case *corev1.ConfigMap:
 		if typed.Name != GPUMapName {
 			ctl.enqueueLogger.V(5).Info("Ignoring ConfigMap that is not the GPU map", "ref", cache.MetaObjectToName(typed))
@@ -513,7 +514,15 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 			ctl.Queue.Add(nodeItem{nodeName})
 		}
 	case *fmav1alpha1.InferenceServerConfig:
-		ctl.enqueueRequestersByInferenceServerConfig(typed, false)
+		prevTyped, ok := prev.(*fmav1alpha1.InferenceServerConfig)
+		if ok && !reflect.DeepEqual(prevTyped.Spec, typed.Spec) {
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+				defer cancel()
+				ctl.cleanupObsoleteSleepingInstances(ctx, prevTyped, typed)
+			}()
+		}
+		ctl.enqueueInfSvrItemsByISC(typed, false)
 	case *corev1.ConfigMap:
 		if typed.Name != GPUMapName {
 			ctl.enqueueLogger.V(5).Info("Ignoring ConfigMap that is not the GPU map", "ref", cache.MetaObjectToName(typed))
@@ -569,7 +578,7 @@ func (ctl *controller) OnDelete(obj any) {
 			ctl.Queue.Add(nodeItem{nodeName})
 		}
 	case *fmav1alpha1.InferenceServerConfig:
-		ctl.enqueueRequestersByInferenceServerConfig(typed, false)
+		ctl.enqueueInfSvrItemsByISC(typed, false)
 	case *corev1.ConfigMap:
 		if typed.Name != GPUMapName {
 			ctl.enqueueLogger.V(5).Info("Ignoring ConfigMap that is not the GPU map", "ref", cache.MetaObjectToName(typed))
@@ -666,7 +675,7 @@ func (ctl *controller) enqueueRequesters(ctx context.Context) {
 	}
 }
 
-func (ctl *controller) enqueueRequestersByInferenceServerConfig(isc *fmav1alpha1.InferenceServerConfig, isInInitialList bool) {
+func (ctl *controller) enqueueInfSvrItemsByISC(isc *fmav1alpha1.InferenceServerConfig, isInInitialList bool) {
 	inferenceServerConfigName := isc.Name
 	requesters, err := ctl.podInformer.GetIndexer().ByIndex(inferenceServerConfigIndexName, inferenceServerConfigName)
 	if err != nil {
@@ -792,3 +801,112 @@ func (ctl *controller) clearServerData(nodeDat *nodeData, uid apitypes.UID) {
 	defer ctl.mutex.Unlock()
 	delete(nodeDat.InferenceServers, uid)
 }
+
+func (ctl *controller) deleteInstanceFromLauncherData(nodeName, launcherPodName, instanceID string) {
+	ctl.mutex.Lock()
+	defer ctl.mutex.Unlock()
+	nodeDat := ctl.nodeNameToData[nodeName]
+	if nodeDat == nil {
+		return
+	}
+	launcherDat := nodeDat.Launchers[launcherPodName]
+	if launcherDat == nil {
+		return
+	}
+	delete(launcherDat.Instances, instanceID)
+}
+
+func (ctl *controller) cleanupObsoleteSleepingInstances(ctx context.Context, oldISC, newISC *fmav1alpha1.InferenceServerConfig) {
+	logger := ctl.enqueueLogger.WithValues("inferenceServerConfig", newISC.Name)
+	type launcherRef struct {
+		nodeName        string
+		launcherPodName string
+	}
+
+	var launcherRefs []launcherRef
+	ctl.mutex.Lock()
+	for nodeName, nodeDat := range ctl.nodeNameToData {
+		for launcherPodName := range nodeDat.Launchers {
+			launcherRefs = append(launcherRefs, launcherRef{
+				nodeName:        nodeName,
+				launcherPodName: launcherPodName,
+			})
+		}
+	}
+	ctl.mutex.Unlock()
+
+	for _, lr := range launcherRefs {
+		launcherPod, err := ctl.podLister.Pods(ctl.namespace).Get(lr.launcherPodName)
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			logger.Error(err, "Failed to get launcher Pod for obsolete instance cleanup",
+				"launcherPod", lr.launcherPodName)
+			continue
+		}
+		if launcherPod.DeletionTimestamp != nil || launcherPod.Status.PodIP == "" {
+			continue
+		}
+		launcherBaseURL := fmt.Sprintf("http://%s:%d", launcherPod.Status.PodIP, ctlrcommon.LauncherServicePort)
+		lClient, err := NewLauncherClient(launcherBaseURL)
+		if err != nil {
+			logger.Error(err, "Failed to create launcher client for obsolete instance cleanup",
+				"launcherPod", lr.launcherPodName)
+			continue
+		}
+		allInsts, err := lClient.ListInstances(ctx)
+		if err != nil {
+			logger.Error(err, "Failed to list instances for obsolete instance cleanup",
+				"launcherPod", lr.launcherPodName)
+			continue
+		}
+		for _, inst := range allInsts.Instances {
+			iscName := inst.Annotations[VllmConfigISCNameAnnotationKey]
+			if iscName != oldISC.Name {
+				continue
+			}
+			if len(inst.GpuUUIDs) == 0 {
+				logger.V(4).Info("Skipping instance cleanup because GPU UUIDs are unknown",
+					"launcherPod", lr.launcherPodName, "instanceID", inst.InstanceID)
+				continue
+			}
+			_, oldHash, err := ctl.configInferenceServer(oldISC, inst.GpuUUIDs)
+			if err != nil {
+				logger.Error(err, "Failed to compute old instance hash",
+					"launcherPod", lr.launcherPodName, "instanceID", inst.InstanceID)
+				continue
+			}
+			_, newHash, err := ctl.configInferenceServer(newISC, inst.GpuUUIDs)
+			if err != nil {
+				logger.Error(err, "Failed to compute new instance hash",
+					"launcherPod", lr.launcherPodName, "instanceID", inst.InstanceID)
+				continue
+			}
+			if inst.InstanceID != oldHash || oldHash == newHash {
+				continue
+			}
+			sleeping, err := ctl.querySleeping(ctx, launcherPod, int16(oldISC.Spec.ModelServerConfig.Port))
+			if err != nil {
+				logger.Error(err, "Failed to query whether obsolete instance is sleeping",
+					"launcherPod", lr.launcherPodName, "instanceID", inst.InstanceID)
+				continue
+			}
+			if !sleeping {
+				logger.V(4).Info("Skipping obsolete instance cleanup because instance did not explicitly report sleeping",
+					"launcherPod", lr.launcherPodName, "instanceID", inst.InstanceID)
+				continue
+			}
+			if _, err := lClient.DeleteInstance(ctx, inst.InstanceID); err != nil {
+				logger.Error(err, "Failed to delete obsolete sleeping instance",
+					"launcherPod", lr.launcherPodName, "instanceID", inst.InstanceID)
+				continue
+			}
+			ctl.deleteInstanceFromLauncherData(lr.nodeName, lr.launcherPodName, inst.InstanceID)
+			logger.V(2).Info("Deleted obsolete sleeping instance",
+				"launcherPod", lr.launcherPodName, "instanceID", inst.InstanceID,
+				"oldHash", oldHash, "newHash", newHash)
+		}
+	}
+}
+

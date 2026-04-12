@@ -334,7 +334,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	if serverDat.GPUIDsStr == nil {
 		logger.V(5).Info("Querying accelerators", "ip", requesterIP, "port", adminPort)
 		url := fmt.Sprintf("http://%s:%s%s", requesterIP, adminPort, stubapi.AcceleratorQueryPath)
-		gpuUUIDs, err := getGPUUUIDs(url)
+		gpuUUIDs, err := getGPUUUIDs(ctx, url)
 		if err != nil {
 			queryErr := fmt.Errorf("GET %q fails: %s", url, err.Error())
 			updateErr, _ := ctl.ensureReqStatus(ctx, requestingPod, serverDat, queryErr.Error())
@@ -1375,7 +1375,7 @@ func getReducedInferenceContainerState(from *corev1.Pod) *reducedContainerState 
 
 func (ctl *controller) querySleeping(ctx context.Context, providingPod *corev1.Pod, serverPort int16) (bool, error) {
 	queryURL := fmt.Sprintf("http://%s:%d/is_sleeping", providingPod.Status.PodIP, serverPort)
-	body, err := doGet(queryURL)
+	body, err := doGet(ctx, queryURL)
 	if err != nil {
 		return false, err
 	}
@@ -1393,7 +1393,7 @@ func (ctl *controller) accelMemoryIsLowEnough(ctx context.Context, requestingPod
 		adminPort = api.AdminPortDefaultValue
 	}
 	url := fmt.Sprintf("http://%s:%s%s", requestingPod.Status.PodIP, adminPort, stubapi.AcceleratorMemoryQueryPath)
-	body, err := doGet(url)
+	body, err := doGet(ctx, url)
 	if err != nil {
 		return err
 	}
@@ -1598,12 +1598,16 @@ func init() {
 	podDecoder = codecFactory.UniversalDecoder(corev1.SchemeGroupVersion)
 }
 
-func doGet(url string) ([]byte, error) {
+func doGet(ctx context.Context, url string) ([]byte, error) {
 	client := &http.Client{
 		Timeout: 5 * time.Second,
 	}
 
-	resp, err := client.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("http get %q: %w", url, err)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("http get %q: %w", url, err)
 	}
@@ -1621,8 +1625,8 @@ func doGet(url string) ([]byte, error) {
 }
 
 // getGPUUUIDs does the HTTP GET on the given URL to fetch the assigned GPU UUIDs.
-func getGPUUUIDs(url string) ([]string, error) {
-	body, err := doGet(url)
+func getGPUUUIDs(ctx context.Context, url string) ([]string, error) {
+	body, err := doGet(ctx, url)
 	if err != nil {
 		return nil, err
 	}
