@@ -499,4 +499,71 @@ if [ "$E2E_PLATFORM" = "openshift" ]; then check_gpu_pin $req_after_delete; fi
 
 cheer Successful unbound launcher deletion cleanup
 
+# ---------------------------------------------------------------------------
+# Stopped Instance Recovery
+# ---------------------------------------------------------------------------
+
+intro_case Stopped Instance Recovery
+
+# This test verifies that the dual-pods controller detects a stopped vLLM
+# instance (via the sidecar notifier annotation) and deletes the server-
+# requesting Pod so that the ReplicaSet recreates it with a fresh instance.
+#
+# Starting state: $req_after_delete is bound to $launcher_after_delete, both Ready.
+
+echo "Bound requester: $req_after_delete, launcher: $launcher_after_delete"
+req_uid_before=$(kubectl get pod $req_after_delete -n "$NS" -o jsonpath='{.metadata.uid}')
+
+# Get the running instance ID from the launcher
+instance_id=$(kubectl exec -n "$NS" $launcher_after_delete -c inference-server -- python3 -c '
+import json, urllib.request
+resp = json.load(urllib.request.urlopen("http://127.0.0.1:8001/v2/vllm/instances"))
+for inst in resp["instances"]:
+    if inst["status"] == "running":
+        print(inst["instance_id"])
+        break
+')
+echo "Running instance ID: $instance_id"
+[ -n "$instance_id" ]
+
+# Delete the running instance from the launcher to simulate a crash.
+# The notifier sidecar will detect the change and update the Pod annotation.
+# The dual-pods controller will then query the instance, get 404, and delete the requester.
+kubectl exec -n "$NS" $launcher_after_delete -c inference-server -- python3 -c '
+import urllib.request
+req = urllib.request.Request(
+    "http://127.0.0.1:8001/v2/vllm/instances/'"$instance_id"'",
+    method="DELETE",
+)
+urllib.request.urlopen(req)
+print("Instance deleted from launcher")
+'
+
+# Wait for the old requester Pod to be deleted (the dual-pods controller should do this)
+expect '[ "$(kubectl get pod -n '"$NS"' $req_after_delete -o jsonpath={.metadata.uid} 2>/dev/null)" != "$req_uid_before" ]'
+echo "Old requester $req_after_delete was deleted by the controller"
+
+# Wait for the ReplicaSet to recreate a new requester Pod
+expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$inst | wc -l | grep -w 1"
+req_recovered=$(kubectl get pods -n "$NS" -o name -l app=dp-example,instance=$inst | sed s%pod/%%)
+echo "Recovered server-requesting Pod: $req_recovered"
+
+# Wait for the new requester to be bound to the same launcher
+expect "kubectl get pods -n $NS -o name -l dual-pods.llm-d.ai/dual=$req_recovered | wc -l | grep -w 1"
+launcher_recovered=$(kubectl get pods -n "$NS" -o name -l dual-pods.llm-d.ai/dual=$req_recovered | sed s%pod/%%)
+echo "Recovered launcher: $launcher_recovered"
+[ "$launcher_recovered" == "$launcher_after_delete" ]
+
+# Verify bidirectional binding
+expect '[ "$(kubectl get pod -n '"$NS"' $req_recovered -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcher_after_delete" ]'
+
+# Wait for both to be ready
+date
+kubectl wait --for condition=Ready pod/$req_recovered -n "$NS" --timeout=120s
+[ "$(kubectl get pod $launcher_after_delete -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
+
+if [ "$E2E_PLATFORM" = "openshift" ]; then check_gpu_pin $req_recovered; fi
+
+cheer Successful stopped instance recovery
+
 cheer All launcher-based tests passed
