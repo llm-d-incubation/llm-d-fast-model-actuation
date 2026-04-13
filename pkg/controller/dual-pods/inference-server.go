@@ -370,7 +370,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 			syncResult, err, retry := ctl.syncLauncherInstances(ctx, nodeDat, providingPod)
 			if err != nil || retry {
 				if err != nil {
-					return fmt.Errorf("failed to sync launcher instances for bound launcher Pod: %w", err), true
+					return fmt.Errorf("failed to sync launcher instances for bound launcher Pod: %w", err), retry
 				}
 				return nil, true
 			}
