@@ -1124,30 +1124,37 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 	// A providingPod with no IP is not scheduled, so we know that it is not awake.
 	// If providingPod is stale then the update will fail.
 	if (serverDat.Sleeping == nil || !*(serverDat.Sleeping)) && providingPod.Status.PodIP != "" { // need to put to sleep
-		serverPort := serverDat.ServerPort
-		// TODO(waltforme): Is serverPort always set correctly for launcher-based server-providing Pods upon unbinding?
-		// E.g. What if requestingPod is deleted during a crash and restart of the dual-pods controller?
-		// In order to find the port in this case, I think the best effort is to recompute hash for all InferenceServerConfig objects and try to match.
-		if !launcherBased {
-			if serverDat.NominalProvidingPod == nil {
-				var err error
-				_, serverPort, err = utils.GetInferenceServerContainerIndexAndPort(providingPod)
-				if err != nil { // Impossible, because such a providingPod would never be created by this controller
-					return fmt.Errorf("unable to put server to sleep because port not known: %w", err)
+		// For launcher-based instances, check if the instance is already obsolete
+		// (i.e. its InferenceServerConfig was updated since the instance was created).
+		// If so, delete it from the launcher rather than putting it to sleep.
+		if launcherBased && ctl.maybeDeleteObsoleteInstance(ctx, serverDat, providingPod) {
+			serverDat.Sleeping = ptr.To(true)
+		} else {
+			serverPort := serverDat.ServerPort
+			// TODO(waltforme): Is serverPort always set correctly for launcher-based server-providing Pods upon unbinding?
+			// E.g. What if requestingPod is deleted during a crash and restart of the dual-pods controller?
+			// In order to find the port in this case, I think the best effort is to recompute hash for all InferenceServerConfig objects and try to match.
+			if !launcherBased {
+				if serverDat.NominalProvidingPod == nil {
+					var err error
+					_, serverPort, err = utils.GetInferenceServerContainerIndexAndPort(providingPod)
+					if err != nil { // Impossible, because such a providingPod would never be created by this controller
+						return fmt.Errorf("unable to put server to sleep because port not known: %w", err)
+					}
 				}
 			}
+			endpoint := fmt.Sprintf("%s:%d", providingPod.Status.PodIP, serverPort)
+			sleepURL := "http://" + endpoint + "/sleep"
+			resp, err := http.Post(sleepURL, "", nil)
+			if err != nil {
+				return fmt.Errorf("failed to put provider %q to sleep, POST %s got error: %w", serverDat.ProvidingPodName, sleepURL, err)
+			}
+			if sc := resp.StatusCode; sc != http.StatusOK {
+				return fmt.Errorf("failed to put provider %q to sleep, POST %s returned status %d", serverDat.ProvidingPodName, sleepURL, sc)
+			}
+			serverDat.Sleeping = ptr.To(true)
+			logger.V(2).Info("Put inference server to sleep", "endpoint", endpoint)
 		}
-		endpoint := fmt.Sprintf("%s:%d", providingPod.Status.PodIP, serverPort)
-		sleepURL := "http://" + endpoint + "/sleep"
-		resp, err := http.Post(sleepURL, "", nil)
-		if err != nil {
-			return fmt.Errorf("failed to put provider %q to sleep, POST %s got error: %w", serverDat.ProvidingPodName, sleepURL, err)
-		}
-		if sc := resp.StatusCode; sc != http.StatusOK {
-			return fmt.Errorf("failed to put provider %q to sleep, POST %s returned status %d", serverDat.ProvidingPodName, sleepURL, sc)
-		}
-		serverDat.Sleeping = ptr.To(true)
-		logger.V(2).Info("Put inference server to sleep", "endpoint", endpoint)
 	}
 	providingPod = providingPod.DeepCopy()
 	var aChange, fChange bool
@@ -1225,6 +1232,63 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 	serverDat.ProvidingPodName = ""
 	serverDat.ServerPort = -1
 	return nil
+}
+
+// maybeDeleteObsoleteInstance checks whether the launcher-based instance is obsolete
+// (its InferenceServerConfig was updated since the instance was created) and if so,
+// deletes it from the launcher. Returns true if the instance was deleted.
+// On any error, returns false so the caller falls through to the normal sleep path.
+func (ctl *controller) maybeDeleteObsoleteInstance(ctx context.Context, serverDat *serverData, providingPod *corev1.Pod) bool {
+	logger := klog.FromContext(ctx)
+	if serverDat.InstanceID == "" {
+		return false
+	}
+	launcherBaseURL := fmt.Sprintf("http://%s:%d", providingPod.Status.PodIP, ctlrcommon.LauncherServicePort)
+	lClient, err := NewLauncherClient(launcherBaseURL)
+	if err != nil {
+		logger.V(4).Info("Cannot check instance obsolescence: failed to create launcher client", "err", err)
+		return false
+	}
+	instState, err := lClient.GetInstanceState(ctx, serverDat.InstanceID)
+	if err != nil {
+		logger.V(4).Info("Cannot check instance obsolescence: failed to get instance state", "instanceID", serverDat.InstanceID, "err", err)
+		return false
+	}
+	iscName := instState.Annotations[VllmConfigISCNameAnnotationKey]
+	if iscName == "" {
+		logger.V(4).Info("Cannot check instance obsolescence: no ISC name annotation on instance", "instanceID", serverDat.InstanceID)
+		return false
+	}
+	currentISC, err := ctl.iscLister.InferenceServerConfigs(ctl.namespace).Get(iscName)
+	if err != nil {
+		logger.V(4).Info("Cannot check instance obsolescence: ISC not found", "iscName", iscName, "err", err)
+		return false
+	}
+	if len(instState.GpuUUIDs) == 0 {
+		logger.V(4).Info("Cannot check instance obsolescence: no GPU UUIDs on instance", "instanceID", serverDat.InstanceID)
+		return false
+	}
+	_, currentHash, err := ctl.configInferenceServer(currentISC, instState.GpuUUIDs)
+	if err != nil {
+		logger.V(4).Info("Cannot check instance obsolescence: failed to compute current hash", "iscName", iscName, "err", err)
+		return false
+	}
+	if currentHash == serverDat.InstanceID {
+		return false // not obsolete
+	}
+	// Instance is obsolete — delete from launcher instead of sleeping.
+	if _, err := lClient.DeleteInstance(ctx, serverDat.InstanceID); err != nil {
+		if !IsInstanceNotFoundError(err) {
+			logger.Error(err, "Failed to delete obsolete instance during unbinding",
+				"instanceID", serverDat.InstanceID)
+			return false
+		}
+	}
+	nodeName, _ := getProviderNodeName(providingPod)
+	ctl.deleteInstanceFromLauncherData(nodeName, providingPod.Name, serverDat.InstanceID)
+	logger.V(2).Info("Deleted obsolete instance during unbinding",
+		"instanceID", serverDat.InstanceID, "currentHash", currentHash, "iscName", iscName)
+	return true
 }
 
 // getNominalServerProvidingPod returns the nominal server-providing Pod,
