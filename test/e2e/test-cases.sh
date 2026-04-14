@@ -222,57 +222,57 @@ if (( available_gpus < 1 )); then
     exit 1
 else
 
-collision_inst="${inst}-collision"
-collision_rs="my-request-collision-$inst"
+    collision_inst="${inst}-collision"
+    collision_rs="my-request-collision-$inst"
 
-kubectl get rs "$rs" -n "$NS" -o json \
-  | jq \
-      --arg collision_rs "$collision_rs" \
-      --arg collision_inst "$collision_inst" \
-      --arg testnode "$testnode" \
-      --arg isc "$isc" \
-      '
-      .metadata.name = $collision_rs |
-      del(.metadata.uid, .metadata.resourceVersion, .metadata.creationTimestamp, .metadata.annotations, .metadata.ownerReferences, .status) |
-      .spec.replicas = 1 |
-      .spec.selector.matchLabels.instance = $collision_inst |
-      .spec.template.metadata.labels.instance = $collision_inst |
-      .spec.template.spec.nodeSelector = {"kubernetes.io/hostname": $testnode} |
-      .spec.template.metadata.annotations["dual-pods.llm-d.ai/inference-server-config"] = $isc
-    ' \
-  | kubectl apply -n "$NS" -f -
+    kubectl get rs "$rs" -n "$NS" -o json \
+      | jq \
+          --arg collision_rs "$collision_rs" \
+          --arg collision_inst "$collision_inst" \
+          --arg testnode "$testnode" \
+          --arg isc "$isc" \
+          '
+          .metadata.name = $collision_rs |
+          del(.metadata.uid, .metadata.resourceVersion, .metadata.creationTimestamp, .metadata.annotations, .metadata.ownerReferences, .status) |
+          .spec.replicas = 1 |
+          .spec.selector.matchLabels.instance = $collision_inst |
+          .spec.template.metadata.labels.instance = $collision_inst |
+          .spec.template.spec.nodeSelector = {"kubernetes.io/hostname": $testnode} |
+          .spec.template.metadata.annotations["dual-pods.llm-d.ai/inference-server-config"] = $isc
+        ' \
+      | kubectl apply -n "$NS" -f -
 
-expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$collision_inst | wc -l | grep -w 1"
+    expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$collision_inst | wc -l | grep -w 1"
 
-collision_req=$(kubectl get pods -n "$NS" -o name -l app=dp-example,instance=$collision_inst | sed s%pod/%%)
-echo "Collision requester Pod is $collision_req"
+    collision_req=$(kubectl get pods -n "$NS" -o name -l app=dp-example,instance=$collision_inst | sed s%pod/%%)
+    echo "Collision requester Pod is $collision_req"
 
-expect '[ "$(kubectl get pod -n '"$NS"' '"$collision_req"' -o jsonpath={.spec.nodeName})" == "'"$testnode"'" ]'
-expect "kubectl get pods -n $NS -o name -l dual-pods.llm-d.ai/dual=$collision_req | wc -l | grep -w 1"
+    expect '[ "$(kubectl get pod -n '"$NS"' '"$collision_req"' -o jsonpath={.spec.nodeName})" == "'"$testnode"'" ]'
+    expect "kubectl get pods -n $NS -o name -l dual-pods.llm-d.ai/dual=$collision_req | wc -l | grep -w 1"
 
-collision_launcher=$(kubectl get pods -n "$NS" -o name -l dual-pods.llm-d.ai/dual=$collision_req | sed s%pod/%%)
-echo "Collision launcher Pod is $collision_launcher"
+    collision_launcher=$(kubectl get pods -n "$NS" -o name -l dual-pods.llm-d.ai/dual=$collision_req | sed s%pod/%%)
+    echo "Collision launcher Pod is $collision_launcher"
 
-[ "$collision_launcher" != "$launcher1" ]
+    [ "$collision_launcher" != "$launcher1" ]
 
-expect '[ "$(kubectl get pod -n '"$NS"' '"$collision_req"' -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "'"$collision_launcher"'" ]'
+    expect '[ "$(kubectl get pod -n '"$NS"' '"$collision_req"' -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "'"$collision_launcher"'" ]'
 
-date
-kubectl wait --for condition=Ready pod/$collision_req -n "$NS" --timeout=120s
-[ "$(kubectl get pod $collision_launcher -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
+    date
+    kubectl wait --for condition=Ready pod/$collision_req -n "$NS" --timeout=120s
+    [ "$(kubectl get pod $collision_launcher -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
 
-req_gpus=$(kubectl get pod "$req1" -n "$NS" -o jsonpath='{.metadata.annotations.dual-pods\.llm-d\.ai/accelerators}')
-collision_gpus=$(kubectl get pod "$collision_req" -n "$NS" -o jsonpath='{.metadata.annotations.dual-pods\.llm-d\.ai/accelerators}')
-[ -n "$req_gpus" ]
-[ -n "$collision_gpus" ]
-[ "$req_gpus" != "$collision_gpus" ]
+    req_gpus=$(kubectl get pod "$req1" -n "$NS" -o jsonpath='{.metadata.annotations.dual-pods\.llm-d\.ai/accelerators}')
+    collision_gpus=$(kubectl get pod "$collision_req" -n "$NS" -o jsonpath='{.metadata.annotations.dual-pods\.llm-d\.ai/accelerators}')
+    [ -n "$req_gpus" ]
+    [ -n "$collision_gpus" ]
+    [ "$req_gpus" != "$collision_gpus" ]
 
-kubectl delete rs "$collision_rs" -n "$NS" --wait=true
-expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$collision_inst | wc -l | grep -w 0"
-kubectl delete pod "$collision_launcher" -n "$NS" --wait=true
-expect '! kubectl get pods -n '"$NS"' -o name | grep -qw pod/'"$collision_launcher"
+    kubectl delete rs "$collision_rs" -n "$NS" --wait=true
+    expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$collision_inst | wc -l | grep -w 0"
+    kubectl delete pod "$collision_launcher" -n "$NS" --wait=true
+    expect '! kubectl get pods -n '"$NS"' -o name | grep -qw pod/'"$collision_launcher"
 
-cheer Successful same-node collision handling
+    cheer Successful same-node collision handling
 
 fi # available_gpus check
 
