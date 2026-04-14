@@ -203,6 +203,25 @@ fi
 
 intro_case Same-Node Port Collision Creates New Launcher
 
+# Check whether the test node has a free GPU for the collision requester.
+# req1 already holds 1 GPU; the collision requester needs 1 more on the same node.
+allocatable_gpus=$(kubectl get node "$testnode" -o jsonpath='{.status.allocatable.nvidia\.com/gpu}')
+allocated_gpus=$(kubectl get pods --all-namespaces --field-selector spec.nodeName="$testnode" -o json \
+  | jq '[.items[]
+         | select(.status.phase != "Succeeded" and .status.phase != "Failed")
+         | select(.metadata.deletionTimestamp == null)
+         | .spec.containers[]?.resources.limits["nvidia.com/gpu"] // "0"
+         | tonumber] | add // 0')
+available_gpus=$(( allocatable_gpus - allocated_gpus ))
+echo "Node $testnode: allocatable_gpus=$allocatable_gpus allocated_gpus=$allocated_gpus available_gpus=$available_gpus"
+
+if (( available_gpus < 1 )); then
+    echo "FAIL: Node $testnode has no free GPUs ($allocatable_gpus allocatable, $allocated_gpus allocated)." >&2
+    echo "The Same-Node Port Collision test needs 1 free GPU for the collision requester." >&2
+    echo "This is likely due to GPU saturation on the shared cluster." >&2
+    exit 1
+else
+
 collision_inst="${inst}-collision"
 collision_rs="my-request-collision-$inst"
 
@@ -254,6 +273,8 @@ kubectl delete pod "$collision_launcher" -n "$NS" --wait=true
 expect '! kubectl get pods -n '"$NS"' -o name | grep -qw pod/'"$collision_launcher"
 
 cheer Successful same-node collision handling
+
+fi # available_gpus check
 
 # ---------------------------------------------------------------------------
 # Instance Wake-up Fast Path

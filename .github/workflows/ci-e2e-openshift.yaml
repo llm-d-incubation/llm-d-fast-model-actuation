@@ -386,6 +386,29 @@ jobs:
           done
         continue-on-error: true
 
+      - name: Dump GPU allocation per node
+        run: |
+          echo "=== GPU allocation per node ==="
+          for nodename in $(kubectl get nodes -l nvidia.com/gpu.present=true -o jsonpath='{.items[*].metadata.name}'); do
+            allocatable=$(kubectl get node "$nodename" -o jsonpath='{.status.allocatable.nvidia\.com/gpu}')
+            allocated=$(kubectl get pods --all-namespaces --field-selector spec.nodeName="$nodename" -o json \
+              | jq '[.items[]
+                    | select(.status.phase != "Succeeded" and .status.phase != "Failed")
+                    | select(.metadata.deletionTimestamp == null)
+                    | .spec.containers[]?.resources.limits["nvidia.com/gpu"] // "0"
+                    | tonumber] | add // 0')
+            echo "Node $nodename: allocatable=$allocatable allocated=$allocated available=$((allocatable - allocated))"
+            echo "  GPU-consuming pods in $FMA_NAMESPACE:"
+            kubectl get pods -n "$FMA_NAMESPACE" --field-selector spec.nodeName="$nodename" -o json \
+              | jq -r '.items[]
+                  | select(.status.phase != "Succeeded" and .status.phase != "Failed")
+                  | select(.metadata.deletionTimestamp == null)
+                  | ([.spec.containers[]?.resources.limits["nvidia.com/gpu"] // "0" | tonumber] | add) as $gpu_total
+                  | select($gpu_total > 0)
+                  | "    \(.metadata.name) gpu=\($gpu_total)"'
+          done
+        continue-on-error: true
+
       - name: Detect cluster type
         run: |
           CLUSTER_DOMAIN=$(oc get ingress.config cluster -o jsonpath='{.spec.domain}')
