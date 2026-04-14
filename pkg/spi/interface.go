@@ -59,3 +59,15 @@ const SetLogPath = "/v1/set-log"
 // LogStartPosParam is the name of the query parameter that
 // holds that starting position of a log chunk.
 const LogStartPosParam = "startPos"
+
+// InitProxy is the path for initializing the HTTP reverse proxy。
+// The proxy is used to forward requests from the server-requesting
+// pod to the server-providing pod.
+// Supports two HTTP methods:
+//   - GET: retrieves the initialization status of the proxy.
+//     Returns  status info.
+//   - POST: initializes the proxy with a target address and port.
+//     The request body should contain a JSON object with "address"
+//     and "port" fields. After successful initialization,
+//     the proxy will forward requests to the configured target server.
+const InitProxy = "/v1/proxy/init"

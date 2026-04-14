@@ -574,6 +574,15 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				return fmt.Errorf("launcher Pod %q has no IP assigned yet", launcherPod.Name), true
 			}
 
+			// Initialize the reverse proxy between the launcher Pod and the requester Pod.
+			// Requests can be proxied to the launcher Pod from the requester Pod.
+			url := fmt.Sprintf("http://%s:%s%s", requestingPod.Status.PodIP, adminPort, stubapi.InitProxy)
+			if err := doPostWithData(url, bytes.NewReader([]byte(fmt.Sprintf("{\"address\":\"%s\",\"port\":%d}",
+				launcherIP, desiredPort)))); err != nil {
+				logger.Error(err, "Failed to initialize requester proxy")
+				return err, true
+			}
+
 			launcherBaseURL := fmt.Sprintf("http://%s:%d", launcherIP, ctlrcommon.LauncherServicePort)
 			lClient, err := NewLauncherClient(launcherBaseURL)
 			if err != nil {
@@ -1357,13 +1366,16 @@ func (ctl *controller) ensureReqState(ctx context.Context, requestingPod *corev1
 	return err, err != nil
 }
 
-// doPost does the HTTP POST request/response to the given URL.
 func doPost(url string) error {
+	return doPostWithData(url, nil)
+}
+
+func doPostWithData(url string, data io.Reader) error {
 	client := &http.Client{
 		Timeout: 5 * time.Second,
 	}
 
-	resp, err := client.Post(url, "application/json", nil)
+	resp, err := client.Post(url, "application/json", data)
 	if err != nil {
 		return fmt.Errorf("http post %q: %w", url, err)
 	}
