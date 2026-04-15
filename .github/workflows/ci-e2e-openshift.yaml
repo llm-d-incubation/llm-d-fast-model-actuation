@@ -573,7 +573,7 @@ jobs:
 
           # Delete namespace
           kubectl delete namespace "$FMA_NAMESPACE" \
-            --ignore-not-found --timeout=120s || true
+            --ignore-not-found --timeout=180s || true
 
           # Delete cluster-scoped stuff for reading Node objects
           kubectl delete clusterrole        "${FMA_CHART_INSTANCE_NAME}-node-view" --ignore-not-found || true
