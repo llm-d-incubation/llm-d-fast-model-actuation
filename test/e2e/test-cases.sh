@@ -64,7 +64,7 @@ expect() {
         if eval "$1"; then return; fi
         if (( elapsed > limit )); then
             echo "Did not become true (from $start to $(date)): $1" >&2
-            exit 99
+            return 99
         fi
         sleep 5
         elapsed=$(( elapsed+5 ))
@@ -103,12 +103,63 @@ check_gpu_pin() {
 }
 
 # ---------------------------------------------------------------------------
+# Probe for a node with 2 free GPUs
+# ---------------------------------------------------------------------------
+# Create a throwaway Pod that requests 2 GPUs.  The scheduler will place it
+# on a node that actually has 2 GPUs available right now.  Once it is running
+# we record the node, delete the probe Pod, and pin every subsequent test
+# workload to that node.  This avoids spurious failures on shared clusters
+# where GPU availability is dynamic (Issue #422).
+
+intro_case GPU Probe
+
+probe_pod="gpu-probe-$(date +%d-%H-%M-%S)"
+
+if [ -n "${RUNTIME_CLASS_NAME:-}" ]; then
+    probe_runtime_class="runtimeClassName: ${RUNTIME_CLASS_NAME}"
+else
+    probe_runtime_class=""
+fi
+
+kubectl apply -n "$NS" -f - <<PROBE
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ${probe_pod}
+  labels:
+    app: gpu-probe
+spec:
+  ${probe_runtime_class}
+  containers:
+  - name: pause
+    image: registry.k8s.io/pause:3.10.2
+    resources:
+      limits:
+        nvidia.com/gpu: "2"
+  terminationGracePeriodSeconds: 0
+PROBE
+
+if ! expect '[ "$(kubectl get pod '"$probe_pod"' -n '"$NS"' -o jsonpath={.status.phase})" = "Running" ]'; then
+    echo "FAIL: GPU probe Pod $probe_pod did not reach Running." >&2
+    echo "This probably means no node in the cluster has 2 GPUs available right now." >&2
+    kubectl delete pod "$probe_pod" -n "$NS" --wait=false 2>/dev/null || true
+    exit 1
+fi
+
+testnode=$(kubectl get pod "$probe_pod" -n "$NS" -o jsonpath='{.spec.nodeName}')
+echo "GPU probe Pod $probe_pod scheduled on Node $testnode — using it for the rest of the tests"
+
+kubectl delete pod "$probe_pod" -n "$NS" --wait=true
+
+cheer "GPU probe complete — test node is $testnode"
+
+# ---------------------------------------------------------------------------
 # Create test objects
 # ---------------------------------------------------------------------------
 
 intro_case Basic Launcher Pod Creation
 
-objs=$("$MKOBJS_SCRIPT" -n "$NS")
+objs=$("$MKOBJS_SCRIPT" -n "$NS" --node "$testnode")
 isc=$(echo $objs | awk '{print $1}')
 lc=$(echo $objs | awk '{print $2}')
 rs=$(echo $objs | awk '{print $3}')
@@ -147,8 +198,7 @@ expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$inst | wc -l
 
 export req1=$(kubectl get pods -n "$NS" -o name -l app=dp-example,instance=$inst | sed s%pod/%%)
 echo "Server-requesting Pod is $req1"
-testnode=$(kubectl get pod $req1 -n "$NS" -o jsonpath='{.spec.nodeName}')
-echo "The test Pods run on Node $testnode"
+[ "$(kubectl get pod $req1 -n "$NS" -o jsonpath='{.spec.nodeName}')" = "$testnode" ]
 
 # Wait for launcher-to-requester binding, then capture the launcher name
 expect "kubectl get pods -n $NS -o name -l dual-pods.llm-d.ai/dual=$req1 | wc -l | grep -w 1"

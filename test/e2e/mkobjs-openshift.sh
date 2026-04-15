@@ -2,7 +2,7 @@
 
 # Creates test Kubernetes objects for the OpenShift / real-cluster E2E path.
 #
-# Usage: mkobjs-openshift.sh [-n <namespace>]
+# Usage: mkobjs-openshift.sh [-n <namespace>] [--node <node-name>]
 #
 # Required environment variables:
 #   LAUNCHER_IMAGE   - container image for the launcher pod
@@ -17,8 +17,9 @@
 
 set -euo pipefail
 
-# Parse optional -n / --namespace flag
+# Parse optional flags
 ns_flag=()
+node_name=""
 while [ $# -gt 0 ]; do
     case "$1" in
         -n|--namespace)
@@ -27,6 +28,15 @@ while [ $# -gt 0 ]; do
                 shift 2
             else
                 echo "Missing --namespace argument" >&2
+                exit 1
+            fi
+            ;;
+        --node)
+            if [ $# -gt 1 ] ; then
+                node_name="$2"
+                shift 2
+            else
+                echo "Missing --node argument" >&2
                 exit 1
             fi
             ;;
@@ -46,6 +56,14 @@ inst=$(date +%d-%H-%M-%S)
 runtime_class=""
 if [ -n "${RUNTIME_CLASS_NAME:-}" ]; then
     runtime_class="runtimeClassName: ${RUNTIME_CLASS_NAME}"
+fi
+
+# When a node is specified, pin the ReplicaSet's pods to it.
+if [ -n "$node_name" ]; then
+    node_selector="nodeSelector:
+        kubernetes.io/hostname: \"$node_name\""
+else
+    node_selector=""
 fi
 
 if out=$(kubectl apply "${ns_flag[@]}" -f - 2>&1 <<EOF
@@ -218,6 +236,7 @@ spec:
         dual-pods.llm-d.ai/inference-server-config: "inference-server-config-smol-$inst"
     spec:
       ${runtime_class}
+      ${node_selector}
       containers:
         - name: inference-server
           image: ${REQUESTER_IMAGE}
