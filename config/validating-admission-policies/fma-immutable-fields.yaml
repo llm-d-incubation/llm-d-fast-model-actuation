@@ -17,11 +17,8 @@ spec:
     # some critical annotations/labels. It permits
     # such changes only when the requester is an FMA controller service
     # account.
-    # NOTE: this particular test on ServiceAccount name is extra relaxed,
-    # to also match ServiceAccounts that predate PR 297; after that PR merges,
-    # we can tighten up by looking for the suffix `-fma-controllers`.
     - expression: |
-        request.userInfo.username.matches("^system:serviceaccount:[^:]+:[^:]*-controllers$") ||
+        request.userInfo.username.matches("^system:serviceaccount:[^:]+:[^:]*-fma-controllers$") ||
         (
           oldObject.metadata.?annotations['dual-pods.llm-d.ai/requester'].orValue('') == object.metadata.?annotations['dual-pods.llm-d.ai/requester'].orValue('') &&
           oldObject.metadata.?annotations['dual-pods.llm-d.ai/status'].orValue('') == object.metadata.?annotations['dual-pods.llm-d.ai/status'].orValue('') &&

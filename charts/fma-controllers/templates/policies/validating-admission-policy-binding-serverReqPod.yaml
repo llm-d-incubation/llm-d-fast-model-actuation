@@ -1,2 +1,0 @@
-# ValidatingAdmissionPolicyBinding objects are no longer managed by this chart.
-# Apply config/validating-admission-policies/ to your cluster instead.
