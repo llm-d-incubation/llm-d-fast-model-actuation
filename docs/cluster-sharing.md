@@ -29,10 +29,13 @@ object.
 
 (One design goal is to minimize chores for administrators of shared clusters.)
 
-- As development progresses, we never change the definitions in an
-  existing version of the `fma.llm-d.ai` API group; we only add new
+- As development progresses, we almost never change the definitions in
+  an existing version of the `fma.llm-d.ai` API group; we only add new
   versions. Old versions may be deleted only once we are sure there is
   no further dev/test activity using them.
+  We can make a change in an existing definition if the change does not
+  affect any current usage (e.g., add a field, change an optional thing
+  that does not appear in any existing YAML).
 
 - During development of a PR that adds a version of the API group,
   successive revisions of the PR's head branch can change the
