@@ -64,7 +64,7 @@ expect() {
         if eval "$1"; then return; fi
         if (( elapsed > limit )); then
             echo "Did not become true (from $start to $(date)): $1" >&2
-            exit 99
+            return 99
         fi
         sleep 5
         elapsed=$(( elapsed+5 ))
@@ -103,12 +103,63 @@ check_gpu_pin() {
 }
 
 # ---------------------------------------------------------------------------
+# Probe for a node with 2 free GPUs
+# ---------------------------------------------------------------------------
+# Create a throwaway Pod that requests 2 GPUs.  The scheduler will place it
+# on a node that actually has 2 GPUs available right now.  Once it is running
+# we record the node, delete the probe Pod, and pin every subsequent test
+# workload to that node.  This avoids spurious failures on shared clusters
+# where GPU availability is dynamic (Issue #422).
+
+intro_case GPU Probe
+
+probe_pod="gpu-probe-$(date +%d-%H-%M-%S)"
+
+if [ -n "${RUNTIME_CLASS_NAME:-}" ]; then
+    probe_runtime_class="runtimeClassName: ${RUNTIME_CLASS_NAME}"
+else
+    probe_runtime_class=""
+fi
+
+kubectl apply -n "$NS" -f - <<PROBE
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ${probe_pod}
+  labels:
+    app: gpu-probe
+spec:
+  ${probe_runtime_class}
+  containers:
+  - name: pause
+    image: registry.k8s.io/pause:3.10.2
+    resources:
+      limits:
+        nvidia.com/gpu: "2"
+  terminationGracePeriodSeconds: 0
+PROBE
+
+if ! expect '[ "$(kubectl get pod '"$probe_pod"' -n '"$NS"' -o jsonpath={.status.phase})" = "Running" ]'; then
+    echo "FAIL: GPU probe Pod $probe_pod did not reach Running." >&2
+    echo "This probably means no node in the cluster has 2 GPUs available right now." >&2
+    kubectl delete pod "$probe_pod" -n "$NS" --wait=false 2>/dev/null || true
+    exit 1
+fi
+
+testnode=$(kubectl get pod "$probe_pod" -n "$NS" -o jsonpath='{.spec.nodeName}')
+echo "GPU probe Pod $probe_pod scheduled on Node $testnode — using it for the rest of the tests"
+
+kubectl delete pod "$probe_pod" -n "$NS" --wait=true
+
+cheer "GPU probe complete — test node is $testnode"
+
+# ---------------------------------------------------------------------------
 # Create test objects
 # ---------------------------------------------------------------------------
 
 intro_case Basic Launcher Pod Creation
 
-objs=$("$MKOBJS_SCRIPT" -n "$NS")
+objs=$("$MKOBJS_SCRIPT" -n "$NS" --node "$testnode")
 isc=$(echo $objs | awk '{print $1}')
 lc=$(echo $objs | awk '{print $2}')
 rs=$(echo $objs | awk '{print $3}')
@@ -147,8 +198,7 @@ expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$inst | wc -l
 
 export req1=$(kubectl get pods -n "$NS" -o name -l app=dp-example,instance=$inst | sed s%pod/%%)
 echo "Server-requesting Pod is $req1"
-testnode=$(kubectl get pod $req1 -n "$NS" -o jsonpath='{.spec.nodeName}')
-echo "The test Pods run on Node $testnode"
+[ "$(kubectl get pod $req1 -n "$NS" -o jsonpath='{.spec.nodeName}')" = "$testnode" ]
 
 # Wait for launcher-to-requester binding, then capture the launcher name
 expect "kubectl get pods -n $NS -o name -l dual-pods.llm-d.ai/dual=$req1 | wc -l | grep -w 1"
@@ -203,57 +253,78 @@ fi
 
 intro_case Same-Node Port Collision Creates New Launcher
 
-collision_inst="${inst}-collision"
-collision_rs="my-request-collision-$inst"
+# Check whether the test node has a free GPU for the collision requester.
+# req1 already holds 1 GPU; the collision requester needs 1 more on the same node.
+allocatable_gpus=$(kubectl get node "$testnode" -o jsonpath='{.status.allocatable.nvidia\.com/gpu}')
+allocated_gpus=$(kubectl get pods --all-namespaces --field-selector spec.nodeName="$testnode" -o json \
+  | jq '[.items[]
+         | select(.status.phase != "Succeeded" and .status.phase != "Failed")
+         | select(.metadata.deletionTimestamp == null)
+         | .spec.containers[]?.resources.limits["nvidia.com/gpu"] // "0"
+         | tonumber] | add // 0')
+available_gpus=$(( allocatable_gpus - allocated_gpus ))
+echo "Node $testnode: allocatable_gpus=$allocatable_gpus allocated_gpus=$allocated_gpus available_gpus=$available_gpus"
 
-kubectl get rs "$rs" -n "$NS" -o json \
-  | jq \
-      --arg collision_rs "$collision_rs" \
-      --arg collision_inst "$collision_inst" \
-      --arg testnode "$testnode" \
-      --arg isc "$isc" \
-      '
-      .metadata.name = $collision_rs |
-      del(.metadata.uid, .metadata.resourceVersion, .metadata.creationTimestamp, .metadata.annotations, .metadata.ownerReferences, .status) |
-      .spec.replicas = 1 |
-      .spec.selector.matchLabels.instance = $collision_inst |
-      .spec.template.metadata.labels.instance = $collision_inst |
-      .spec.template.spec.nodeSelector = {"kubernetes.io/hostname": $testnode} |
-      .spec.template.metadata.annotations["dual-pods.llm-d.ai/inference-server-config"] = $isc
-    ' \
-  | kubectl apply -n "$NS" -f -
+if (( available_gpus < 1 )); then
+    echo "FAIL: Node $testnode has no free GPUs ($allocatable_gpus allocatable, $allocated_gpus allocated)." >&2
+    echo "The Same-Node Port Collision test needs 1 free GPU for the collision requester." >&2
+    echo "This is likely due to GPU saturation on the shared cluster." >&2
+    exit 1
+else
 
-expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$collision_inst | wc -l | grep -w 1"
+    collision_inst="${inst}-collision"
+    collision_rs="my-request-collision-$inst"
 
-collision_req=$(kubectl get pods -n "$NS" -o name -l app=dp-example,instance=$collision_inst | sed s%pod/%%)
-echo "Collision requester Pod is $collision_req"
+    kubectl get rs "$rs" -n "$NS" -o json \
+      | jq \
+          --arg collision_rs "$collision_rs" \
+          --arg collision_inst "$collision_inst" \
+          --arg testnode "$testnode" \
+          --arg isc "$isc" \
+          '
+          .metadata.name = $collision_rs |
+          del(.metadata.uid, .metadata.resourceVersion, .metadata.creationTimestamp, .metadata.annotations, .metadata.ownerReferences, .status) |
+          .spec.replicas = 1 |
+          .spec.selector.matchLabels.instance = $collision_inst |
+          .spec.template.metadata.labels.instance = $collision_inst |
+          .spec.template.spec.nodeSelector = {"kubernetes.io/hostname": $testnode} |
+          .spec.template.metadata.annotations["dual-pods.llm-d.ai/inference-server-config"] = $isc
+        ' \
+      | kubectl apply -n "$NS" -f -
 
-expect '[ "$(kubectl get pod -n '"$NS"' '"$collision_req"' -o jsonpath={.spec.nodeName})" == "'"$testnode"'" ]'
-expect "kubectl get pods -n $NS -o name -l dual-pods.llm-d.ai/dual=$collision_req | wc -l | grep -w 1"
+    expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$collision_inst | wc -l | grep -w 1"
 
-collision_launcher=$(kubectl get pods -n "$NS" -o name -l dual-pods.llm-d.ai/dual=$collision_req | sed s%pod/%%)
-echo "Collision launcher Pod is $collision_launcher"
+    collision_req=$(kubectl get pods -n "$NS" -o name -l app=dp-example,instance=$collision_inst | sed s%pod/%%)
+    echo "Collision requester Pod is $collision_req"
 
-[ "$collision_launcher" != "$launcher1" ]
+    expect '[ "$(kubectl get pod -n '"$NS"' '"$collision_req"' -o jsonpath={.spec.nodeName})" == "'"$testnode"'" ]'
+    expect "kubectl get pods -n $NS -o name -l dual-pods.llm-d.ai/dual=$collision_req | wc -l | grep -w 1"
 
-expect '[ "$(kubectl get pod -n '"$NS"' '"$collision_req"' -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "'"$collision_launcher"'" ]'
+    collision_launcher=$(kubectl get pods -n "$NS" -o name -l dual-pods.llm-d.ai/dual=$collision_req | sed s%pod/%%)
+    echo "Collision launcher Pod is $collision_launcher"
 
-date
-kubectl wait --for condition=Ready pod/$collision_req -n "$NS" --timeout=120s
-[ "$(kubectl get pod $collision_launcher -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
+    [ "$collision_launcher" != "$launcher1" ]
 
-req_gpus=$(kubectl get pod "$req1" -n "$NS" -o jsonpath='{.metadata.annotations.dual-pods\.llm-d\.ai/accelerators}')
-collision_gpus=$(kubectl get pod "$collision_req" -n "$NS" -o jsonpath='{.metadata.annotations.dual-pods\.llm-d\.ai/accelerators}')
-[ -n "$req_gpus" ]
-[ -n "$collision_gpus" ]
-[ "$req_gpus" != "$collision_gpus" ]
+    expect '[ "$(kubectl get pod -n '"$NS"' '"$collision_req"' -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "'"$collision_launcher"'" ]'
 
-kubectl delete rs "$collision_rs" -n "$NS" --wait=true
-expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$collision_inst | wc -l | grep -w 0"
-kubectl delete pod "$collision_launcher" -n "$NS" --wait=true
-expect '! kubectl get pods -n '"$NS"' -o name | grep -qw pod/'"$collision_launcher"
+    date
+    kubectl wait --for condition=Ready pod/$collision_req -n "$NS" --timeout=120s
+    [ "$(kubectl get pod $collision_launcher -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
 
-cheer Successful same-node collision handling
+    req_gpus=$(kubectl get pod "$req1" -n "$NS" -o jsonpath='{.metadata.annotations.dual-pods\.llm-d\.ai/accelerators}')
+    collision_gpus=$(kubectl get pod "$collision_req" -n "$NS" -o jsonpath='{.metadata.annotations.dual-pods\.llm-d\.ai/accelerators}')
+    [ -n "$req_gpus" ]
+    [ -n "$collision_gpus" ]
+    [ "$req_gpus" != "$collision_gpus" ]
+
+    kubectl delete rs "$collision_rs" -n "$NS" --wait=true
+    expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$collision_inst | wc -l | grep -w 0"
+    kubectl delete pod "$collision_launcher" -n "$NS" --wait=true
+    expect '! kubectl get pods -n '"$NS"' -o name | grep -qw pod/'"$collision_launcher"
+
+    cheer Successful same-node collision handling
+
+fi # available_gpus check
 
 # ---------------------------------------------------------------------------
 # Instance Wake-up Fast Path

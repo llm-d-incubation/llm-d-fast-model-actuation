@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 
-# Parse optional -n / --namespace flag
+# Parse optional flags
 ns_flag=()
+node_name=""
 while [ $# -gt 0 ]; do
     case "$1" in
         -n|--namespace)
@@ -13,12 +14,29 @@ while [ $# -gt 0 ]; do
                 exit 1
             fi
             ;;
+        --node)
+            if [ $# -gt 1 ] ; then
+                node_name="$2"
+                shift 2
+            else
+                echo "Missing --node argument" >&2
+                exit 1
+            fi
+            ;;
         *)
             echo "Unknown argument: $1" >&2
             exit 1
             ;;
     esac
 done
+
+# When a node is specified, pin the ReplicaSet's pods to it.
+if [ -n "$node_name" ]; then
+    node_selector="nodeSelector:
+        kubernetes.io/hostname: \"$node_name\""
+else
+    node_selector=""
+fi
 
 inst=$(date +%d-%H-%M-%S)
 requester_img=$(make echo-var VAR=TEST_REQUESTER_IMG)
@@ -194,8 +212,8 @@ spec:
               nvidia.com/gpu: "1"
               cpu: "200m"
               memory: 250Mi
+      ${node_selector}
       serviceAccount: testreq
-      # nodeName: fmatest-worker # try fixed node for the consistency of value of dual-pods.llm-d.ai/launcher-config-hash annotation
 EOF
         )
 then
