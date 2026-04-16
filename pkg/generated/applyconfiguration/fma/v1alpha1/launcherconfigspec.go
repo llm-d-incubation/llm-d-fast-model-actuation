@@ -17,15 +17,11 @@ limitations under the License.
 
 package v1alpha1
 
-import (
-	v1 "k8s.io/api/core/v1"
-)
-
 // LauncherConfigSpecApplyConfiguration represents a declarative configuration of the LauncherConfigSpec type for use
 // with apply.
 type LauncherConfigSpecApplyConfiguration struct {
-	PodTemplate          *v1.PodTemplateSpec `json:"podTemplate,omitempty"`
-	MaxSleepingInstances *int32              `json:"maxSleepingInstances,omitempty"`
+	PodTemplate          *EmbeddedPodTemplateSpecApplyConfiguration `json:"podTemplate,omitempty"`
+	MaxSleepingInstances *int32                                     `json:"maxSleepingInstances,omitempty"`
 }
 
 // LauncherConfigSpecApplyConfiguration constructs a declarative configuration of the LauncherConfigSpec type for use with
@@ -37,8 +33,8 @@ func LauncherConfigSpec() *LauncherConfigSpecApplyConfiguration {
 // WithPodTemplate sets the PodTemplate field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the PodTemplate field is set to the value of the last call.
-func (b *LauncherConfigSpecApplyConfiguration) WithPodTemplate(value v1.PodTemplateSpec) *LauncherConfigSpecApplyConfiguration {
-	b.PodTemplate = &value
+func (b *LauncherConfigSpecApplyConfiguration) WithPodTemplate(value *EmbeddedPodTemplateSpecApplyConfiguration) *LauncherConfigSpecApplyConfiguration {
+	b.PodTemplate = value
 	return b
 }
 

@@ -21,11 +21,34 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// EmbeddedObjectMeta holds the subset of metav1.ObjectMeta fields that
+// we want in the CRD schema, so that strict decoding accepts them.
+type EmbeddedObjectMeta struct {
+	// Labels for organizing and categorizing objects.
+	// +optional
+	Labels map[string]string `json:"labels,omitempty"`
+
+	// Annotations for storing arbitrary non-identifying metadata.
+	// +optional
+	Annotations map[string]string `json:"annotations,omitempty"`
+}
+
+// EmbeddedPodTemplateSpec is a PodTemplateSpec whose metadata fields
+// are explicitly declared so that the CRD schema admits them.
+type EmbeddedPodTemplateSpec struct {
+	// +optional
+	Metadata EmbeddedObjectMeta `json:"metadata,omitempty"`
+
+	// Spec defines the behavior of pods created from this template.
+	// +optional
+	Spec corev1.PodSpec `json:"spec,omitempty"`
+}
+
 // LauncherConfigSpec defines the configuration to manage the nominal server-providing pod definition.
 type LauncherConfigSpec struct {
 	// PodTemplate defines the pod specification for the server-providing pod.
 	// +optional
-	PodTemplate corev1.PodTemplateSpec `json:"podTemplate,omitempty"`
+	PodTemplate EmbeddedPodTemplateSpec `json:"podTemplate,omitempty"`
 
 	// MaxSleepingInstances is the maximum number of sleeping inference engine instances allowed per launcher pod.
 	// +kubebuilder:validation:Required

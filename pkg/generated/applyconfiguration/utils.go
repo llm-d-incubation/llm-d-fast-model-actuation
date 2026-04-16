@@ -33,6 +33,10 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 	// Group=fma.llm-d.ai, Version=v1alpha1
 	case v1alpha1.SchemeGroupVersion.WithKind("CountForLauncher"):
 		return &fmav1alpha1.CountForLauncherApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("EmbeddedObjectMeta"):
+		return &fmav1alpha1.EmbeddedObjectMetaApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("EmbeddedPodTemplateSpec"):
+		return &fmav1alpha1.EmbeddedPodTemplateSpecApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("EnhancedNodeSelector"):
 		return &fmav1alpha1.EnhancedNodeSelectorApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("InferenceServerConfig"):
