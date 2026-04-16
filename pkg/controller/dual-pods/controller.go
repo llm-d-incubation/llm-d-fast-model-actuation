@@ -76,17 +76,21 @@ import (
 // deletion of any server-providing Pod. Nor does the controller ever try to bind
 // one that is unbound; they are only created in the bound state.
 
-// There are two types of item in the controller's work queue.
+// There are three types of item in the controller's work queue.
 // One is a reference to the gpu-map ConfigMap.
 
-// The other type of queue item is a reference to an inference server.
+// The second type of queue item is a reference to an inference server.
 // This reference carries the inference server's UID and the name
 // of the server-requesting Pod.
 // An inference server's UID is the UID of the server-requesting Pod.
 
-const requesterAnnotationKey      = "dual-pods.llm-d.ai/requester"
-const nominalHashAnnotationKey    = "dual-pods.llm-d.ai/nominal"
-const iscLabelKeysAnnotationKey   = "dual-pods.llm-d.ai/isc-label-keys"
+// The third type of queue item is a reference to an InferenceServerConfig.
+// It is enqueued when an ISC's spec changes, to trigger cleanup of any
+// sleeping launcher instances whose configuration is now obsolete.
+
+const requesterAnnotationKey = "dual-pods.llm-d.ai/requester"
+const nominalHashAnnotationKey = "dual-pods.llm-d.ai/nominal"
+const iscLabelKeysAnnotationKey = "dual-pods.llm-d.ai/isc-label-keys"
 const iscAnnotationKeysAnnotationKey = "dual-pods.llm-d.ai/isc-annotation-keys"
 
 const providerFinalizer = "dual-pods.llm-d.ai/provider"
@@ -342,6 +346,10 @@ type unboundLauncherPodItem struct {
 	NodeName        string
 }
 
+type iscItem struct {
+	ISCName string
+}
+
 type infSvrItemType string
 
 const (
@@ -516,11 +524,7 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 	case *fmav1alpha1.InferenceServerConfig:
 		prevTyped, ok := prev.(*fmav1alpha1.InferenceServerConfig)
 		if ok && !reflect.DeepEqual(prevTyped.Spec, typed.Spec) {
-			go func() {
-				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-				defer cancel()
-				ctl.cleanupObsoleteSleepingInstances(ctx, prevTyped, typed)
-			}()
+			ctl.Queue.Add(iscItem{ISCName: typed.Name})
 		}
 		ctl.enqueueInfSvrItemsByISC(typed, false)
 	case *corev1.ConfigMap:
@@ -654,6 +658,18 @@ func (item cmItem) process(ctx context.Context, ctl *controller) (error, bool) {
 	if additions > 0 {
 		ctl.enqueueRequesters(ctx)
 	}
+	return nil, false
+}
+
+func (item iscItem) process(ctx context.Context, ctl *controller) (error, bool) {
+	isc, err := ctl.iscLister.InferenceServerConfigs(ctl.namespace).Get(item.ISCName)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, false
+		}
+		return err, true
+	}
+	ctl.cleanupObsoleteSleepingInstances(ctx, isc)
 	return nil, false
 }
 
@@ -816,8 +832,8 @@ func (ctl *controller) deleteInstanceFromLauncherData(nodeName, launcherPodName,
 	delete(launcherDat.Instances, instanceID)
 }
 
-func (ctl *controller) cleanupObsoleteSleepingInstances(ctx context.Context, oldISC, newISC *fmav1alpha1.InferenceServerConfig) {
-	logger := ctl.enqueueLogger.WithValues("inferenceServerConfig", newISC.Name)
+func (ctl *controller) cleanupObsoleteSleepingInstances(ctx context.Context, isc *fmav1alpha1.InferenceServerConfig) {
+	logger := ctl.enqueueLogger.WithValues("inferenceServerConfig", isc.Name)
 	type launcherRef struct {
 		nodeName        string
 		launcherPodName string
@@ -863,7 +879,7 @@ func (ctl *controller) cleanupObsoleteSleepingInstances(ctx context.Context, old
 		}
 		for _, inst := range allInsts.Instances {
 			iscName := inst.Annotations[VllmConfigISCNameAnnotationKey]
-			if iscName != oldISC.Name {
+			if iscName != isc.Name {
 				continue
 			}
 			if len(inst.GpuUUIDs) == 0 {
@@ -871,22 +887,16 @@ func (ctl *controller) cleanupObsoleteSleepingInstances(ctx context.Context, old
 					"launcherPod", lr.launcherPodName, "instanceID", inst.InstanceID)
 				continue
 			}
-			_, oldHash, err := ctl.configInferenceServer(oldISC, inst.GpuUUIDs)
+			_, currentHash, err := ctl.configInferenceServer(isc, inst.GpuUUIDs)
 			if err != nil {
-				logger.Error(err, "Failed to compute old instance hash",
+				logger.Error(err, "Failed to compute current instance hash",
 					"launcherPod", lr.launcherPodName, "instanceID", inst.InstanceID)
 				continue
 			}
-			_, newHash, err := ctl.configInferenceServer(newISC, inst.GpuUUIDs)
-			if err != nil {
-				logger.Error(err, "Failed to compute new instance hash",
-					"launcherPod", lr.launcherPodName, "instanceID", inst.InstanceID)
-				continue
+			if inst.InstanceID == currentHash {
+				continue // not obsolete
 			}
-			if inst.InstanceID != oldHash || oldHash == newHash {
-				continue
-			}
-			sleeping, err := ctl.querySleeping(ctx, launcherPod, int16(oldISC.Spec.ModelServerConfig.Port))
+			sleeping, err := ctl.querySleeping(ctx, launcherPod, int16(isc.Spec.ModelServerConfig.Port))
 			if err != nil {
 				logger.Error(err, "Failed to query whether obsolete instance is sleeping",
 					"launcherPod", lr.launcherPodName, "instanceID", inst.InstanceID)
@@ -898,15 +908,15 @@ func (ctl *controller) cleanupObsoleteSleepingInstances(ctx context.Context, old
 				continue
 			}
 			if _, err := lClient.DeleteInstance(ctx, inst.InstanceID); err != nil {
-				logger.Error(err, "Failed to delete obsolete sleeping instance",
-					"launcherPod", lr.launcherPodName, "instanceID", inst.InstanceID)
+				if !IsInstanceNotFoundError(err) {
+					logger.Error(err, "Failed to delete obsolete sleeping instance",
+						"launcherPod", lr.launcherPodName, "instanceID", inst.InstanceID)
+				}
 				continue
 			}
 			ctl.deleteInstanceFromLauncherData(lr.nodeName, lr.launcherPodName, inst.InstanceID)
 			logger.V(2).Info("Deleted obsolete sleeping instance",
-				"launcherPod", lr.launcherPodName, "instanceID", inst.InstanceID,
-				"oldHash", oldHash, "newHash", newHash)
+				"launcherPod", lr.launcherPodName, "instanceID", inst.InstanceID, "currentHash", currentHash)
 		}
 	}
 }
-
