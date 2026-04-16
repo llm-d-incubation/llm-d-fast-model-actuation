@@ -89,8 +89,8 @@ CRD_NAMES=""
 for crd_file in config/crd/*.yaml; do
     crd_name=$(kubectl apply --dry-run=client -f "$crd_file" -o jsonpath='{.metadata.name}')
     CRD_NAMES="$CRD_NAMES $crd_name"
-    if kubectl get crd "$crd_name" &>/dev/null; then
-        echo "  CRD $crd_name already exists, skipping"
+    if kubectl get crd "$crd_name" -o json 2>/dev/null | jq -e --slurpfile desired <(kubectl apply --dry-run=client -f "$crd_file" -o json | jq .spec) '.spec as $server | ($server * $desired[0]) == $server' &>/dev/null; then
+        echo "  CRD $crd_name already exists and is up to date, skipping"
     else
         echo "  Applying $crd_file ($crd_name)"
         kubectl apply --server-side -f "$crd_file"
