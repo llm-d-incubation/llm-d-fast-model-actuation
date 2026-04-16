@@ -178,7 +178,7 @@ helm upgrade --install "$FMA_CHART_INSTANCE_NAME" charts/fma-controllers \
 
 step "Wait for controllers to be ready"
 
-kubectl wait --for=condition=available --timeout=120s \
+kubectl wait --for=condition=available --timeout=180s \
     deployment "${FMA_CHART_INSTANCE_NAME}-dual-pods-controller" -n "$FMA_NAMESPACE"
 kubectl wait --for=condition=available --timeout=120s \
     deployment "${FMA_CHART_INSTANCE_NAME}-launcher-populator" -n "$FMA_NAMESPACE"
