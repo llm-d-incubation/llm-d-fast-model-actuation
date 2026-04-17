@@ -79,10 +79,13 @@ import (
 // There are three types of item in the controller's work queue.
 // One is a reference to the gpu-map ConfigMap.
 
-// The second type of queue item is a reference to an inference server.
+// The second type of queue item is a reference to a Node.
+// The are two types for an item on a Node:
+// 1) A reference to an inference server.
 // This reference carries the inference server's UID and the name
 // of the server-requesting Pod.
 // An inference server's UID is the UID of the server-requesting Pod.
+// 2) A reference to an unbound launcher-based server-providing Pod.
 
 // The third type of queue item is a reference to an InferenceServerConfig.
 // It is enqueued when an ISC's spec changes, to trigger cleanup of any
