@@ -44,7 +44,18 @@ type ModelServerConfig struct {
 	// EnvVars are the environment variables for the vLLM instance
 	// +optional
 	EnvVars     map[string]string `json:"env_vars,omitempty"`
-	Labels      map[string]string `json:"labels,omitempty"`
+
+	// Labels are applied to the server-providing Pod while bound.
+	// Keys must be valid Kubernetes label keys and must not use reserved prefixes
+	// (dual-pods.llm-d.ai/, kubernetes.io/, k8s.io/).
+	// Values must be valid Kubernetes label values.
+	// +optional
+	Labels map[string]string `json:"labels,omitempty"`
+
+	// Annotations are applied to the server-providing Pod while bound.
+	// Keys must be valid Kubernetes annotation keys and must not use reserved prefixes
+	// (dual-pods.llm-d.ai/, kubernetes.io/, k8s.io/).
+	// +optional
 	Annotations map[string]string `json:"annotations,omitempty"`
 }
 

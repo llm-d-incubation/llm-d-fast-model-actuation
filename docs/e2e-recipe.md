@@ -532,9 +532,9 @@ spec:
       VLLM_USE_V1: "1"
       VLLM_LOGGING_LEVEL: "DEBUG"
     labels:
-      component: inference
+      example.fma.llm-d.ai/isc-label: example-value
     annotations:
-      description: "Example InferenceServerConfig"
+      example.fma.llm-d.ai/isc-annotation: example-value
   launcherConfigName: my-launcher-config
 ---
 apiVersion: fma.llm-d.ai/v1alpha1

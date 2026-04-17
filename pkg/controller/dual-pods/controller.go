@@ -83,8 +83,10 @@ import (
 // of the server-requesting Pod.
 // An inference server's UID is the UID of the server-requesting Pod.
 
-const requesterAnnotationKey = "dual-pods.llm-d.ai/requester"
-const nominalHashAnnotationKey = "dual-pods.llm-d.ai/nominal"
+const requesterAnnotationKey      = "dual-pods.llm-d.ai/requester"
+const nominalHashAnnotationKey    = "dual-pods.llm-d.ai/nominal"
+const iscLabelKeysAnnotationKey   = "dual-pods.llm-d.ai/isc-label-keys"
+const iscAnnotationKeysAnnotationKey = "dual-pods.llm-d.ai/isc-annotation-keys"
 
 const providerFinalizer = "dual-pods.llm-d.ai/provider"
 const requesterFinalizer = "dual-pods.llm-d.ai/requester"
@@ -294,8 +296,10 @@ type serverData struct {
 	GPUIndices    []string
 	GPUIndicesStr *string
 
-	ProvidingPodName string
-	InstanceID       string // if provider launcher-based
+	ProvidingPodName  string
+	InstanceID        string   // if provider launcher-based
+	ISCLabelKeys      []string // keys of ISC labels applied to providingPod
+	ISCAnnotationKeys []string // keys of ISC annotations applied to providingPod
 
 	ReadinessRelayed *bool
 
