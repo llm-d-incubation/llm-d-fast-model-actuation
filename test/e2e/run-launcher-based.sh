@@ -3,6 +3,8 @@
 # Usage: $0
 # Current working directory must be the root of the Git repository.
 # This script tests launcher-based server-providing pods independently.
+#
+# Required tools: kubectl, helm, jq, yq (https://github.com/mikefarah/yq).
 
 set -euo pipefail
 

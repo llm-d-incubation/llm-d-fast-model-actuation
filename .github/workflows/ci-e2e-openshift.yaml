@@ -372,6 +372,7 @@ jobs:
           if ! command -v yq &>/dev/null; then
             YQ_VERSION="v4.53.2"
             curl -fsSL --retry 3 --retry-delay 5 -o yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+            echo "d56bf5c6819e8e696340c312bd70f849dc1678a7cda9c2ad63eebd906371d56b  yq" | sha256sum --check
             chmod +x yq
             sudo mv yq /usr/local/bin/
           fi
