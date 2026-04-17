@@ -44,7 +44,16 @@ type ModelServerConfig struct {
 	// EnvVars are the environment variables for the vLLM instance
 	// +optional
 	EnvVars     map[string]string `json:"env_vars,omitempty"`
-	Labels      map[string]string `json:"labels,omitempty"`
+	// Labels are applied to the server-providing Pod while bound.
+	// Keys must not start with "dual-pods.llm-d.ai/".
+	// +optional
+	// +kubebuilder:validation:XValidation:rule="self.all(k, !k.startsWith('dual-pods.llm-d.ai/'))",message="label keys must not start with 'dual-pods.llm-d.ai/'"
+	Labels map[string]string `json:"labels,omitempty"`
+
+	// Annotations are applied to the server-providing Pod while bound.
+	// Keys must not start with "dual-pods.llm-d.ai/".
+	// +optional
+	// +kubebuilder:validation:XValidation:rule="self.all(k, !k.startsWith('dual-pods.llm-d.ai/'))",message="annotation keys must not start with 'dual-pods.llm-d.ai/'"
 	Annotations map[string]string `json:"annotations,omitempty"`
 }
 

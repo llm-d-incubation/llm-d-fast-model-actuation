@@ -118,9 +118,9 @@ spec:
       VLLM_USE_V1: "1"
       VLLM_LOGGING_LEVEL: "DEBUG"
     labels:
-      component: inference
+      e2e-test.fma.llm-d.ai/isc-label: test-value
     annotations:
-      description: "E2E test InferenceServerConfig"
+      e2e-test.fma.llm-d.ai/isc-annotation: test-value
   launcherConfigName: launcher-config-$inst
 ---
 apiVersion: fma.llm-d.ai/v1alpha1
@@ -138,9 +138,9 @@ spec:
       VLLM_USE_V1: "1"
       VLLM_LOGGING_LEVEL: "DEBUG"
     labels:
-      component: inference
+      e2e-test.fma.llm-d.ai/isc-label: test-value
     annotations:
-      description: "E2E test InferenceServerConfig"
+      e2e-test.fma.llm-d.ai/isc-annotation: test-value
   launcherConfigName: launcher-config-$inst
 ---
 apiVersion: fma.llm-d.ai/v1alpha1
@@ -158,9 +158,9 @@ spec:
       VLLM_USE_V1: "1"
       VLLM_LOGGING_LEVEL: "DEBUG"
     labels:
-      component: inference
+      e2e-test.fma.llm-d.ai/isc-label: test-value
     annotations:
-      description: "E2E test InferenceServerConfig"
+      e2e-test.fma.llm-d.ai/isc-annotation: test-value
   launcherConfigName: launcher-config-$inst
 ---
 apiVersion: fma.llm-d.ai/v1alpha1

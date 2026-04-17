@@ -54,7 +54,13 @@ spec:
                   annotations:
                     additionalProperties:
                       type: string
+                    description: |-
+                      Annotations are applied to the server-providing Pod while bound.
+                      Keys must not start with "dual-pods.llm-d.ai/".
                     type: object
+                    x-kubernetes-validations:
+                    - message: annotation keys must not start with 'dual-pods.llm-d.ai/'
+                      rule: self.all(k, !k.startsWith('dual-pods.llm-d.ai/'))
                   env_vars:
                     additionalProperties:
                       type: string
@@ -64,7 +70,13 @@ spec:
                   labels:
                     additionalProperties:
                       type: string
+                    description: |-
+                      Labels are applied to the server-providing Pod while bound.
+                      Keys must not start with "dual-pods.llm-d.ai/".
                     type: object
+                    x-kubernetes-validations:
+                    - message: label keys must not start with 'dual-pods.llm-d.ai/'
+                      rule: self.all(k, !k.startsWith('dual-pods.llm-d.ai/'))
                   options:
                     description: Options are the vLLM startup options, excluding Port
                     type: string

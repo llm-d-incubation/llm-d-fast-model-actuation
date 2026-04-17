@@ -103,6 +103,56 @@ check_gpu_pin() {
 }
 
 # ---------------------------------------------------------------------------
+# ISC Label and Annotation Key Validation
+# ---------------------------------------------------------------------------
+
+intro_case ISC Label and Annotation Key Validation
+
+echo "Verifying ISC rejects label keys starting with dual-pods.llm-d.ai/"
+if output=$(kubectl apply -n "$NS" -f - 2>&1 <<BADEOF
+apiVersion: fma.llm-d.ai/v1alpha1
+kind: InferenceServerConfig
+metadata:
+  name: bad-isc-test
+spec:
+  modelServerConfig:
+    port: 9999
+    labels:
+      dual-pods.llm-d.ai/forbidden: "true"
+  launcherConfigName: nonexistent
+BADEOF
+); then
+  echo "ERROR: ISC with dual-pods.llm-d.ai/ label key was accepted but should have been rejected"
+  kubectl delete -n "$NS" isc bad-isc-test --ignore-not-found
+  exit 1
+else
+  echo "✓ ISC with reserved label key prefix was rejected, as expected"
+fi
+
+echo "Verifying ISC rejects annotation keys starting with dual-pods.llm-d.ai/"
+if output=$(kubectl apply -n "$NS" -f - 2>&1 <<BADEOF
+apiVersion: fma.llm-d.ai/v1alpha1
+kind: InferenceServerConfig
+metadata:
+  name: bad-isc-test
+spec:
+  modelServerConfig:
+    port: 9999
+    annotations:
+      dual-pods.llm-d.ai/forbidden: "true"
+  launcherConfigName: nonexistent
+BADEOF
+); then
+  echo "ERROR: ISC with dual-pods.llm-d.ai/ annotation key was accepted but should have been rejected"
+  kubectl delete -n "$NS" isc bad-isc-test --ignore-not-found
+  exit 1
+else
+  echo "✓ ISC with reserved annotation key prefix was rejected, as expected"
+fi
+
+cheer ISC key validation
+
+# ---------------------------------------------------------------------------
 # Probe for a node with 2 free GPUs
 # ---------------------------------------------------------------------------
 # Create a throwaway Pod that requests 2 GPUs.  The scheduler will place it
@@ -207,6 +257,10 @@ echo "Launcher Pod is $launcher1"
 
 # Verify requester is bound to launcher (bidirectional check)
 expect '[ "$(kubectl get pod -n '"$NS"' $req1 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcher1" ]'
+
+# Verify ISC labels and annotations were propagated to launcher
+[ "$(kubectl get pod -n "$NS" $launcher1 -o jsonpath='{.metadata.labels.e2e-test\.fma\.llm-d\.ai/isc-label}')" == "test-value" ] || { echo "ERROR: ISC label not propagated to launcher pod $launcher1"; exit 1; }
+[ "$(kubectl get pod -n "$NS" $launcher1 -o jsonpath='{.metadata.annotations.e2e-test\.fma\.llm-d\.ai/isc-annotation}')" == "test-value" ] || { echo "ERROR: ISC annotation not propagated to launcher pod $launcher1"; exit 1; }
 
 # Wait for both pods to be ready
 date
@@ -349,6 +403,10 @@ kubectl get pod $launcher1 -n "$NS"
 # Verify launcher is unbound (no dual label pointing to requester)
 expect '[ "$(kubectl get pod -n '"$NS"' $launcher1 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "" ]'
 
+# Verify ISC labels and annotations were removed from launcher
+[ "$(kubectl get pod -n "$NS" $launcher1 -o jsonpath='{.metadata.labels.e2e-test\.fma\.llm-d\.ai/isc-label}')" == "" ] || { echo "ERROR: ISC label not removed from launcher pod $launcher1 after unbind"; exit 1; }
+[ "$(kubectl get pod -n "$NS" $launcher1 -o jsonpath='{.metadata.annotations.e2e-test\.fma\.llm-d\.ai/isc-annotation}')" == "" ] || { echo "ERROR: ISC annotation not removed from launcher pod $launcher1 after unbind"; exit 1; }
+
 # Scale back up (should reuse same launcher and wake sleeping instance)
 kubectl scale rs $rs -n "$NS" --replicas=1
 
@@ -364,6 +422,10 @@ launcher2=$(kubectl get pods -n "$NS" -o name -l dual-pods.llm-d.ai/dual=$req2 |
 
 # Verify requester is bound to launcher (bidirectional check)
 expect '[ "$(kubectl get pod -n '"$NS"' $req2 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcher1" ]'
+
+# Verify ISC labels and annotations re-propagated after re-bind
+[ "$(kubectl get pod -n "$NS" $launcher1 -o jsonpath='{.metadata.labels.e2e-test\.fma\.llm-d\.ai/isc-label}')" == "test-value" ] || { echo "ERROR: ISC label not re-propagated to launcher pod $launcher1 after re-bind"; exit 1; }
+[ "$(kubectl get pod -n "$NS" $launcher1 -o jsonpath='{.metadata.annotations.e2e-test\.fma\.llm-d\.ai/isc-annotation}')" == "test-value" ] || { echo "ERROR: ISC annotation not re-propagated to launcher pod $launcher1 after re-bind"; exit 1; }
 
 # Wait for requester to be ready (launcher should already be ready)
 date

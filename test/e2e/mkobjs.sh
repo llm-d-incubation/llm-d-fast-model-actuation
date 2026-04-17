@@ -58,9 +58,9 @@ spec:
       VLLM_LOGGING_LEVEL: "DEBUG"
       VLLM_CPU_KVCACHE_SPACE: "1" # GiB, helpful for small models to reduce CPU memory usage during testing
     labels:
-      component: inference
+      e2e-test.fma.llm-d.ai/isc-label: test-value
     annotations:
-      description: "Example InferenceServerConfig"
+      e2e-test.fma.llm-d.ai/isc-annotation: test-value
   launcherConfigName: launcher-config-$inst
 ---
 apiVersion: fma.llm-d.ai/v1alpha1
@@ -79,9 +79,9 @@ spec:
       VLLM_LOGGING_LEVEL: "DEBUG"
       VLLM_CPU_KVCACHE_SPACE: "1" # GiB, helpful for small models to reduce CPU memory usage during testing
     labels:
-      component: inference
+      e2e-test.fma.llm-d.ai/isc-label: test-value
     annotations:
-      description: "Example InferenceServerConfig"
+      e2e-test.fma.llm-d.ai/isc-annotation: test-value
   launcherConfigName: launcher-config-$inst
 ---
 apiVersion: fma.llm-d.ai/v1alpha1
@@ -100,9 +100,9 @@ spec:
       VLLM_LOGGING_LEVEL: "DEBUG"
       VLLM_CPU_KVCACHE_SPACE: "1" # GiB, helpful for small models to reduce CPU memory usage during testing
     labels:
-      component: inference
+      e2e-test.fma.llm-d.ai/isc-label: test-value
     annotations:
-      description: "Example InferenceServerConfig"
+      e2e-test.fma.llm-d.ai/isc-annotation: test-value
   launcherConfigName: launcher-config-$inst
 ---
 apiVersion: fma.llm-d.ai/v1alpha1
