@@ -368,6 +368,13 @@ jobs:
           rm -f openshift-client-linux.tar.gz kubectl README.md
           # Install helm
           curl -fsSL --retry 3 --retry-delay 5 https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          # Install yq if not already present (for YAML-to-JSON conversion in deploy_fma.sh)
+          if ! command -v yq &>/dev/null; then
+            YQ_VERSION="v4.53.2"
+            curl -fsSL --retry 3 --retry-delay 5 -o yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+            chmod +x yq
+            sudo mv yq /usr/local/bin/
+          fi
 
       - name: Verify cluster access
         run: |
