@@ -6,6 +6,8 @@
 # Deploys the FMA controllers (dual-pods controller + launcher-populator)
 # and waits for them to be available.
 #
+# Required tools: kubectl, helm, jq, yq (https://github.com/mikefarah/yq).
+#
 # Required environment variables:
 #   FMA_NAMESPACE              - target Kubernetes namespace
 #   FMA_CHART_INSTANCE_NAME    - Helm chart instance name
@@ -34,6 +36,14 @@ set -euo pipefail
 if [ "${FMA_DEBUG:-false}" = "true" ]; then
     set -x
 fi
+
+# Preflight: verify required tools are available
+for tool in kubectl helm jq yq; do
+    if ! command -v "$tool" &>/dev/null; then
+        echo "ERROR: required tool '$tool' is not installed" >&2
+        exit 1
+    fi
+done
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -89,8 +99,8 @@ CRD_NAMES=""
 for crd_file in config/crd/*.yaml; do
     crd_name=$(kubectl apply --dry-run=client -f "$crd_file" -o jsonpath='{.metadata.name}')
     CRD_NAMES="$CRD_NAMES $crd_name"
-    if kubectl get crd "$crd_name" &>/dev/null; then
-        echo "  CRD $crd_name already exists, skipping"
+    if kubectl get crd "$crd_name" -o json 2>/dev/null | jq -e --slurpfile desired <(yq -o json '.spec' "$crd_file") '.spec as $server | ($server * $desired[0]) == $server' &>/dev/null; then
+        echo "  CRD $crd_name already exists and is up to date, skipping"
     else
         echo "  Applying $crd_file ($crd_name)"
         kubectl apply --server-side -f "$crd_file"
@@ -178,7 +188,7 @@ helm upgrade --install "$FMA_CHART_INSTANCE_NAME" charts/fma-controllers \
 
 step "Wait for controllers to be ready"
 
-kubectl wait --for=condition=available --timeout=120s \
+kubectl wait --for=condition=available --timeout=180s \
     deployment "${FMA_CHART_INSTANCE_NAME}-dual-pods-controller" -n "$FMA_NAMESPACE"
 kubectl wait --for=condition=available --timeout=120s \
     deployment "${FMA_CHART_INSTANCE_NAME}-launcher-populator" -n "$FMA_NAMESPACE"

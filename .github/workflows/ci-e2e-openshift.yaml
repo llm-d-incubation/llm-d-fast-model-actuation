@@ -368,6 +368,13 @@ jobs:
           rm -f openshift-client-linux.tar.gz kubectl README.md
           # Install helm
           curl -fsSL --retry 3 --retry-delay 5 https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          # Install yq if not already present (for YAML-to-JSON conversion in deploy_fma.sh)
+          if ! command -v yq &>/dev/null; then
+            YQ_VERSION="v4.53.2"
+            curl -fsSL --retry 3 --retry-delay 5 -o yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+            chmod +x yq
+            sudo mv yq /usr/local/bin/
+          fi
 
       - name: Verify cluster access
         run: |
@@ -456,6 +463,18 @@ jobs:
         run: |
           export CONTAINER_IMG_REG="${CONTAINER_IMG_REG,,}"
           ./test/e2e/deploy_fma.sh
+
+      - name: Dump InferenceServerConfig CRD
+        if: always()
+        run: kubectl get crd inferenceserverconfigs.fma.llm-d.ai -o yaml
+
+      - name: Dump LauncherConfig CRD
+        if: always()
+        run: kubectl get crd launcherconfigs.fma.llm-d.ai -o yaml
+
+      - name: Dump LauncherPopulationPolicy CRD
+        if: always()
+        run: kubectl get crd launcherpopulationpolicies.fma.llm-d.ai -o yaml
 
       - name: Run E2E tests
         env:
