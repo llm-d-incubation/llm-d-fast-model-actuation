@@ -42,6 +42,7 @@ import (
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	k8sserializer "k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apimachinery/pkg/util/sets"
+	k8svalidation "k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
@@ -52,6 +53,17 @@ import (
 	ctlrcommon "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/common"
 	stubapi "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/spi"
 )
+
+var reservedKeyPrefixes = []string{"dual-pods.llm-d.ai/", "kubernetes.io/", "k8s.io/"}
+
+func hasReservedPrefix(key string) bool {
+	for _, prefix := range reservedKeyPrefixes {
+		if strings.HasPrefix(key, prefix) {
+			return true
+		}
+	}
+	return false
+}
 
 type nodeItem struct {
 	NodeName string
@@ -354,6 +366,25 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	// If there is already a bound server-providing Pod then ensure that it is awake,
 	// ensure status reported, and relay readiness if needed.
 	if providingPod != nil {
+		// Recover ISC label/annotation keys from tracking annotations after controller restart.
+		if serverDat.ISCLabelKeys == nil {
+			if v, ok := providingPod.Annotations[iscLabelKeysAnnotationKey]; ok {
+				if v == "" {
+					serverDat.ISCLabelKeys = []string{}
+				} else {
+					serverDat.ISCLabelKeys = strings.Split(v, " ")
+				}
+			}
+		}
+		if serverDat.ISCAnnotationKeys == nil {
+			if v, ok := providingPod.Annotations[iscAnnotationKeysAnnotationKey]; ok {
+				if v == "" {
+					serverDat.ISCAnnotationKeys = []string{}
+				} else {
+					serverDat.ISCAnnotationKeys = strings.Split(v, " ")
+				}
+			}
+		}
 		var serverPort int16
 		if launcherBased {
 			serverPort = int16(isc.Spec.ModelServerConfig.Port)
@@ -493,7 +524,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				logger.V(2).Info("Unexpected: multiple sleeping Pods match; using the first", "requesterName", requestingPod.Name)
 			}
 			providingPod = sleepingAnys[0].(*corev1.Pod)
-			return ctl.bind(ctx, serverDat, requestingPod, providingPod, nil, -1)
+			return ctl.bind(ctx, serverDat, requestingPod, providingPod, nil, -1, nil, nil)
 		}
 		// What remains is to make a new server-providing Pod --- if the sleeper budget allows.
 
@@ -591,7 +622,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				}
 				launcherDat.Instances[iscHash] = time.Now()
 				// TODO(waltforme): the bind method may need more revision to fully handle launcher-based server providing Pods
-				return ctl.bind(ctx, serverDat, requestingPod, launcherPod, &iscHash, int16(isc.Spec.ModelServerConfig.Port))
+				return ctl.bind(ctx, serverDat, requestingPod, launcherPod, &iscHash, int16(isc.Spec.ModelServerConfig.Port), isc.Spec.ModelServerConfig.Labels, isc.Spec.ModelServerConfig.Annotations)
 			} else {
 				// Slower path: create new instance in launcher with capacity
 				logger.V(5).Info("Creating new vLLM instance", "iscHash", iscHash)
@@ -605,7 +636,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				)
 				launcherDat.Instances[iscHash] = time.Now()
 				// TODO(waltforme): the bind method may need more revision to fully handle launcher-based server providing Pods
-				return ctl.bind(ctx, serverDat, requestingPod, launcherPod, &iscHash, int16(isc.Spec.ModelServerConfig.Port))
+				return ctl.bind(ctx, serverDat, requestingPod, launcherPod, &iscHash, int16(isc.Spec.ModelServerConfig.Port), isc.Spec.ModelServerConfig.Labels, isc.Spec.ModelServerConfig.Annotations)
 			}
 		}
 	}
@@ -901,20 +932,63 @@ func (ctl *controller) enforceSleeperBudget(ctx context.Context, serverDat *serv
 
 // Note: instPort is used only for launcher-based server-providing Pods.
 // instanceID is non-nil iff launcher-based
-func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requestingPod, providingPod *corev1.Pod, instanceID *string, instPort int16) (error, bool) {
+func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requestingPod, providingPod *corev1.Pod, instanceID *string, instPort int16, iscLabels, iscAnnotations map[string]string) (error, bool) {
 	logger := klog.FromContext(ctx)
 	providingPod = providingPod.DeepCopy()
-	providingPod.Annotations[requesterAnnotationKey] = string(requestingPod.UID) + " " + requestingPod.Name
+	providingPod.Annotations = utils.MapSet(providingPod.Annotations, requesterAnnotationKey, string(requestingPod.UID)+" "+requestingPod.Name)
 	if !slices.Contains(providingPod.Finalizers, providerFinalizer) {
 		providingPod.Finalizers = append(providingPod.Finalizers, providerFinalizer)
 	}
 	providingPod.Labels = utils.MapSet(providingPod.Labels, api.DualLabelName, requestingPod.Name)
+	launcherBased := instanceID != nil
+	var problems []string
+	for k, v := range iscLabels {
+		if errs := k8svalidation.IsQualifiedName(k); len(errs) > 0 {
+			problems = append(problems, fmt.Sprintf("ISC label key %q is not a valid qualified name: %s", k, strings.Join(errs, "; ")))
+		} else if hasReservedPrefix(k) {
+			problems = append(problems, fmt.Sprintf("ISC label key %q uses a reserved prefix", k))
+		} else if _, exists := providingPod.Labels[k]; exists {
+			problems = append(problems, fmt.Sprintf("ISC label key %q collides with existing pod label", k))
+		}
+		if errs := k8svalidation.IsValidLabelValue(v); len(errs) > 0 {
+			problems = append(problems, fmt.Sprintf("ISC label value %q for key %q is not valid: %s", v, k, strings.Join(errs, "; ")))
+		}
+	}
+	for k := range iscAnnotations {
+		if errs := k8svalidation.IsQualifiedName(k); len(errs) > 0 {
+			problems = append(problems, fmt.Sprintf("ISC annotation key %q is not a valid qualified name: %s", k, strings.Join(errs, "; ")))
+		} else if hasReservedPrefix(k) {
+			problems = append(problems, fmt.Sprintf("ISC annotation key %q uses a reserved prefix", k))
+		} else if _, exists := providingPod.Annotations[k]; exists {
+			problems = append(problems, fmt.Sprintf("ISC annotation key %q collides with existing pod annotation", k))
+		}
+	}
+	if len(problems) > 0 {
+		return ctl.ensureReqStatus(ctx, requestingPod, serverDat, problems...)
+	}
+	labelKeys := make([]string, 0, len(iscLabels))
+	for k, v := range iscLabels {
+		providingPod.Labels[k] = v
+		labelKeys = append(labelKeys, k)
+	}
+	slices.Sort(labelKeys)
+	serverDat.ISCLabelKeys = labelKeys
+	annotationKeys := make([]string, 0, len(iscAnnotations))
+	for k, v := range iscAnnotations {
+		providingPod.Annotations[k] = v
+		annotationKeys = append(annotationKeys, k)
+	}
+	slices.Sort(annotationKeys)
+	serverDat.ISCAnnotationKeys = annotationKeys
+	if launcherBased {
+		providingPod.Annotations[iscLabelKeysAnnotationKey] = strings.Join(labelKeys, " ")
+		providingPod.Annotations[iscAnnotationKeysAnnotationKey] = strings.Join(annotationKeys, " ")
+	}
 	serverDat.Sleeping = nil
 	echo, err := ctl.coreclient.Pods(ctl.namespace).Update(ctx, providingPod, metav1.UpdateOptions{FieldManager: ControllerName})
 	if err != nil {
 		return fmt.Errorf("failed to bind server-providing Pod %s: %w", providingPod.Name, err), true
 	}
-	launcherBased := instanceID != nil
 	serverDat.ProvidingPodName = providingPod.Name
 	if launcherBased {
 		serverDat.InstanceID = *instanceID
@@ -1090,6 +1164,51 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 	}
 	// Ensure finalizer is absent
 	providingPod.Finalizers, fChange = utils.SliceRemoveOnce(providingPod.Finalizers, providerFinalizer)
+	// Recover ISC label/annotation keys if not yet cached (e.g., controller restarted
+	// and ensureUnbound is reached before the normal reconciliation path).
+	if serverDat.ISCLabelKeys == nil {
+		if v, ok := providingPod.Annotations[iscLabelKeysAnnotationKey]; ok {
+			if v == "" {
+				serverDat.ISCLabelKeys = []string{}
+			} else {
+				serverDat.ISCLabelKeys = strings.Split(v, " ")
+			}
+		}
+	}
+	if serverDat.ISCAnnotationKeys == nil {
+		if v, ok := providingPod.Annotations[iscAnnotationKeysAnnotationKey]; ok {
+			if v == "" {
+				serverDat.ISCAnnotationKeys = []string{}
+			} else {
+				serverDat.ISCAnnotationKeys = strings.Split(v, " ")
+			}
+		}
+	}
+	// Remove ISC labels
+	for _, k := range serverDat.ISCLabelKeys {
+		if _, have := providingPod.Labels[k]; have {
+			delete(providingPod.Labels, k)
+			lChange = true
+		}
+	}
+	serverDat.ISCLabelKeys = nil
+	// Remove ISC annotations
+	for _, k := range serverDat.ISCAnnotationKeys {
+		if _, have := providingPod.Annotations[k]; have {
+			delete(providingPod.Annotations, k)
+			aChange = true
+		}
+	}
+	serverDat.ISCAnnotationKeys = nil
+	// Remove tracking annotations
+	if _, have := providingPod.Annotations[iscLabelKeysAnnotationKey]; have {
+		delete(providingPod.Annotations, iscLabelKeysAnnotationKey)
+		aChange = true
+	}
+	if _, have := providingPod.Annotations[iscAnnotationKeysAnnotationKey]; have {
+		delete(providingPod.Annotations, iscAnnotationKeysAnnotationKey)
+		aChange = true
+	}
 	if aChange || fChange || lChange {
 		if providingPod.Labels != nil {
 			delete(providingPod.Labels, api.DualLabelName)
