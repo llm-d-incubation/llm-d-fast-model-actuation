@@ -54,6 +54,10 @@ spec:
                   annotations:
                     additionalProperties:
                       type: string
+                    description: |-
+                      Annotations are applied to the server-providing Pod while bound.
+                      Keys must be valid Kubernetes annotation keys and must not use reserved prefixes
+                      (dual-pods.llm-d.ai/, kubernetes.io/, k8s.io/).
                     type: object
                   env_vars:
                     additionalProperties:
@@ -64,6 +68,11 @@ spec:
                   labels:
                     additionalProperties:
                       type: string
+                    description: |-
+                      Labels are applied to the server-providing Pod while bound.
+                      Keys must be valid Kubernetes label keys and must not use reserved prefixes
+                      (dual-pods.llm-d.ai/, kubernetes.io/, k8s.io/).
+                      Values must be valid Kubernetes label values.
                     type: object
                   options:
                     description: Options are the vLLM startup options, excluding Port

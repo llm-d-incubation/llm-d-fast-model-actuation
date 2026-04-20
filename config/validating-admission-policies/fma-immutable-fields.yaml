@@ -22,6 +22,8 @@ spec:
         (
           oldObject.metadata.?annotations['dual-pods.llm-d.ai/requester'].orValue('') == object.metadata.?annotations['dual-pods.llm-d.ai/requester'].orValue('') &&
           oldObject.metadata.?annotations['dual-pods.llm-d.ai/status'].orValue('') == object.metadata.?annotations['dual-pods.llm-d.ai/status'].orValue('') &&
+          oldObject.metadata.?annotations['dual-pods.llm-d.ai/isc-label-keys'].orValue('') == object.metadata.?annotations['dual-pods.llm-d.ai/isc-label-keys'].orValue('') &&
+          oldObject.metadata.?annotations['dual-pods.llm-d.ai/isc-annotation-keys'].orValue('') == object.metadata.?annotations['dual-pods.llm-d.ai/isc-annotation-keys'].orValue('') &&
           oldObject.metadata.?labels['dual-pods.llm-d.ai/dual'].orValue('') == object.metadata.?labels['dual-pods.llm-d.ai/dual'].orValue('')
         )
       message: "One or more annotations/labels are managed by FMA controllers and cannot be modified directly."
