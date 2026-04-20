@@ -266,7 +266,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		if providingPod.Labels != nil {
 			_, providingPodLauncherBased = providingPod.Labels[ctlrcommon.LauncherConfigNameLabelKey]
 		}
-		err := ctl.ensureUnbound(ctx, serverDat, providingPod, providingPodLauncherBased)
+		err := ctl.ensureUnbound(ctx, serverDat, nodeDat, providingPod, providingPodLauncherBased)
 		if err != nil {
 			return err, true
 		}
@@ -1118,8 +1118,80 @@ func (ctl *controller) removeProviderFinalizer(ctx context.Context, providingPod
 	return false, nil // no change
 }
 
+func (item instanceGCItem) process(ctx context.Context, ctl *controller, nodeDat *nodeData) (error, bool) {
+	logger := klog.FromContext(ctx).WithValues("iscName", item.ISCName)
+
+	isc, err := ctl.iscLister.InferenceServerConfigs(ctl.namespace).Get(item.ISCName)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, false
+		}
+		return err, true
+	}
+
+	for launcherPodName, launcherDat := range nodeDat.Launchers {
+		launcherPod, err := ctl.podLister.Pods(ctl.namespace).Get(launcherPodName)
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			logger.Error(err, "Failed to get launcher pod during instance GC", "launcherPod", launcherPodName)
+			continue
+		}
+		if launcherPod.DeletionTimestamp != nil || launcherPod.Status.PodIP == "" {
+			continue
+		}
+		launcherBaseURL := fmt.Sprintf("http://%s:%d", launcherPod.Status.PodIP, ctlrcommon.LauncherServicePort)
+		lClient, err := NewLauncherClient(launcherBaseURL)
+		if err != nil {
+			logger.Error(err, "Failed to create launcher client during instance GC", "launcherPod", launcherPodName)
+			continue
+		}
+		allInsts, err := lClient.ListInstances(ctx)
+		if err != nil {
+			logger.Error(err, "Failed to list instances during instance GC", "launcherPod", launcherPodName)
+			continue
+		}
+		for _, inst := range allInsts.Instances {
+			if inst.Annotations[VllmConfigISCNameAnnotationKey] != isc.Name {
+				continue
+			}
+			if len(inst.GpuUUIDs) == 0 {
+				logger.V(4).Info("Skipping instance GC: no GPU UUIDs", "launcherPod", launcherPodName, "instanceID", inst.InstanceID)
+				continue
+			}
+			_, currentHash, err := ctl.configInferenceServer(isc, inst.GpuUUIDs)
+			if err != nil {
+				logger.Error(err, "Failed to compute current hash during instance GC", "launcherPod", launcherPodName, "instanceID", inst.InstanceID)
+				continue
+			}
+			if inst.InstanceID == currentHash {
+				continue // not obsolete
+			}
+			sleeping, err := ctl.querySleeping(ctx, launcherPod, int16(isc.Spec.ModelServerConfig.Port))
+			if err != nil {
+				logger.Error(err, "Failed to query sleeping state during instance GC", "launcherPod", launcherPodName, "instanceID", inst.InstanceID)
+				continue
+			}
+			if !sleeping {
+				logger.V(4).Info("Skipping instance GC: instance not explicitly sleeping", "launcherPod", launcherPodName, "instanceID", inst.InstanceID)
+				continue
+			}
+			if _, err := lClient.DeleteInstance(ctx, inst.InstanceID); err != nil {
+				if !IsInstanceNotFoundError(err) {
+					logger.Error(err, "Failed to delete obsolete sleeping instance during GC", "launcherPod", launcherPodName, "instanceID", inst.InstanceID)
+				}
+				continue
+			}
+			delete(launcherDat.Instances, inst.InstanceID)
+			logger.V(2).Info("Deleted obsolete sleeping instance", "launcherPod", launcherPodName, "instanceID", inst.InstanceID, "currentHash", currentHash)
+		}
+	}
+	return nil, false
+}
+
 // Unbinds the given server-providing Pod.
-func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData, providingPod *corev1.Pod, launcherBased bool) error {
+func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData, nodeDat *nodeData, providingPod *corev1.Pod, launcherBased bool) error {
 	logger := klog.FromContext(ctx)
 	// A providingPod with no IP is not scheduled, so we know that it is not awake.
 	// If providingPod is stale then the update will fail.
@@ -1127,7 +1199,7 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 		// For launcher-based instances, check if the instance is already obsolete
 		// (i.e. its InferenceServerConfig was updated since the instance was created).
 		// If so, delete it from the launcher rather than putting it to sleep.
-		if launcherBased && ctl.maybeDeleteObsoleteInstance(ctx, serverDat, providingPod) {
+		if launcherBased && ctl.maybeDeleteObsoleteInstance(ctx, serverDat, nodeDat, providingPod) {
 			serverDat.Sleeping = ptr.To(true)
 		} else {
 			serverPort := serverDat.ServerPort
@@ -1238,7 +1310,7 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 // (its InferenceServerConfig was updated since the instance was created) and if so,
 // deletes it from the launcher. Returns true if the instance was deleted.
 // On any error, returns false so the caller falls through to the normal sleep path.
-func (ctl *controller) maybeDeleteObsoleteInstance(ctx context.Context, serverDat *serverData, providingPod *corev1.Pod) bool {
+func (ctl *controller) maybeDeleteObsoleteInstance(ctx context.Context, serverDat *serverData, nodeDat *nodeData, providingPod *corev1.Pod) bool {
 	logger := klog.FromContext(ctx)
 	if serverDat.InstanceID == "" {
 		return false
@@ -1284,8 +1356,9 @@ func (ctl *controller) maybeDeleteObsoleteInstance(ctx context.Context, serverDa
 			return false
 		}
 	}
-	nodeName, _ := getProviderNodeName(providingPod)
-	ctl.deleteInstanceFromLauncherData(nodeName, providingPod.Name, serverDat.InstanceID)
+	if launcherDat := nodeDat.Launchers[providingPod.Name]; launcherDat != nil {
+		delete(launcherDat.Instances, serverDat.InstanceID)
+	}
 	logger.V(2).Info("Deleted obsolete instance during unbinding",
 		"instanceID", serverDat.InstanceID, "currentHash", currentHash, "iscName", iscName)
 	return true

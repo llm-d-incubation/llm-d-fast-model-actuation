@@ -349,7 +349,7 @@ type unboundLauncherPodItem struct {
 	NodeName        string
 }
 
-type iscItem struct {
+type instanceGCItem struct {
 	ISCName string
 }
 
@@ -527,7 +527,7 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 	case *fmav1alpha1.InferenceServerConfig:
 		prevTyped, ok := prev.(*fmav1alpha1.InferenceServerConfig)
 		if ok && !reflect.DeepEqual(prevTyped.Spec, typed.Spec) {
-			ctl.Queue.Add(iscItem{ISCName: typed.Name})
+			ctl.enqueueInstanceGCItemsForISC(typed.Name)
 		}
 		ctl.enqueueInfSvrItemsByISC(typed, false)
 	case *corev1.ConfigMap:
@@ -664,16 +664,13 @@ func (item cmItem) process(ctx context.Context, ctl *controller) (error, bool) {
 	return nil, false
 }
 
-func (item iscItem) process(ctx context.Context, ctl *controller) (error, bool) {
-	isc, err := ctl.iscLister.InferenceServerConfigs(ctl.namespace).Get(item.ISCName)
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, false
-		}
-		return err, true
+func (ctl *controller) enqueueInstanceGCItemsForISC(iscName string) {
+	ctl.mutex.Lock()
+	defer ctl.mutex.Unlock()
+	for nodeName, nodeDat := range ctl.nodeNameToData {
+		nodeDat.add(instanceGCItem{ISCName: iscName})
+		ctl.Queue.Add(nodeItem{nodeName})
 	}
-	ctl.cleanupObsoleteSleepingInstances(ctx, isc)
-	return nil, false
 }
 
 func (ctl *controller) enqueueRequesters(ctx context.Context) {
@@ -821,105 +818,3 @@ func (ctl *controller) clearServerData(nodeDat *nodeData, uid apitypes.UID) {
 	delete(nodeDat.InferenceServers, uid)
 }
 
-func (ctl *controller) deleteInstanceFromLauncherData(nodeName, launcherPodName, instanceID string) {
-	ctl.mutex.Lock()
-	defer ctl.mutex.Unlock()
-	nodeDat := ctl.nodeNameToData[nodeName]
-	if nodeDat == nil {
-		return
-	}
-	launcherDat := nodeDat.Launchers[launcherPodName]
-	if launcherDat == nil {
-		return
-	}
-	delete(launcherDat.Instances, instanceID)
-}
-
-func (ctl *controller) cleanupObsoleteSleepingInstances(ctx context.Context, isc *fmav1alpha1.InferenceServerConfig) {
-	logger := ctl.enqueueLogger.WithValues("inferenceServerConfig", isc.Name)
-	type launcherRef struct {
-		nodeName        string
-		launcherPodName string
-	}
-
-	var launcherRefs []launcherRef
-	ctl.mutex.Lock()
-	for nodeName, nodeDat := range ctl.nodeNameToData {
-		for launcherPodName := range nodeDat.Launchers {
-			launcherRefs = append(launcherRefs, launcherRef{
-				nodeName:        nodeName,
-				launcherPodName: launcherPodName,
-			})
-		}
-	}
-	ctl.mutex.Unlock()
-
-	for _, lr := range launcherRefs {
-		launcherPod, err := ctl.podLister.Pods(ctl.namespace).Get(lr.launcherPodName)
-		if err != nil {
-			if apierrors.IsNotFound(err) {
-				continue
-			}
-			logger.Error(err, "Failed to get launcher Pod for obsolete instance cleanup",
-				"launcherPod", lr.launcherPodName)
-			continue
-		}
-		if launcherPod.DeletionTimestamp != nil || launcherPod.Status.PodIP == "" {
-			continue
-		}
-		launcherBaseURL := fmt.Sprintf("http://%s:%d", launcherPod.Status.PodIP, ctlrcommon.LauncherServicePort)
-		lClient, err := NewLauncherClient(launcherBaseURL)
-		if err != nil {
-			logger.Error(err, "Failed to create launcher client for obsolete instance cleanup",
-				"launcherPod", lr.launcherPodName)
-			continue
-		}
-		allInsts, err := lClient.ListInstances(ctx)
-		if err != nil {
-			logger.Error(err, "Failed to list instances for obsolete instance cleanup",
-				"launcherPod", lr.launcherPodName)
-			continue
-		}
-		for _, inst := range allInsts.Instances {
-			iscName := inst.Annotations[VllmConfigISCNameAnnotationKey]
-			if iscName != isc.Name {
-				continue
-			}
-			if len(inst.GpuUUIDs) == 0 {
-				logger.V(4).Info("Skipping instance cleanup because GPU UUIDs are unknown",
-					"launcherPod", lr.launcherPodName, "instanceID", inst.InstanceID)
-				continue
-			}
-			_, currentHash, err := ctl.configInferenceServer(isc, inst.GpuUUIDs)
-			if err != nil {
-				logger.Error(err, "Failed to compute current instance hash",
-					"launcherPod", lr.launcherPodName, "instanceID", inst.InstanceID)
-				continue
-			}
-			if inst.InstanceID == currentHash {
-				continue // not obsolete
-			}
-			sleeping, err := ctl.querySleeping(ctx, launcherPod, int16(isc.Spec.ModelServerConfig.Port))
-			if err != nil {
-				logger.Error(err, "Failed to query whether obsolete instance is sleeping",
-					"launcherPod", lr.launcherPodName, "instanceID", inst.InstanceID)
-				continue
-			}
-			if !sleeping {
-				logger.V(4).Info("Skipping obsolete instance cleanup because instance did not explicitly report sleeping",
-					"launcherPod", lr.launcherPodName, "instanceID", inst.InstanceID)
-				continue
-			}
-			if _, err := lClient.DeleteInstance(ctx, inst.InstanceID); err != nil {
-				if !IsInstanceNotFoundError(err) {
-					logger.Error(err, "Failed to delete obsolete sleeping instance",
-						"launcherPod", lr.launcherPodName, "instanceID", inst.InstanceID)
-				}
-				continue
-			}
-			ctl.deleteInstanceFromLauncherData(lr.nodeName, lr.launcherPodName, inst.InstanceID)
-			logger.V(2).Info("Deleted obsolete sleeping instance",
-				"launcherPod", lr.launcherPodName, "instanceID", inst.InstanceID, "currentHash", currentHash)
-		}
-	}
-}
