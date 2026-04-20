@@ -381,24 +381,21 @@ Stream instance lifecycle events as newline-delimited JSON ([NDJSON](https://git
 Each event carries the full state of the relevant instance and a monotonically increasing `revision` number:
 
 ```json
-{"type": "CREATED", "object": {"status": "started", "instance_id": "abc123", "options": "--model test"}, "revision": 1}
-{"type": "STOPPED", "object": {"instance_id": "abc123", "status": "stopped", "exit_code": -9}, "revision": 2}
-{"type": "DELETED", "object": {"status": "terminated", "instance_id": "abc123", "options": "--model test"}, "revision": 3}
+{"type": "CREATED", "object": {"status": "started", "instance_id": "abc123", "options": "--model test", "revision": 1}, "revision": 1}
+{"type": "STOPPED", "object": {"instance_id": "abc123", "status": "stopped", "exit_code": -9, "revision": 2}, "revision": 2}
+{"type": "DELETED", "object": {"status": "terminated", "instance_id": "abc123", "options": "--model test", "revision": 3}, "revision": 3}
 ```
 
 **Event Types:**
 
 - `CREATED` — A new instance was spawned
 - `STOPPED` — An instance process terminated (detected automatically via kernel-level process monitoring, zero-polling)
-- `DELETED` — An instance was explicitly removed via the DELETE API
+- `DELETED` — An instance was explicitly removed via the DELETE API. The object status is `"terminated"` when the process was still running, or `"not_running"` when the process had already exited before the delete request.
 
 **Initial state and resumption:**
 
 - **Without `?since`**: The stream begins with a synthetic `CREATED` event for every instance that exists at the time the watch starts, followed by live events. Instances deleted before the watch began are not mentioned.
-- **With `?since=N`**: The stream resumes from revision `N`, yielding only events with `revision > N`. This allows a client to reconnect without missing events. If the requested revision is older than the server's event buffer, the stream returns an error object:
-  ```json
-  {"error": "revision_too_old", "message": "Requested revision 0 is no longer available. Oldest available: 42."}
-  ```
+- **With `?since=N`**: The stream resumes from revision `N`, yielding only events with `revision > N`. This allows a client to reconnect without missing events. If the requested revision is older than the server's event buffer, the server responds with **410 Gone** and closes the connection. The client should start a fresh watch without `?since` to re-sync. If the revision falls out of the buffer while the stream is already open (slow client), the server silently closes the connection.
 
 **Usage Examples:**
 

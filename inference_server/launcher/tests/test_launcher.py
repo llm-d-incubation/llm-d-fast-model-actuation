@@ -706,7 +706,7 @@ class TestAPIEndpoints:
     def test_list_instances(self, mock_manager, client):
         """Test listing instances via API"""
         mock_manager.list_instances.return_value = ["id-1", "id-2"]
-        mock_manager.broadcaster.revision = 5
+        mock_manager.revision = 5
 
         response = client.get("/v2/vllm/instances?detail=False")
 
@@ -1047,6 +1047,7 @@ class TestEventBroadcaster:
             event = WatchEvent(
                 type="CREATED",
                 object={"instance_id": "abc", "status": "started"},
+                revision=1,
             )
             await broadcaster.publish(event)
 
@@ -1061,13 +1062,15 @@ class TestEventBroadcaster:
 
         asyncio.run(run())
 
-    def test_publish_assigns_sequential_revisions(self):
-        """Each published event gets a sequential revision number."""
+    def test_publish_tracks_sequential_revisions(self):
+        """Broadcaster tracks revision from pre-stamped events."""
 
         async def run():
             broadcaster = EventBroadcaster()
-            for i in range(3):
-                await broadcaster.publish(WatchEvent(type="CREATED", object={"i": i}))
+            for i in range(1, 4):
+                await broadcaster.publish(
+                    WatchEvent(type="CREATED", object={"i": i}, revision=i)
+                )
             assert broadcaster.revision == 3
             assert broadcaster._events[0].revision == 1
             assert broadcaster._events[1].revision == 2
@@ -1096,10 +1099,10 @@ class TestEventBroadcaster:
             await asyncio.sleep(0)  # let watchers start
 
             await broadcaster.publish(
-                WatchEvent(type="CREATED", object={"instance_id": "1"})
+                WatchEvent(type="CREATED", object={"instance_id": "1"}, revision=1)
             )
             await broadcaster.publish(
-                WatchEvent(type="STOPPED", object={"instance_id": "1"})
+                WatchEvent(type="STOPPED", object={"instance_id": "1"}, revision=2)
             )
 
             await asyncio.gather(task_a, task_b)
@@ -1117,13 +1120,13 @@ class TestEventBroadcaster:
         async def run():
             broadcaster = EventBroadcaster()
             await broadcaster.publish(
-                WatchEvent(type="CREATED", object={"instance_id": "1"})
+                WatchEvent(type="CREATED", object={"instance_id": "1"}, revision=1)
             )
             await broadcaster.publish(
-                WatchEvent(type="STOPPED", object={"instance_id": "1"})
+                WatchEvent(type="STOPPED", object={"instance_id": "1"}, revision=2)
             )
             await broadcaster.publish(
-                WatchEvent(type="CREATED", object={"instance_id": "2"})
+                WatchEvent(type="CREATED", object={"instance_id": "2"}, revision=3)
             )
 
             received = []
@@ -1145,8 +1148,10 @@ class TestEventBroadcaster:
         async def run():
             broadcaster = EventBroadcaster()
             # Fill beyond buffer to force trimming
-            for i in range(_MAX_BROADCASTER_EVENTS + 10):
-                await broadcaster.publish(WatchEvent(type="CREATED", object={"i": i}))
+            for i in range(1, _MAX_BROADCASTER_EVENTS + 11):
+                await broadcaster.publish(
+                    WatchEvent(type="CREATED", object={"i": i}, revision=i)
+                )
 
             with pytest.raises(RevisionTooOld) as exc_info:
                 async for _ in broadcaster.watch(since_revision=0):
@@ -1163,17 +1168,21 @@ class TestEventBroadcaster:
 class TestSentinelWatcher:
     """Test suite for VllmInstance sentinel-based process exit detection."""
 
-    def test_sentinel_publishes_stopped_event(self, gpu_translator, tmp_log_dir):
-        """When a process exits, the sentinel watcher publishes a STOPPED event."""
+    def test_sentinel_invokes_callback_on_exit(self, gpu_translator, tmp_log_dir):
+        """When a process exits, the sentinel watcher invokes the callback."""
 
         async def run():
-            broadcaster = EventBroadcaster()
             config = VllmConfig(options="--model test --port 8000")
             instance = VllmInstance("test-id", config, gpu_translator, tmp_log_dir)
             mock_proc = MockProcess()
             instance.process = mock_proc
 
-            instance.start_sentinel_watcher(broadcaster)
+            callback_calls = []
+
+            def on_exit(instance_id, exitcode):
+                callback_calls.append((instance_id, exitcode))
+
+            instance.start_sentinel_watcher(on_exit)
             assert instance._sentinel_active is True
 
             # Simulate process exit
@@ -1182,11 +1191,8 @@ class TestSentinelWatcher:
             # Give the event loop a chance to fire the reader callback
             await asyncio.sleep(0.05)
 
-            assert broadcaster._revision == 1
-            event = broadcaster._events[0]
-            assert event.type == "STOPPED"
-            assert event.object["instance_id"] == "test-id"
-            assert event.object["exit_code"] == -9
+            assert len(callback_calls) == 1
+            assert callback_calls[0] == ("test-id", -9)
             assert instance._sentinel_active is False
 
             mock_proc.close_sentinel()
@@ -1194,10 +1200,9 @@ class TestSentinelWatcher:
         asyncio.run(run())
 
     def test_sentinel_cancelled_on_explicit_stop(self, gpu_translator, tmp_log_dir):
-        """When stop is called explicitly, sentinel is cancelled (no STOPPED event)."""
+        """When stop is called explicitly, sentinel is cancelled (no callback)."""
 
         async def run():
-            broadcaster = EventBroadcaster()
             config = VllmConfig(options="--model test --port 8000")
             instance = VllmInstance("test-id", config, gpu_translator, tmp_log_dir)
             mock_proc = MockProcess()
@@ -1205,14 +1210,16 @@ class TestSentinelWatcher:
             # Create log file so stop() cleanup doesn't fail
             open(instance._log_file_path, "wb").close()
 
-            instance.start_sentinel_watcher(broadcaster)
+            callback_calls = []
+
+            instance.start_sentinel_watcher(lambda iid, ec: callback_calls.append(1))
             assert instance._sentinel_active is True
 
             instance.cancel_sentinel_watcher()
             assert instance._sentinel_active is False
 
-            # No events should have been published
-            assert broadcaster._revision == 0
+            # No callback should have fired
+            assert len(callback_calls) == 0
 
             mock_proc.close_sentinel()
 
@@ -1227,7 +1234,7 @@ class TestWatchAPIEndpoint:
         """The watch endpoint returns application/x-ndjson."""
         mock_manager = MagicMock()
         mock_broadcaster = MagicMock()
-        mock_broadcaster.revision = 0
+        mock_manager.revision = 0
 
         async def mock_watch(since_revision=0):
             yield WatchEvent(
@@ -1251,6 +1258,7 @@ class TestWatchAPIEndpoint:
 
         mock_manager = MagicMock()
         mock_broadcaster = MagicMock()
+        mock_broadcaster.oldest_revision = 0
 
         events = [
             WatchEvent(
@@ -1281,7 +1289,7 @@ class TestWatchAPIEndpoint:
 
         mock_manager = MagicMock()
         mock_broadcaster = MagicMock()
-        mock_broadcaster.revision = 5
+        mock_manager.revision = 5
 
         # No new events from broadcaster
         async def mock_watch(since_revision=0):
@@ -1292,6 +1300,7 @@ class TestWatchAPIEndpoint:
 
         # One existing instance
         mock_instance = MagicMock()
+        mock_instance.last_revision = 3
         mock_instance.get_status.return_value = {
             "status": "running",
             "instance_id": "existing-1",
@@ -1307,6 +1316,7 @@ class TestWatchAPIEndpoint:
             event = json.loads(lines[0])
             assert event["type"] == "CREATED"
             assert event["object"]["instance_id"] == "existing-1"
+            assert event["object"]["revision"] == 3
             assert event["revision"] == 5
 
 
