@@ -21,6 +21,7 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/coordination"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/probes"
@@ -54,10 +55,19 @@ func main() {
 		proxyPort = "8082"
 	}
 
+	// Configure proxy timeouts from environment variables (with defaults)
+	proxyConfig := proxy.DefaultProxyConfig
+	if dur, err := time.ParseDuration(os.Getenv("PROXY_UNINIT_DELAY")); err == nil && dur != 0 {
+		proxyConfig.UninitDelay = dur
+	}
+	if dur, err := time.ParseDuration(os.Getenv("PROXY_DIAL_TIMEOUT")); err == nil && dur != 0 {
+		proxyConfig.DialTimeout = dur
+	}
+
 	var ready atomic.Bool
 
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
 
 	go func() {
 		defer wg.Done()
@@ -81,7 +91,7 @@ func main() {
 	// Start the reverse proxy server
 	go func() {
 		defer wg.Done()
-		err := proxy.Run(ctx, proxyPort)
+		err := proxy.RunWithConfig(ctx, proxyPort, proxyConfig)
 		if err != nil {
 			logger.Error(err, "failed to start requester proxy server")
 		}

@@ -60,14 +60,20 @@ const SetLogPath = "/v1/set-log"
 // holds that starting position of a log chunk.
 const LogStartPosParam = "startPos"
 
-// InitProxy is the path for initializing the HTTP reverse proxy。
+// InitProxy is the path for configuring the TCP proxy.
 // The proxy is used to forward requests from the server-requesting
-// pod to the server-providing pod.
+// pod to the vLLM instance in the server-providing pod.
 // Supports two HTTP methods:
 //   - GET: retrieves the initialization status of the proxy.
-//     Returns  status info.
-//   - POST: initializes the proxy with a target address and port.
+//     Returns 200 if initialized, 404 if not.
+//   - PUT: configures the proxy with a target address and port.
 //     The request body should contain a JSON object with "address"
-//     and "port" fields. After successful initialization,
-//     the proxy will forward requests to the configured target server.
+//     and "port" fields. After successful configuration,
+//     the proxy will forward TCP connections to the configured target.
 const InitProxy = "/v1/proxy/init"
+
+// ProxyConfigRequest is the request body to configure the proxy target
+type ProxyConfigRequest struct {
+	Address string `json:"address"`
+	Port    int32  `json:"port"`
+}
