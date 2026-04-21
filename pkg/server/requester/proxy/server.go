@@ -76,7 +76,7 @@ func RunWithConfig(ctx context.Context, port string, cfg ProxyConfig) error {
 	go func() {
 		<-ctx.Done()
 		logger.Info("shutting down TCP proxy server")
-		listener.Close()
+		_ = listener.Close()
 	}()
 
 	logger.Info("TCP proxy server started", "port", port)
