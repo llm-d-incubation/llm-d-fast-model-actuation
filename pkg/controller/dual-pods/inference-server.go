@@ -42,8 +42,8 @@ import (
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	k8sserializer "k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apimachinery/pkg/util/sets"
-	k8svalidation "k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
+	k8svalidation "k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/yaml"
@@ -73,6 +73,34 @@ type launcherSyncResult struct {
 	instances                 *AllInstancesState
 	deletedStoppedInstanceIDs sets.Set[string]
 	failedStoppedInstanceErrs map[string]error
+}
+
+func ensureNamedLauncherInstance(
+	ctx context.Context,
+	lClient *LauncherClient,
+	launcherDat *launcherData,
+	instanceID string,
+	cfg VllmConfig,
+) (*InstanceState, error) {
+	inst, err := lClient.GetInstanceState(ctx, instanceID)
+	if err == nil {
+		launcherDat.Instances[instanceID] = time.Now()
+		return inst, nil
+	}
+	if !IsInstanceNotFoundError(err) {
+		return nil, fmt.Errorf("get vLLM instance %q: %w", instanceID, err)
+	}
+
+	result, err := lClient.CreateNamedInstance(ctx, instanceID, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("create vLLM instance: %w", err)
+	}
+	launcherDat.Instances[instanceID] = time.Now()
+	return &InstanceState{
+		InstanceID: instanceID,
+		Status:     result.Status,
+		VllmConfig: cfg,
+	}, nil
 }
 
 func (ni nodeItem) process(ctx context.Context, ctl *controller) (error, bool) {
@@ -394,6 +422,34 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				return fmt.Errorf("unable to wake up server because port not known: %w", err), true
 			}
 		}
+		// A launcher pod may be created in a bound state (requester annotation set at
+		// creation) before its vLLM instance is set up. Handle that here.
+		// The absence of DualLabelName distinguishes this from a controller restart
+		// where InstanceID is unknown but the instance already exists on the launcher.
+		if launcherBased && serverDat.InstanceID == "" {
+			if _, hasDual := providingPod.Labels[api.DualLabelName]; !hasDual {
+				if providingPod.Status.PodIP == "" || !utils.IsPodReady(providingPod) {
+					return nil, true
+				}
+				cfg, iscHash, err := ctl.configInferenceServer(isc, serverDat.GPUIDs)
+				if err != nil {
+					return fmt.Errorf("failed to configure inference server config: %w", err), true
+				}
+				launcherBaseURL := fmt.Sprintf("http://%s:%d", providingPod.Status.PodIP, ctlrcommon.LauncherServicePort)
+				lClient, err := NewLauncherClient(launcherBaseURL)
+				if err != nil {
+					return err, true
+				}
+				launcherDat := ctl.getLauncherData(nodeDat, providingPod.Name)
+				result, err := ensureNamedLauncherInstance(ctx, lClient, launcherDat, iscHash, *cfg)
+				if err != nil {
+					return err, true
+				}
+				logger.V(5).Info("Ensured vLLM instance for pre-bound launcher Pod", "instance_id", result.InstanceID, "status", result.Status)
+				return ctl.bind(ctx, serverDat, requestingPod, providingPod, &iscHash, int16(isc.Spec.ModelServerConfig.Port),
+					isc.Spec.ModelServerConfig.Labels, isc.Spec.ModelServerConfig.Annotations)
+			}
+		}
 		// For launcher-based providers, check whether the bound instance is still alive.
 		// The sidecar notifier updates the Pod annotation when instance status changes,
 		// which triggers reconciliation through the informer.
@@ -646,6 +702,14 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		return err, retry
 	}
 	// Sleeper budget is met. Make a new launcher Pod.
+
+	// Bind at creation time so the launcher-populator cannot delete this pod
+	// while the vLLM instance is being set up. The dual label is added
+	// later by bind() once the instance is ready.
+	desiredLauncherPod.Annotations = utils.MapSet(desiredLauncherPod.Annotations, requesterAnnotationKey, string(requestingPod.UID)+" "+requestingPod.Name)
+	if !slices.Contains(desiredLauncherPod.Finalizers, providerFinalizer) {
+		desiredLauncherPod.Finalizers = append(desiredLauncherPod.Finalizers, providerFinalizer)
+	}
 
 	echo, err := podOps.Create(ctx, desiredLauncherPod, metav1.CreateOptions{})
 	if err != nil {
