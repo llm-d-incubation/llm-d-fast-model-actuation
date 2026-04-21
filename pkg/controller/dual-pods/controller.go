@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -75,17 +76,24 @@ import (
 // deletion of any server-providing Pod. Nor does the controller ever try to bind
 // one that is unbound; they are only created in the bound state.
 
-// There are two types of item in the controller's work queue.
+// There are three types of item in the controller's work queue.
 // One is a reference to the gpu-map ConfigMap.
 
-// The other type of queue item is a reference to an inference server.
+// The second type of queue item is a reference to a Node.
+// The are two types for an item on a Node:
+// 1) A reference to an inference server.
 // This reference carries the inference server's UID and the name
 // of the server-requesting Pod.
 // An inference server's UID is the UID of the server-requesting Pod.
+// 2) A reference to an unbound launcher-based server-providing Pod.
 
-const requesterAnnotationKey      = "dual-pods.llm-d.ai/requester"
-const nominalHashAnnotationKey    = "dual-pods.llm-d.ai/nominal"
-const iscLabelKeysAnnotationKey   = "dual-pods.llm-d.ai/isc-label-keys"
+// The third type of queue item is a reference to an InferenceServerConfig.
+// It is enqueued when an ISC's spec changes, to trigger cleanup of any
+// sleeping launcher instances whose configuration is now obsolete.
+
+const requesterAnnotationKey = "dual-pods.llm-d.ai/requester"
+const nominalHashAnnotationKey = "dual-pods.llm-d.ai/nominal"
+const iscLabelKeysAnnotationKey = "dual-pods.llm-d.ai/isc-label-keys"
 const iscAnnotationKeysAnnotationKey = "dual-pods.llm-d.ai/isc-annotation-keys"
 
 const providerFinalizer = "dual-pods.llm-d.ai/provider"
@@ -341,6 +349,10 @@ type unboundLauncherPodItem struct {
 	NodeName        string
 }
 
+type instanceGCItem struct {
+	ISCName string
+}
+
 type infSvrItemType string
 
 const (
@@ -460,7 +472,7 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 			ctl.Queue.Add(nodeItem{nodeName})
 		}
 	case *fmav1alpha1.InferenceServerConfig:
-		ctl.enqueueRequestersByInferenceServerConfig(typed, isInInitialList)
+		ctl.enqueueInfSvrItemsByISC(typed, isInInitialList)
 	case *corev1.ConfigMap:
 		if typed.Name != GPUMapName {
 			ctl.enqueueLogger.V(5).Info("Ignoring ConfigMap that is not the GPU map", "ref", cache.MetaObjectToName(typed))
@@ -513,7 +525,11 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 			ctl.Queue.Add(nodeItem{nodeName})
 		}
 	case *fmav1alpha1.InferenceServerConfig:
-		ctl.enqueueRequestersByInferenceServerConfig(typed, false)
+		prevTyped, ok := prev.(*fmav1alpha1.InferenceServerConfig)
+		if ok && !reflect.DeepEqual(prevTyped.Spec, typed.Spec) {
+			ctl.enqueueInstanceGCItemsForISC(typed.Name)
+		}
+		ctl.enqueueInfSvrItemsByISC(typed, false)
 	case *corev1.ConfigMap:
 		if typed.Name != GPUMapName {
 			ctl.enqueueLogger.V(5).Info("Ignoring ConfigMap that is not the GPU map", "ref", cache.MetaObjectToName(typed))
@@ -569,7 +585,7 @@ func (ctl *controller) OnDelete(obj any) {
 			ctl.Queue.Add(nodeItem{nodeName})
 		}
 	case *fmav1alpha1.InferenceServerConfig:
-		ctl.enqueueRequestersByInferenceServerConfig(typed, false)
+		ctl.enqueueInfSvrItemsByISC(typed, false)
 	case *corev1.ConfigMap:
 		if typed.Name != GPUMapName {
 			ctl.enqueueLogger.V(5).Info("Ignoring ConfigMap that is not the GPU map", "ref", cache.MetaObjectToName(typed))
@@ -648,6 +664,15 @@ func (item cmItem) process(ctx context.Context, ctl *controller) (error, bool) {
 	return nil, false
 }
 
+func (ctl *controller) enqueueInstanceGCItemsForISC(iscName string) {
+	ctl.mutex.Lock()
+	defer ctl.mutex.Unlock()
+	for nodeName, nodeDat := range ctl.nodeNameToData {
+		nodeDat.add(instanceGCItem{ISCName: iscName})
+		ctl.Queue.Add(nodeItem{nodeName})
+	}
+}
+
 func (ctl *controller) enqueueRequesters(ctx context.Context) {
 	ctl.mutex.Lock()
 	defer ctl.mutex.Unlock()
@@ -666,7 +691,7 @@ func (ctl *controller) enqueueRequesters(ctx context.Context) {
 	}
 }
 
-func (ctl *controller) enqueueRequestersByInferenceServerConfig(isc *fmav1alpha1.InferenceServerConfig, isInInitialList bool) {
+func (ctl *controller) enqueueInfSvrItemsByISC(isc *fmav1alpha1.InferenceServerConfig, isInInitialList bool) {
 	inferenceServerConfigName := isc.Name
 	requesters, err := ctl.podInformer.GetIndexer().ByIndex(inferenceServerConfigIndexName, inferenceServerConfigName)
 	if err != nil {
@@ -792,3 +817,4 @@ func (ctl *controller) clearServerData(nodeDat *nodeData, uid apitypes.UID) {
 	defer ctl.mutex.Unlock()
 	delete(nodeDat.InferenceServers, uid)
 }
+

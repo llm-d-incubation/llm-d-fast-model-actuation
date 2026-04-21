@@ -102,6 +102,11 @@ check_gpu_pin() {
     echo "GPU UUID(s) verified on pod $pod: $actual_uuids"
 }
 
+get_launcher_total_instances() {
+    local launcher_pod="$1"
+    kubectl exec -n "$NS" "$launcher_pod" -- python3 -c 'import json,urllib.request; print(json.load(urllib.request.urlopen("http://127.0.0.1:8001/v2/vllm/instances"))["total_instances"])'
+}
+
 # ---------------------------------------------------------------------------
 # Probe for a node with 2 free GPUs
 # ---------------------------------------------------------------------------
@@ -542,6 +547,58 @@ kubectl wait --for condition=Ready pod/$req_post_restart -n "$NS" --timeout=30s
 if [ "$E2E_PLATFORM" = "openshift" ]; then check_gpu_pin $req_post_restart; fi
 
 cheer Successful controller restart state recovery
+
+# ---------------------------------------------------------------------------
+# Delete Obsolete Sleeping Instances After ISC Update
+# ---------------------------------------------------------------------------
+
+intro_case Delete Obsolete Sleeping Instances After ISC Update
+
+expect '[ "$(kubectl get pod -n '"$NS"' $launcher1 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$req_post_restart" ]'
+
+old_total_instances=$(get_launcher_total_instances "$launcher1")
+echo "Launcher had $old_total_instances instance(s) before updating ISC to make a sleeping instance obsolete"
+
+# Mutate isc in a hash-relevant way so its sleeping instance becomes obsolete.
+kubectl patch inferenceserverconfig "$isc" -n "$NS" --type=merge -p='{"spec":{"modelServerConfig":{"options":"--model HuggingFaceTB/SmolLM2-360M-Instruct --served-model-name obsolete-after-update"}}}'
+
+expect '[ "$(get_launcher_total_instances "$launcher1")" == "$((old_total_instances - 1))" ]'
+
+cheer Successful deletion of obsolete sleeping instance
+
+# ---------------------------------------------------------------------------
+# Delete Obsolete Awake Instance on Unbinding
+# ---------------------------------------------------------------------------
+
+intro_case Delete Obsolete Awake Instance on Unbinding
+
+# This test verifies that when an awake instance's ISC is updated (making it
+# obsolete) and then the requester scales down, the controller deletes the
+# instance during unbinding rather than putting it to sleep.
+
+expect '[ "$(kubectl get pod -n '"$NS"' $launcher1 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$req_post_restart" ]'
+
+old_total_instances=$(get_launcher_total_instances "$launcher1")
+echo "Launcher had $old_total_instances instance(s) before making awake instance obsolete"
+
+# Save isc2's original options so we can restore them after the test.
+original_isc2_options=$(kubectl get inferenceserverconfig "$isc2" -n "$NS" -o jsonpath='{.spec.modelServerConfig.options}')
+echo "Original isc2 options: $original_isc2_options"
+
+# Mutate isc2 in a hash-relevant way while its instance is still awake (bound to req_post_restart).
+kubectl patch inferenceserverconfig "$isc2" -n "$NS" --type=merge -p='{"spec":{"modelServerConfig":{"options":"'"$original_isc2_options"' --served-model-name obsolete-awake-unbind"}}}'
+
+# Scale to 0 — triggers unbinding, which should detect obsolescence and delete the instance.
+kubectl scale rs $rs -n "$NS" --replicas=0
+
+expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$inst | wc -l | grep -w 0"
+
+expect '[ "$(get_launcher_total_instances "$launcher1")" == "$((old_total_instances - 1))" ]'
+
+# Restore isc2's original options so subsequent tests can create working instances.
+kubectl patch inferenceserverconfig "$isc2" -n "$NS" --type=merge -p='{"spec":{"modelServerConfig":{"options":"'"$original_isc2_options"'"}}}'
+
+cheer Successful deletion of obsolete awake instance on unbinding
 
 # ---------------------------------------------------------------------------
 # Unbound Launcher Deletion Cleanup

@@ -266,7 +266,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		if providingPod.Labels != nil {
 			_, providingPodLauncherBased = providingPod.Labels[ctlrcommon.LauncherConfigNameLabelKey]
 		}
-		err := ctl.ensureUnbound(ctx, serverDat, providingPod, providingPodLauncherBased)
+		err := ctl.ensureUnbound(ctx, serverDat, nodeDat, providingPod, providingPodLauncherBased)
 		if err != nil {
 			return err, true
 		}
@@ -334,7 +334,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	if serverDat.GPUIDsStr == nil {
 		logger.V(5).Info("Querying accelerators", "ip", requesterIP, "port", adminPort)
 		url := fmt.Sprintf("http://%s:%s%s", requesterIP, adminPort, stubapi.AcceleratorQueryPath)
-		gpuUUIDs, err := getGPUUUIDs(url)
+		gpuUUIDs, err := getGPUUUIDs(ctx, url)
 		if err != nil {
 			queryErr := fmt.Errorf("GET %q fails: %s", url, err.Error())
 			updateErr, _ := ctl.ensureReqStatus(ctx, requestingPod, serverDat, queryErr.Error())
@@ -1118,36 +1118,115 @@ func (ctl *controller) removeProviderFinalizer(ctx context.Context, providingPod
 	return false, nil // no change
 }
 
+func (item instanceGCItem) process(ctx context.Context, ctl *controller, nodeDat *nodeData) (error, bool) {
+	logger := klog.FromContext(ctx).WithValues("iscName", item.ISCName)
+
+	isc, err := ctl.iscLister.InferenceServerConfigs(ctl.namespace).Get(item.ISCName)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, false
+		}
+		return err, true
+	}
+
+	for launcherPodName, launcherDat := range nodeDat.Launchers {
+		launcherPod, err := ctl.podLister.Pods(ctl.namespace).Get(launcherPodName)
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			logger.Error(err, "Failed to get launcher pod during instance GC", "launcherPod", launcherPodName)
+			continue
+		}
+		if launcherPod.DeletionTimestamp != nil || launcherPod.Status.PodIP == "" {
+			continue
+		}
+		launcherBaseURL := fmt.Sprintf("http://%s:%d", launcherPod.Status.PodIP, ctlrcommon.LauncherServicePort)
+		lClient, err := NewLauncherClient(launcherBaseURL)
+		if err != nil {
+			logger.Error(err, "Failed to create launcher client during instance GC", "launcherPod", launcherPodName)
+			continue
+		}
+		allInsts, err := lClient.ListInstances(ctx)
+		if err != nil {
+			logger.Error(err, "Failed to list instances during instance GC", "launcherPod", launcherPodName)
+			continue
+		}
+		for _, inst := range allInsts.Instances {
+			if inst.Annotations[VllmConfigISCNameAnnotationKey] != isc.Name {
+				continue
+			}
+			if len(inst.GpuUUIDs) == 0 {
+				logger.V(4).Info("Skipping instance GC: no GPU UUIDs", "launcherPod", launcherPodName, "instanceID", inst.InstanceID)
+				continue
+			}
+			_, currentHash, err := ctl.configInferenceServer(isc, inst.GpuUUIDs)
+			if err != nil {
+				logger.Error(err, "Failed to compute current hash during instance GC", "launcherPod", launcherPodName, "instanceID", inst.InstanceID)
+				continue
+			}
+			if inst.InstanceID == currentHash {
+				continue // not obsolete
+			}
+			sleeping, err := ctl.querySleeping(ctx, launcherPod, int16(isc.Spec.ModelServerConfig.Port))
+			if err != nil {
+				logger.Error(err, "Failed to query sleeping state during instance GC", "launcherPod", launcherPodName, "instanceID", inst.InstanceID)
+				continue
+			}
+			if !sleeping {
+				logger.V(4).Info("Skipping instance GC: instance not explicitly sleeping", "launcherPod", launcherPodName, "instanceID", inst.InstanceID)
+				continue
+			}
+			if _, err := lClient.DeleteInstance(ctx, inst.InstanceID); err != nil {
+				if !IsInstanceNotFoundError(err) {
+					logger.Error(err, "Failed to delete obsolete sleeping instance during GC", "launcherPod", launcherPodName, "instanceID", inst.InstanceID)
+				}
+				continue
+			}
+			delete(launcherDat.Instances, inst.InstanceID)
+			logger.V(2).Info("Deleted obsolete sleeping instance", "launcherPod", launcherPodName, "instanceID", inst.InstanceID, "currentHash", currentHash)
+		}
+	}
+	return nil, false
+}
+
 // Unbinds the given server-providing Pod.
-func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData, providingPod *corev1.Pod, launcherBased bool) error {
+func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData, nodeDat *nodeData, providingPod *corev1.Pod, launcherBased bool) error {
 	logger := klog.FromContext(ctx)
 	// A providingPod with no IP is not scheduled, so we know that it is not awake.
 	// If providingPod is stale then the update will fail.
 	if (serverDat.Sleeping == nil || !*(serverDat.Sleeping)) && providingPod.Status.PodIP != "" { // need to put to sleep
-		serverPort := serverDat.ServerPort
-		// TODO(waltforme): Is serverPort always set correctly for launcher-based server-providing Pods upon unbinding?
-		// E.g. What if requestingPod is deleted during a crash and restart of the dual-pods controller?
-		// In order to find the port in this case, I think the best effort is to recompute hash for all InferenceServerConfig objects and try to match.
-		if !launcherBased {
-			if serverDat.NominalProvidingPod == nil {
-				var err error
-				_, serverPort, err = utils.GetInferenceServerContainerIndexAndPort(providingPod)
-				if err != nil { // Impossible, because such a providingPod would never be created by this controller
-					return fmt.Errorf("unable to put server to sleep because port not known: %w", err)
+		// For launcher-based instances, check if the instance is already obsolete
+		// (i.e. its InferenceServerConfig was updated since the instance was created).
+		// If so, delete it from the launcher rather than putting it to sleep.
+		if launcherBased && ctl.maybeDeleteObsoleteInstance(ctx, serverDat, nodeDat, providingPod) {
+			serverDat.Sleeping = ptr.To(true)
+		} else {
+			serverPort := serverDat.ServerPort
+			// TODO(waltforme): Is serverPort always set correctly for launcher-based server-providing Pods upon unbinding?
+			// E.g. What if requestingPod is deleted during a crash and restart of the dual-pods controller?
+			// In order to find the port in this case, I think the best effort is to recompute hash for all InferenceServerConfig objects and try to match.
+			if !launcherBased {
+				if serverDat.NominalProvidingPod == nil {
+					var err error
+					_, serverPort, err = utils.GetInferenceServerContainerIndexAndPort(providingPod)
+					if err != nil { // Impossible, because such a providingPod would never be created by this controller
+						return fmt.Errorf("unable to put server to sleep because port not known: %w", err)
+					}
 				}
 			}
+			endpoint := fmt.Sprintf("%s:%d", providingPod.Status.PodIP, serverPort)
+			sleepURL := "http://" + endpoint + "/sleep"
+			resp, err := http.Post(sleepURL, "", nil)
+			if err != nil {
+				return fmt.Errorf("failed to put provider %q to sleep, POST %s got error: %w", serverDat.ProvidingPodName, sleepURL, err)
+			}
+			if sc := resp.StatusCode; sc != http.StatusOK {
+				return fmt.Errorf("failed to put provider %q to sleep, POST %s returned status %d", serverDat.ProvidingPodName, sleepURL, sc)
+			}
+			serverDat.Sleeping = ptr.To(true)
+			logger.V(2).Info("Put inference server to sleep", "endpoint", endpoint)
 		}
-		endpoint := fmt.Sprintf("%s:%d", providingPod.Status.PodIP, serverPort)
-		sleepURL := "http://" + endpoint + "/sleep"
-		resp, err := http.Post(sleepURL, "", nil)
-		if err != nil {
-			return fmt.Errorf("failed to put provider %q to sleep, POST %s got error: %w", serverDat.ProvidingPodName, sleepURL, err)
-		}
-		if sc := resp.StatusCode; sc != http.StatusOK {
-			return fmt.Errorf("failed to put provider %q to sleep, POST %s returned status %d", serverDat.ProvidingPodName, sleepURL, sc)
-		}
-		serverDat.Sleeping = ptr.To(true)
-		logger.V(2).Info("Put inference server to sleep", "endpoint", endpoint)
 	}
 	providingPod = providingPod.DeepCopy()
 	var aChange, fChange bool
@@ -1225,6 +1304,64 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 	serverDat.ProvidingPodName = ""
 	serverDat.ServerPort = -1
 	return nil
+}
+
+// maybeDeleteObsoleteInstance checks whether the launcher-based instance is obsolete
+// (its InferenceServerConfig was updated since the instance was created) and if so,
+// deletes it from the launcher. Returns true if the instance was deleted.
+// On any error, returns false so the caller falls through to the normal sleep path.
+func (ctl *controller) maybeDeleteObsoleteInstance(ctx context.Context, serverDat *serverData, nodeDat *nodeData, providingPod *corev1.Pod) bool {
+	logger := klog.FromContext(ctx)
+	if serverDat.InstanceID == "" {
+		return false
+	}
+	launcherBaseURL := fmt.Sprintf("http://%s:%d", providingPod.Status.PodIP, ctlrcommon.LauncherServicePort)
+	lClient, err := NewLauncherClient(launcherBaseURL)
+	if err != nil {
+		logger.V(4).Info("Cannot check instance obsolescence: failed to create launcher client", "err", err)
+		return false
+	}
+	instState, err := lClient.GetInstanceState(ctx, serverDat.InstanceID)
+	if err != nil {
+		logger.V(4).Info("Cannot check instance obsolescence: failed to get instance state", "instanceID", serverDat.InstanceID, "err", err)
+		return false
+	}
+	iscName := instState.Annotations[VllmConfigISCNameAnnotationKey]
+	if iscName == "" {
+		logger.V(4).Info("Cannot check instance obsolescence: no ISC name annotation on instance", "instanceID", serverDat.InstanceID)
+		return false
+	}
+	currentISC, err := ctl.iscLister.InferenceServerConfigs(ctl.namespace).Get(iscName)
+	if err != nil {
+		logger.V(4).Info("Cannot check instance obsolescence: ISC not found", "iscName", iscName, "err", err)
+		return false
+	}
+	if len(instState.GpuUUIDs) == 0 {
+		logger.V(4).Info("Cannot check instance obsolescence: no GPU UUIDs on instance", "instanceID", serverDat.InstanceID)
+		return false
+	}
+	_, currentHash, err := ctl.configInferenceServer(currentISC, instState.GpuUUIDs)
+	if err != nil {
+		logger.V(4).Info("Cannot check instance obsolescence: failed to compute current hash", "iscName", iscName, "err", err)
+		return false
+	}
+	if currentHash == serverDat.InstanceID {
+		return false // not obsolete
+	}
+	// Instance is obsolete — delete from launcher instead of sleeping.
+	if _, err := lClient.DeleteInstance(ctx, serverDat.InstanceID); err != nil {
+		if !IsInstanceNotFoundError(err) {
+			logger.Error(err, "Failed to delete obsolete instance during unbinding",
+				"instanceID", serverDat.InstanceID)
+			return false
+		}
+	}
+	if launcherDat := nodeDat.Launchers[providingPod.Name]; launcherDat != nil {
+		delete(launcherDat.Instances, serverDat.InstanceID)
+	}
+	logger.V(2).Info("Deleted obsolete instance during unbinding",
+		"instanceID", serverDat.InstanceID, "currentHash", currentHash, "iscName", iscName)
+	return true
 }
 
 // getNominalServerProvidingPod returns the nominal server-providing Pod,
@@ -1375,7 +1512,7 @@ func getReducedInferenceContainerState(from *corev1.Pod) *reducedContainerState 
 
 func (ctl *controller) querySleeping(ctx context.Context, providingPod *corev1.Pod, serverPort int16) (bool, error) {
 	queryURL := fmt.Sprintf("http://%s:%d/is_sleeping", providingPod.Status.PodIP, serverPort)
-	body, err := doGet(queryURL)
+	body, err := doGet(ctx, queryURL)
 	if err != nil {
 		return false, err
 	}
@@ -1393,7 +1530,7 @@ func (ctl *controller) accelMemoryIsLowEnough(ctx context.Context, requestingPod
 		adminPort = api.AdminPortDefaultValue
 	}
 	url := fmt.Sprintf("http://%s:%s%s", requestingPod.Status.PodIP, adminPort, stubapi.AcceleratorMemoryQueryPath)
-	body, err := doGet(url)
+	body, err := doGet(ctx, url)
 	if err != nil {
 		return err
 	}
@@ -1598,12 +1735,16 @@ func init() {
 	podDecoder = codecFactory.UniversalDecoder(corev1.SchemeGroupVersion)
 }
 
-func doGet(url string) ([]byte, error) {
+func doGet(ctx context.Context, url string) ([]byte, error) {
 	client := &http.Client{
 		Timeout: 5 * time.Second,
 	}
 
-	resp, err := client.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("http get %q: %w", url, err)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("http get %q: %w", url, err)
 	}
@@ -1621,8 +1762,8 @@ func doGet(url string) ([]byte, error) {
 }
 
 // getGPUUUIDs does the HTTP GET on the given URL to fetch the assigned GPU UUIDs.
-func getGPUUUIDs(url string) ([]string, error) {
-	body, err := doGet(url)
+func getGPUUUIDs(ctx context.Context, url string) ([]string, error) {
+	body, err := doGet(ctx, url)
 	if err != nil {
 		return nil, err
 	}
