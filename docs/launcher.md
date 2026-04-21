@@ -381,9 +381,9 @@ Stream instance lifecycle events as newline-delimited JSON ([NDJSON](https://git
 Each event carries the full state of the relevant instance and a monotonically increasing `revision` number:
 
 ```json
-{"type": "CREATED", "object": {"status": "started", "instance_id": "abc123", "options": "--model test", "revision": 1}, "revision": 1}
-{"type": "STOPPED", "object": {"instance_id": "abc123", "status": "stopped", "exit_code": -9, "revision": 2}, "revision": 2}
-{"type": "DELETED", "object": {"status": "terminated", "instance_id": "abc123", "options": "--model test", "revision": 3}, "revision": 3}
+{"type": "CREATED", "object": {"status": "started", "instance_id": "abc123", "options": "--model test", "revision": 1}}
+{"type": "STOPPED", "object": {"instance_id": "abc123", "status": "stopped", "exit_code": -9, "revision": 2}}
+{"type": "DELETED", "object": {"status": "terminated", "instance_id": "abc123", "options": "--model test", "revision": 3}}
 ```
 
 **Event Types:**
@@ -468,7 +468,7 @@ Get status information for all instances. `Detail` is `True` by default.
       "options": <options 1>,
       "gpu_uuids": <gpus 1>,
       "env_vars": <envars 1>,
-      "revision": 5
+      "revision": 1
     },
     {
       "status": "stopped",
@@ -476,7 +476,7 @@ Get status information for all instances. `Detail` is `True` by default.
       "options": <options 2>,
       "gpu_uuids": <gpus 2>,
       "env_vars": <envars 2>,
-      "revision": 5
+      "revision": 3
     },
     {
       "status": "running",

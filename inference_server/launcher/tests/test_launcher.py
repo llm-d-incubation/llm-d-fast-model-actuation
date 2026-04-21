@@ -1263,7 +1263,12 @@ class TestWatchAPIEndpoint:
         events = [
             WatchEvent(
                 type="STOPPED",
-                object={"instance_id": "abc", "status": "stopped", "exit_code": 0},
+                object={
+                    "instance_id": "abc",
+                    "status": "stopped",
+                    "exit_code": 0,
+                    "revision": 2,
+                },
                 revision=2,
             ),
         ]
@@ -1281,7 +1286,8 @@ class TestWatchAPIEndpoint:
             assert len(lines) == 1
             event = json.loads(lines[0])
             assert event["type"] == "STOPPED"
-            assert event["revision"] == 2
+            assert "revision" not in event
+            assert event["object"]["revision"] == 2
 
     def test_watch_without_since_sends_initial_state(self, client):
         """Without ?since, existing instances are sent as CREATED first."""
@@ -1300,11 +1306,11 @@ class TestWatchAPIEndpoint:
 
         # One existing instance
         mock_instance = MagicMock()
-        mock_instance.last_revision = 3
         mock_instance.get_status.return_value = {
             "status": "running",
             "instance_id": "existing-1",
             "options": "--model test",
+            "revision": 3,
         }
         mock_manager.instances = {"existing-1": mock_instance}
         mock_manager.broadcaster = mock_broadcaster
@@ -1317,7 +1323,7 @@ class TestWatchAPIEndpoint:
             assert event["type"] == "CREATED"
             assert event["object"]["instance_id"] == "existing-1"
             assert event["object"]["revision"] == 3
-            assert event["revision"] == 5
+            assert "revision" not in event
 
 
 class TestLogStartOffset:
