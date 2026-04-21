@@ -54,13 +54,24 @@ spec:
                 properties:
                   metadata:
                     description: |-
-                      Standard object's metadata.
-                      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+                      EmbeddedObjectMeta holds the subset of metav1.ObjectMeta fields that
+                      we want in the CRD schema, so that strict decoding accepts them.
+                    properties:
+                      annotations:
+                        additionalProperties:
+                          type: string
+                        description: Annotations for storing arbitrary non-identifying
+                          metadata.
+                        type: object
+                      labels:
+                        additionalProperties:
+                          type: string
+                        description: Labels for organizing and categorizing objects.
+                        type: object
                     type: object
                   spec:
-                    description: |-
-                      Specification of the desired behavior of the pod.
-                      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status
+                    description: Spec defines the behavior of pods created from this
+                      template.
                     properties:
                       activeDeadlineSeconds:
                         description: |-
