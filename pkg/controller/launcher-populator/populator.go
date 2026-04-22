@@ -193,7 +193,7 @@ func (item lppItem) process(ctx context.Context, ctl *controller) (error, bool) 
 	logger := klog.FromContext(ctx)
 
 	// Build desired state from all policies
-	populationPolicy, err := ctl.buildDesiredStateFromPolicies(ctx, nil)
+	populationPolicy, err := ctl.buildDesiredStateFromPolicies(ctx)
 	if err != nil {
 		logger.Error(err, "Failed to build desired state from policies")
 		return err, true
@@ -202,9 +202,14 @@ func (item lppItem) process(ctx context.Context, ctl *controller) (error, bool) 
 	logger.Info("Final population policy", "policy", MapToLoggable(populationPolicy))
 
 	// Adjust launcher pods according to final requirements
-	if err := ctl.reconcileAllLaunchers(ctx, populationPolicy); err != nil {
+	needsRequeue, err := ctl.reconcileAllLaunchers(ctx, populationPolicy)
+	if err != nil {
 		logger.Error(err, "Failed to reconcile launchers")
 		return err, true
+	}
+
+	if needsRequeue {
+		return nil, true
 	}
 	return nil, false
 }
@@ -212,39 +217,34 @@ func (item lppItem) process(ctx context.Context, ctl *controller) (error, bool) 
 func (item lcItem) process(ctx context.Context, ctl *controller) (error, bool) {
 	logger := klog.FromContext(ctx)
 
-	// Get the LauncherConfig
-	lc, err := ctl.lcLister.LauncherConfigs(ctl.namespace).Get(item.Name)
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			logger.Info("LauncherConfig does not exist yet, skipping reconciliation", "name", item.Name)
-			return nil, false
-		}
-		logger.Error(err, "Failed to get LauncherConfig", "name", item.Name)
-		return err, true
-	}
-
-	// Build desired state only for policies that reference this LauncherConfig
-	populationPolicy, err := ctl.buildDesiredStateFromPolicies(ctx, &item.Name)
+	// Build desired state from all policies.
+	// No special treatment for any particular LauncherConfig;
+	// missing LauncherConfigs are handled inside buildDesiredStateFromPolicies.
+	populationPolicy, err := ctl.buildDesiredStateFromPolicies(ctx)
 	if err != nil {
 		logger.Error(err, "Failed to build desired state from policies")
 		return err, true
 	}
 
-	logger.Info("Final population policy for LauncherConfig", "config", item.Name, "policy", MapToLoggable(populationPolicy))
+	logger.Info("Final population policy", "policy", MapToLoggable(populationPolicy))
 
-	// Reconcile launchers for this LauncherConfig
-	if err := ctl.reconcileAllLaunchers(ctx, populationPolicy); err != nil {
-		logger.Error(err, "Failed to reconcile launchers for LauncherConfig", "name", lc.Name)
+	// Adjust launcher pods according to final requirements
+	needsRequeue, err := ctl.reconcileAllLaunchers(ctx, populationPolicy)
+	if err != nil {
+		logger.Error(err, "Failed to reconcile launchers")
 		return err, true
 	}
 
-	logger.Info("Successfully reconciled launchers for LauncherConfig", "name", lc.Name)
+	if needsRequeue {
+		return nil, true
+	}
 	return nil, false
 }
 
 // buildDesiredStateFromPolicies builds the desired state map from all policies.
-// If filterByConfig is provided, only policies referencing that config are considered.
-func (ctl *controller) buildDesiredStateFromPolicies(ctx context.Context, filterByConfig *string) (map[NodeLauncherKey]int32, error) {
+// It reads each LauncherConfig from the informer's local cache to verify existence
+// and obtain the current spec. LauncherConfigs that do not exist are skipped.
+func (ctl *controller) buildDesiredStateFromPolicies(ctx context.Context) (map[NodeLauncherKey]DesiredStateEntry, error) {
 	logger := klog.FromContext(ctx)
 
 	policies, err := ctl.lppLister.List(labels.Everything())
@@ -252,7 +252,7 @@ func (ctl *controller) buildDesiredStateFromPolicies(ctx context.Context, filter
 		return nil, fmt.Errorf("failed to list LauncherPopulationPolicies: %w", err)
 	}
 
-	desired := make(map[NodeLauncherKey]int32)
+	desired := make(map[NodeLauncherKey]DesiredStateEntry)
 	for _, lpp := range policies {
 		nodes, err := ctl.getMatchingNodes(ctx, lpp.Spec.EnhancedNodeSelector)
 		if err != nil {
@@ -261,16 +261,28 @@ func (ctl *controller) buildDesiredStateFromPolicies(ctx context.Context, filter
 		}
 
 		for _, countRule := range lpp.Spec.CountForLauncher {
-			if filterByConfig != nil && countRule.LauncherConfigName != *filterByConfig {
-				continue
+			// Read the LauncherConfig from informer's local cache to verify existence
+			// and get the current spec (needed for A3: spec-change detection)
+			lc, err := ctl.lcLister.LauncherConfigs(ctl.namespace).Get(countRule.LauncherConfigName)
+			if err != nil {
+				if apierrors.IsNotFound(err) {
+					logger.Info("LauncherConfig referenced in policy does not exist, skipping",
+						"config", countRule.LauncherConfigName, "policy", lpp.Name)
+					continue
+				}
+				return nil, fmt.Errorf("failed to get LauncherConfig %s: %w", countRule.LauncherConfigName, err)
 			}
+
 			for _, node := range nodes {
 				key := NodeLauncherKey{
 					NodeName:           node.Name,
 					LauncherConfigName: countRule.LauncherConfigName,
 				}
-				if current, exists := desired[key]; !exists || countRule.LauncherCount > current {
-					desired[key] = countRule.LauncherCount
+				if entry, exists := desired[key]; !exists || countRule.LauncherCount > entry.Count {
+					desired[key] = DesiredStateEntry{
+						Count:          countRule.LauncherCount,
+						LauncherConfig: lc,
+					}
 				}
 			}
 		}
@@ -301,62 +313,65 @@ func (ctl *controller) getMatchingNodes(ctx context.Context, selector fmav1alpha
 }
 
 // reconcileAllLaunchers adjusts all launcher pods according to final requirements.
-// It processes each node separately to ensure deletions happen before creations,
-// minimizing peak memory consumption on each node.
-func (ctl *controller) reconcileAllLaunchers(ctx context.Context, desired map[NodeLauncherKey]int32) error {
+// It returns true if a requeue is needed (deletions were performed or are in progress),
+// so that creations happen only after deletions have taken effect.
+func (ctl *controller) reconcileAllLaunchers(ctx context.Context, desired map[NodeLauncherKey]DesiredStateEntry) (bool, error) {
 	logger := klog.FromContext(ctx)
 
-	// Group by node to optimize resource usage across all LauncherConfigs on each node
+	// Group by node to process each node separately
 	nodeGroups := make(map[string][]NodeLauncherKey)
 	for key := range desired {
 		nodeGroups[key.NodeName] = append(nodeGroups[key.NodeName], key)
 	}
 
-	// Process each node separately to ensure deletions happen before creations
-	// at the node level, minimizing peak memory consumption
+	anyRequeueNeeded := false
 	for nodeName, keys := range nodeGroups {
-		if err := ctl.reconcileLaunchersOnSingleNode(ctx, nodeName, keys, desired); err != nil {
+		needsRequeue, err := ctl.reconcileLaunchersOnSingleNode(ctx, nodeName, keys, desired)
+		if err != nil {
 			logger.Error(err, "Failed to reconcile launchers on node", "node", nodeName)
 			continue
 		}
+		if needsRequeue {
+			anyRequeueNeeded = true
+		}
 	}
 
-	return nil
+	return anyRequeueNeeded, nil
 }
 
 // reconcileLaunchersOnSingleNode handles all LauncherConfigs for a single node.
-// It ensures that ALL deletions happen BEFORE ANY creations on this node,
-// optimizing memory usage by freeing resources before allocating new ones.
-func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeName string, keys []NodeLauncherKey, desired map[NodeLauncherKey]int32) error {
+// For each LauncherConfig, it does deletions immediately as they are identified
+// and remembers creations called for. If any deletions were performed (or are in
+// progress from a previous cycle), it returns true to request a requeue so that
+// creations happen only after deletions have taken effect, minimizing peak resource
+// consumption on the node.
+// So that when a LauncherConfig changes, each corresponding launcher Pod that is
+// not bound to a server-requesting Pod is deleted and replaced.
+func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeName string, keys []NodeLauncherKey, desired map[NodeLauncherKey]DesiredStateEntry) (bool, error) {
 	logger := klog.FromContext(ctx)
 
 	node, err := ctl.nodeLister.Get(nodeName)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			logger.Info("Node no longer exists, skipping reconciliation", "node", nodeName)
-			return nil
+			return false, nil
 		}
-		return fmt.Errorf("failed to get node %s: %w", nodeName, err)
+		return false, fmt.Errorf("failed to get node %s: %w", nodeName, err)
 	}
 
-	// Phase 1: Collect all pods that need to be deleted across all configs on this node
-	type deletionInfo struct {
-		key    NodeLauncherKey
-		pod    *corev1.Pod
-		reason string
-	}
-	var allDeletions []deletionInfo
+	didDelete := false
+	deletionInProgress := false // tracks pods already being deleted (DeletionTimestamp set)
 
-	// Phase 2: Collect all pods that need to be created across all configs on this node
 	type creationInfo struct {
 		key   NodeLauncherKey
 		count int
+		lc    *fmav1alpha1.LauncherConfig
 	}
-	var allCreations []creationInfo
+	var creations []creationInfo
 
-	// Analyze each LauncherConfig on this node
+	// Process each LauncherConfig on this node
 	for _, key := range keys {
-		desiredCount := desired[key]
+		entry := desired[key]
 
 		currentLaunchers, err := ctl.getCurrentLaunchersOnNode(ctx, key)
 		if err != nil {
@@ -365,119 +380,146 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 			continue
 		}
 
-		currentCount := int32(len(currentLaunchers))
-		diff := desiredCount - currentCount
+		// Compute the nominal hash for spec-change detection.
+		// BuildLauncherPodFromTemplate computes a hash of the fully built pod spec
+		// and stores it as the LauncherConfigHashAnnotationKey annotation.
+		nominalHash := ""
+		nominalPod, hashErr := utils.BuildLauncherPodFromTemplate(
+			entry.LauncherConfig.Spec.PodTemplate, ctl.namespace, key.NodeName, key.LauncherConfigName)
+		if hashErr != nil {
+			logger.Error(hashErr, "Failed to build nominal pod for hash comparison",
+				"node", nodeName, "config", key.LauncherConfigName)
+		} else if nominalPod.Annotations != nil {
+			nominalHash = nominalPod.Annotations[string(common.LauncherConfigHashAnnotationKey)]
+		}
+
+		// Categorize current pods: separate live unbound current-spec pods from stale/unbound ones
+		var liveBoundCount int
+		var liveUnboundCurrentPods []*corev1.Pod // live, unbound, spec matches current LauncherConfig
+		var staleUnboundPods []*corev1.Pod       // live, unbound, spec is stale
+
+		for _, pod := range currentLaunchers {
+			// Skip pods already being deleted
+			if pod.DeletionTimestamp != nil {
+				deletionInProgress = true
+				continue
+			}
+
+			isBound, _ := ctl.isLauncherBoundToServerRequestingPod(pod)
+			if isBound {
+				liveBoundCount++
+				continue
+			}
+
+			// Check if pod spec is stale (LauncherConfig changed)
+			if nominalHash != "" {
+				podHash := pod.Annotations[string(common.LauncherConfigHashAnnotationKey)]
+				if podHash != nominalHash {
+					staleUnboundPods = append(staleUnboundPods, pod)
+					continue
+				}
+			}
+
+			liveUnboundCurrentPods = append(liveUnboundCurrentPods, pod)
+		}
+
+		// Delete stale pods immediately (spec changed → delete and replace)
+		for _, pod := range staleUnboundPods {
+			if err := ctl.coreclient.Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{}); err != nil {
+				if apierrors.IsNotFound(err) {
+					logger.Info("Stale launcher pod already deleted", "pod", pod.Name)
+					continue
+				}
+				return false, fmt.Errorf("failed to delete stale launcher pod %s: %w", pod.Name, err)
+			}
+			logger.Info("Deleted stale launcher pod (spec changed)",
+				"pod", pod.Name,
+				"node", nodeName,
+				"config", key.LauncherConfigName)
+			didDelete = true
+		}
+
+		// Calculate diff based on effective remaining pods after stale deletion
+		effectiveRemaining := liveBoundCount + len(liveUnboundCurrentPods)
+		diff := entry.Count - int32(effectiveRemaining)
 
 		logger.Info("Analyzing config on node",
 			"node", nodeName,
 			"config", key.LauncherConfigName,
-			"current", currentCount,
-			"desired", desiredCount,
+			"current", effectiveRemaining,
+			"stale", len(staleUnboundPods),
+			"desired", entry.Count,
 			"diff", diff)
 
 		if diff < 0 {
-			// Need to delete some pods for this config
+			// Need to delete excess pods from live unbound current pods
 			numToDelete := int(-diff)
-			collectedForDeletion := 0
-			for i := 0; i < len(currentLaunchers) && collectedForDeletion < numToDelete; i++ {
-				pod := currentLaunchers[len(currentLaunchers)-1-i]
-				isBound, requesterPodName := ctl.isLauncherBoundToServerRequestingPod(pod)
-				if isBound {
-					logger.V(5).Info("Skipping deletion of bound pod",
-						"pod", pod.Name, "server-requesting pod", requesterPodName)
-					continue
+			for i := len(liveUnboundCurrentPods) - 1; i >= 0 && numToDelete > 0; i-- {
+				pod := liveUnboundCurrentPods[i]
+				if err := ctl.coreclient.Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{}); err != nil {
+					if apierrors.IsNotFound(err) {
+						logger.Info("Launcher pod already deleted", "pod", pod.Name)
+						numToDelete--
+						continue
+					}
+					return false, fmt.Errorf("failed to delete launcher pod %s: %w", pod.Name, err)
 				}
-				allDeletions = append(allDeletions, deletionInfo{
-					key:    key,
-					pod:    pod,
-					reason: "excess launcher",
-				})
-				collectedForDeletion++
+				logger.Info("Deleted excess launcher pod",
+					"pod", pod.Name,
+					"node", nodeName,
+					"config", key.LauncherConfigName)
+				didDelete = true
+				numToDelete--
 			}
 		} else if diff > 0 {
-			// Need to create some pods for this config
-			allCreations = append(allCreations, creationInfo{
+			// Remember creations called for (will be executed only if no deletions)
+			creations = append(creations, creationInfo{
 				key:   key,
 				count: int(diff),
+				lc:    entry.LauncherConfig,
 			})
 		}
 	}
 
-	// Execute Phase 1: Delete all marked pods FIRST (across all configs on this node)
-	deletedCount := 0
-	var conflictErrors []string
-	for _, del := range allDeletions {
-		if err := ctl.coreclient.Pods(del.pod.Namespace).Delete(ctx, del.pod.Name, metav1.DeleteOptions{
-			Preconditions: &metav1.Preconditions{
-				ResourceVersion: &del.pod.ResourceVersion,
-			},
-		}); err != nil {
-			if apierrors.IsNotFound(err) {
-				logger.Info("Launcher pod already deleted", "pod", del.pod.Name)
-				deletedCount++
-				continue
-			}
-			if apierrors.IsConflict(err) {
-				logger.Info("Launcher pod version conflict, skipping deletion",
-					"pod", del.pod.Name, "error", err)
-				conflictErrors = append(conflictErrors, del.pod.Name)
-				continue
-			}
-			return fmt.Errorf("failed to delete launcher pod %s: %w", del.pod.Name, err)
-		}
-		logger.Info("Deleted launcher pod (Phase 1)",
-			"pod", del.pod.Name,
+	// If any deletions were performed or are in progress, requeue for later.
+	// This ensures that deletions take effect before any creations happen,
+	// so that freed resources are available for newly created pods.
+	if didDelete || deletionInProgress {
+		logger.Info("Deletions performed or in progress, requeuing for creation later",
 			"node", nodeName,
-			"config", del.key.LauncherConfigName,
-			"reason", del.reason)
-		deletedCount++
+			"didDelete", didDelete,
+			"deletionInProgress", deletionInProgress)
+		return true, nil
 	}
 
-	if len(conflictErrors) > 0 {
-		return fmt.Errorf("encountered %d version conflicts during deletion (pods: %v), will retry",
-			len(conflictErrors), conflictErrors)
-	}
-
-	if deletedCount < len(allDeletions) {
-		logger.Info("Fewer pods deleted than planned",
-			"planned", len(allDeletions),
-			"actual", deletedCount)
-	} else if deletedCount > 0 {
-		logger.Info("Completed Phase 1: Deletions",
-			"node", nodeName,
-			"deleted", deletedCount)
-	}
-
-	// Execute Phase 2: Create all needed pods AFTER deletions complete
+	// No deletions needed, proceed with planned creations
 	totalCreated := 0
-	for _, creation := range allCreations {
-		if err := ctl.createLaunchers(ctx, *node, creation.key, creation.count); err != nil {
+	for _, creation := range creations {
+		if err := ctl.createLaunchers(ctx, *node, creation.key, creation.count, creation.lc); err != nil {
 			logger.Error(err, "Failed to create launchers for config",
 				"node", nodeName,
 				"config", creation.key.LauncherConfigName,
 				"count", creation.count)
-			return err
+			return false, err
 		}
 		totalCreated += creation.count
-		logger.Info("Created launchers for config (Phase 2)",
+		logger.Info("Created launchers for config",
 			"node", nodeName,
 			"config", creation.key.LauncherConfigName,
 			"created", creation.count)
 	}
 
 	if totalCreated > 0 {
-		logger.Info("Completed Phase 2: Creations",
+		logger.Info("Completed creation of launchers",
 			"node", nodeName,
 			"created", totalCreated)
 	}
 
 	logger.Info("Completed reconciliation for node",
 		"node", nodeName,
-		"configs_processed", len(keys),
-		"pods_deleted", deletedCount,
-		"pods_created", totalCreated)
+		"configs_processed", len(keys))
 
-	return nil
+	return false, nil
 }
 
 // getCurrentLaunchersOnNode returns launcher pods for a specific config on a specific node
@@ -497,15 +539,9 @@ func (ctl *controller) getCurrentLaunchersOnNode(ctx context.Context, key NodeLa
 }
 
 // createLaunchers creates the specified number of launcher pods on a node
-func (ctl *controller) createLaunchers(ctx context.Context, node corev1.Node, key NodeLauncherKey, count int) error {
+// using the given LauncherConfig directly (no additional lookup needed).
+func (ctl *controller) createLaunchers(ctx context.Context, node corev1.Node, key NodeLauncherKey, count int, launcherConfig *fmav1alpha1.LauncherConfig) error {
 	logger := klog.FromContext(ctx)
-	// Fetch the LauncherConfig
-	var launcherConfig *fmav1alpha1.LauncherConfig
-	launcherConfigName := key.LauncherConfigName
-	launcherConfig, err := ctl.lcLister.LauncherConfigs(ctl.namespace).Get(launcherConfigName)
-	if err != nil {
-		return fmt.Errorf("failed to get LauncherConfig %s/%s: %+v", ctl.namespace, launcherConfigName, err)
-	}
 
 	// Create the specified number of launcher pods
 	for i := 0; i < count; i++ {
