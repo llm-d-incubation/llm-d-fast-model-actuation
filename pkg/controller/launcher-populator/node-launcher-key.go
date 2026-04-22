@@ -18,6 +18,8 @@ package launcherpopulator
 
 import (
 	"fmt"
+
+	fmav1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
 )
 
 // NodeLauncherKey defines the unique identifier for a (Node, LauncherConfig) pair
@@ -30,8 +32,22 @@ func (k NodeLauncherKey) String() string {
 	return fmt.Sprintf("%s/%s", k.LauncherConfigName, k.NodeName)
 }
 
-// MapToLoggable converts a map of NodeLauncherKey to int32 values into a string representation.
-// This function formats the map as a string with the format "{namespace/name/node:count, ...}"
+// DesiredStateEntry holds the desired count and corresponding LauncherConfig
+// for a (Node, LauncherConfig) pair.
+type DesiredStateEntry struct {
+	Count          int32
+	LauncherConfig *fmav1alpha1.LauncherConfig
+}
+
+func (e DesiredStateEntry) String() string {
+	if e.LauncherConfig != nil {
+		return fmt.Sprintf("count=%d,config=%s", e.Count, e.LauncherConfig.Name)
+	}
+	return fmt.Sprintf("count=%d", e.Count)
+}
+
+// MapToLoggable converts a map of NodeLauncherKey to Val values into a string representation.
+// This function formats the map as a string with the format "{namespace/name/node:val, ...}"
 // for debugging and logging purposes.
 func MapToLoggable[Key interface {
 	comparable
