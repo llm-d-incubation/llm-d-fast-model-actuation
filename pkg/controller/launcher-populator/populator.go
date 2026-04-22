@@ -136,7 +136,7 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 		item := lcItem{cache.MetaObjectToName(typed)}
 		ctl.Queue.Add(item)
 	default:
-		ctl.enqueueLogger.V(5).Info("Notified of add of type of ignored object", "type", fmt.Sprintf("%T", obj))
+		ctl.enqueueLogger.V(5).Info("Notified of add of ignored object", "type", fmt.Sprintf("%T", obj))
 		return
 	}
 }
