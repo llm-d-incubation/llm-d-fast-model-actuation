@@ -93,7 +93,15 @@ func ensureNamedLauncherInstance(
 
 	result, err := lClient.CreateNamedInstance(ctx, instanceID, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("create vLLM instance: %w", err)
+		if IsInstanceAlreadyExistsError(err) {
+			inst, retryErr := lClient.GetInstanceState(ctx, instanceID)
+			if retryErr != nil {
+				return nil, fmt.Errorf("get existing vLLM instance %q after conflict: %w", instanceID, retryErr)
+			}
+			launcherDat.Instances[instanceID] = time.Now()
+			return inst, nil
+		}
+		return nil, fmt.Errorf("create vLLM instance %q: %w", instanceID, err)
 	}
 	launcherDat.Instances[instanceID] = time.Now()
 	return &InstanceState{
@@ -422,33 +430,34 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				return fmt.Errorf("unable to wake up server because port not known: %w", err), true
 			}
 		}
-		// A launcher pod may be created in a bound state (requester annotation set at
-		// creation) before its vLLM instance is set up. Handle that here.
-		// The absence of DualLabelName distinguishes this from a controller restart
-		// where InstanceID is unknown but the instance already exists on the launcher.
+		// A launcher pod may be created in a pre-bound state, or the controller
+		// may have restarted and lost the in-memory InstanceID. In both cases,
+		// ensureNamedLauncherInstance recovers or creates the instance.
 		if launcherBased && serverDat.InstanceID == "" {
-			if _, hasDual := providingPod.Labels[api.DualLabelName]; !hasDual {
-				if providingPod.Status.PodIP == "" || !utils.IsPodReady(providingPod) {
-					return nil, true
-				}
-				cfg, iscHash, err := ctl.configInferenceServer(isc, serverDat.GPUIDs)
-				if err != nil {
-					return fmt.Errorf("failed to configure inference server config: %w", err), true
-				}
-				launcherBaseURL := fmt.Sprintf("http://%s:%d", providingPod.Status.PodIP, ctlrcommon.LauncherServicePort)
-				lClient, err := NewLauncherClient(launcherBaseURL)
-				if err != nil {
-					return err, true
-				}
-				launcherDat := ctl.getLauncherData(nodeDat, providingPod.Name)
-				result, err := ensureNamedLauncherInstance(ctx, lClient, launcherDat, iscHash, *cfg)
-				if err != nil {
-					return err, true
-				}
-				logger.V(5).Info("Ensured vLLM instance for pre-bound launcher Pod", "instance_id", result.InstanceID, "status", result.Status)
-				return ctl.bind(ctx, serverDat, requestingPod, providingPod, &iscHash, int16(isc.Spec.ModelServerConfig.Port),
-					isc.Spec.ModelServerConfig.Labels, isc.Spec.ModelServerConfig.Annotations)
+			if providingPod.Status.PodIP == "" || !utils.IsPodReady(providingPod) {
+				return nil, true
 			}
+			cfg, iscHash, err := ctl.configInferenceServer(isc, serverDat.GPUIDs)
+			if err != nil {
+				return fmt.Errorf("failed to configure inference server config: %w", err), true
+			}
+			launcherBaseURL := fmt.Sprintf("http://%s:%d", providingPod.Status.PodIP, ctlrcommon.LauncherServicePort)
+			lClient, err := NewLauncherClient(launcherBaseURL)
+			if err != nil {
+				return err, true
+			}
+			launcherDat := ctl.getLauncherData(nodeDat, providingPod.Name)
+			result, err := ensureNamedLauncherInstance(ctx, lClient, launcherDat, iscHash, *cfg)
+			if err != nil {
+				return err, true
+			}
+			logger.V(5).Info("Ensured vLLM instance", "instance_id", result.InstanceID, "status", result.Status)
+			if _, bound := providingPod.Annotations[iscLabelKeysAnnotationKey]; !bound {
+				return ctl.bind(ctx, serverDat, requestingPod, providingPod, &iscHash, int16(isc.Spec.ModelServerConfig.Port),
+					isc.Spec.ModelServerConfig.Labels, isc.Spec.ModelServerConfig.Annotations, true)
+			}
+			serverDat.InstanceID = iscHash
+			serverDat.ServerPort = int16(isc.Spec.ModelServerConfig.Port)
 		}
 		// For launcher-based providers, check whether the bound instance is still alive.
 		// The sidecar notifier updates the Pod annotation when instance status changes,
@@ -580,7 +589,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				logger.V(2).Info("Unexpected: multiple sleeping Pods match; using the first", "requesterName", requestingPod.Name)
 			}
 			providingPod = sleepingAnys[0].(*corev1.Pod)
-			return ctl.bind(ctx, serverDat, requestingPod, providingPod, nil, -1, nil, nil)
+			return ctl.bind(ctx, serverDat, requestingPod, providingPod, nil, -1, nil, nil, false)
 		}
 		// What remains is to make a new server-providing Pod --- if the sleeper budget allows.
 
@@ -677,7 +686,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 					return fmt.Errorf("wake up vLLM instance: %w", err), true
 				}
 				launcherDat.Instances[iscHash] = time.Now()
-				return ctl.bind(ctx, serverDat, requestingPod, launcherPod, &iscHash, int16(isc.Spec.ModelServerConfig.Port), isc.Spec.ModelServerConfig.Labels, isc.Spec.ModelServerConfig.Annotations)
+				return ctl.bind(ctx, serverDat, requestingPod, launcherPod, &iscHash, int16(isc.Spec.ModelServerConfig.Port), isc.Spec.ModelServerConfig.Labels, isc.Spec.ModelServerConfig.Annotations, false)
 			} else {
 				// Slower path: create new instance in launcher with capacity
 				logger.V(5).Info("Creating new vLLM instance", "iscHash", iscHash)
@@ -690,7 +699,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 					"status", result.Status,
 				)
 				launcherDat.Instances[iscHash] = time.Now()
-				return ctl.bind(ctx, serverDat, requestingPod, launcherPod, &iscHash, int16(isc.Spec.ModelServerConfig.Port), isc.Spec.ModelServerConfig.Labels, isc.Spec.ModelServerConfig.Annotations)
+				return ctl.bind(ctx, serverDat, requestingPod, launcherPod, &iscHash, int16(isc.Spec.ModelServerConfig.Port), isc.Spec.ModelServerConfig.Labels, isc.Spec.ModelServerConfig.Annotations, false)
 			}
 		}
 	}
@@ -704,9 +713,9 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	// Sleeper budget is met. Make a new launcher Pod.
 
 	// Bind at creation time so the launcher-populator cannot delete this pod
-	// while the vLLM instance is being set up. The dual label is added
-	// later by bind() once the instance is ready.
+	// while the vLLM instance is being set up.
 	desiredLauncherPod.Annotations = utils.MapSet(desiredLauncherPod.Annotations, requesterAnnotationKey, string(requestingPod.UID)+" "+requestingPod.Name)
+	desiredLauncherPod.Labels = utils.MapSet(desiredLauncherPod.Labels, api.DualLabelName, requestingPod.Name)
 	if !slices.Contains(desiredLauncherPod.Finalizers, providerFinalizer) {
 		desiredLauncherPod.Finalizers = append(desiredLauncherPod.Finalizers, providerFinalizer)
 	}
@@ -994,7 +1003,7 @@ func (ctl *controller) enforceSleeperBudget(ctx context.Context, serverDat *serv
 
 // Note: instPort is used only for launcher-based server-providing Pods.
 // instanceID is non-nil iff launcher-based
-func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requestingPod, providingPod *corev1.Pod, instanceID *string, instPort int16, iscLabels, iscAnnotations map[string]string) (error, bool) {
+func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requestingPod, providingPod *corev1.Pod, instanceID *string, instPort int16, iscLabels, iscAnnotations map[string]string, skipWake bool) (error, bool) {
 	logger := klog.FromContext(ctx)
 	providingPod = providingPod.DeepCopy()
 	providingPod.Annotations = utils.MapSet(providingPod.Annotations, requesterAnnotationKey, string(requestingPod.UID)+" "+requestingPod.Name)
@@ -1069,9 +1078,11 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 			return fmt.Errorf("unable to wake up server because port not known: %w", err), true
 		}
 	}
-	err = ctl.wakeSleeper(ctx, serverDat, requestingPod, providingPod, serverPort, "freshly-bound")
-	if err != nil {
-		return err, true
+	if !skipWake {
+		err = ctl.wakeSleeper(ctx, serverDat, requestingPod, providingPod, serverPort, "freshly-bound")
+		if err != nil {
+			return err, true
+		}
 	}
 	return ctl.ensureReqState(ctx, requestingPod, serverDat, !slices.Contains(requestingPod.Finalizers, requesterFinalizer), false)
 }
