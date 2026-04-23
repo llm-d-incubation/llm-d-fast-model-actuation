@@ -217,6 +217,10 @@ expect '[ "$(kubectl get pod -n '"$NS"' $req1 -o jsonpath={.metadata.labels.dual
 [ "$(kubectl get pod -n "$NS" $launcher1 -o jsonpath='{.metadata.labels.e2e-test\.fma\.llm-d\.ai/isc-label}')" == "test-value" ] || { echo "ERROR: ISC label not propagated to launcher pod $launcher1"; exit 1; }
 [ "$(kubectl get pod -n "$NS" $launcher1 -o jsonpath='{.metadata.annotations.e2e-test\.fma\.llm-d\.ai/isc-annotation}')" == "test-value" ] || { echo "ERROR: ISC annotation not propagated to launcher pod $launcher1"; exit 1; }
 
+# Verify LauncherConfig podTemplate metadata labels/annotations were propagated to launcher pod (Issue #433)
+[ "$(kubectl get pod -n "$NS" $launcher1 -o jsonpath='{.metadata.labels.e2e-test\.fma\.llm-d\.ai/template-label}')" == "from-launcher-config" ] || { echo "ERROR: LauncherConfig podTemplate label is not correctly set on launcher pod $launcher1"; false; }
+[ "$(kubectl get pod -n "$NS" $launcher1 -o jsonpath='{.metadata.annotations.e2e-test\.fma\.llm-d\.ai/template-annotation}')" == "from-launcher-config" ] || { echo "ERROR: LauncherConfig podTemplate annotation is not correctly set on launcher pod $launcher1"; false; }
+
 # Wait for both pods to be ready
 date
 kubectl wait --for condition=Ready pod/$req1 -n "$NS" --timeout=180s
@@ -361,6 +365,10 @@ expect '[ "$(kubectl get pod -n '"$NS"' $launcher1 -o jsonpath={.metadata.labels
 # Verify ISC labels and annotations were removed from launcher
 [ "$(kubectl get pod -n "$NS" $launcher1 -o jsonpath='{.metadata.labels.e2e-test\.fma\.llm-d\.ai/isc-label}')" == "" ] || { echo "ERROR: ISC label not removed from launcher pod $launcher1 after unbind"; exit 1; }
 [ "$(kubectl get pod -n "$NS" $launcher1 -o jsonpath='{.metadata.annotations.e2e-test\.fma\.llm-d\.ai/isc-annotation}')" == "" ] || { echo "ERROR: ISC annotation not removed from launcher pod $launcher1 after unbind"; exit 1; }
+
+# Verify LauncherConfig podTemplate metadata survives unbind (these are intrinsic to the pod, not ISC-specific)
+[ "$(kubectl get pod -n "$NS" $launcher1 -o jsonpath='{.metadata.labels.e2e-test\.fma\.llm-d\.ai/template-label}')" == "from-launcher-config" ] || { echo "ERROR: LauncherConfig podTemplate label is not correctly set on launcher pod $launcher1 after unbind"; false; }
+[ "$(kubectl get pod -n "$NS" $launcher1 -o jsonpath='{.metadata.annotations.e2e-test\.fma\.llm-d\.ai/template-annotation}')" == "from-launcher-config" ] || { echo "ERROR: LauncherConfig podTemplate annotation is not correctly set on launcher pod $launcher1 after unbind"; false; }
 
 # Scale back up (should reuse same launcher and wake sleeping instance)
 kubectl scale rs $rs -n "$NS" --replicas=1
