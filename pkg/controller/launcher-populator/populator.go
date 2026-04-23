@@ -136,7 +136,7 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 		item := lcItem{cache.MetaObjectToName(typed)}
 		ctl.Queue.Add(item)
 	default:
-		ctl.enqueueLogger.V(5).Info("Notified of add of ignored object", "type", fmt.Sprintf("%T", obj))
+		ctl.enqueueLogger.V(5).Info("Notified of add of object of ignored type", "type", fmt.Sprintf("%T", obj))
 		return
 	}
 }
@@ -190,6 +190,19 @@ func (ctl *controller) process(ctx context.Context, item queueItem) (error, bool
 }
 
 func (item lppItem) process(ctx context.Context, ctl *controller) (error, bool) {
+	return ctl.reconcileFromPolicies(ctx)
+}
+
+func (item lcItem) process(ctx context.Context, ctl *controller) (error, bool) {
+	// No special treatment for any particular LauncherConfig;
+	// missing LauncherConfigs are handled inside buildDesiredStateFromPolicies.
+	return ctl.reconcileFromPolicies(ctx)
+}
+
+// reconcileFromPolicies builds the desired state from all policies and reconciles
+// all launcher pods accordingly. It is the common implementation shared by
+// lppItem.process and lcItem.process.
+func (ctl *controller) reconcileFromPolicies(ctx context.Context) (error, bool) {
 	logger := klog.FromContext(ctx)
 
 	// Build desired state from all policies
@@ -208,37 +221,7 @@ func (item lppItem) process(ctx context.Context, ctl *controller) (error, bool) 
 		return err, true
 	}
 
-	if needsRequeue {
-		return nil, true
-	}
-	return nil, false
-}
-
-func (item lcItem) process(ctx context.Context, ctl *controller) (error, bool) {
-	logger := klog.FromContext(ctx)
-
-	// Build desired state from all policies.
-	// No special treatment for any particular LauncherConfig;
-	// missing LauncherConfigs are handled inside buildDesiredStateFromPolicies.
-	populationPolicy, err := ctl.buildDesiredStateFromPolicies(ctx)
-	if err != nil {
-		logger.Error(err, "Failed to build desired state from policies")
-		return err, true
-	}
-
-	logger.Info("Final population policy", "policy", MapToLoggable(populationPolicy))
-
-	// Adjust launcher pods according to final requirements
-	needsRequeue, err := ctl.reconcileAllLaunchers(ctx, populationPolicy)
-	if err != nil {
-		logger.Error(err, "Failed to reconcile launchers")
-		return err, true
-	}
-
-	if needsRequeue {
-		return nil, true
-	}
-	return nil, false
+	return nil, needsRequeue
 }
 
 // buildDesiredStateFromPolicies builds the desired state map from all policies.
@@ -331,9 +314,7 @@ func (ctl *controller) reconcileAllLaunchers(ctx context.Context, desired map[No
 			logger.Error(err, "Failed to reconcile launchers on node", "node", nodeName)
 			continue
 		}
-		if needsRequeue {
-			anyRequeueNeeded = true
-		}
+		anyRequeueNeeded = anyRequeueNeeded || needsRequeue
 	}
 
 	return anyRequeueNeeded, nil
