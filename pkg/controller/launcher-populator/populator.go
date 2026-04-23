@@ -261,10 +261,13 @@ func (ctl *controller) buildDesiredStateFromPolicies(ctx context.Context) (map[N
 					NodeName:           node.Name,
 					LauncherConfigName: countRule.LauncherConfigName,
 				}
+				ownerRef := *metav1.NewControllerRef(lc, fmav1alpha1.SchemeGroupVersion.WithKind("LauncherConfig"))
+				ownerRef.BlockOwnerDeletion = ptr.To(false)
 				if entry, exists := desired[key]; !exists || countRule.LauncherCount > entry.Count {
 					desired[key] = DesiredStateEntry{
-						Count:          countRule.LauncherCount,
-						LauncherConfig: lc,
+						Count:                  countRule.LauncherCount,
+						LauncherConfigSpec:     lc.Spec,
+						LauncherConfigOwnerRef: ownerRef,
 					}
 				}
 			}
@@ -344,9 +347,10 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 	deletionInProgress := false // tracks pods already being deleted (DeletionTimestamp set)
 
 	type creationInfo struct {
-		key   NodeLauncherKey
-		count int
-		lc    *fmav1alpha1.LauncherConfig
+		key    NodeLauncherKey
+		count  int
+		spec   fmav1alpha1.LauncherConfigSpec
+		owner  metav1.OwnerReference
 	}
 	var creations []creationInfo
 
@@ -356,6 +360,8 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 
 		currentLaunchers, err := ctl.getCurrentLaunchersOnNode(ctx, key)
 		if err != nil {
+			// The only error possible here is from the lister, which should never fail in practice.
+			// Log and skip this config rather than aborting the entire reconciliation.
 			logger.Error(err, "Failed to get current launchers for config",
 				"node", nodeName, "config", key.LauncherConfigName)
 			continue
@@ -365,10 +371,12 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 		// BuildLauncherPodFromTemplate computes a hash of the fully built pod spec
 		// and stores it as the LauncherConfigHashAnnotationKey annotation.
 		nominalHash := ""
-		nominalPod, hashErr := utils.BuildLauncherPodFromTemplate(
-			entry.LauncherConfig.Spec.PodTemplate, ctl.namespace, key.NodeName, key.LauncherConfigName)
-		if hashErr != nil {
-			logger.Error(hashErr, "Failed to build nominal pod for hash comparison",
+		nominalPod, err := utils.BuildLauncherPodFromTemplate(
+			entry.LauncherConfigSpec.PodTemplate, ctl.namespace, key.NodeName, key.LauncherConfigName)
+		if err != nil {
+			// The only error possible here is that the PodTemplate lacks an inference server container.
+			// In that case we proceed without a nominal hash, so no stale-pod detection occurs for this config.
+			logger.Error(err, "Failed to build nominal pod for hash comparison",
 				"node", nodeName, "config", key.LauncherConfigName)
 		} else if nominalPod.Annotations != nil {
 			nominalHash = nominalPod.Annotations[string(common.LauncherConfigHashAnnotationKey)]
@@ -457,7 +465,8 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 			creations = append(creations, creationInfo{
 				key:   key,
 				count: int(diff),
-				lc:    entry.LauncherConfig,
+				spec:  entry.LauncherConfigSpec,
+				owner: entry.LauncherConfigOwnerRef,
 			})
 		}
 	}
@@ -476,7 +485,7 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 	// No deletions needed, proceed with planned creations
 	totalCreated := 0
 	for _, creation := range creations {
-		if err := ctl.createLaunchers(ctx, *node, creation.key, creation.count, creation.lc); err != nil {
+		if err := ctl.createLaunchers(ctx, *node, creation.key, creation.count, creation.spec, creation.owner); err != nil {
 			logger.Error(err, "Failed to create launchers for config",
 				"node", nodeName,
 				"config", creation.key.LauncherConfigName,
@@ -490,15 +499,10 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 			"created", creation.count)
 	}
 
-	if totalCreated > 0 {
-		logger.Info("Completed creation of launchers",
-			"node", nodeName,
-			"created", totalCreated)
-	}
-
 	logger.Info("Completed reconciliation for node",
 		"node", nodeName,
-		"configs_processed", len(keys))
+		"configs_processed", len(keys),
+		"created", totalCreated)
 
 	return false, nil
 }
@@ -520,23 +524,18 @@ func (ctl *controller) getCurrentLaunchersOnNode(ctx context.Context, key NodeLa
 }
 
 // createLaunchers creates the specified number of launcher pods on a node
-// using the given LauncherConfig directly (no additional lookup needed).
-func (ctl *controller) createLaunchers(ctx context.Context, node corev1.Node, key NodeLauncherKey, count int, launcherConfig *fmav1alpha1.LauncherConfig) error {
+// using the given LauncherConfig spec and owner reference directly (no additional lookup needed).
+func (ctl *controller) createLaunchers(ctx context.Context, node corev1.Node, key NodeLauncherKey, count int, lcSpec fmav1alpha1.LauncherConfigSpec, lcOwnerRef metav1.OwnerReference) error {
 	logger := klog.FromContext(ctx)
 
 	// Create the specified number of launcher pods
 	for i := 0; i < count; i++ {
-		pod, err := utils.BuildLauncherPodFromTemplate(launcherConfig.Spec.PodTemplate, ctl.namespace, key.NodeName, key.LauncherConfigName)
+		pod, err := utils.BuildLauncherPodFromTemplate(lcSpec.PodTemplate, ctl.namespace, key.NodeName, key.LauncherConfigName)
 		if err != nil {
 			return fmt.Errorf("failed to build launcher pod: %w", err)
 		}
-		pod.GenerateName = fmt.Sprintf("launcher-%s-", launcherConfig.Name)
-		// Set owner reference pointing to LauncherConfig
-		ownerRef := *metav1.NewControllerRef(launcherConfig, fmav1alpha1.SchemeGroupVersion.WithKind("LauncherConfig"))
-		ownerRef.BlockOwnerDeletion = ptr.To(false)
-		pod.OwnerReferences = []metav1.OwnerReference{
-			ownerRef,
-		}
+		pod.GenerateName = fmt.Sprintf("launcher-%s-", key.LauncherConfigName)
+		pod.OwnerReferences = []metav1.OwnerReference{lcOwnerRef}
 
 		if _, err := ctl.coreclient.Pods(pod.Namespace).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 			return fmt.Errorf("failed to create launcher pod: %w", err)

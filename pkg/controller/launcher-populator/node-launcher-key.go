@@ -19,6 +19,8 @@ package launcherpopulator
 import (
 	"fmt"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	fmav1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
 )
 
@@ -32,18 +34,16 @@ func (k NodeLauncherKey) String() string {
 	return fmt.Sprintf("%s/%s", k.LauncherConfigName, k.NodeName)
 }
 
-// DesiredStateEntry holds the desired count and corresponding LauncherConfig
+// DesiredStateEntry holds the desired count and the LauncherConfig spec
 // for a (Node, LauncherConfig) pair.
 type DesiredStateEntry struct {
-	Count          int32
-	LauncherConfig *fmav1alpha1.LauncherConfig
+	Count              int32
+	LauncherConfigSpec fmav1alpha1.LauncherConfigSpec
+	LauncherConfigOwnerRef metav1.OwnerReference
 }
 
 func (e DesiredStateEntry) String() string {
-	if e.LauncherConfig != nil {
-		return fmt.Sprintf("count=%d,config=%s", e.Count, e.LauncherConfig.Name)
-	}
-	return fmt.Sprintf("count=%d", e.Count)
+	return fmt.Sprintf("count=%d,config=%s", e.Count, e.LauncherConfigOwnerRef.Name)
 }
 
 // MapToLoggable converts a map of NodeLauncherKey to Val values into a string representation.
