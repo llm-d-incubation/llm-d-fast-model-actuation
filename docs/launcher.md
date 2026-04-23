@@ -151,7 +151,7 @@ Response:
 
 ```json
 {
-  "status": "started",
+  "status": "running",
   "instance_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
   "options": "--model facebook/opt-125m --port 8000",
   "revision": 1
@@ -265,7 +265,7 @@ Create a new vLLM instance with an auto-generated UUID.
 
 ```json
 {
-  "status": "started",
+  "status": "running",
   "instance_id": "uuid-string",
   "options": "--model MODEL_NAME --port PORT",
   "gpu_uuids": ["GPU-33", "GPU-86"],
@@ -317,7 +317,7 @@ Stop and delete a specific vLLM instance.
 
 ```json
 {
-  "status": "terminated",
+  "status": "stopped",
   "instance_id": "instance-id",
   "options": "--model MODEL_NAME --port PORT",
   "gpu_uuids": ["GPU-33", "GPU-86"],
@@ -381,16 +381,16 @@ Stream instance lifecycle events as newline-delimited JSON ([NDJSON](https://git
 Each event carries the full state of the relevant instance and a monotonically increasing `revision` number:
 
 ```json
-{"type": "CREATED", "object": {"status": "started", "instance_id": "abc123", "options": "--model test", "revision": 1}}
+{"type": "CREATED", "object": {"status": "running", "instance_id": "abc123", "options": "--model test", "revision": 1}}
 {"type": "STOPPED", "object": {"instance_id": "abc123", "status": "stopped", "exit_code": -9, "revision": 2}}
-{"type": "DELETED", "object": {"status": "terminated", "instance_id": "abc123", "options": "--model test", "revision": 3}}
+{"type": "DELETED", "object": {"status": "stopped", "instance_id": "abc123", "options": "--model test", "revision": 3}}
 ```
 
 **Event Types:**
 
 - `CREATED` — A new instance was spawned
 - `STOPPED` — An instance process terminated (detected automatically via kernel-level process monitoring, zero-polling)
-- `DELETED` — An instance was explicitly removed via the DELETE API. The object status is `"terminated"` when the process was still running, or `"not_running"` when the process had already exited before the delete request.
+- `DELETED` — An instance was explicitly removed via the DELETE API.
 
 **Initial state and resumption:**
 
@@ -421,8 +421,8 @@ Stop and delete all running vLLM instances. This functionality can be especially
 {
   "status": "all_stopped",
   "stopped_instances": [
-    {"status": "terminated", "instance_id": "id-1"},
-    {"status": "terminated", "instance_id": "id-2"}
+    {"status": "stopped", "instance_id": "id-1"},
+    {"status": "stopped", "instance_id": "id-2"}
   ],
   "total_stopped": 2
 }
@@ -458,7 +458,7 @@ Get status information for all instances. `Detail` is `True` by default.
 
 ```json
 {
-  "revision": 5,
+  "revision": 7,
   "total_instances": 3,
   "running_instances": 2,
   "instances": [

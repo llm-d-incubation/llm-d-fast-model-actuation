@@ -432,7 +432,7 @@ class TestVllmMultiProcessManager:
 
         result = manager.create_instance(vllm_config)
 
-        assert result["status"] == "started"
+        assert result["status"] == "running"
         assert "instance_id" in result
         assert len(manager.instances) == 1
 
@@ -444,7 +444,7 @@ class TestVllmMultiProcessManager:
 
         result = manager.create_instance(vllm_config, "custom-id")
 
-        assert result["status"] == "started"
+        assert result["status"] == "running"
         assert result["instance_id"] == "custom-id"
         assert "custom-id" in manager.instances
 
@@ -472,7 +472,7 @@ class TestVllmMultiProcessManager:
 
         stop_result = manager.stop_instance(instance_id)
 
-        assert stop_result["status"] == "terminated"
+        assert stop_result["status"] == "stopped"
         assert instance_id not in manager.instances  # Should be cleaned up
 
     @patch("launcher.multiprocessing.Process")
@@ -1046,10 +1046,9 @@ class TestEventBroadcaster:
             broadcaster = EventBroadcaster()
             event = WatchEvent(
                 type="CREATED",
-                object={"instance_id": "abc", "status": "started"},
-                revision=1,
+                object={"instance_id": "abc", "status": "started", "revision": 1},
             )
-            await broadcaster.publish(event)
+            broadcaster._append(event)
 
             received = []
             async for ev in broadcaster.watch(since_revision=0):
@@ -1058,7 +1057,7 @@ class TestEventBroadcaster:
             assert len(received) == 1
             assert received[0].type == "CREATED"
             assert received[0].object["instance_id"] == "abc"
-            assert received[0].revision == 1
+            assert received[0].object["revision"] == 1
 
         asyncio.run(run())
 
@@ -1068,13 +1067,13 @@ class TestEventBroadcaster:
         async def run():
             broadcaster = EventBroadcaster()
             for i in range(1, 4):
-                await broadcaster.publish(
-                    WatchEvent(type="CREATED", object={"i": i}, revision=i)
+                broadcaster._append(
+                    WatchEvent(type="CREATED", object={"i": i, "revision": i})
                 )
             assert broadcaster.revision == 3
-            assert broadcaster._events[0].revision == 1
-            assert broadcaster._events[1].revision == 2
-            assert broadcaster._events[2].revision == 3
+            assert broadcaster._events[0].object["revision"] == 1
+            assert broadcaster._events[1].object["revision"] == 2
+            assert broadcaster._events[2].object["revision"] == 3
 
         asyncio.run(run())
 
@@ -1098,12 +1097,19 @@ class TestEventBroadcaster:
 
             await asyncio.sleep(0)  # let watchers start
 
-            await broadcaster.publish(
-                WatchEvent(type="CREATED", object={"instance_id": "1"}, revision=1)
+            broadcaster._append(
+                WatchEvent(
+                    type="CREATED",
+                    object={"instance_id": "1", "revision": 1},
+                )
             )
-            await broadcaster.publish(
-                WatchEvent(type="STOPPED", object={"instance_id": "1"}, revision=2)
+            broadcaster._append(
+                WatchEvent(
+                    type="STOPPED",
+                    object={"instance_id": "1", "revision": 2},
+                )
             )
+            await broadcaster._notify()
 
             await asyncio.gather(task_a, task_b)
 
@@ -1119,14 +1125,23 @@ class TestEventBroadcaster:
 
         async def run():
             broadcaster = EventBroadcaster()
-            await broadcaster.publish(
-                WatchEvent(type="CREATED", object={"instance_id": "1"}, revision=1)
+            broadcaster._append(
+                WatchEvent(
+                    type="CREATED",
+                    object={"instance_id": "1", "revision": 1},
+                )
             )
-            await broadcaster.publish(
-                WatchEvent(type="STOPPED", object={"instance_id": "1"}, revision=2)
+            broadcaster._append(
+                WatchEvent(
+                    type="STOPPED",
+                    object={"instance_id": "1", "revision": 2},
+                )
             )
-            await broadcaster.publish(
-                WatchEvent(type="CREATED", object={"instance_id": "2"}, revision=3)
+            broadcaster._append(
+                WatchEvent(
+                    type="CREATED",
+                    object={"instance_id": "2", "revision": 3},
+                )
             )
 
             received = []
@@ -1137,7 +1152,7 @@ class TestEventBroadcaster:
 
             assert len(received) == 2
             assert received[0].type == "STOPPED"
-            assert received[0].revision == 2
+            assert received[0].object["revision"] == 2
             assert received[1].object["instance_id"] == "2"
 
         asyncio.run(run())
@@ -1149,8 +1164,8 @@ class TestEventBroadcaster:
             broadcaster = EventBroadcaster()
             # Fill beyond buffer to force trimming
             for i in range(1, _MAX_BROADCASTER_EVENTS + 11):
-                await broadcaster.publish(
-                    WatchEvent(type="CREATED", object={"i": i}, revision=i)
+                broadcaster._append(
+                    WatchEvent(type="CREATED", object={"i": i, "revision": i})
                 )
 
             with pytest.raises(RevisionTooOld) as exc_info:
@@ -1239,8 +1254,7 @@ class TestWatchAPIEndpoint:
         async def mock_watch(since_revision=0):
             yield WatchEvent(
                 type="CREATED",
-                object={"instance_id": "abc", "status": "started"},
-                revision=1,
+                object={"instance_id": "abc", "status": "started", "revision": 1},
             )
 
         mock_broadcaster.watch = mock_watch
@@ -1269,7 +1283,6 @@ class TestWatchAPIEndpoint:
                     "exit_code": 0,
                     "revision": 2,
                 },
-                revision=2,
             ),
         ]
 

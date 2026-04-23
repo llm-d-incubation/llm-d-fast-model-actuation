@@ -34,7 +34,7 @@ import uvloop
 from fastapi import FastAPI, Header, HTTPException, Path, Query
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from gputranslator import GpuTranslator
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from vllm.entrypoints.openai.api_server import run_server
 from vllm.entrypoints.openai.cli_args import make_arg_parser, validate_parsed_serve_args
 from vllm.entrypoints.utils import cli_env_setup
@@ -69,7 +69,6 @@ class WatchEvent(BaseModel):
 
     type: str  # "CREATED", "STOPPED", "DELETED"
     object: dict
-    revision: int = Field(default=0, exclude=True)
 
 
 class RevisionTooOld(Exception):
@@ -108,18 +107,13 @@ class EventBroadcaster:
 
     def _append(self, event: WatchEvent):
         """Synchronously buffer event and advance the revision cursor."""
-        self._revision = event.revision
+        self._revision = event.object["revision"]
         self._events.append(event)
         if len(self._events) > _MAX_BROADCASTER_EVENTS:
             self._events = self._events[-_MAX_BROADCASTER_EVENTS:]
 
     async def _notify(self):
         """Acquire condition lock and wake all watchers."""
-        async with self._condition:
-            self._condition.notify_all()
-
-    async def publish(self, event: WatchEvent):
-        self._append(event)
         async with self._condition:
             self._condition.notify_all()
 
@@ -196,7 +190,7 @@ class VllmInstance:
         self.instance_id = instance_id
         self.config = config
         self.process: Optional[multiprocessing.Process] = None
-        self.last_revision: int = 0
+        self.last_revision: Optional[int] = None
         self._sentinel_active = False
         self._log_file_path = os.path.join(
             log_dir or "/tmp",
@@ -379,17 +373,18 @@ class VllmMultiProcessManager:
         """Sentinel callback: assign revision and publish a STOPPED event."""
         revision = self._next_revision()
         if instance_id in self.instances:
-            self.instances[instance_id].last_revision = revision
-        event = WatchEvent(
-            type="STOPPED",
-            object={
+            instance = self.instances[instance_id]
+            instance.last_revision = revision
+            obj = instance.get_status()
+            obj["exit_code"] = exitcode
+        else:
+            obj = {
                 "instance_id": instance_id,
                 "status": "stopped",
                 "exit_code": exitcode,
                 "revision": revision,
-            },
-            revision=revision,
-        )
+            }
+        event = WatchEvent(type="STOPPED", object=obj)
         self.broadcaster._append(event)
         loop = asyncio.get_running_loop()
         loop.create_task(self.broadcaster._notify())
@@ -410,15 +405,15 @@ class VllmMultiProcessManager:
         self.instances[instance_id] = instance
 
         try:
-            start_result = instance.start()
+            instance.start()
         except Exception:
             self.instances.pop(instance_id, None)
             raise
 
         revision = self._next_revision()
         instance.last_revision = revision
-        result = instance._make_state(start_result["status"])
-        event = WatchEvent(type="CREATED", object=result, revision=revision)
+        result = instance.get_status()
+        event = WatchEvent(type="CREATED", object=result)
         self.broadcaster._append(event)
         try:
             loop = asyncio.get_running_loop()
@@ -435,17 +430,15 @@ class VllmMultiProcessManager:
 
         instance = self.instances[instance_id]
         instance.cancel_sentinel_watcher()
-        stop_result = instance.stop(timeout)
+        instance.stop(timeout)
 
         revision = self._next_revision()
         instance.last_revision = revision
-        result = instance._make_state(stop_result["status"])
+        result = instance.get_status()
 
-        # Clean up stopped instance
-        if result["status"] in ["terminated", "not_running"]:
-            del self.instances[instance_id]
+        del self.instances[instance_id]
 
-        event = WatchEvent(type="DELETED", object=result, revision=revision)
+        event = WatchEvent(type="DELETED", object=result)
         self.broadcaster._append(event)
         try:
             loop = asyncio.get_running_loop()
@@ -638,7 +631,6 @@ async def watch_instances(
                 initial = WatchEvent(
                     type="CREATED",
                     object=state,
-                    revision=start_revision,
                 )
                 yield initial.model_dump_json() + "\n"
         else:
