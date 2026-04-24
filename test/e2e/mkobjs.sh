@@ -115,6 +115,11 @@ metadata:
 spec:
   maxSleepingInstances: 1
   podTemplate:
+    metadata:
+      labels:
+        e2e-test.fma.llm-d.ai/template-label: from-launcher-config
+      annotations:
+        e2e-test.fma.llm-d.ai/template-annotation: from-launcher-config
     spec:
       serviceAccount: testlauncher
       containers:

@@ -172,6 +172,11 @@ metadata:
 spec:
   maxSleepingInstances: 3
   podTemplate:
+    metadata:
+      labels:
+        e2e-test.fma.llm-d.ai/template-label: from-launcher-config
+      annotations:
+        e2e-test.fma.llm-d.ai/template-annotation: from-launcher-config
     spec:
       ${runtime_class}
       serviceAccountName: launcher-$inst
