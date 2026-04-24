@@ -469,8 +469,8 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				launcherDat := ctl.getLauncherData(nodeDat, providingPod.Name)
 				launcherDat.Instances[serverDat.InstanceID] = time.Now()
 				logger.V(5).Info("Created vLLM instance", "instance_id", result.InstanceID, "status", result.Status)
-				// If ISC tracking annotations are missing (pre-bound pod), complete the bind metadata.
-				if _, bound := providingPod.Annotations[iscLabelKeysAnnotationKey]; !bound {
+				// If ISC tracking annotations are missing (pre-bound pod), propagate the ISC metadata.
+				if _, propagated := providingPod.Annotations[iscLabelKeysAnnotationKey]; !propagated {
 					return ctl.bind(ctx, serverDat, requestingPod, providingPod, &serverDat.InstanceID, int16(isc.Spec.ModelServerConfig.Port),
 						isc.Spec.ModelServerConfig.Labels, isc.Spec.ModelServerConfig.Annotations, true)
 				}
