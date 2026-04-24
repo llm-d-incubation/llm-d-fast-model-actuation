@@ -88,7 +88,7 @@ func ensureNamedLauncherInstance(
 		return inst, nil
 	}
 	if !IsInstanceNotFoundError(err) {
-		return nil, fmt.Errorf("get vLLM instance %q: %w", instanceID, err)
+		return nil, fmt.Errorf("failed to get vLLM instance %q: %w", instanceID, err)
 	}
 
 	result, err := lClient.CreateNamedInstance(ctx, instanceID, cfg)
@@ -96,12 +96,12 @@ func ensureNamedLauncherInstance(
 		if IsInstanceAlreadyExistsError(err) {
 			inst, retryErr := lClient.GetInstanceState(ctx, instanceID)
 			if retryErr != nil {
-				return nil, fmt.Errorf("get existing vLLM instance %q after conflict: %w", instanceID, retryErr)
+				return nil, fmt.Errorf("failed to get existing vLLM instance %q after conflict: %w", instanceID, retryErr)
 			}
 			launcherDat.Instances[instanceID] = time.Now()
 			return inst, nil
 		}
-		return nil, fmt.Errorf("create vLLM instance %q: %w", instanceID, err)
+		return nil, fmt.Errorf("failed to create vLLM instance %q: %w", instanceID, err)
 	}
 	launcherDat.Instances[instanceID] = time.Now()
 	return &InstanceState{
@@ -435,7 +435,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		// ensureNamedLauncherInstance recovers or creates the instance.
 		if launcherBased && serverDat.InstanceID == "" {
 			if providingPod.Status.PodIP == "" || !utils.IsPodReady(providingPod) {
-				return nil, true
+				return nil, false
 			}
 			cfg, iscHash, err := ctl.configInferenceServer(isc, serverDat.GPUIDs)
 			if err != nil {
