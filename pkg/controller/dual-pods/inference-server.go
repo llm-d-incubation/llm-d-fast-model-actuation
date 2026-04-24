@@ -430,40 +430,22 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				return fmt.Errorf("unable to wake up server because port not known: %w", err), true
 			}
 		}
-		// A launcher pod may be created in a pre-bound state, or the controller
-		// may have restarted and lost the in-memory InstanceID. In both cases,
-		// ensureNamedLauncherInstance recovers or creates the instance.
-		if launcherBased && serverDat.InstanceID == "" {
+		if launcherBased {
+			// Compute InstanceID from ISC hash if not yet known (e.g. controller restart).
+			if serverDat.InstanceID == "" {
+				_, iscHash, err := ctl.configInferenceServer(isc, serverDat.GPUIDs)
+				if err != nil {
+					return fmt.Errorf("failed to configure inference server config: %w", err), true
+				}
+				serverDat.InstanceID = iscHash
+				serverDat.ServerPort = int16(isc.Spec.ModelServerConfig.Port)
+			}
+
 			if providingPod.Status.PodIP == "" || !utils.IsPodReady(providingPod) {
 				logger.V(5).Info("Bound launcher pod not yet reachable, waiting", "podIP", providingPod.Status.PodIP, "ready", utils.IsPodReady(providingPod))
 				return nil, false
 			}
-			cfg, iscHash, err := ctl.configInferenceServer(isc, serverDat.GPUIDs)
-			if err != nil {
-				return fmt.Errorf("failed to configure inference server config: %w", err), true
-			}
-			launcherBaseURL := fmt.Sprintf("http://%s:%d", providingPod.Status.PodIP, ctlrcommon.LauncherServicePort)
-			lClient, err := NewLauncherClient(launcherBaseURL)
-			if err != nil {
-				return err, true
-			}
-			launcherDat := ctl.getLauncherData(nodeDat, providingPod.Name)
-			result, err := ensureNamedLauncherInstance(ctx, lClient, launcherDat, iscHash, *cfg)
-			if err != nil {
-				return err, true
-			}
-			logger.V(5).Info("Ensured vLLM instance", "instance_id", result.InstanceID, "status", result.Status)
-			if _, bound := providingPod.Annotations[iscLabelKeysAnnotationKey]; !bound {
-				return ctl.bind(ctx, serverDat, requestingPod, providingPod, &iscHash, int16(isc.Spec.ModelServerConfig.Port),
-					isc.Spec.ModelServerConfig.Labels, isc.Spec.ModelServerConfig.Annotations, true)
-			}
-			serverDat.InstanceID = iscHash
-			serverDat.ServerPort = int16(isc.Spec.ModelServerConfig.Port)
-		}
-		// For launcher-based providers, check whether the bound instance is still alive.
-		// The sidecar notifier updates the Pod annotation when instance status changes,
-		// which triggers reconciliation through the informer.
-		if launcherBased && serverDat.InstanceID != "" && providingPod.Status.PodIP != "" {
+
 			syncResult, err, retry := ctl.syncLauncherInstances(ctx, nodeDat, providingPod)
 			if err != nil || retry {
 				if err != nil {
@@ -477,34 +459,57 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 			if delErr, failedCleanup := syncResult.failedStoppedInstanceErrs[serverDat.InstanceID]; failedCleanup {
 				return fmt.Errorf("failed to delete stopped instance %q from launcher: %w", serverDat.InstanceID, delErr), true
 			}
-			if _, deletedStopped := syncResult.deletedStoppedInstanceIDs[serverDat.InstanceID]; deletedStopped || !instancePresent {
-				if deletedStopped {
-					logger.V(2).Info("Deleted stopped bound instance from launcher during sync")
-				} else {
-					logger.V(2).Info("Bound instance not found in launcher after sync, treating as deleted")
+
+			_, deletedStopped := syncResult.deletedStoppedInstanceIDs[serverDat.InstanceID]
+			if deletedStopped || !instancePresent {
+				if serverDat.InstanceExists != nil && *serverDat.InstanceExists {
+					// Instance was previously confirmed to exist — it died.
+					if deletedStopped {
+						logger.V(2).Info("Deleted stopped bound instance from launcher during sync")
+					} else {
+						logger.V(2).Info("Bound instance not found in launcher after sync, treating as deleted")
+					}
+					// Mark as sleeping so that ensureUnbound (called during requester deletion)
+					// does not attempt to POST /sleep on the dead instance.
+					serverDat.Sleeping = ptr.To(true)
+					err = podOps.Delete(ctx, requestingPod.Name, metav1.DeleteOptions{
+						PropagationPolicy: ptr.To(metav1.DeletePropagationBackground),
+						Preconditions:     &metav1.Preconditions{UID: &item.UID, ResourceVersion: &requestingPod.ResourceVersion}})
+					if err == nil {
+						logger.V(2).Info("Requested deletion of server-requesting Pod because bound instance stopped")
+					} else if apierrors.IsGone(err) || apierrors.IsNotFound(err) {
+						logger.V(5).Info("The server-requesting Pod is already gone")
+					} else {
+						return fmt.Errorf("failed to delete server-requesting Pod for stopped instance: %w", err), true
+					}
+					serverDat.RequesterDeleteRequested = true
+					return nil, false
 				}
-				// Mark as sleeping so that ensureUnbound (called during requester deletion)
-				// does not attempt to POST /sleep on the dead instance.
-				// The instance process is dead — this is not a real sleeping state,
-				// but it prevents ensureUnbound from hitting a dead endpoint and retrying forever.
-				serverDat.Sleeping = ptr.To(true)
-				// Delete the server-requesting Pod.
-				// This is analogous to the direct-provider case where a providing Pod's
-				// deletion is reflected to deletion of the server-requesting Pod.
-				// The ReplicaSet will recreate the requesting Pod, triggering a fresh bind.
-				err = podOps.Delete(ctx, requestingPod.Name, metav1.DeleteOptions{
-					PropagationPolicy: ptr.To(metav1.DeletePropagationBackground),
-					Preconditions:     &metav1.Preconditions{UID: &item.UID, ResourceVersion: &requestingPod.ResourceVersion}})
-				if err == nil {
-					logger.V(2).Info("Requested deletion of server-requesting Pod because bound instance stopped")
-				} else if apierrors.IsGone(err) || apierrors.IsNotFound(err) {
-					logger.V(5).Info("The server-requesting Pod is already gone")
-				} else {
-					return fmt.Errorf("failed to delete server-requesting Pod for stopped instance: %w", err), true
+				// InstanceExists is nil (unknown) — instance hasn't been created yet
+				// (bind-first path) or controller restarted and lost tracking.
+				// ensureNamedLauncherInstance is idempotent: GET first, create if not found.
+				cfg, _, err := ctl.configInferenceServer(isc, serverDat.GPUIDs)
+				if err != nil {
+					return fmt.Errorf("failed to configure inference server config: %w", err), true
 				}
-				serverDat.RequesterDeleteRequested = true
-				return nil, false
+				launcherBaseURL := fmt.Sprintf("http://%s:%d", providingPod.Status.PodIP, ctlrcommon.LauncherServicePort)
+				lClient, err := NewLauncherClient(launcherBaseURL)
+				if err != nil {
+					return err, true
+				}
+				launcherDat := ctl.getLauncherData(nodeDat, providingPod.Name)
+				result, err := ensureNamedLauncherInstance(ctx, lClient, launcherDat, serverDat.InstanceID, *cfg)
+				if err != nil {
+					return err, true
+				}
+				logger.V(5).Info("Ensured vLLM instance", "instance_id", result.InstanceID, "status", result.Status)
+				// If ISC tracking annotations are missing (pre-bound pod), complete the bind metadata.
+				if _, bound := providingPod.Annotations[iscLabelKeysAnnotationKey]; !bound {
+					return ctl.bind(ctx, serverDat, requestingPod, providingPod, &serverDat.InstanceID, int16(isc.Spec.ModelServerConfig.Port),
+						isc.Spec.ModelServerConfig.Labels, isc.Spec.ModelServerConfig.Annotations, true)
+				}
 			}
+			serverDat.InstanceExists = ptr.To(true)
 		}
 		if serverDat.Sleeping == nil {
 			sleeping, err := ctl.querySleeping(ctx, providingPod, serverPort)
@@ -641,7 +646,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		return err, false
 	}
 
-	cfg, iscHash, err := ctl.configInferenceServer(isc, serverDat.GPUIDs)
+	_, iscHash, err := ctl.configInferenceServer(isc, serverDat.GPUIDs)
 	if err != nil {
 		return fmt.Errorf("failed to configure inference server config: %w", err), true
 	}
@@ -666,43 +671,11 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 			logger.V(5).Info("No suitable launcher Pod found with sleeping instance or necessary capacity")
 			// Fall through to create new launcher Pod
 		} else {
-			logger.V(5).Info("Selected launcher Pod", "name", launcherPod.Name, "hasSleepingInstance", hasSleepingInstance)
-			launcherIP := launcherPod.Status.PodIP
-			if launcherIP == "" {
-				return fmt.Errorf("launcher Pod %q has no IP assigned yet", launcherPod.Name), true
-			}
-
-			launcherBaseURL := fmt.Sprintf("http://%s:%d", launcherIP, ctlrcommon.LauncherServicePort)
-			lClient, err := NewLauncherClient(launcherBaseURL)
-			if err != nil {
-				return err, true
-			}
-
-			launcherDat := ctl.getLauncherData(nodeDat, launcherPod.Name)
-
-			if hasSleepingInstance {
-				// Fast path: wake up existing sleeping instance
-				logger.V(5).Info("Waking up existing vLLM instance", "iscHash", iscHash)
-				err := ctl.wakeupInstance(ctx, lClient, iscHash, isc.Spec.ModelServerConfig.Port)
-				if err != nil {
-					return fmt.Errorf("wake up vLLM instance: %w", err), true
-				}
-				launcherDat.Instances[iscHash] = time.Now()
-				return ctl.bind(ctx, serverDat, requestingPod, launcherPod, &iscHash, int16(isc.Spec.ModelServerConfig.Port), isc.Spec.ModelServerConfig.Labels, isc.Spec.ModelServerConfig.Annotations, false)
-			} else {
-				// Slower path: create new instance in launcher with capacity
-				logger.V(5).Info("Creating new vLLM instance", "iscHash", iscHash)
-				result, err := lClient.CreateNamedInstance(ctx, iscHash, *cfg)
-				if err != nil {
-					return fmt.Errorf("create vLLM instance: %w", err), true
-				}
-				logger.V(5).Info("Created new vLLM instance",
-					"instance_id", result.InstanceID,
-					"status", result.Status,
-				)
-				launcherDat.Instances[iscHash] = time.Now()
-				return ctl.bind(ctx, serverDat, requestingPod, launcherPod, &iscHash, int16(isc.Spec.ModelServerConfig.Port), isc.Spec.ModelServerConfig.Labels, isc.Spec.ModelServerConfig.Annotations, false)
-			}
+			// Bind first, then rely on informer notification to trigger re-reconciliation.
+			// The "bound provider" path will handle instance creation/waking.
+			// This ensures the invariant: vllm awake implies provider Pod is bound.
+			logger.V(5).Info("Selected launcher Pod, binding first", "name", launcherPod.Name, "hasSleepingInstance", hasSleepingInstance)
+			return ctl.bind(ctx, serverDat, requestingPod, launcherPod, &iscHash, int16(isc.Spec.ModelServerConfig.Port), isc.Spec.ModelServerConfig.Labels, isc.Spec.ModelServerConfig.Annotations, true)
 		}
 	}
 	// Remains: Zero matching launcher Pods, or the matching launcher Pod cannot host more instances to fulfill the request.
@@ -900,17 +873,6 @@ func getVLLMInstancePort(inst InstanceState) (int32, error) {
 	return 0, fmt.Errorf("missing annotations[%s]", VllmConfigInferencePortAnnotationKey)
 }
 
-func (ctl *controller) wakeupInstance(ctx context.Context, lClient *LauncherClient, instanceID string, instancePort int32) error {
-	logger := klog.FromContext(ctx)
-	endpoint := lClient.baseURL.Hostname() + ":" + strconv.Itoa(int(instancePort))
-	err := doPost("http://" + endpoint + "/wake_up")
-	if err != nil {
-		return fmt.Errorf("failed to wake up vLLM instance %q (at %s): %w", instanceID, endpoint, err)
-	}
-	logger.V(2).Info("Woke up vLLM instance", "instanceID", instanceID, "endpoint", endpoint)
-	return nil
-}
-
 func (ctl *controller) ensureSleepingLabel(ctx context.Context, providingPod *corev1.Pod, desired bool) error {
 	logger := klog.FromContext(ctx)
 	desiredStr := strconv.FormatBool(desired)
@@ -1058,6 +1020,7 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 		providingPod.Annotations[iscAnnotationKeysAnnotationKey] = strings.Join(annotationKeys, " ")
 	}
 	serverDat.Sleeping = nil
+	serverDat.InstanceExists = nil
 	echo, err := ctl.coreclient.Pods(ctl.namespace).Update(ctx, providingPod, metav1.UpdateOptions{FieldManager: ControllerName})
 	if err != nil {
 		return fmt.Errorf("failed to bind server-providing Pod %s: %w", providingPod.Name, err), true
@@ -1378,6 +1341,8 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 	}
 	serverDat.ProvidingPodName = ""
 	serverDat.ServerPort = -1
+	serverDat.InstanceID = ""
+	serverDat.InstanceExists = nil
 	return nil
 }
 

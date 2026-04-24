@@ -305,7 +305,8 @@ type serverData struct {
 	GPUIndicesStr *string
 
 	ProvidingPodName  string
-	InstanceID        string   // if provider launcher-based
+	InstanceID        string // ISC hash; set when computed, independent of instance existence
+	InstanceExists    *bool  // nil=unknown, *true=confirmed present, *false=confirmed absent
 	ISCLabelKeys      []string // keys of ISC labels applied to providingPod
 	ISCAnnotationKeys []string // keys of ISC annotations applied to providingPod
 
