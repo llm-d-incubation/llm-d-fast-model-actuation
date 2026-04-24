@@ -205,9 +205,9 @@ func IsInstanceNotFoundError(err error) bool {
 	return errors.As(err, &launcherErr) && launcherErr.StatusCode == http.StatusNotFound
 }
 
-// IsInstanceAlreadyExistsError returns true when the launcher reports that the
-// instance already exists (HTTP 409 Conflict).
-func IsInstanceAlreadyExistsError(err error) bool {
+// IsInstanceCreationConflictError returns true when the launcher reports
+// HTTP 409 Conflict while creating an instance.
+func IsInstanceCreationConflictError(err error) bool {
 	var launcherErr *launcherError
 	return errors.As(err, &launcherErr) && launcherErr.StatusCode == http.StatusConflict
 }

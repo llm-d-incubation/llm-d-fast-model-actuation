@@ -93,7 +93,7 @@ func ensureNamedLauncherInstance(
 
 	result, err := lClient.CreateNamedInstance(ctx, instanceID, cfg)
 	if err != nil {
-		if IsInstanceAlreadyExistsError(err) {
+		if IsInstanceCreationConflictError(err) {
 			inst, retryErr := lClient.GetInstanceState(ctx, instanceID)
 			if retryErr != nil {
 				return nil, fmt.Errorf("failed to get existing vLLM instance %q after conflict: %w", instanceID, retryErr)
