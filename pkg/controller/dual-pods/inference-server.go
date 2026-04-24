@@ -435,6 +435,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		// ensureNamedLauncherInstance recovers or creates the instance.
 		if launcherBased && serverDat.InstanceID == "" {
 			if providingPod.Status.PodIP == "" || !utils.IsPodReady(providingPod) {
+				logger.V(5).Info("Bound launcher pod not yet reachable, waiting", "podIP", providingPod.Status.PodIP, "ready", utils.IsPodReady(providingPod))
 				return nil, false
 			}
 			cfg, iscHash, err := ctl.configInferenceServer(isc, serverDat.GPUIDs)
@@ -468,6 +469,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				if err != nil {
 					return fmt.Errorf("failed to sync launcher instances for bound launcher Pod: %w", err), retry
 				}
+				logger.V(5).Info("Launcher instance sync requested retry")
 				return nil, true
 			}
 
