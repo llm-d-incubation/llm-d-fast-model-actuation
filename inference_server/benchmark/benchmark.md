@@ -4,11 +4,10 @@ latency of model-serving pods within the LLM-D Fast Model Actuation workflow.
 
 ## Purpose
 The goal is to quantify and compare how quickly a model-serving duo (server-requesting
-and server-providing pods) becomes available under different actuation conditions
+and server-providing pods) becomes available under four different actuation conditions
 in order of decreasing latency:
 
-- **Cold start without FMA**: creating a new vLLM instance without using a launcher
-- **Cold start (FMA M2)**: DPC creates a standalone server-providing pod directly (planned)
+- **Cold start (no FMA)**: creating a new vLLM instance without using a launcher
 - **Cold start (with launcher)**: DPC creates a new launcher pod, then the launcher creates a new vLLM instance
 - **Warm start**: creating a new vLLM instance in an existing launcher pod
 - **Hot start**: waking a sleeping vLLM instance on an existing launcher pod
@@ -38,7 +37,7 @@ direct scope but is referenced for completeness and handoff to other frameworks.
 
 **Metric definitions:**
 
-- **T_actuation**: Time from requester pod creation (ReplicaSet scale-up) to requester pod readiness (`/ready` probe passes), which implies the DPC has bound the requester to a server-providing pod and the vLLM instance is serving. For FMA paths, spans different sub-components depending on the actuation path: hot start (T_wake), warm start (T_launcher), or cold start with launcher (T_cold_launcher). For non-FMA and M2 cold starts, T_actuation is measured directly with no FMA-specific sub-components.
+- **T_actuation**: Time from requester pod creation (ReplicaSet scale-up) to requester pod readiness (`/ready` probe passes), which implies the DPC has bound the requester to a server-providing pod and the vLLM instance is serving. For FMA paths, spans different sub-components depending on the actuation path: hot start (T_wake), warm start (T_launcher), or cold start with launcher (T_cold_launcher). For the non-FMA cold start, T_actuation is measured directly with no FMA-specific sub-components.
 - **T_wake**: Request-response time for the DPC's `/wake_up` call to a sleeping vLLM instance on the server-providing pod. A part of T_actuation when a hot start occurs.
 - **Hit_rate**: Fraction of server-requesting Pods that get satisfied by waking a sleeping vLLM instance.
 - **T_cold_launcher**: Time from the DPC launcher pod creation to the new vLLM instance reporting healthy. Covers the full cold start (with launcher) span: launcher pod scheduling, launcher startup, and vLLM instance creation.
@@ -84,7 +83,6 @@ using the team's established terminology:
 | Actuation Path            | What It Measures | Why Included | llm-d-benchmark Config |
 | ------------------------- | ---------------- | ------------ | ---------------------- |
 | **Cold Start (no FMA)**   | No FMA involvement. Raw Kubernetes deploy-to-ready latency. | Non-FMA baseline that all FMA paths should improve upon. | `-t standalone` comparison baseline |
-| **Cold Start (FMA M2)**   | DPC creates a standalone server-providing pod directly (no launcher). The requesting pod uses the `server-patch` annotation. | Measures the DPC's contribution without the launcher. Planned: pending a stable M3 harness. | `-t fma` with `fma.mode: m2` (planned) |
 | **Cold Start (with launcher)** | No suitable launcher pod exists. The DPC creates a new launcher pod, then DPC commands the launcher to create a new vLLM instance. | Worst-case FMA launcher path, relevant for dynamic situations such as LauncherConfig rollouts or newly added nodes where launchers have not yet been populated. | `-t fma` with LauncherPopulationPolicy that does not cover the target node |
 | **Warm Start**            | A launcher pod already exists but no sleeping instance is available. DPC commands the launcher to create a new vLLM instance with module preloading. | Measures the launcher's contribution when no sleeping instance is available. | `-t fma` with default `LLMDBENCH_FMA_LAUNCHER_*` env vars |
 | **Hot Start**             | A sleeping vLLM instance exists in a suitable launcher pod. DPC sends `/wake_up`. | Best-case FMA path. Measures sleep-to-wake latency. | `-t fma` with `LLMDBENCH_VLLM_COMMON_ENABLE_SLEEP_MODE=true`, `LLMDBENCH_FMA_DUAL_POD_SLEEPER_LIMIT>=1` |
@@ -98,6 +96,10 @@ using the team's established terminology:
 > besides Hot Start (where the instance is already loaded). Caching configuration is
 > controlled via `LLMDBENCH_VLLM_COMMON_EXTRA_PVC_NAME` and `LLMDBENCH_VLLM_COMMON_VLLM_CACHE_ROOT`
 > in the `fma.sh` scenario.
+>
+> **Note on FMA M2:** FMA Milestone 2 (DPC creating standalone server-providing pods
+> without a launcher) is a distinct actuation path from the non-FMA cold start, but is
+> not included in the benchmarking matrix. The focus is on M3 (launcher-based) paths.
 
 ### Matrix
 
@@ -107,12 +109,12 @@ Cell annotations indicate which measurement layers apply:
 - **L1+L2+L3** -- Actuation metrics plus inference readiness plus steady-state performance (TPOT, throughput, queue depth, KV cache, replica stability)
 - **--** -- Not applicable to this combination
 
-| Scenario                           | Cold Start (no FMA) | Cold Start (FMA M2) | Cold Start (with launcher) | Warm Start | Hot Start |
-| ---------------------------------- | :-----------------: | :-----------------: | :------------------------: | :--------: | :-------: |
-| **Fast Replica Scale Up**          | L1+L2               | L1+L2 (planned)     | L1+L2                      | L1+L2      | L1+L2     |
-| **Introducing New Variant**        | L1+L2               | L1+L2 (planned)     | L1+L2                      | L1+L2      | --        |
-| **Resource Scaling and Stress Test** | L1+L2+L3          | L1+L2+L3 (planned)  | L1+L2+L3                   | L1+L2+L3   | L1+L2+L3  |
-| **Maintenance Planning**           | L1+L2+L3            | L1+L2+L3 (planned)  | L1+L2+L3                   | L1+L2+L3   | L1+L2+L3  |
+| Scenario                           | Cold Start (no FMA) | Cold Start (with launcher) | Warm Start | Hot Start |
+| ---------------------------------- | :-----------------: | :------------------------: | :--------: | :-------: |
+| **Fast Replica Scale Up**          | L1+L2               | L1+L2                      | L1+L2      | L1+L2     |
+| **Introducing New Variant**        | L1+L2               | L1+L2                      | L1+L2      | --        |
+| **Resource Scaling and Stress Test** | L1+L2+L3          | L1+L2+L3                   | L1+L2+L3   | L1+L2+L3  |
+| **Maintenance Planning**           | L1+L2+L3            | L1+L2+L3                   | L1+L2+L3   | L1+L2+L3  |
 
 
 ### Scenario Rationale
