@@ -142,6 +142,7 @@ export HF_TOKEN="hf_xxxxx"
 Options:
   -h, --help              Show help message
   -c, --cleanup           Clean up existing deployment before installing
+  --cleanup-only          Clean up existing deployment and exit (skip deployment)
   -d, --delete-repo       Delete WVA repository after deployment
   --wva-only              Deploy only WVA (skip llm-d)
   --llmd-only             Deploy only llm-d (skip WVA)
@@ -229,22 +230,28 @@ kubectl logs -n llm-d-inference-scheduler \
 
 ## Cleanup
 
-### Remove Deployment Only
+### Clean Up and Redeploy
+
+The `--cleanup` flag removes the existing deployment **before** installing again:
 
 ```bash
+# Clean up and redeploy with default settings
 ./deploy-wva-stack.sh --cleanup
-```
 
-OR if HPA and VA are enabled:
-
-```bash
+# Clean up and redeploy with HPA and VA
 ./deploy-wva-stack.sh --cleanup --with-hpa --with-va
 ```
 
-### Remove Deployment and Kind Cluster
+### Clean Up Only (No Redeployment)
+
+The `--cleanup-only` flag removes the deployment and exits without redeploying:
 
 ```bash
-./deploy-wva-stack.sh --cleanup --delete-kind
+# Remove deployment only
+./deploy-wva-stack.sh --cleanup-only
+
+# Remove deployment and Kind cluster
+./deploy-wva-stack.sh --cleanup-only --delete-kind
 ```
 
 ## Kind Cluster Configuration
