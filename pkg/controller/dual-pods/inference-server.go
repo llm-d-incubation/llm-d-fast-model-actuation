@@ -362,6 +362,19 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		}
 	}
 
+	var cfg *VllmConfig
+	var iscHash string
+	if launcherBased {
+		cfg, iscHash, err = ctl.configInferenceServer(isc, serverDat.GPUIDs)
+		if err != nil {
+			return fmt.Errorf("failed to configure inference server config: %w", err), true
+		}
+		if serverDat.InstanceID == "" {
+			serverDat.InstanceID = iscHash
+			serverDat.ServerPort = int16(isc.Spec.ModelServerConfig.Port)
+		}
+	}
+
 	// If there is already a bound server-providing Pod then ensure that it is awake,
 	// ensure status reported, and relay readiness if needed.
 	if providingPod != nil {
@@ -394,16 +407,6 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 			}
 		}
 		if launcherBased {
-			// Compute InstanceID from ISC hash if not yet known (e.g. controller restart).
-			if serverDat.InstanceID == "" {
-				_, iscHash, err := ctl.configInferenceServer(isc, serverDat.GPUIDs)
-				if err != nil {
-					return fmt.Errorf("failed to configure inference server config: %w", err), true
-				}
-				serverDat.InstanceID = iscHash
-				serverDat.ServerPort = int16(isc.Spec.ModelServerConfig.Port)
-			}
-
 			if providingPod.Status.PodIP == "" || !utils.IsPodReady(providingPod) {
 				logger.V(5).Info("Bound launcher pod not yet reachable, waiting", "podIP", providingPod.Status.PodIP, "ready", utils.IsPodReady(providingPod))
 				return nil, false
@@ -454,10 +457,6 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				// InstanceExists is nil (unknown) and instance is absent (not stopped) —
 				// not yet created (bind-first path) or controller restarted and lost tracking.
 				// We just synced, so we know the instance is not on the launcher — create directly.
-				cfg, _, err := ctl.configInferenceServer(isc, serverDat.GPUIDs)
-				if err != nil {
-					return fmt.Errorf("failed to configure inference server config: %w", err), true
-				}
 				launcherBaseURL := fmt.Sprintf("http://%s:%d", providingPod.Status.PodIP, ctlrcommon.LauncherServicePort)
 				lClient, err := NewLauncherClient(launcherBaseURL)
 				if err != nil {
@@ -613,10 +612,6 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		return err, false
 	}
 
-	_, iscHash, err := ctl.configInferenceServer(isc, serverDat.GPUIDs)
-	if err != nil {
-		return fmt.Errorf("failed to configure inference server config: %w", err), true
-	}
 	desiredPort := isc.Spec.ModelServerConfig.Port
 	logger.V(5).Info("Nominal hash of InferenceServerConfig", "hash", iscHash)
 
