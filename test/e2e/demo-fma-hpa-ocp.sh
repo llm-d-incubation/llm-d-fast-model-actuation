@@ -17,7 +17,7 @@
 # Optional environment variables (with defaults):
 #   NAMESPACE          - target namespace (default: fma-hpa)
 #   CONTAINER_IMG_REG  - image registry (default: quay.io/diego_castan)
-#   IMAGE_TAG          - image tag (default: git short SHA)
+#   IMAGE_TAG          - image tag (default: f323a8f, the last known-good build)
 #   LAUNCHER_IMAGE     - launcher image (default: $CONTAINER_IMG_REG/launcher:$IMAGE_TAG)
 #   REQUESTER_IMAGE    - requester image (default: $CONTAINER_IMG_REG/requester:$IMAGE_TAG)
 #   MODEL              - vLLM model (default: HuggingFaceTB/SmolLM2-360M-Instruct)
@@ -29,7 +29,7 @@ set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-fma-hpa}"
 CONTAINER_IMG_REG="${CONTAINER_IMG_REG:-quay.io/diego_castan}"
-IMAGE_TAG="${IMAGE_TAG:-$(git rev-parse --short HEAD)}"
+IMAGE_TAG="${IMAGE_TAG:-f323a8f}"
 LAUNCHER_IMAGE="${LAUNCHER_IMAGE:-${CONTAINER_IMG_REG}/launcher:${IMAGE_TAG}}"
 REQUESTER_IMAGE="${REQUESTER_IMAGE:-${CONTAINER_IMG_REG}/requester:${IMAGE_TAG}}"
 MODEL="${MODEL:-HuggingFaceTB/SmolLM2-360M-Instruct}"
