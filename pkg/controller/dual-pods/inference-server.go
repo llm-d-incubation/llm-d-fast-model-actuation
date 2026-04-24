@@ -70,9 +70,8 @@ type nodeItem struct {
 }
 
 type launcherSyncResult struct {
-	instances                 *AllInstancesState
-	deletedStoppedInstanceIDs sets.Set[string]
-	failedStoppedInstanceErrs map[string]error
+	instances          *AllInstancesState
+	stoppedInstanceIDs sets.Set[string] // bound instances found stopped (not deleted by sync)
 }
 
 func ensureNamedLauncherInstance(
@@ -456,18 +455,21 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 			}
 
 			_, instancePresent := findInstanceState(syncResult.instances.Instances, serverDat.InstanceID)
-			if delErr, failedCleanup := syncResult.failedStoppedInstanceErrs[serverDat.InstanceID]; failedCleanup {
-				return fmt.Errorf("failed to delete stopped instance %q from launcher: %w", serverDat.InstanceID, delErr), true
-			}
+			_, instanceStopped := syncResult.stoppedInstanceIDs[serverDat.InstanceID]
 
-			_, deletedStopped := syncResult.deletedStoppedInstanceIDs[serverDat.InstanceID]
-			if deletedStopped || !instancePresent {
-				if serverDat.InstanceExists != nil && *serverDat.InstanceExists {
-					// Instance was previously confirmed to exist — it died.
-					if deletedStopped {
-						logger.V(2).Info("Deleted stopped bound instance from launcher during sync")
+			if instanceStopped || !instancePresent {
+				if instanceStopped || (serverDat.InstanceExists != nil && *serverDat.InstanceExists) {
+					// instanceStopped is an objective signal that the instance existed
+					// and died — no dependency on in-memory InstanceExists state.
+					// When !instancePresent && InstanceExists==true the instance vanished
+					// (e.g. launcher restart) — same treatment.
+					// Delete the requesting Pod first so the intent is durable in the
+					// Kubernetes API; the stopped vLLM instance is cleaned up by the
+					// next sync after the server data is removed.
+					if instanceStopped {
+						logger.V(2).Info("Bound instance found stopped on launcher")
 					} else {
-						logger.V(2).Info("Bound instance not found in launcher after sync, treating as deleted")
+						logger.V(2).Info("Bound instance not found in launcher, treating as dead")
 					}
 					// Mark as sleeping so that ensureUnbound (called during requester deletion)
 					// does not attempt to POST /sleep on the dead instance.
@@ -485,8 +487,8 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 					serverDat.RequesterDeleteRequested = true
 					return nil, false
 				}
-				// InstanceExists is nil (unknown) — instance hasn't been created yet
-				// (bind-first path) or controller restarted and lost tracking.
+				// InstanceExists is nil (unknown) and instance is absent (not stopped) —
+				// not yet created (bind-first path) or controller restarted and lost tracking.
 				// ensureNamedLauncherInstance is idempotent: GET first, create if not found.
 				cfg, _, err := ctl.configInferenceServer(isc, serverDat.GPUIDs)
 				if err != nil {
@@ -1711,26 +1713,37 @@ func (ctl *controller) syncLauncherInstances(ctx context.Context, nodeDat *nodeD
 	}
 
 	launcherDat := ctl.getLauncherData(nodeDat, launcherPod.Name)
+
+	boundInstanceIDs := sets.New[string]()
+	for _, sd := range nodeDat.InferenceServers {
+		if sd.ProvidingPodName == launcherPod.Name && sd.InstanceID != "" {
+			boundInstanceIDs.Insert(sd.InstanceID)
+		}
+	}
+
 	newInstances := make(map[string]time.Time)
 	remainingInstances := make([]InstanceState, 0, len(insts.Instances))
-	deletedStoppedInstanceIDs := sets.New[string]()
-	failedStoppedInstanceErrs := map[string]error{}
+	stoppedInstanceIDs := sets.New[string]()
 	runningCount := 0
 	for _, inst := range insts.Instances {
 		if inst.Status == InstanceStatusStopped {
-			// Clean up stopped instances from the launcher.
-			_, delErr := lClient.DeleteInstance(ctx, inst.InstanceID)
-			if delErr != nil && !IsInstanceNotFoundError(delErr) {
-				logger.V(3).Info("Failed to delete stopped instance from launcher during sync",
-					"instanceID", inst.InstanceID, "err", delErr)
-				// Deletion failed — the instance still occupies a slot in the launcher.
-				failedStoppedInstanceErrs[inst.InstanceID] = delErr
-			} else {
-				logger.V(2).Info("Deleted stopped instance from launcher during sync",
+			if boundInstanceIDs.Has(inst.InstanceID) {
+				// Bound stopped instance — defer deletion so the caller can
+				// delete the requesting Pod first (resolves create/delete ambiguity).
+				stoppedInstanceIDs.Insert(inst.InstanceID)
+				logger.V(2).Info("Found stopped bound instance, deferring cleanup",
 					"instanceID", inst.InstanceID)
-				deletedStoppedInstanceIDs.Insert(inst.InstanceID)
-				continue
+			} else {
+				_, delErr := lClient.DeleteInstance(ctx, inst.InstanceID)
+				if delErr != nil && !IsInstanceNotFoundError(delErr) {
+					logger.V(3).Info("Failed to delete stopped instance from launcher during sync",
+						"instanceID", inst.InstanceID, "err", delErr)
+				} else {
+					logger.V(2).Info("Deleted stopped instance from launcher during sync",
+						"instanceID", inst.InstanceID)
+				}
 			}
+			continue
 		}
 		remainingInstances = append(remainingInstances, inst)
 		if inst.Status == "running" {
@@ -1759,9 +1772,8 @@ func (ctl *controller) syncLauncherInstances(ctx context.Context, nodeDat *nodeD
 		"instanceCount", len(newInstances))
 
 	return &launcherSyncResult{
-		instances:                 insts,
-		deletedStoppedInstanceIDs: deletedStoppedInstanceIDs,
-		failedStoppedInstanceErrs: failedStoppedInstanceErrs,
+		instances:          insts,
+		stoppedInstanceIDs: stoppedInstanceIDs,
 	}, nil, false
 }
 
