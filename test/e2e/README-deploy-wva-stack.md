@@ -291,4 +291,4 @@ The Kind cluster includes:
 
 ### `--llmd-only --kind` Requires WVA Image
 
-Due to an upstream bug in the WVA repository (`deploy/kind-emulator/install.sh`, line 131), the Kind emulator deployment unconditionally tries to pull the WVA controller image even when `DEPLOY_WVA=false`. As a workaround, authenticate with ghcr.io before running `./deploy-wva-stack.sh --llmd-only --kind`, or use a real Kubernetes cluster instead of Kind for llm-d-only deployments.
+Due to a limitation in the WVA upstream repository (`deploy/kind-emulator/install.sh`, line 131), the Kind emulator deployment unconditionally tries to pull the WVA controller image even when `DEPLOY_WVA=false`. As a workaround, authenticate with ghcr.io before running `./deploy-wva-stack.sh --llmd-only --kind`, or use a real Kubernetes cluster instead of Kind for llm-d-only deployments.
