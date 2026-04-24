@@ -74,42 +74,6 @@ type launcherSyncResult struct {
 	stoppedInstanceIDs sets.Set[string] // bound instances found stopped (not deleted by sync)
 }
 
-func ensureNamedLauncherInstance(
-	ctx context.Context,
-	lClient *LauncherClient,
-	launcherDat *launcherData,
-	instanceID string,
-	cfg VllmConfig,
-) (*InstanceState, error) {
-	inst, err := lClient.GetInstanceState(ctx, instanceID)
-	if err == nil {
-		launcherDat.Instances[instanceID] = time.Now()
-		return inst, nil
-	}
-	if !IsInstanceNotFoundError(err) {
-		return nil, fmt.Errorf("failed to get vLLM instance %q: %w", instanceID, err)
-	}
-
-	result, err := lClient.CreateNamedInstance(ctx, instanceID, cfg)
-	if err != nil {
-		if IsInstanceCreationConflictError(err) {
-			inst, retryErr := lClient.GetInstanceState(ctx, instanceID)
-			if retryErr != nil {
-				return nil, fmt.Errorf("failed to get existing vLLM instance %q after conflict: %w", instanceID, retryErr)
-			}
-			launcherDat.Instances[instanceID] = time.Now()
-			return inst, nil
-		}
-		return nil, fmt.Errorf("failed to create vLLM instance %q: %w", instanceID, err)
-	}
-	launcherDat.Instances[instanceID] = time.Now()
-	return &InstanceState{
-		InstanceID: instanceID,
-		Status:     result.Status,
-		VllmConfig: cfg,
-	}, nil
-}
-
 func (ni nodeItem) process(ctx context.Context, ctl *controller) (error, bool) {
 	logger := klog.FromContext(ctx).WithValues("node", ni.NodeName)
 	ctx = klog.NewContext(ctx, logger)
@@ -489,7 +453,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				}
 				// InstanceExists is nil (unknown) and instance is absent (not stopped) —
 				// not yet created (bind-first path) or controller restarted and lost tracking.
-				// ensureNamedLauncherInstance is idempotent: GET first, create if not found.
+				// We just synced, so we know the instance is not on the launcher — create directly.
 				cfg, _, err := ctl.configInferenceServer(isc, serverDat.GPUIDs)
 				if err != nil {
 					return fmt.Errorf("failed to configure inference server config: %w", err), true
@@ -499,12 +463,13 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				if err != nil {
 					return err, true
 				}
-				launcherDat := ctl.getLauncherData(nodeDat, providingPod.Name)
-				result, err := ensureNamedLauncherInstance(ctx, lClient, launcherDat, serverDat.InstanceID, *cfg)
+				result, err := lClient.CreateNamedInstance(ctx, serverDat.InstanceID, *cfg)
 				if err != nil {
-					return err, true
+					return fmt.Errorf("failed to create vLLM instance %q: %w", serverDat.InstanceID, err), true
 				}
-				logger.V(5).Info("Ensured vLLM instance", "instance_id", result.InstanceID, "status", result.Status)
+				launcherDat := ctl.getLauncherData(nodeDat, providingPod.Name)
+				launcherDat.Instances[serverDat.InstanceID] = time.Now()
+				logger.V(5).Info("Created vLLM instance", "instance_id", result.InstanceID, "status", result.Status)
 				// If ISC tracking annotations are missing (pre-bound pod), complete the bind metadata.
 				if _, bound := providingPod.Annotations[iscLabelKeysAnnotationKey]; !bound {
 					return ctl.bind(ctx, serverDat, requestingPod, providingPod, &serverDat.InstanceID, int16(isc.Spec.ModelServerConfig.Port),

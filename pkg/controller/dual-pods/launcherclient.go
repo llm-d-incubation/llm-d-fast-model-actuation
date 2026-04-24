@@ -205,12 +205,7 @@ func IsInstanceNotFoundError(err error) bool {
 	return errors.As(err, &launcherErr) && launcherErr.StatusCode == http.StatusNotFound
 }
 
-// IsInstanceCreationConflictError returns true when the launcher reports
-// HTTP 409 Conflict while creating an instance.
-func IsInstanceCreationConflictError(err error) bool {
-	var launcherErr *launcherError
-	return errors.As(err, &launcherErr) && launcherErr.StatusCode == http.StatusConflict
-}
+
 
 func (c *LauncherClient) do(
 	ctx context.Context,
