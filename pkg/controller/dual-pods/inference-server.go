@@ -621,7 +621,6 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 					return fmt.Errorf("wake up vLLM instance: %w", err), true
 				}
 				launcherDat.Instances[iscHash] = time.Now()
-				// TODO(waltforme): the bind method may need more revision to fully handle launcher-based server providing Pods
 				return ctl.bind(ctx, serverDat, requestingPod, launcherPod, &iscHash, int16(isc.Spec.ModelServerConfig.Port), isc.Spec.ModelServerConfig.Labels, isc.Spec.ModelServerConfig.Annotations)
 			} else {
 				// Slower path: create new instance in launcher with capacity
@@ -635,7 +634,6 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 					"status", result.Status,
 				)
 				launcherDat.Instances[iscHash] = time.Now()
-				// TODO(waltforme): the bind method may need more revision to fully handle launcher-based server providing Pods
 				return ctl.bind(ctx, serverDat, requestingPod, launcherPod, &iscHash, int16(isc.Spec.ModelServerConfig.Port), isc.Spec.ModelServerConfig.Labels, isc.Spec.ModelServerConfig.Annotations)
 			}
 		}
