@@ -205,8 +205,6 @@ func IsInstanceNotFoundError(err error) bool {
 	return errors.As(err, &launcherErr) && launcherErr.StatusCode == http.StatusNotFound
 }
 
-
-
 func (c *LauncherClient) do(
 	ctx context.Context,
 	method string,
