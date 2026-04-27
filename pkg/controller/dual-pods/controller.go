@@ -304,8 +304,9 @@ type serverData struct {
 	GPUIndices    []string
 	GPUIndicesStr *string
 
-	ProvidingPodName  string
-	InstanceID        string   // if provider launcher-based
+	ProvidingPodName     string
+	InstanceID           string // ISC hash; set when computed, independent of instance existence
+	InstanceKnownToExist bool   // meaningful only for launcher-based providers
 	ISCLabelKeys      []string // keys of ISC labels applied to providingPod
 	ISCAnnotationKeys []string // keys of ISC annotations applied to providingPod
 
@@ -817,4 +818,3 @@ func (ctl *controller) clearServerData(nodeDat *nodeData, uid apitypes.UID) {
 	defer ctl.mutex.Unlock()
 	delete(nodeDat.InferenceServers, uid)
 }
-
