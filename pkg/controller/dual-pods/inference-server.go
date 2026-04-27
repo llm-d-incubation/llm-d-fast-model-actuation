@@ -425,10 +425,10 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 			_, instanceStopped := syncResult.stoppedInstanceIDs[serverDat.InstanceID]
 
 			if instanceStopped || !instancePresent {
-				if instanceStopped || (serverDat.InstanceExists != nil && *serverDat.InstanceExists) {
+				if instanceStopped || serverDat.InstanceKnownToExist {
 					// instanceStopped is an objective signal that the instance existed
-					// and died — no dependency on in-memory InstanceExists state.
-					// When !instancePresent && InstanceExists==true the instance vanished
+					// and died — no dependency on in-memory InstanceKnownToExist state.
+					// When !instancePresent && InstanceKnownToExist==true the instance vanished
 					// (e.g. launcher restart) — same treatment.
 					// Delete the requesting Pod first so the intent is durable in the
 					// Kubernetes API; the stopped vLLM instance is cleaned up by the
@@ -454,7 +454,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 					serverDat.RequesterDeleteRequested = true
 					return nil, false
 				}
-				// InstanceExists is nil (unknown) and instance is absent (not stopped) —
+				// InstanceKnownToExist is false and instance is absent (not stopped) —
 				// not yet created (bind-first path) or controller restarted and lost tracking.
 				// We just synced, so we know the instance is not on the launcher — create directly.
 				launcherBaseURL := fmt.Sprintf("http://%s:%d", providingPod.Status.PodIP, ctlrcommon.LauncherServicePort)
@@ -466,6 +466,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				if err != nil {
 					return fmt.Errorf("failed to create vLLM instance %q: %w", serverDat.InstanceID, err), true
 				}
+				serverDat.InstanceKnownToExist = true
 				launcherDat := ctl.getLauncherData(nodeDat, providingPod.Name)
 				launcherDat.Instances[serverDat.InstanceID] = time.Now()
 				logger.V(5).Info("Created vLLM instance", "instance_id", result.InstanceID, "status", result.Status)
@@ -475,7 +476,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 						isc.Spec.ModelServerConfig.Labels, isc.Spec.ModelServerConfig.Annotations, true)
 				}
 			}
-			serverDat.InstanceExists = ptr.To(true)
+			serverDat.InstanceKnownToExist = true
 		}
 		if serverDat.Sleeping == nil {
 			sleeping, err := ctl.querySleeping(ctx, providingPod, serverPort)
@@ -1303,7 +1304,7 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 	serverDat.ProvidingPodName = ""
 	serverDat.ServerPort = -1
 	serverDat.InstanceID = ""
-	serverDat.InstanceExists = nil
+	serverDat.InstanceKnownToExist = false
 	return nil
 }
 
