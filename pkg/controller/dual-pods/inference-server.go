@@ -982,7 +982,6 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 		providingPod.Annotations[iscAnnotationKeysAnnotationKey] = strings.Join(annotationKeys, " ")
 	}
 	serverDat.Sleeping = nil
-	serverDat.InstanceExists = nil
 	echo, err := ctl.coreclient.Pods(ctl.namespace).Update(ctx, providingPod, metav1.UpdateOptions{FieldManager: ControllerName})
 	if err != nil {
 		return fmt.Errorf("failed to bind server-providing Pod %s: %w", providingPod.Name, err), true
