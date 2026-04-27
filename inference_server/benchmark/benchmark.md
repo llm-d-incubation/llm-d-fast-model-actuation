@@ -4,8 +4,7 @@ latency of model-serving pods within the LLM-D Fast Model Actuation workflow.
 
 ## Purpose
 The goal is to quantify and compare how quickly a model-serving duo (server-requesting
-and server-providing pods) becomes available under four different actuation conditions
-in order of decreasing latency:
+and server-providing pods) becomes available under four different actuation conditions:
 
 - **Cold start (no FMA)**: creating a new vLLM instance without using a launcher
 - **Cold start (with launcher)**: DPC creates a new launcher pod, then the launcher creates a new vLLM instance
@@ -31,23 +30,23 @@ direct scope but is referenced for completeness and handoff to other frameworks.
 
 | Layer | Focus | Metrics | Measured By |
 | ----- | ----- | ------- | ----------- |
-| **L1: Actuation** | Requester pod readiness | T_actuation (requester creation to readiness), T_wake (DPC wakes sleeping vLLM instance), Hit_rate (GPU hits), T_cold_launcher (DPC creates launcher pod then vLLM instance), T_launcher (launcher creates new vLLM instance) | llm-d-benchmark new harness |
+| **L1: Actuation** | Requester pod readiness | T_actuation (requester creation to readiness), T_wake (DPC wakes sleeping vLLM instance), Hit_rate (GPU hits), T_cold_launcher (DPC creates launcher pod then vLLM instance), T_instance_create (DPC commands new vLLM instance creation) | llm-d-benchmark new harness |
 | **L2: Inference Readiness** | First inference response | T_e2e (requester creation to first inference response), T_first_token (requester ready to first inference response) | llm-d-benchmark nop/inference-perf harness |
 | **L3: Steady-State** | Throughput/latency | TPOT (time per output token), throughput, queue depth, KV cache usage, replica stability | llm-d-benchmark / WVA |
 
 **Metric definitions:**
 
-- **T_actuation**: Time from requester pod creation (ReplicaSet scale-up) to requester pod readiness (`/ready` probe passes), which implies the DPC has bound the requester to a server-providing pod and the vLLM instance is serving. For FMA paths, spans different sub-components depending on the actuation path: hot start (T_wake), warm start (T_launcher), or cold start with launcher (T_cold_launcher). For the non-FMA cold start, T_actuation is measured directly with no FMA-specific sub-components.
+- **T_actuation**: Time from requester pod creation (ReplicaSet scale-up) to requester pod readiness (`/ready` probe passes), which implies the DPC has bound the requester to a server-providing pod and the vLLM instance is serving. For FMA paths, spans different sub-components depending on the actuation path: hot start (T_wake), warm start (T_instance_create), or cold start with launcher (T_cold_launcher). For the non-FMA cold start, T_actuation is measured directly with no FMA-specific sub-components.
 - **T_wake**: Request-response time for the DPC's `/wake_up` call to a sleeping vLLM instance on the server-providing pod. A part of T_actuation when a hot start occurs.
 - **Hit_rate**: Fraction of server-requesting Pods that get satisfied by waking a sleeping vLLM instance.
-- **T_cold_launcher**: Time from the DPC launcher pod creation to the new vLLM instance reporting healthy. Covers the full cold start (with launcher) span: launcher pod scheduling, launcher startup, and vLLM instance creation.
-- **T_launcher**: Time from the launcher receiving a create request to the new vLLM instance reporting healthy. Includes the benefit of vLLM module preloading. Applies to both cold start (with launcher) and warm start paths.
+- **T_cold_launcher**: Time from the DPC launcher pod creation to the new vLLM instance reporting healthy. A constituent of T_actuation for cold start (with launcher) cases, covering launcher pod scheduling, launcher startup, and vLLM instance creation. Does not include the earlier portion of T_actuation (requester scheduling and DPC reconciliation before the launcher pod is created).
+- **T_instance_create**: Time from the launcher receiving a create request to the new vLLM instance reporting healthy. Includes the benefit of vLLM module preloading. Applies to both cold start (with launcher) and warm start paths.
 - **T_e2e**: Total time from requester pod creation to first successful inference response (T_actuation + T_first_token). Spans the full actuation and inference readiness path.
 - **T_first_token**: Time from requester pod readiness to receiving the first streamed token from the server-providing pod's vLLM instance (time-to-first-token, post-actuation). Requires streaming inference requests.
 
 **Constituent duration metrics (planned):**
 
-The following metrics break T_cold_launcher and T_launcher into their constituent durations.
+The following metrics break T_cold_launcher and T_instance_create into their constituent durations.
 Collecting them requires correlating Kubernetes object timestamps, DPC log messages, and
 launcher API responses. The fidelity of each (e.g., delay in retrieving/parsing DPC logs)
 needs further evaluation before they are added to the benchmarking harness.
@@ -56,12 +55,18 @@ needs further evaluation before they are added to the benchmarking harness.
 | ------ | ---------- | -------------- |
 | **T_launcher_schedule** | Launcher pod `creationTimestamp` to `PodScheduled` condition `lastTransitionTime` | Kube pod status |
 | **T_launcher_startup** | Launcher pod `PodScheduled` to `Ready` condition `lastTransitionTime` | Kube pod status |
-| **T_dpc_react** | Launcher pod `Ready` to DPC issuing `CreateNamedInstance` | DPC logs (V5: "Creating new vLLM instance") |
+| **T_dpc_react** | Launcher pod `Ready` to DPC issuing `CreateNamedInstance`. Applies to cold start (with launcher) only; in warm start, the launcher is already Ready before the requester exists, so this duration is negligible. | DPC logs (V5: "Creating new vLLM instance") |
 | **T_instance_ready** | `CreateNamedInstance` call to vLLM instance serving (requester pod becomes Ready) | DPC logs + Kube pod status |
 
 Relationships:
 - T_cold_launcher ≈ T_launcher_schedule + T_launcher_startup + T_dpc_react + T_instance_ready
-- T_launcher ≈ T_dpc_react + T_instance_ready (launcher already Ready)
+- T_instance_create ≈ T_instance_ready (warm start; launcher already Ready, DPC react time is negligible)
+
+**Alternative observability approaches:** As an alternative to DPC log parsing for
+T_dpc_react and T_instance_ready, the DPC could emit Prometheus histograms for these
+durations, which would be more reliable than log parsing but only provide aggregate
+distributions. For per-request correlation across DPC, launcher, and vLLM, distributed
+tracing (e.g., OpenTelemetry spans) could be considered.
 
 ## Benchmarking Scenarios
 
@@ -104,7 +109,7 @@ using the team's established terminology:
 ### Matrix
 
 Cell annotations indicate which measurement layers apply:
-- **L1** -- Layer 1 actuation metrics (T_actuation, T_wake, Hit_rate, T_cold_launcher, T_launcher)
+- **L1** -- Layer 1 actuation metrics (T_actuation, T_wake, Hit_rate, T_cold_launcher, T_instance_create)
 - **L1+L2** -- Actuation metrics plus inference readiness (T_first_token, T_e2e)
 - **L1+L2+L3** -- Actuation metrics plus inference readiness plus steady-state performance (TPOT, throughput, queue depth, KV cache, replica stability)
 - **--** -- Not applicable to this combination
@@ -181,9 +186,11 @@ Once actuation paths are classified, isolate the path-specific timing components
 
 - **T_wake** (hot): measure the `/wake_up` round-trip, approximated by the requester pod's
   transition from creation to Ready on known-hot actuations.
-- **T_launcher** (warm and cold start with launcher): time between DPC binding and vLLM
-  instance readiness, approximated by (requester dual-label timestamp - launcher pod Ready
-  timestamp). Includes some DPC reconciliation overhead.
+- **T_instance_create** (warm and cold start with launcher): time from the launcher receiving
+  a create request to vLLM instance readiness. Initially approximated by (requester dual-label
+  timestamp - launcher pod Ready timestamp), which is an upper bound that includes DPC
+  reconciliation overhead. A tighter measurement requires DPC log parsing or Prometheus
+  histograms (see alternative observability approaches above).
 - **T_cold_launcher** (cold start with launcher): end-to-end from launcher pod creation
   timestamp to vLLM instance healthy.
 
