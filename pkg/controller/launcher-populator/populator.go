@@ -350,7 +350,8 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 	}
 
 	didDelete := false
-	deletionInProgress := false // tracks pods already being deleted (DeletionTimestamp set)
+	deletionInProgress := false  // tracks pods already being deleted (DeletionTimestamp set)
+	deletionShortfall := false   // excess-pod deletion loop could not delete as many as needed
 
 	type creationInfo struct {
 		key   NodeLauncherKey
@@ -421,6 +422,7 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 		}
 
 		// Delete stale pods immediately (spec changed → delete and replace)
+		staleNotDeleted := 0
 		for _, pod := range staleUnboundPods {
 			err := ctl.coreclient.Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{
 				Preconditions: &metav1.Preconditions{UID: &pod.UID, ResourceVersion: &pod.ResourceVersion},
@@ -432,6 +434,7 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 				}
 				if apierrors.IsConflict(err) {
 					// Pod was modified (e.g. bound) since we read it; skip deletion.
+					staleNotDeleted++
 					logger.Info("Stale launcher pod was modified since read, skipping deletion", "pod", pod.Name)
 					continue
 				}
@@ -445,7 +448,7 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 		}
 
 		// Calculate diff based on effective remaining pods after stale deletion
-		effectiveRemaining := liveBoundCount + len(liveUnboundCurrentPods)
+		effectiveRemaining := liveBoundCount + len(liveUnboundCurrentPods) + staleNotDeleted
 		diff := entry.Count - int32(effectiveRemaining)
 
 		logger.Info("Analyzed config on node",
@@ -484,6 +487,9 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 				didDelete = true
 				numToDelete--
 			}
+			if numToDelete > 0 {
+				deletionShortfall = true
+			}
 		} else if diff > 0 {
 			// Remember creations called for (will be executed only if no deletions)
 			creations = append(creations, creationInfo{
@@ -495,14 +501,16 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 		}
 	}
 
-	// If any deletions were performed or are in progress, requeue for later.
-	// This ensures that deletions take effect before any creations happen,
-	// so that freed resources are available for newly created pods.
-	if didDelete || deletionInProgress {
-		logger.Info("Deletions performed or in progress, requeuing for creation later",
+	// If any deletions were performed or are in progress, or the desired reduction
+	// in launcher count was not fully achieved, requeue for later. This ensures that
+	// deletions take effect before any creations happen, so that freed resources are
+	// available for newly created pods.
+	if didDelete || deletionInProgress || deletionShortfall {
+		logger.Info("Requeuing for creation later",
 			"node", nodeName,
 			"didDelete", didDelete,
-			"deletionInProgress", deletionInProgress)
+			"deletionInProgress", deletionInProgress,
+			"deletionShortfall", deletionShortfall)
 		return true, nil
 	}
 
