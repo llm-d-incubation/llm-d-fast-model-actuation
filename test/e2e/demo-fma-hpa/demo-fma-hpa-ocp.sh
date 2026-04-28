@@ -57,10 +57,10 @@ check_skip() {
 }
 
 # =========================================================================
-# Step 1: Namespace + RBAC + gpu-map
+# Step 1: Namespace + RBAC
 # =========================================================================
 
-step "Namespace, ServiceAccounts, RBAC, gpu-map"
+step "Namespace, ServiceAccounts, RBAC"
 
 if kubectl get ns "$NAMESPACE" &>/dev/null; then
     echo "  Namespace $NAMESPACE exists"
@@ -91,7 +91,7 @@ rules:
   resources: [inferenceserverconfigs, launcherconfigs]
   verbs: [get, list, watch]
 - apiGroups: [""]
-  resourceNames: [gpu-map, gpu-allocs]
+  resourceNames: [gpu-allocs]
   resources: [configmaps]
   verbs: [update, patch, get, list, watch]
 - apiGroups: [""]
@@ -107,10 +107,6 @@ metadata:
   name: testlauncher
 rules:
 - apiGroups: [""]
-  resourceNames: [gpu-map]
-  resources: [configmaps]
-  verbs: [get, list, watch]
-- apiGroups: [""]
   resources: [pods]
   verbs: [get, patch]
 EOF
@@ -123,12 +119,6 @@ EOF
     echo "  Created RBAC roles and bindings"
 fi
 
-if kubectl get cm gpu-map -n "$NAMESPACE" &>/dev/null; then
-    echo "  ConfigMap gpu-map exists"
-else
-    kubectl create cm gpu-map -n "$NAMESPACE"
-    echo "  Created ConfigMap gpu-map"
-fi
 
 # =========================================================================
 # Step 2: CRDs (Gateway API, GAIE, FMA)
