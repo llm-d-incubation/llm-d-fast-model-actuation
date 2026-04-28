@@ -321,6 +321,7 @@ func (ctl *controller) reconcileAllLaunchers(ctx context.Context, desired map[No
 		needsRequeue, err := ctl.reconcileLaunchersOnSingleNode(ctx, nodeName, keys, desired)
 		if err != nil {
 			logger.Error(err, "Failed to reconcile launchers on node", "node", nodeName)
+			anyRequeueNeeded = true
 			continue
 		}
 		anyRequeueNeeded = anyRequeueNeeded || needsRequeue
@@ -346,7 +347,8 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 			logger.Info("Node no longer exists, skipping reconciliation", "node", nodeName)
 			return false, nil
 		}
-		return false, fmt.Errorf("failed to get node %s: %w", nodeName, err)
+		logger.Error(err, "Unexpected error from node lister (should be impossible), will retry", "node", nodeName)
+		return true, nil
 	}
 
 	didDelete := false
