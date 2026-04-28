@@ -37,13 +37,16 @@ func (k NodeLauncherKey) String() string {
 // DesiredStateEntry holds the desired count and the LauncherConfig spec
 // for a (Node, LauncherConfig) pair.
 type DesiredStateEntry struct {
-	Count              int32
-	LauncherConfigSpec fmav1alpha1.LauncherConfigSpec
+	Count                  int32
+	LauncherConfigSpec     *fmav1alpha1.LauncherConfigSpec
 	LauncherConfigOwnerRef metav1.OwnerReference
 }
 
 func (e DesiredStateEntry) String() string {
-	return fmt.Sprintf("count=%d,config=%s", e.Count, e.LauncherConfigOwnerRef.Name)
+	if e.LauncherConfigSpec == nil {
+		return fmt.Sprintf("count=%d,config=%s,spec=<nil>", e.Count, e.LauncherConfigOwnerRef.Name)
+	}
+	return fmt.Sprintf("count=%d,config=%s,spec=%+v", e.Count, e.LauncherConfigOwnerRef.Name, *e.LauncherConfigSpec)
 }
 
 // MapToLoggable converts a map of NodeLauncherKey to Val values into a string representation.

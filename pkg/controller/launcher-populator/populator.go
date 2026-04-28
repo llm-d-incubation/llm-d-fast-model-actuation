@@ -152,7 +152,7 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 		item := lcItem{cache.MetaObjectToName(typed)}
 		ctl.Queue.Add(item)
 	default:
-		ctl.enqueueLogger.V(5).Info("Notified of update of type of ignored object", "type", fmt.Sprintf("%T", obj))
+		ctl.enqueueLogger.V(5).Info("Notified of update of object of ignored type", "type", fmt.Sprintf("%T", obj))
 		return
 	}
 }
@@ -167,7 +167,7 @@ func (ctl *controller) OnDelete(obj any) {
 		item := lppItem{cache.MetaObjectToName(typed)}
 		ctl.Queue.Add(item)
 	default:
-		ctl.enqueueLogger.V(5).Info("Notified of delete of type of ignored object", "type", fmt.Sprintf("%T", obj))
+		ctl.enqueueLogger.V(5).Info("Notified of delete of object of ignored type", "type", fmt.Sprintf("%T", obj))
 		return
 	}
 }
@@ -261,12 +261,18 @@ func (ctl *controller) buildDesiredStateFromPolicies(ctx context.Context) (map[N
 					NodeName:           node.Name,
 					LauncherConfigName: countRule.LauncherConfigName,
 				}
-				ownerRef := *metav1.NewControllerRef(lc, fmav1alpha1.SchemeGroupVersion.WithKind("LauncherConfig"))
-				ownerRef.BlockOwnerDeletion = ptr.To(false)
+				ownerRef := metav1.OwnerReference{
+					APIVersion:         fmav1alpha1.SchemeGroupVersion.String(),
+					Kind:               "LauncherConfig",
+					Name:               lc.Name,
+					UID:                lc.UID,
+					Controller:         ptr.To(false),
+					BlockOwnerDeletion: ptr.To(false),
+				}
 				if entry, exists := desired[key]; !exists || countRule.LauncherCount > entry.Count {
 					desired[key] = DesiredStateEntry{
 						Count:                  countRule.LauncherCount,
-						LauncherConfigSpec:     lc.Spec,
+						LauncherConfigSpec:     &lc.Spec,
 						LauncherConfigOwnerRef: ownerRef,
 					}
 				}
@@ -347,10 +353,10 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 	deletionInProgress := false // tracks pods already being deleted (DeletionTimestamp set)
 
 	type creationInfo struct {
-		key    NodeLauncherKey
-		count  int
-		spec   fmav1alpha1.LauncherConfigSpec
-		owner  metav1.OwnerReference
+		key   NodeLauncherKey
+		count int
+		spec  *fmav1alpha1.LauncherConfigSpec
+		owner metav1.OwnerReference
 	}
 	var creations []creationInfo
 
@@ -371,15 +377,17 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 		// BuildLauncherPodFromTemplate computes a hash of the fully built pod spec
 		// and stores it as the LauncherConfigHashAnnotationKey annotation.
 		nominalHash := ""
-		nominalPod, err := utils.BuildLauncherPodFromTemplate(
-			entry.LauncherConfigSpec.PodTemplate, ctl.namespace, key.NodeName, key.LauncherConfigName)
-		if err != nil {
-			// The only error possible here is that the PodTemplate lacks an inference server container.
-			// In that case we proceed without a nominal hash, so no stale-pod detection occurs for this config.
-			logger.Error(err, "Failed to build nominal pod for hash comparison",
-				"node", nodeName, "config", key.LauncherConfigName)
-		} else if nominalPod.Annotations != nil {
-			nominalHash = nominalPod.Annotations[string(common.LauncherConfigHashAnnotationKey)]
+		if entry.LauncherConfigSpec != nil {
+			nominalPod, err := utils.BuildLauncherPodFromTemplate(
+				entry.LauncherConfigSpec.PodTemplate, ctl.namespace, key.NodeName, key.LauncherConfigName)
+			if err != nil {
+				// The only error possible here is that the PodTemplate lacks an inference server container.
+				// In that case we proceed without a nominal hash, so no stale-pod detection occurs for this config.
+				logger.Error(err, "Failed to build nominal pod for hash comparison",
+					"node", nodeName, "config", key.LauncherConfigName)
+			} else {
+				nominalHash = nominalPod.Annotations[string(common.LauncherConfigHashAnnotationKey)]
+			}
 		}
 
 		// Categorize current pods: separate live unbound current-spec pods from stale/unbound ones
@@ -432,7 +440,7 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 		effectiveRemaining := liveBoundCount + len(liveUnboundCurrentPods)
 		diff := entry.Count - int32(effectiveRemaining)
 
-		logger.Info("Analyzing config on node",
+		logger.Info("Analyzed config on node",
 			"node", nodeName,
 			"config", key.LauncherConfigName,
 			"current", effectiveRemaining,
@@ -525,7 +533,7 @@ func (ctl *controller) getCurrentLaunchersOnNode(ctx context.Context, key NodeLa
 
 // createLaunchers creates the specified number of launcher pods on a node
 // using the given LauncherConfig spec and owner reference directly (no additional lookup needed).
-func (ctl *controller) createLaunchers(ctx context.Context, node corev1.Node, key NodeLauncherKey, count int, lcSpec fmav1alpha1.LauncherConfigSpec, lcOwnerRef metav1.OwnerReference) error {
+func (ctl *controller) createLaunchers(ctx context.Context, node corev1.Node, key NodeLauncherKey, count int, lcSpec *fmav1alpha1.LauncherConfigSpec, lcOwnerRef metav1.OwnerReference) error {
 	logger := klog.FromContext(ctx)
 
 	// Create the specified number of launcher pods
