@@ -18,6 +18,7 @@
 vLLM Launcher
 """
 
+import asyncio
 import logging
 import multiprocessing
 import os
@@ -30,8 +31,8 @@ from http import HTTPStatus  # HTTP Status Codes
 from typing import Dict, List, Optional
 
 import uvloop
-from fastapi import FastAPI, Header, HTTPException, Path
-from fastapi.responses import JSONResponse, Response
+from fastapi import FastAPI, Header, HTTPException, Path, Query
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from gputranslator import GpuTranslator
 from pydantic import BaseModel
 from vllm.entrypoints.openai.api_server import run_server
@@ -40,6 +41,7 @@ from vllm.entrypoints.utils import cli_env_setup
 from vllm.utils.argparse_utils import FlexibleArgumentParser
 
 MAX_LOG_RESPONSE_BYTES = 1 * 1024 * 1024  # 1 MB default for API response
+_MAX_BROADCASTER_EVENTS = 1000
 
 
 class LogRangeNotAvailable(Exception):
@@ -60,6 +62,84 @@ class VllmConfig(BaseModel):
     gpu_uuids: Optional[List[str]] = None
     env_vars: Optional[Dict[str, str]] = None
     annotations: Optional[Dict[str, str]] = None
+
+
+class WatchEvent(BaseModel):
+    """Represents an instance lifecycle event for the watch stream."""
+
+    type: str  # "CREATED", "STOPPED", "DELETED"
+    object: dict
+
+
+class RevisionTooOld(Exception):
+    """Raised when a requested watch revision has fallen out of the buffer."""
+
+    def __init__(self, requested: int, oldest: int):
+        super().__init__()
+        self.requested = requested
+        self.oldest = oldest
+
+
+class EventBroadcaster:
+    """Fans out WatchEvents to all connected watchers using asyncio.Condition.
+
+    Each watcher maintains its own cursor (revision) so late joiners can
+    catch up with events still in the buffer.
+    """
+
+    def __init__(self):
+        self._condition = asyncio.Condition()
+        self._events: List[WatchEvent] = []
+        # Tracks the revision of the most recently published event
+        # (0 = no events published yet).  Revision numbers are assigned
+        # by the VllmMultiProcessManager; the broadcaster only records them.
+        self._revision: int = 0
+
+    @property
+    def revision(self) -> int:
+        return self._revision
+
+    @property
+    def oldest_revision(self) -> int:
+        """Exclusive lower bound: events in the buffer have revision
+        strictly greater than this value."""
+        return self._revision - len(self._events)
+
+    def _append(self, event: WatchEvent):
+        """Synchronously buffer event and advance the revision cursor."""
+        self._revision = event.object["revision"]
+        self._events.append(event)
+        if len(self._events) > _MAX_BROADCASTER_EVENTS:
+            self._events = self._events[-_MAX_BROADCASTER_EVENTS:]
+
+    async def _notify(self):
+        """Acquire condition lock and wake all watchers."""
+        async with self._condition:
+            self._condition.notify_all()
+
+    async def watch(self, since_revision: int = 0):
+        """Async generator that yields WatchEvents as they arrive.
+
+        :param since_revision: Resume from this revision.  Events with
+            revision > since_revision are yielded.
+        :raises RevisionTooOld: If since_revision is older than the
+            oldest event still in the buffer.
+        """
+        oldest = self.oldest_revision
+        if since_revision < oldest:
+            raise RevisionTooOld(since_revision, oldest)
+        pos = since_revision
+        while True:
+            async with self._condition:
+                while pos >= self._revision:
+                    await self._condition.wait()
+                offset = pos - self.oldest_revision
+                if offset < 0:
+                    raise RevisionTooOld(pos, self.oldest_revision)
+                new_events = self._events[offset:]
+                pos = self._revision
+            for event in new_events:
+                yield event
 
 
 class HalfMade(Exception):
@@ -110,6 +190,8 @@ class VllmInstance:
         self.instance_id = instance_id
         self.config = config
         self.process: Optional[multiprocessing.Process] = None
+        self.last_revision: Optional[int] = None
+        self._sentinel_active = False
         self._log_file_path = os.path.join(
             log_dir or "/tmp",
             f"launcher-{os.getpid()}-vllm-{instance_id}.log",
@@ -119,6 +201,7 @@ class VllmInstance:
         return {
             "status": status,
             "instance_id": self.instance_id,
+            "revision": self.last_revision,
             **self.config.model_dump(exclude_none=True),
         }
 
@@ -169,6 +252,41 @@ class VllmInstance:
 
         self._cleanup_log_file()
         return self._make_state("terminated")
+
+    def _on_sentinel_exit(self):
+        """Handle process exit detected by the sentinel fd.
+
+        Removes the reader, collects the exit code, and invokes the
+        registered *_on_exit_callback(instance_id, exitcode)*.
+        """
+        loop = asyncio.get_running_loop()
+        loop.remove_reader(self.process.sentinel)
+        self._sentinel_active = False
+        self._on_exit_callback(self.instance_id, self.process.exitcode)
+
+    def start_sentinel_watcher(self, on_exit_callback):
+        """Register a sentinel fd on the event loop to detect process exit.
+
+        When the child process terminates, the kernel makes the sentinel fd
+        readable.  The handler invokes *on_exit_callback(instance_id, exitcode)*.
+        """
+        if self.process is None:
+            raise HalfMade(self.instance_id)
+
+        self._on_exit_callback = on_exit_callback
+        loop = asyncio.get_running_loop()
+        loop.add_reader(self.process.sentinel, self._on_sentinel_exit)
+        self._sentinel_active = True
+
+    def cancel_sentinel_watcher(self):
+        """Remove the sentinel reader if it is still registered."""
+        if self._sentinel_active and self.process is not None:
+            try:
+                loop = asyncio.get_running_loop()
+                loop.remove_reader(self.process.sentinel)
+            except RuntimeError:
+                pass
+            self._sentinel_active = False
 
     def _cleanup_log_file(self):
         """Remove the log file if it exists."""
@@ -229,6 +347,12 @@ class VllmMultiProcessManager:
         log_dir: str = "",
     ):
         self.instances: Dict[str, VllmInstance] = {}
+        self.broadcaster = EventBroadcaster()
+        # Monotonically increasing counter owned by the manager.
+        # The manager stamps every event before handing it to the
+        # broadcaster, so revision assignment is synchronous and
+        # race-free with respect to the returned API response.
+        self._revision: int = 0
         self.gpu_translator = GpuTranslator(
             mock_gpus=mock_gpus,
             node_name=node_name,
@@ -236,6 +360,34 @@ class VllmMultiProcessManager:
             mock_gpu_count=mock_gpu_count,
         )
         self.log_dir = log_dir
+
+    @property
+    def revision(self) -> int:
+        return self._revision
+
+    def _next_revision(self) -> int:
+        self._revision += 1
+        return self._revision
+
+    def _on_instance_stopped(self, instance_id: str, exitcode):
+        """Sentinel callback: assign revision and publish a STOPPED event."""
+        revision = self._next_revision()
+        if instance_id in self.instances:
+            instance = self.instances[instance_id]
+            instance.last_revision = revision
+            obj = instance.get_status()
+            obj["exit_code"] = exitcode
+        else:
+            obj = {
+                "instance_id": instance_id,
+                "status": "stopped",
+                "exit_code": exitcode,
+                "revision": revision,
+            }
+        event = WatchEvent(type="STOPPED", object=obj)
+        self.broadcaster._append(event)
+        loop = asyncio.get_running_loop()
+        loop.create_task(self.broadcaster._notify())
 
     def create_instance(
         self, vllm_config: VllmConfig, instance_id: Optional[str] = None
@@ -252,22 +404,47 @@ class VllmMultiProcessManager:
         )
         self.instances[instance_id] = instance
 
-        # Because start() is always the first method called on a VllmInstance,
-        # the other methods of VllmMultiProcessManager do not need to handle
-        # the HalfMade exception.
-        return instance.start()
+        try:
+            instance.start()
+        except Exception:
+            self.instances.pop(instance_id, None)
+            raise
+
+        revision = self._next_revision()
+        instance.last_revision = revision
+        result = instance.get_status()
+        event = WatchEvent(type="CREATED", object=result)
+        self.broadcaster._append(event)
+        try:
+            loop = asyncio.get_running_loop()
+            instance.start_sentinel_watcher(self._on_instance_stopped)
+            loop.create_task(self.broadcaster._notify())
+        except RuntimeError:
+            pass  # No running event loop (e.g. in sync tests)
+        return result
 
     def stop_instance(self, instance_id: str, timeout: int = 10) -> dict:
         """Stop a specific vLLM instance"""
         if instance_id not in self.instances:
             raise KeyError(f"Instance {instance_id} not found")
 
-        result = self.instances[instance_id].stop(timeout)
+        instance = self.instances[instance_id]
+        instance.cancel_sentinel_watcher()
+        instance.stop(timeout)
 
-        # Clean up stopped instance
-        if result["status"] in ["terminated", "not_running"]:
-            del self.instances[instance_id]
+        revision = self._next_revision()
+        instance.last_revision = revision
+        result = instance.get_status()
 
+        del self.instances[instance_id]
+
+        event = WatchEvent(type="DELETED", object=result)
+        self.broadcaster._append(event)
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self.broadcaster._notify())
+        except RuntimeError:
+            pass  # No running event loop (e.g. in sync tests)
         return result
 
     def stop_all_instances(self, timeout: int = 10) -> dict:
@@ -307,6 +484,7 @@ class VllmMultiProcessManager:
                 running_count += 1
 
         return {
+            "revision": self._revision,
             "total_instances": len(self.instances),
             "running_instances": running_count,
             "instances": instances_status,
@@ -411,6 +589,7 @@ async def index():
                 "get_instance_status": "GET /v2/vllm/instances/{instance_id}",
                 "get_all_instances": "GET /v2/vllm/instances",
                 "get_instance_logs": "GET /v2/vllm/instances/{instance_id}/log",
+                "watch_instances": "GET /v2/vllm/instances/watch",
             },
         },
         status_code=HTTPStatus.OK,
@@ -420,6 +599,56 @@ async def index():
 ######################################################################
 # vLLM MANAGEMENT ENDPOINTS
 ######################################################################
+
+
+@app.get("/v2/vllm/instances/watch")
+async def watch_instances(
+    since: Optional[int] = Query(
+        None,
+        description="Resume watching from this revision. "
+        "If omitted, the stream begins with CREATED events for every "
+        "instance that currently exists, followed by live events.",
+    ),
+):
+    """Stream instance lifecycle events as NDJSON (Kubernetes watch-style)."""
+
+    if since is not None:
+        oldest = vllm_manager.broadcaster.oldest_revision
+        if since < oldest:
+            raise HTTPException(
+                status_code=HTTPStatus.GONE,
+                detail=f"Requested revision {since} is no longer available. "
+                f"Oldest available: {oldest}.",
+            )
+
+    async def event_stream():
+        if since is None:
+            # Initial state: emit a CREATED event for every existing instance
+            # and start streaming from the current revision.
+            start_revision = vllm_manager.revision
+            for instance in vllm_manager.instances.values():
+                state = instance.get_status()
+                initial = WatchEvent(
+                    type="CREATED",
+                    object=state,
+                )
+                yield initial.model_dump_json() + "\n"
+        else:
+            start_revision = since
+
+        try:
+            async for event in vllm_manager.broadcaster.watch(start_revision):
+                yield event.model_dump_json() + "\n"
+        except RevisionTooOld:
+            return
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="application/x-ndjson",
+        headers={"X-Content-Type-Options": "nosniff"},
+    )
+
+
 @app.post("/v2/vllm/instances")
 async def create_vllm_instance(vllm_config: VllmConfig):
     """Create a new vLLM instance with random instance ID"""
@@ -487,7 +716,11 @@ async def get_all_vllm_instances(detail: bool = True):
         result = vllm_manager.get_all_instances_status()
     else:
         instances = vllm_manager.list_instances()
-        result = {"instance_ids": instances, "count": len(instances)}
+        result = {
+            "revision": vllm_manager.revision,
+            "instance_ids": instances,
+            "count": len(instances),
+        }
 
     return JSONResponse(content=result, status_code=HTTPStatus.OK)
 
