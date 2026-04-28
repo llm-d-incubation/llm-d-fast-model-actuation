@@ -422,9 +422,17 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 
 		// Delete stale pods immediately (spec changed → delete and replace)
 		for _, pod := range staleUnboundPods {
-			if err := ctl.coreclient.Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{}); err != nil {
-				if apierrors.IsNotFound(err) {
+			err := ctl.coreclient.Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{
+				Preconditions: &metav1.Preconditions{UID: &pod.UID, ResourceVersion: &pod.ResourceVersion},
+			})
+			if err != nil {
+				if apierrors.IsNotFound(err) || apierrors.IsGone(err) {
 					logger.Info("Stale launcher pod already deleted", "pod", pod.Name)
+					continue
+				}
+				if apierrors.IsConflict(err) {
+					// Pod was modified (e.g. bound) since we read it; skip deletion.
+					logger.Info("Stale launcher pod was modified since read, skipping deletion", "pod", pod.Name)
 					continue
 				}
 				return false, fmt.Errorf("failed to delete stale launcher pod %s: %w", pod.Name, err)
@@ -453,10 +461,18 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 			numToDelete := int(-diff)
 			for i := len(liveUnboundCurrentPods) - 1; i >= 0 && numToDelete > 0; i-- {
 				pod := liveUnboundCurrentPods[i]
-				if err := ctl.coreclient.Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{}); err != nil {
-					if apierrors.IsNotFound(err) {
+				err := ctl.coreclient.Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{
+					Preconditions: &metav1.Preconditions{UID: &pod.UID, ResourceVersion: &pod.ResourceVersion},
+				})
+				if err != nil {
+					if apierrors.IsNotFound(err) || apierrors.IsGone(err) {
 						logger.Info("Launcher pod already deleted", "pod", pod.Name)
 						numToDelete--
+						continue
+					}
+					if apierrors.IsConflict(err) {
+						// Pod was modified (e.g. bound) since we read it; skip deletion.
+						logger.Info("Launcher pod was modified since read, skipping deletion", "pod", pod.Name)
 						continue
 					}
 					return false, fmt.Errorf("failed to delete launcher pod %s: %w", pod.Name, err)
