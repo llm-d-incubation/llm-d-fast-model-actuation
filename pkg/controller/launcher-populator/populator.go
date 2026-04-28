@@ -345,10 +345,10 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			logger.Info("Node no longer exists, skipping reconciliation", "node", nodeName)
-		} else {
-			logger.Error(err, "Unexpected error from node lister (should be impossible), skipping reconciliation", "node", nodeName)
+			return false, nil
 		}
-		return false, nil
+		logger.Error(err, "Unexpected error from node lister (should be impossible), will retry", "node", nodeName)
+		return true, nil
 	}
 
 	didDelete := false
