@@ -153,7 +153,7 @@ func BuildLauncherPodFromTemplate(template v1alpha1.EmbeddedPodTemplateSpec, ns,
 		Spec: *DeIndividualize(template.Spec.DeepCopy()),
 	}
 	pod.Namespace = ns
-	pod.GenerateName = "launcher-"
+	pod.GenerateName = fmt.Sprintf("launcher-%s-", launcherConfigName)
 	// Ensure labels are set
 	if pod.Labels == nil {
 		pod.Labels = make(map[string]string)
