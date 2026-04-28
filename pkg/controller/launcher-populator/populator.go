@@ -542,7 +542,6 @@ func (ctl *controller) createLaunchers(ctx context.Context, node corev1.Node, ke
 		if err != nil {
 			return fmt.Errorf("failed to build launcher pod: %w", err)
 		}
-		pod.GenerateName = fmt.Sprintf("launcher-%s-", key.LauncherConfigName)
 		pod.OwnerReferences = []metav1.OwnerReference{lcOwnerRef}
 
 		if _, err := ctl.coreclient.Pods(pod.Namespace).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
