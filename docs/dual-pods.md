@@ -125,6 +125,45 @@ assigned to the server-requesting Pod) for running `vllm serve`. To
 swap a model out, the controller issues a request that does not
 include those details.
 
+#### Requester Reverse Proxy
+
+The requester container includes a TCP proxy server that forwards
+inference requests to the actual vLLM instance running in the
+server-providing Pod (typically managed by the launcher). This
+abstraction allows clients to send requests to the server-requesting
+Pod without needing to know the actual port vLLM is listening on.
+
+The reverse proxy operates as follows:
+
+1. **Configuration**: When the dual-pods controller binds a
+   server-requesting Pod to a server-providing Pod, it sends an HTTP
+   PUT request to the requester's proxy configuration endpoint
+   (`/v1/proxy/init`). The request body contains the target address
+   (launcher Pod IP) and the allocated port:
+
+   ```json
+   {"address": "10.244.1.5", "port": 8005}
+   ```
+
+   A successful response returns HTTP 200. If the proxy is already
+   configured, the request returns HTTP 409 (Conflict).
+
+2. **Status checking**: The proxy's configuration status can be
+   queried via an HTTP GET request to `/v1/proxy/init`. If the proxy
+   has been configured, it returns HTTP 200 with the target address.
+   If not, it returns HTTP 404.
+
+3. **Request forwarding**: Once configured, the TCP proxy forwards
+   all incoming connections to the configured vLLM instance. This
+   includes OpenAI-compatible API endpoints like `/v1/chat/completions`,
+   `/v1/completions`, etc. Because this is a TCP-level proxy, it supports
+   any protocol over TCP (HTTP/1.x, HTTP/2, HTTPS, gRPC, etc.).
+
+This design decouples the client-facing endpoint (server-requesting
+Pod) from the actual inference server location (server-providing Pod
+with dynamic port), enabling flexible resource management and model
+swapping without disrupting inference clients.
+
 ### Scenarios
 
 The outer product of

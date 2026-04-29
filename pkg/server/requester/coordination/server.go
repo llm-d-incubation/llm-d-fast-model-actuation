@@ -31,6 +31,7 @@ import (
 
 	"k8s.io/klog/v2"
 
+	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/proxy"
 	stubapi "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/spi"
 )
 
@@ -212,6 +213,7 @@ func RunWithGPUUUIDs(ctx context.Context, port string, ready *atomic.Bool, logWr
 	mux.HandleFunc("POST "+stubapi.BecomeReadyPath, newSetReadyHandler(logger, ready, true))
 	mux.HandleFunc("POST "+stubapi.BecomeUnreadyPath, newSetReadyHandler(logger, ready, false))
 	mux.HandleFunc("POST "+stubapi.SetLogPath, newSetLogHandler(logger, logWriter))
+	mux.HandleFunc(stubapi.InitProxy, proxy.Initialize)
 
 	server := &http.Server{
 		Addr:    ":" + port,

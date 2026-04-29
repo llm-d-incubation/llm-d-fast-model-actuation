@@ -21,9 +21,11 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/coordination"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/probes"
+	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/proxy"
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 
 	"k8s.io/klog/v2"
@@ -48,10 +50,24 @@ func main() {
 		spiPort = "8081"
 	}
 
+	proxyPort := os.Getenv("PROXY_PORT")
+	if proxyPort == "" {
+		proxyPort = "8082"
+	}
+
+	// Configure proxy timeouts from environment variables (with defaults)
+	proxyConfig := proxy.DefaultProxyConfig
+	if dur, err := time.ParseDuration(os.Getenv("PROXY_UNINIT_DELAY")); err == nil && dur != 0 {
+		proxyConfig.UninitDelay = dur
+	}
+	if dur, err := time.ParseDuration(os.Getenv("PROXY_DIAL_TIMEOUT")); err == nil && dur != 0 {
+		proxyConfig.DialTimeout = dur
+	}
+
 	var ready atomic.Bool
 
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
 
 	go func() {
 		defer wg.Done()
@@ -69,6 +85,15 @@ func main() {
 		err := probes.Run(ctx, probesPort, &ready)
 		if err != nil {
 			logger.Error(err, "failed to start requester probes server")
+		}
+	}()
+
+	// Start the reverse proxy server
+	go func() {
+		defer wg.Done()
+		err := proxy.RunWithConfig(ctx, proxyPort, proxyConfig)
+		if err != nil {
+			logger.Error(err, "failed to start requester proxy server")
 		}
 	}()
 
