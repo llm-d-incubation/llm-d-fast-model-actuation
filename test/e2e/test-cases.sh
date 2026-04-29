@@ -491,6 +491,63 @@ if [ "$E2E_PLATFORM" = "openshift" ]; then check_gpu_pin $req4; fi
 cheer Successful switching instances in one launcher
 
 # ---------------------------------------------------------------------------
+# Reverse Proxy Initialization and Forwarding
+# ---------------------------------------------------------------------------
+
+intro_case Reverse Proxy Initialization and Forwarding
+
+# This test verifies that the dual-pods controller initializes the TCP proxy
+# on the requester pod after binding, and that the proxy configuration points
+# to the correct launcher pod IP.
+#
+# Starting state: $req4 is bound to $launcher1, both Ready.
+
+echo "Checking proxy initialization on requester pod $req4"
+
+# Port-forward to the requester's SPI port to query proxy status
+kubectl port-forward pod/"$req4" 28091:8081 -n "$NS" &
+PF_SPI_PID=$!
+sleep 2
+
+proxy_resp=$(curl -sf "http://localhost:28091/v1/proxy/init" 2>/dev/null || echo "")
+kill "$PF_SPI_PID" 2>/dev/null || true
+wait "$PF_SPI_PID" 2>/dev/null || true
+
+if ! echo "$proxy_resp" | grep -q "proxying to"; then
+    echo "ERROR: expected proxy to be initialized, got: '$proxy_resp'" >&2
+    exit 1
+fi
+echo "Proxy is initialized: $proxy_resp"
+
+# Verify proxy target contains the launcher pod IP
+launcher1_ip=$(kubectl get pod "$launcher1" -n "$NS" -o jsonpath='{.status.podIP}')
+if ! echo "$proxy_resp" | grep -qF "$launcher1_ip"; then
+    echo "ERROR: proxy target does not contain launcher IP $launcher1_ip: '$proxy_resp'" >&2
+    exit 1
+fi
+echo "Proxy target contains launcher IP: $launcher1_ip"
+
+# Verify traffic forwarding through the TCP proxy port (8082)
+# The launcher has a /health endpoint that returns 200
+echo "Verifying traffic forwarding through TCP proxy port"
+kubectl port-forward pod/"$req4" 28092:8082 -n "$NS" &
+PF_PROXY_PID=$!
+sleep 2
+
+health_status=$(curl -s -o /dev/null -w "%{http_code}" \
+    "http://localhost:28092/health" 2>/dev/null || echo "000")
+kill "$PF_PROXY_PID" 2>/dev/null || true
+wait "$PF_PROXY_PID" 2>/dev/null || true
+
+if [ "$health_status" != "200" ]; then
+    echo "ERROR: vLLM /health via proxy port returned $health_status (expected 200)" >&2
+    exit 1
+fi
+echo "Proxy forwarding verified: /health via proxy port returned 200"
+
+cheer Successful reverse proxy initialization and forwarding
+
+# ---------------------------------------------------------------------------
 # Controller Restart State Recovery
 # ---------------------------------------------------------------------------
 

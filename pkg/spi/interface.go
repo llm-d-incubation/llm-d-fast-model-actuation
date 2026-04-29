@@ -75,5 +75,5 @@ const InitProxy = "/v1/proxy/init"
 // ProxyConfigRequest is the request body to configure the proxy target
 type ProxyConfigRequest struct {
 	Address string `json:"address"`
-	Port    int16  `json:"port"`
+	Port    int    `json:"port"`
 }

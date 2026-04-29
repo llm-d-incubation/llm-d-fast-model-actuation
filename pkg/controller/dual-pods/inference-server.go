@@ -1017,7 +1017,7 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 	url := fmt.Sprintf("http://%s%s", requesterAddr, stubapi.InitProxy)
 	proxyConfig, _ := json.Marshal(stubapi.ProxyConfigRequest{
 		Address: providingPod.Status.PodIP,
-		Port:    serverPort,
+		Port:    int(serverPort),
 	})
 
 	if err := doPut(url, bytes.NewReader(proxyConfig)); err != nil {

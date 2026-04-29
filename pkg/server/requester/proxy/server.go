@@ -32,12 +32,13 @@ import (
 	stubapi "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/spi"
 )
 
-// forwarder is a lazy TCP proxy that only starts forwarding after receiving
-// the first configuration request
+// forwarder is a TCP proxy that uses a connection pool to reuse
+// backend connections, reducing per-request TCP handshake latency.
 type forwarder struct {
-	mu          sync.RWMutex
-	targetAddr  string
-	initialized atomic.Bool
+	pool  *connPool
+	mu    sync.Mutex
+	cfg   PoolConfig
+	ready atomic.Bool
 }
 
 // singleton instance initialized once at startup
@@ -47,14 +48,18 @@ var instance forwarder
 type ProxyConfig struct {
 	// UninitDelay is the delay before closing a connection when proxy is not initialized
 	UninitDelay time.Duration
-	// DialTimeout is the timeout for connecting to the target server
-	DialTimeout time.Duration
+	// DrainTimeout is how long to wait for pending data before returning a
+	// backend connection to the pool
+	DrainTimeout time.Duration
+	// PoolConfig is forwarded to the connection pool
+	PoolConfig
 }
 
 // DefaultProxyConfig provides sensible defaults
 var DefaultProxyConfig = ProxyConfig{
-	UninitDelay: 100 * time.Millisecond,
-	DialTimeout: 10 * time.Second,
+	UninitDelay:  100 * time.Millisecond,
+	DrainTimeout: 200 * time.Millisecond,
+	PoolConfig:   DefaultPoolConfig,
 }
 
 // Run starts the TCP proxy server on the given port
@@ -67,16 +72,32 @@ func RunWithConfig(ctx context.Context, port string, cfg ProxyConfig) error {
 	logger := klog.FromContext(ctx).WithName("proxy-server")
 	logger.Info("starting TCP proxy server")
 
+	// Create or update the connection pool
+	instance.mu.Lock()
+	instance.cfg = cfg.PoolConfig
+	if instance.pool == nil {
+		instance.pool = newConnPool(cfg.PoolConfig)
+	}
+	pool := instance.pool
+	instance.mu.Unlock()
+
+	pool.StartCleaner(ctx, logger)
+
 	// Listen for incoming TCP connections
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%s", port))
 	if err != nil {
 		return fmt.Errorf("failed to listen on port %s: %w", port, err)
 	}
 
+	// Mark proxy as ready for accepting connections
+	instance.ready.Store(true)
+
+	// Start shutdown goroutine
 	go func() {
 		<-ctx.Done()
 		logger.Info("shutting down TCP proxy server")
 		_ = listener.Close()
+		pool.Close()
 	}()
 
 	logger.Info("TCP proxy server started", "port", port)
@@ -99,35 +120,36 @@ func RunWithConfig(ctx context.Context, port string, cfg ProxyConfig) error {
 	}
 }
 
-// handleConnection forwards a single TCP connection to the target
+// handleConnection forwards a single TCP connection using a pooled backend connection
 func handleConnection(ctx context.Context, clientConn net.Conn, f *forwarder, logger klog.Logger, cfg ProxyConfig) {
 	defer func() { _ = clientConn.Close() }()
 
-	// Check if proxy is initialized
-	if !f.initialized.Load() {
-		// Proxy not initialized, close connection after a short delay
-		logger.Info("rejecting connection: proxy not initialized")
+	// Check if proxy is ready to accept connections
+	if !f.ready.Load() {
+		logger.Info("rejecting connection: proxy not ready")
 		time.Sleep(cfg.UninitDelay)
 		return
 	}
 
-	// Get target address
-	f.mu.RLock()
-	target := f.targetAddr
-	f.mu.RUnlock()
-
-	if target == "" {
-		logger.Info("rejecting connection: target address not set")
+	// Get the pool
+	pool := f.getPool()
+	if pool == nil {
+		logger.Info("rejecting connection: pool not configured")
 		return
 	}
 
-	// Connect to target server
-	targetConn, err := net.DialTimeout("tcp", target, cfg.DialTimeout)
+	// Get a backend connection from the pool (or dial a new one)
+	targetConn, err := pool.Get(ctx)
 	if err != nil {
-		logger.Error(err, "failed to connect to target", "target", target)
+		logger.Error(err, "failed to get backend connection")
 		return
 	}
-	defer func() { _ = targetConn.Close() }()
+	if targetConn == nil {
+		logger.Info("rejecting connection: no target configured")
+		return
+	}
+	// NOTE: Do NOT defer targetConn.Close() here — we return it to the pool
+	// after a clean drain, or close it on error.
 
 	// Bidirectional forwarding
 	done := make(chan struct{}, 2)
@@ -151,24 +173,61 @@ func handleConnection(ctx context.Context, clientConn net.Conn, f *forwarder, lo
 	// Wait for either direction to finish or context to be cancelled
 	select {
 	case <-done:
+		// One side finished — drain remaining data before returning to pool
+		drainConn(targetConn, cfg.DrainTimeout, logger)
+		pool.Put(targetConn)
 	case <-ctx.Done():
+		// Context cancelled — close the connection instead of pooling
+		_ = targetConn.Close()
 	}
 }
 
-// Initialize handles proxy initialization and configuration
+func (f *forwarder) getPool() *connPool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.pool
+}
+
+// drainConn reads any remaining data from the connection with a short timeout,
+// so that the connection can be safely returned to the pool in a clean state.
+func drainConn(conn net.Conn, timeout time.Duration, logger klog.Logger) {
+	deadline := time.Now().Add(timeout)
+	_ = conn.SetReadDeadline(deadline)
+
+	buf := make([]byte, 4096)
+	for {
+		_, err := conn.Read(buf)
+		if err != nil {
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				// No more data — connection is clean
+				break
+			}
+			// EOF or other error — also clean
+			break
+		}
+		// Read some data, keep draining
+		logger.V(6).Info("drained bytes from backend connection")
+	}
+	// Reset deadline
+	_ = conn.SetReadDeadline(time.Time{})
+}
+
+// Initialize handles proxy initialization and configuration.
+// May be called before or after Run starts. If called before Run,
+// the pool is created on Initialize and reused when Run starts.
 func Initialize(w http.ResponseWriter, r *http.Request) {
 	// Get proxy status
 	if r.Method == http.MethodGet {
-		if instance.initialized.Load() {
-			instance.mu.RLock()
-			target := instance.targetAddr
-			instance.mu.RUnlock()
-			w.WriteHeader(http.StatusOK)
-			_, _ = fmt.Fprintf(w, "proxying to %s", target)
-		} else {
-			w.WriteHeader(http.StatusNotFound)
-			_, _ = w.Write([]byte("proxy not initialized"))
+		if instance.pool != nil {
+			target := instance.pool.Target()
+			if target != "" {
+				w.WriteHeader(http.StatusOK)
+				_, _ = fmt.Fprintf(w, "proxying to %s", target)
+				return
+			}
 		}
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte("proxy not initialized"))
 		return
 	}
 
@@ -177,14 +236,8 @@ func Initialize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Acquire write lock and check again
 	instance.mu.Lock()
 	defer instance.mu.Unlock()
-
-	if instance.initialized.Load() {
-		http.Error(w, "proxy already initialized", http.StatusConflict)
-		return
-	}
 
 	// Parse configuration from request body
 	body, err := io.ReadAll(r.Body)
@@ -210,10 +263,22 @@ func Initialize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Set target address
-	instance.targetAddr = net.JoinHostPort(config.Address, fmt.Sprintf("%d", config.Port))
-	instance.initialized.Store(true)
+	targetAddr := net.JoinHostPort(config.Address, fmt.Sprintf("%d", config.Port))
+
+	// Create pool if it doesn't exist (before Run starts) or reconfigure existing pool
+	if instance.pool == nil {
+		// Called before Run — create the pool with default config.
+		// Run will reuse this pool via its own cfg.PoolConfig.
+		poolCfg := DefaultPoolConfig
+		instance.pool = newConnPool(poolCfg)
+	}
+
+	oldTarget := instance.pool.SetTarget(targetAddr)
 
 	w.WriteHeader(http.StatusOK)
-	_, _ = fmt.Fprintf(w, "initialized proxy to: %s", instance.targetAddr)
+	if oldTarget != "" {
+		_, _ = fmt.Fprintf(w, "reconfigured proxy: %s -> %s (old pool drained)", oldTarget, targetAddr)
+	} else {
+		_, _ = fmt.Fprintf(w, "initialized proxy to: %s", targetAddr)
+	}
 }

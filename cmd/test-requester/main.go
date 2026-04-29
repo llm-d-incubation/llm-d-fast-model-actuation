@@ -33,6 +33,7 @@ import (
 
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/coordination"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/probes"
+	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/proxy"
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 
 	"k8s.io/klog/v2"
@@ -60,6 +61,7 @@ func main() {
 	numGPUs := uint(1)
 	probesPort := int16(8080)
 	spiPort := int16(8081)
+	proxyPort := int16(8082)
 
 	klog.InitFlags(nil)
 	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
@@ -69,6 +71,7 @@ func main() {
 	pflag.CommandLine.UintVar(&numGPUs, "num-gpus", numGPUs, "number of GPUs to allocate")
 	pflag.CommandLine.Int16Var(&probesPort, "probes-port", probesPort, "port number for /ready")
 	pflag.CommandLine.Int16Var(&spiPort, "spi-port", spiPort, "port for dual-pods requests")
+	pflag.CommandLine.Int16Var(&proxyPort, "proxy-port", proxyPort, "port for reverse proxy")
 
 	pflag.Parse()
 
@@ -110,7 +113,7 @@ func main() {
 	var ready atomic.Bool
 
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
 
 	go func() {
 		defer wg.Done()
@@ -128,6 +131,16 @@ func main() {
 		err := probes.Run(ctx, strconv.FormatInt(int64(probesPort), 10), &ready)
 		if err != nil {
 			logger.Error(err, "failed to start requester probes server")
+		}
+	}()
+
+	// Start the reverse proxy server
+	go func() {
+		defer wg.Done()
+
+		err := proxy.Run(ctx, strconv.FormatInt(int64(proxyPort), 10))
+		if err != nil {
+			logger.Error(err, "failed to start requester proxy server")
 		}
 	}()
 
