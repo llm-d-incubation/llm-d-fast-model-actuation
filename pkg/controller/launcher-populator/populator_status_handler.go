@@ -18,13 +18,11 @@ func (ctl *controller) setLPPStatusErrors(ctx context.Context, lpp *fmav1alpha1.
 		// Status already reflects the desired state; nothing to do.
 		return nil
 	}
-	apply := applyfmav1alpha1.LauncherPopulationPolicy(lpp.Name, lpp.Namespace).
-		WithStatus(applyfmav1alpha1.LauncherPopulationPolicyStatus().
-			WithObservedGeneration(lpp.Generation).
-			WithErrors(desiredErrors...))
-	_, err := ctl.fmaclient.LauncherPopulationPolicies(lpp.Namespace).ApplyStatus(ctx, apply, metav1.ApplyOptions{
-		FieldManager: ControllerName,
-		Force:        true,
-	})
+	lpp = lpp.DeepCopy()
+	lpp.Status = LauncherPopulationPolicyStatus{
+	    ObservedGeneration: lpp.Generation,
+	    Errors: desiredErrors}
+	echo, err := ctl.fmaclient.LauncherPopulationPolicies(lpp.Namespace).Update(ctx, lpp, metav1.UpdateOptions{FieldManager: ControllerName})
+	klog.FromContext(ctx).V(4).Info("Updated LauncherPopulationPolicyStatus", "name", lpp.Name, "observedGeneration", lpp.Generation, "errors", desiredErrors, "resourceVersion", echo.ResourceVersion)
 	return err
 }
