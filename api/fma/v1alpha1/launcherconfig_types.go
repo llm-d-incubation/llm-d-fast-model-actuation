@@ -57,6 +57,13 @@ type LauncherConfigSpec struct {
 
 // LauncherConfigStatus represents the current status
 type LauncherConfigStatus struct {
+	// `observedGeneration` is the `metadata.generation` last seen by the controller.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// `errors` reports problems seen in the desired state of this object.
+	// +optional
+	Errors []string `json:"errors,omitempty"`
 }
 
 // +genclient

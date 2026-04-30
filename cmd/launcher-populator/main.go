@@ -89,6 +89,7 @@ func main() {
 	ctlr, err := launcherpopulator.NewController(
 		logger,
 		kubeClient.CoreV1(),
+		fmaClient.FmaV1alpha1(),
 		overrides.Context.Namespace,
 		kubePreInformers.Core().V1(),
 		fmaPreInformers,

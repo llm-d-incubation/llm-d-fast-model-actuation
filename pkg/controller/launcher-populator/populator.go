@@ -37,6 +37,7 @@ import (
 	fmav1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
 	genctlr "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/generic"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/utils"
+	fmaclientv1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/generated/clientset/versioned/typed/fma/v1alpha1"
 	fmainformers "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/generated/informers/externalversions"
 	fmalisters "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/generated/listers/fma/v1alpha1"
 )
@@ -52,6 +53,7 @@ type Controller interface {
 func NewController(
 	logger klog.Logger,
 	coreClient coreclient.CoreV1Interface,
+	fmaClient fmaclientv1alpha1.FmaV1alpha1Interface,
 	namespace string,
 	corev1PreInformers corev1preinformers.Interface,
 	fmaInformerFactory fmainformers.SharedInformerFactory,
@@ -59,6 +61,7 @@ func NewController(
 	ctl := &controller{
 		enqueueLogger: logger.WithName(ControllerName),
 		coreclient:    coreClient,
+		fmaclient:     fmaClient,
 		namespace:     namespace,
 		podInformer:   corev1PreInformers.Pods().Informer(),
 		podLister:     corev1PreInformers.Pods().Lister(),
@@ -97,6 +100,7 @@ func NewController(
 type controller struct {
 	enqueueLogger klog.Logger
 	coreclient    coreclient.CoreV1Interface
+	fmaclient     fmaclientv1alpha1.FmaV1alpha1Interface
 	namespace     string
 	podInformer   cache.SharedIndexInformer
 	podLister     corev1listers.PodLister
@@ -237,8 +241,13 @@ func (ctl *controller) buildDesiredStateFromPolicies(ctx context.Context) (map[N
 
 	desired := make(map[NodeLauncherKey]DesiredStateEntry)
 	for _, lpp := range policies {
-		nodes, err := ctl.getMatchingNodes(ctx, lpp.Spec.EnhancedNodeSelector)
+		nodes, selectorErrs, err := ctl.getMatchingNodes(ctx, lpp.Spec.EnhancedNodeSelector)
+		// Ensure proper status for lpp.
+		if statusErr := ctl.setLPPStatusErrors(ctx, lpp, selectorErrs); statusErr != nil {
+			logger.Error(statusErr, "Failed to set Status for policy", "policy", lpp.Name)
+		}
 		if err != nil {
+			// This is an infrastructure error: the lister failed to list nodes.
 			logger.Error(err, "Failed to get matching nodes for policy", "policy", lpp.Name)
 			continue
 		}
@@ -254,6 +263,23 @@ func (ctl *controller) buildDesiredStateFromPolicies(ctx context.Context) (map[N
 					continue
 				}
 				return nil, fmt.Errorf("failed to get LauncherConfig %s: %w", countRule.LauncherConfigName, err)
+			}
+
+			// Validate the PodTemplate once per LauncherConfig, not once per node.
+			// This is a user error if the inference server container is missing.
+			var lcTemplateErrs []string
+			if templateErr := utils.ValidateLauncherPodTemplate(lc.Spec.PodTemplate); templateErr != nil {
+				logger.Error(templateErr, "Invalid PodTemplate in LauncherConfig, reporting in Status",
+					"config", countRule.LauncherConfigName, "policy", lpp.Name)
+				lcTemplateErrs = []string{templateErr.Error()}
+			}
+			// Unconditionally ensure the LauncherConfig Status reflects the current state.
+			// setLCStatusErrors is idempotent and skips the API call if Status is already correct.
+			if statusErr := ctl.setLCStatusErrors(ctx, lc, lcTemplateErrs); statusErr != nil {
+				logger.Error(statusErr, "Failed to set Status for LauncherConfig", "config", countRule.LauncherConfigName)
+			}
+			if len(lcTemplateErrs) > 0 {
+				continue
 			}
 
 			for _, node := range nodes {
@@ -283,16 +309,20 @@ func (ctl *controller) buildDesiredStateFromPolicies(ctx context.Context) (map[N
 	return desired, nil
 }
 
-// getMatchingNodes returns nodes that match the EnhancedNodeSelector
-func (ctl *controller) getMatchingNodes(ctx context.Context, selector fmav1alpha1.EnhancedNodeSelector) ([]corev1.Node, error) {
-	// Use label selector to filter nodes
-	labelSelector, err := metav1.LabelSelectorAsSelector(&selector.LabelSelector)
-	if err != nil {
-		return nil, fmt.Errorf("failed to convert label selector: %w", err)
+// getMatchingNodes returns nodes that match the EnhancedNodeSelector.
+// It returns three values: the matched nodes, user-facing selector errors (non-nil when the
+// LabelSelector itself is malformed — this is a user configuration error), and an internal
+// error (non-nil for unexpected infrastructure failures such as lister errors).
+// Callers should handle selectorErrs and err independently.
+func (ctl *controller) getMatchingNodes(ctx context.Context, selector fmav1alpha1.EnhancedNodeSelector) ([]corev1.Node, []string, error) {
+	// Convert the label selector. A failure here is a user error (malformed LabelSelector).
+	labelSelector, selectorErr := metav1.LabelSelectorAsSelector(&selector.LabelSelector)
+	if selectorErr != nil {
+		return nil, []string{fmt.Sprintf("invalid label selector: %v", selectorErr)}, nil
 	}
 	nodes, err := ctl.nodeLister.List(labelSelector)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list nodes using nodeLister: %w", err)
+		return nil, nil, fmt.Errorf("failed to list nodes using nodeLister: %w", err)
 	}
 
 	var matchedNodes []corev1.Node
@@ -301,7 +331,7 @@ func (ctl *controller) getMatchingNodes(ctx context.Context, selector fmav1alpha
 			matchedNodes = append(matchedNodes, *node)
 		}
 	}
-	return matchedNodes, nil
+	return matchedNodes, nil, nil
 }
 
 // reconcileAllLaunchers adjusts all launcher pods according to final requirements.
@@ -352,8 +382,8 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 	}
 
 	didDelete := false
-	deletionInProgress := false  // tracks pods already being deleted (DeletionTimestamp set)
-	deletionShortfall := false   // excess-pod deletion loop could not delete as many as needed
+	deletionInProgress := false // tracks pods already being deleted (DeletionTimestamp set)
+	deletionShortfall := false  // excess-pod deletion loop could not delete as many as needed
 
 	type creationInfo struct {
 		key   NodeLauncherKey
@@ -379,14 +409,15 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 		// Compute the nominal hash for spec-change detection.
 		// BuildLauncherPodFromTemplate computes a hash of the fully built pod spec
 		// and stores it as the LauncherConfigHashAnnotationKey annotation.
+		// The PodTemplate has already been validated in buildDesiredStateFromPolicies;
+		// any LC with an invalid template is excluded from the desired map.
 		nominalHash := ""
 		if entry.LauncherConfigSpec != nil {
 			nominalPod, err := utils.BuildLauncherPodFromTemplate(
 				entry.LauncherConfigSpec.PodTemplate, ctl.namespace, key.NodeName, key.LauncherConfigName)
 			if err != nil {
-				// The only error possible here is that the PodTemplate lacks an inference server container.
-				// In that case we proceed without a nominal hash, so no stale-pod detection occurs for this config.
-				logger.Error(err, "Failed to build nominal pod for hash comparison",
+				// Should not happen: template was already validated upstream.
+				logger.Error(err, "Unexpected error building nominal pod (template should have been validated)",
 					"node", nodeName, "config", key.LauncherConfigName)
 			} else {
 				nominalHash = nominalPod.Annotations[string(common.LauncherConfigHashAnnotationKey)]

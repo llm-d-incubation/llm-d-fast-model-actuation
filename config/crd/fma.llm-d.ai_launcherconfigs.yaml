@@ -8478,6 +8478,18 @@ spec:
             type: object
           status:
             description: Status represents the observed status of the LauncherConfig.
+            properties:
+              errors:
+                description: '`errors` reports problems seen in the desired state
+                  of this object.'
+                items:
+                  type: string
+                type: array
+              observedGeneration:
+                description: '`observedGeneration` is the `metadata.generation` last
+                  seen by the controller.'
+                format: int64
+                type: integer
             type: object
         required:
         - spec

@@ -133,6 +133,20 @@ func GetInferenceServerContainerIndex(pod *corev1.Pod) (int, error) {
 	return cIdx, nil
 }
 
+// ValidateLauncherPodTemplate checks whether the given EmbeddedPodTemplateSpec is valid
+// for use as a launcher pod template. It returns an error if the template is missing the
+// required inference server container. This check does not depend on any node-specific
+// information and is safe to call once per LauncherConfig rather than once per node.
+func ValidateLauncherPodTemplate(template v1alpha1.EmbeddedPodTemplateSpec) error {
+	cIdx := slices.IndexFunc(template.Spec.Containers, func(c corev1.Container) bool {
+		return c.Name == api.InferenceServerContainerName
+	})
+	if cIdx == -1 {
+		return fmt.Errorf("container %q not found", api.InferenceServerContainerName)
+	}
+	return nil
+}
+
 func IsPodReady(pod *corev1.Pod) bool {
 	for _, cond := range pod.Status.Conditions {
 		if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {

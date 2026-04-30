@@ -49,6 +49,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &fmav1alpha1.LauncherConfigApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("LauncherConfigSpec"):
 		return &fmav1alpha1.LauncherConfigSpecApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("LauncherConfigStatus"):
+		return &fmav1alpha1.LauncherConfigStatusApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("LauncherPopulationPolicy"):
 		return &fmav1alpha1.LauncherPopulationPolicyApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("LauncherPopulationPolicySpec"):
