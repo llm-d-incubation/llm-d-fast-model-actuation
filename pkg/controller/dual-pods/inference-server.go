@@ -365,13 +365,17 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	var cfg *VllmConfig
 	var iscHash string
 	if launcherBased {
-		cfg, iscHash, err = ctl.configInferenceServer(isc, serverDat.GPUIDs)
-		if err != nil {
-			return fmt.Errorf("failed to configure inference server config: %w", err), true
-		}
-		if serverDat.InstanceID == "" {
+		if serverDat.InstanceConfig == nil {
+			cfg, iscHash, err = ctl.configInferenceServer(isc, serverDat.GPUIDs)
+			if err != nil {
+				return fmt.Errorf("failed to configure inference server config: %w", err), true
+			}
+			serverDat.InstanceConfig = cfg
 			serverDat.InstanceID = iscHash
 			serverDat.ServerPort = int16(isc.Spec.ModelServerConfig.Port)
+		} else {
+			cfg = serverDat.InstanceConfig
+			iscHash = serverDat.InstanceID
 		}
 	}
 
@@ -399,7 +403,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		}
 		var serverPort int16
 		if launcherBased {
-			serverPort = int16(isc.Spec.ModelServerConfig.Port)
+			serverPort = serverDat.ServerPort
 		} else {
 			_, serverPort, err = utils.GetInferenceServerContainerIndexAndPort(providingPod)
 			if err != nil { // Impossible, because such a providingPod would never be created by this controller
@@ -472,7 +476,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				logger.V(5).Info("Created vLLM instance", "instance_id", result.InstanceID, "status", result.Status)
 				// If ISC tracking annotations are missing (pre-bound pod), propagate the ISC metadata.
 				if _, propagated := providingPod.Annotations[iscLabelKeysAnnotationKey]; !propagated {
-					return ctl.bind(ctx, serverDat, requestingPod, providingPod, &serverDat.InstanceID, int16(isc.Spec.ModelServerConfig.Port),
+					return ctl.bind(ctx, serverDat, requestingPod, providingPod, &serverDat.InstanceID, serverDat.ServerPort,
 						isc.Spec.ModelServerConfig.Labels, isc.Spec.ModelServerConfig.Annotations, true)
 				}
 			}
@@ -613,7 +617,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		return err, false
 	}
 
-	desiredPort := isc.Spec.ModelServerConfig.Port
+	desiredPort := int32(serverDat.ServerPort)
 	logger.V(5).Info("Nominal hash of InferenceServerConfig", "hash", iscHash)
 
 	if len(launcherPodAnys) > 0 {
@@ -638,7 +642,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 			// The "bound provider" path will handle instance creation/waking.
 			// This ensures the invariant: vllm awake implies provider Pod is bound.
 			logger.V(5).Info("Selected launcher Pod, binding first", "name", launcherPod.Name, "hasSleepingInstance", hasSleepingInstance)
-			return ctl.bind(ctx, serverDat, requestingPod, launcherPod, &iscHash, int16(isc.Spec.ModelServerConfig.Port), isc.Spec.ModelServerConfig.Labels, isc.Spec.ModelServerConfig.Annotations, true)
+			return ctl.bind(ctx, serverDat, requestingPod, launcherPod, &iscHash, serverDat.ServerPort, isc.Spec.ModelServerConfig.Labels, isc.Spec.ModelServerConfig.Annotations, true)
 		}
 	}
 	// Remains: Zero matching launcher Pods, or the matching launcher Pod cannot host more instances to fulfill the request.
@@ -1301,10 +1305,6 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 	} else {
 		logger.V(3).Info("Server-providing Pod remains unbound", "name", providingPod.Name, "resourceVersion", providingPod.ResourceVersion)
 	}
-	serverDat.ProvidingPodName = ""
-	serverDat.ServerPort = -1
-	serverDat.InstanceID = ""
-	serverDat.InstanceKnownToExist = false
 	return nil
 }
 

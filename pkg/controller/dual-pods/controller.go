@@ -306,9 +306,10 @@ type serverData struct {
 
 	ProvidingPodName     string
 	InstanceID           string // ISC hash; set when computed, independent of instance existence
-	InstanceKnownToExist bool   // meaningful only for launcher-based providers
-	ISCLabelKeys      []string // keys of ISC labels applied to providingPod
-	ISCAnnotationKeys []string // keys of ISC annotations applied to providingPod
+	InstanceConfig       *VllmConfig
+	InstanceKnownToExist bool     // meaningful only for launcher-based providers
+	ISCLabelKeys         []string // keys of ISC labels applied to providingPod
+	ISCAnnotationKeys    []string // keys of ISC annotations applied to providingPod
 
 	ReadinessRelayed *bool
 

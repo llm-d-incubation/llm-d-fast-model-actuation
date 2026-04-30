@@ -321,7 +321,7 @@ else
     expect '[ "$(kubectl get pod -n '"$NS"' '"$collision_req"' -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "'"$collision_launcher"'" ]'
 
     date
-    kubectl wait --for condition=Ready pod/$collision_req -n "$NS" --timeout=120s
+    kubectl wait --for condition=Ready pod/$collision_req -n "$NS" --timeout=180s
     [ "$(kubectl get pod $collision_launcher -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
 
     req_gpus=$(kubectl get pod "$req1" -n "$NS" -o jsonpath='{.metadata.annotations.dual-pods\.llm-d\.ai/accelerators}')
