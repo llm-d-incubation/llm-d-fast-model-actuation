@@ -239,6 +239,11 @@ func (ctl *controller) buildDesiredStateFromPolicies(ctx context.Context) (map[N
 		return nil, fmt.Errorf("failed to list LauncherPopulationPolicies: %w", err)
 	}
 
+	// lcStatusReported tracks LauncherConfigs whose Status has already been updated this
+	// reconcile cycle. A single LauncherConfig may be referenced by multiple policies or
+	// multiple count rules; we only need one Status update per LC per cycle.
+	lcStatusReported := make(map[string]struct{})
+
 	desired := make(map[NodeLauncherKey]DesiredStateEntry)
 	for _, lpp := range policies {
 		nodes, selectorErrs, err := ctl.getMatchingNodes(ctx, lpp.Spec.EnhancedNodeSelector)
@@ -275,8 +280,13 @@ func (ctl *controller) buildDesiredStateFromPolicies(ctx context.Context) (map[N
 			}
 			// Unconditionally ensure the LauncherConfig Status reflects the current state.
 			// setLCStatusErrors is idempotent and skips the API call if Status is already correct.
-			if statusErr := ctl.setLCStatusErrors(ctx, lc, lcTemplateErrs); statusErr != nil {
-				logger.Error(statusErr, "Failed to set Status for LauncherConfig", "config", countRule.LauncherConfigName)
+			// Guard with lcStatusReported so that a LC referenced by multiple policies or
+			// multiple count rules only triggers one Status update per reconcile cycle.
+			if _, alreadyReported := lcStatusReported[lc.Name]; !alreadyReported {
+				if statusErr := ctl.setLCStatusErrors(ctx, lc, lcTemplateErrs); statusErr != nil {
+					logger.Error(statusErr, "Failed to set Status for LauncherConfig", "config", countRule.LauncherConfigName)
+				}
+				lcStatusReported[lc.Name] = struct{}{}
 			}
 			if len(lcTemplateErrs) > 0 {
 				continue
