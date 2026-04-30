@@ -5,8 +5,8 @@ import (
 	"slices"
 
 	fmav1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
-	applyfmav1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/generated/applyconfiguration/fma/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/klog/v2"
 )
 
 // setLPPStatusErrors sets the LauncherPopulationPolicy's Status.Errors to desiredErrors using
@@ -18,11 +18,16 @@ func (ctl *controller) setLPPStatusErrors(ctx context.Context, lpp *fmav1alpha1.
 		// Status already reflects the desired state; nothing to do.
 		return nil
 	}
-	lpp = lpp.DeepCopy()
-	lpp.Status = LauncherPopulationPolicyStatus{
-	    ObservedGeneration: lpp.Generation,
-	    Errors: desiredErrors}
-	echo, err := ctl.fmaclient.LauncherPopulationPolicies(lpp.Namespace).Update(ctx, lpp, metav1.UpdateOptions{FieldManager: ControllerName})
-	klog.FromContext(ctx).V(4).Info("Updated LauncherPopulationPolicyStatus", "name", lpp.Name, "observedGeneration", lpp.Generation, "errors", desiredErrors, "resourceVersion", echo.ResourceVersion)
+	lppCopy := lpp.DeepCopy()
+	lppCopy.Status = fmav1alpha1.LauncherPopulationPolicyStatus{
+		ObservedGeneration: lpp.Generation,
+		Errors:             desiredErrors,
+	}
+	echo, err := ctl.fmaclient.LauncherPopulationPolicies(lppCopy.Namespace).Update(ctx, lppCopy, metav1.UpdateOptions{FieldManager: ControllerName})
+	resourceVersion := ""
+	if echo != nil {
+		resourceVersion = echo.ResourceVersion
+	}
+	klog.FromContext(ctx).V(4).Info("Updated LauncherPopulationPolicyStatus", "name", lppCopy.Name, "observedGeneration", lppCopy.Generation, "errors", desiredErrors, "resourceVersion", resourceVersion)
 	return err
 }
