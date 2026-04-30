@@ -241,18 +241,18 @@ func (ctl *controller) buildDesiredStateFromPolicies(ctx context.Context) (map[N
 
 	desired := make(map[NodeLauncherKey]DesiredStateEntry)
 	for _, lpp := range policies {
-		nodes, selectorErr, err := ctl.getMatchingNodes(ctx, lpp.Spec.EnhancedNodeSelector)
-		if selectorErr != nil {
+		nodes, selectorErrs, err := ctl.getMatchingNodes(ctx, lpp.Spec.EnhancedNodeSelector)
+		if len(selectorErrs) > 0 {
 			// This is a user error: the LabelSelector in the policy's EnhancedNodeSelector is invalid.
 			// Report it in the policy's Status.Errors so the user can see it via kubectl.
-			logger.Error(selectorErr, "Invalid LabelSelector in policy, reporting in Status", "policy", lpp.Name)
-			if statusErr := ctl.setLPPStatusErrors(ctx, lpp, []string{selectorErr.Error()}); statusErr != nil {
+			logger.Error(nil, "Invalid LabelSelector in policy, reporting in Status", "policy", lpp.Name, "errors", selectorErrs)
+			if statusErr := ctl.setLPPStatusErrors(ctx, lpp, selectorErrs); statusErr != nil {
 				logger.Error(statusErr, "Failed to update Status for policy", "policy", lpp.Name)
 			}
 			continue
 		}
 		// Clear any previously reported selector errors now that the selector is valid.
-		// This is done as soon as selectorErr == nil, before checking err, so that a
+		// This is done as soon as selectorErrs is empty, before checking err, so that a
 		// transient infrastructure error does not prevent stale Status errors from being cleared.
 		if statusErr := ctl.setLPPStatusErrors(ctx, lpp, nil); statusErr != nil {
 			logger.Error(statusErr, "Failed to clear Status errors for policy", "policy", lpp.Name)
@@ -304,15 +304,15 @@ func (ctl *controller) buildDesiredStateFromPolicies(ctx context.Context) (map[N
 }
 
 // getMatchingNodes returns nodes that match the EnhancedNodeSelector.
-// It returns three values: the matched nodes, a user-facing selector error (non-nil when the
+// It returns three values: the matched nodes, user-facing selector errors (non-nil when the
 // LabelSelector itself is malformed — this is a user configuration error), and an internal
 // error (non-nil for unexpected infrastructure failures such as lister errors).
-// Callers should handle selectorErr and err independently.
-func (ctl *controller) getMatchingNodes(ctx context.Context, selector fmav1alpha1.EnhancedNodeSelector) ([]corev1.Node, error, error) {
+// Callers should handle selectorErrs and err independently.
+func (ctl *controller) getMatchingNodes(ctx context.Context, selector fmav1alpha1.EnhancedNodeSelector) ([]corev1.Node, []string, error) {
 	// Convert the label selector. A failure here is a user error (malformed LabelSelector).
 	labelSelector, selectorErr := metav1.LabelSelectorAsSelector(&selector.LabelSelector)
 	if selectorErr != nil {
-		return nil, fmt.Errorf("invalid label selector: %w", selectorErr), nil
+		return nil, []string{fmt.Sprintf("invalid label selector: %v", selectorErr)}, nil
 	}
 	nodes, err := ctl.nodeLister.List(labelSelector)
 	if err != nil {
