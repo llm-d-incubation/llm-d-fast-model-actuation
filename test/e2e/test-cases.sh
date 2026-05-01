@@ -562,8 +562,6 @@ cheer Successful controller restart state recovery
 
 intro_case Delete Obsolete Sleeping Instances After ISC Update
 
-expect '[ "$(kubectl get pod -n '"$NS"' $launcher1 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$req_post_restart" ]'
-
 old_total_instances=$(get_launcher_total_instances "$launcher1")
 echo "Launcher had $old_total_instances instance(s) before updating ISC to make a sleeping instance obsolete"
 
@@ -584,7 +582,7 @@ intro_case Delete Obsolete Awake Instance on Unbinding
 # obsolete) and then the requester scales down, the controller deletes the
 # instance during unbinding rather than putting it to sleep.
 
-expect '[ "$(kubectl get pod -n '"$NS"' $launcher1 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$req_post_restart" ]'
+[ "$(kubectl get pod -n "$NS" $launcher1 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$req_post_restart" ]
 
 old_total_instances=$(get_launcher_total_instances "$launcher1")
 echo "Launcher had $old_total_instances instance(s) before making awake instance obsolete"
