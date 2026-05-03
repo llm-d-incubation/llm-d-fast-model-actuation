@@ -502,30 +502,31 @@ intro_case Reverse Proxy Initialization and Forwarding
 #
 # Starting state: $req4 is bound to $launcher1, both Ready.
 
-echo "Checking proxy initialization on requester pod $req4"
+echo "Checking proxy configuration on requester pod $req4"
 
-# Port-forward to the requester's SPI port to query proxy status
+# Port-forward to the requester's SPI port to query proxy config
 kubectl port-forward pod/"$req4" 28091:8081 -n "$NS" &
 PF_SPI_PID=$!
 sleep 2
 
-proxy_resp=$(curl -sf "http://localhost:28091/v1/proxy/init" 2>/dev/null || echo "")
+proxy_resp=$(curl -sf "http://localhost:28091/v1/proxy/config" 2>/dev/null || echo "")
 kill "$PF_SPI_PID" 2>/dev/null || true
 wait "$PF_SPI_PID" 2>/dev/null || true
 
-if ! echo "$proxy_resp" | grep -q "proxying to"; then
-    echo "ERROR: expected proxy to be initialized, got: '$proxy_resp'" >&2
+# GET /v1/proxy/config returns JSON {"address":"...","port":...} or 404 if not configured
+if ! echo "$proxy_resp" | grep -q '"address"'; then
+    echo "ERROR: expected proxy to be configured, got: '$proxy_resp'" >&2
     exit 1
 fi
-echo "Proxy is initialized: $proxy_resp"
+echo "Proxy is configured: $proxy_resp"
 
 # Verify proxy target contains the launcher pod IP
 launcher1_ip=$(kubectl get pod "$launcher1" -n "$NS" -o jsonpath='{.status.podIP}')
 if ! echo "$proxy_resp" | grep -qF "$launcher1_ip"; then
-    echo "ERROR: proxy target does not contain launcher IP $launcher1_ip: '$proxy_resp'" >&2
+    echo "ERROR: proxy config does not contain launcher IP $launcher1_ip: '$proxy_resp'" >&2
     exit 1
 fi
-echo "Proxy target contains launcher IP: $launcher1_ip"
+echo "Proxy config contains launcher IP: $launcher1_ip"
 
 # Verify traffic forwarding through the TCP proxy port (8082)
 # The launcher has a /health endpoint that returns 200
