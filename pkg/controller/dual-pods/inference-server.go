@@ -1014,10 +1014,10 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 	}
 	requesterAddr := fmt.Sprintf("%s:%s", requestingPod.Status.PodIP, adminPort)
 	launcherAddr := fmt.Sprintf("%s:%d", providingPod.Status.PodIP, serverPort)
-	url := fmt.Sprintf("http://%s%s", requesterAddr, stubapi.InitProxy)
-	proxyConfig, _ := json.Marshal(stubapi.ProxyConfigRequest{
+	url := fmt.Sprintf("http://%s%s", requesterAddr, stubapi.ProxyConfigPath)
+	proxyConfig, _ := json.Marshal(stubapi.ProxyConfig{
 		Address: providingPod.Status.PodIP,
-		Port:    int(serverPort),
+		Port:    serverPort,
 	})
 
 	if err := doPut(url, bytes.NewReader(proxyConfig)); err != nil {
@@ -1647,7 +1647,7 @@ func doPut(url string, data io.Reader) error {
 func doHTTPRequest(method, url string, data io.Reader) error {
 	req, err := http.NewRequest(method, url, data)
 	if err != nil {
-		return fmt.Errorf("http %s %q: %w", strings.ToUpper(method), url, err)
+		return fmt.Errorf("http %s %q: %w", method, url, err)
 	}
 	if data != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -1658,13 +1658,13 @@ func doHTTPRequest(method, url string, data io.Reader) error {
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("http %s %q: %w", strings.ToUpper(method), url, err)
+		return fmt.Errorf("http %s %q: %w", method, url, err)
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("http %s %q returned unexpected status %d; response body=%s", strings.ToUpper(method), url, resp.StatusCode, string(body))
+		return fmt.Errorf("http %s %q returned unexpected status %d; response body=%s", method, url, resp.StatusCode, string(body))
 	}
 
 	return nil

@@ -57,9 +57,6 @@ func main() {
 
 	// Configure proxy timeouts from environment variables (with defaults)
 	proxyConfig := proxy.DefaultProxyConfig
-	if dur, err := time.ParseDuration(os.Getenv("PROXY_UNINIT_DELAY")); err == nil && dur != 0 {
-		proxyConfig.UninitDelay = dur
-	}
 	if dur, err := time.ParseDuration(os.Getenv("PROXY_DIAL_TIMEOUT")); err == nil && dur != 0 {
 		proxyConfig.DialTimeout = dur
 	}
@@ -93,7 +90,7 @@ func main() {
 		defer wg.Done()
 		err := proxy.RunWithConfig(ctx, proxyPort, proxyConfig)
 		if err != nil {
-			logger.Error(err, "failed to start requester proxy server")
+			logger.Error(err, "failed to run requester proxy server")
 		}
 	}()
 

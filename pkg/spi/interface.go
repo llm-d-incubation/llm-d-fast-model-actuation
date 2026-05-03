@@ -60,20 +60,19 @@ const SetLogPath = "/v1/set-log"
 // holds that starting position of a log chunk.
 const LogStartPosParam = "startPos"
 
-// InitProxy is the path for configuring the TCP proxy.
-// The proxy is used to forward requests from the server-requesting
-// pod to the vLLM instance in the server-providing pod.
+// ProxyConfigPath is the path for the proxy configuration resource.
 // Supports two HTTP methods:
-//   - GET: retrieves the initialization status of the proxy.
-//     Returns 200 if initialized, 404 if not.
+//   - GET: retrieves the configuration status of the proxy.
+//     Returns 200 if configured, 404 if not.
 //   - PUT: configures the proxy with a target address and port.
-//     The request body should contain a JSON object with "address"
-//     and "port" fields. After successful configuration,
-//     the proxy will forward TCP connections to the configured target.
-const InitProxy = "/v1/proxy/init"
+//     After successful configuration, the proxy will forward TCP
+//     connections to the configured target.
+const ProxyConfigPath = "/v1/proxy/config"
 
-// ProxyConfigRequest is the request body to configure the proxy target
-type ProxyConfigRequest struct {
+// ProxyConfig is the request and response body for configuring the proxy.
+type ProxyConfig struct {
+	// Address is the target host to proxy to.
 	Address string `json:"address"`
-	Port    int    `json:"port"`
+	// Port is the target port number.
+	Port int16 `json:"port"`
 }

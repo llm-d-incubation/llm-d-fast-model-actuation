@@ -213,7 +213,7 @@ func RunWithGPUUUIDs(ctx context.Context, port string, ready *atomic.Bool, logWr
 	mux.HandleFunc("POST "+stubapi.BecomeReadyPath, newSetReadyHandler(logger, ready, true))
 	mux.HandleFunc("POST "+stubapi.BecomeUnreadyPath, newSetReadyHandler(logger, ready, false))
 	mux.HandleFunc("POST "+stubapi.SetLogPath, newSetLogHandler(logger, logWriter))
-	mux.HandleFunc(stubapi.InitProxy, proxy.Initialize)
+	mux.HandleFunc(stubapi.ProxyConfigPath, proxy.Configure)
 
 	server := &http.Server{
 		Addr:    ":" + port,

@@ -120,7 +120,7 @@ func main() {
 
 		err := coordination.RunWithGPUUUIDs(ctx, strconv.FormatInt(int64(spiPort), 10), &ready, os.Stdout, gpuUUIDs)
 		if err != nil {
-			logger.Error(err, "failed to start requester SPI server")
+			logger.Error(err, "failed to run requester SPI server")
 		}
 	}()
 
@@ -130,7 +130,7 @@ func main() {
 
 		err := probes.Run(ctx, strconv.FormatInt(int64(probesPort), 10), &ready)
 		if err != nil {
-			logger.Error(err, "failed to start requester probes server")
+			logger.Error(err, "failed to run requester probes server")
 		}
 	}()
 
@@ -140,7 +140,7 @@ func main() {
 
 		err := proxy.Run(ctx, strconv.FormatInt(int64(proxyPort), 10))
 		if err != nil {
-			logger.Error(err, "failed to start requester proxy server")
+			logger.Error(err, "failed to run requester proxy server")
 		}
 	}()
 
