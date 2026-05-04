@@ -33,7 +33,6 @@ import (
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 
 	dpctlr "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/dual-pods"
-	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/utils"
 
 	"k8s.io/klog/v2"
 )
@@ -136,11 +135,11 @@ func allocateGPUs(ctx context.Context, coreClient corev1client.CoreV1Interface, 
 			return err
 		}
 		avail := gpuMap.onNode(nodeName)
-		podUIDs, err := getPodUIDs(ctx, podClient)
+		podMap, err := getPodMap(ctx, podClient)
 		if err != nil {
 			return err
 		}
-		if !podUIDs.Has(podUID) {
+		if _, has := podMap[podUID]; !has {
 			return fmt.Errorf("pod UID %q not found among current Pods", podUID)
 		}
 		// Get the current allocations, as a data structure and as a ConfigMap object.
@@ -148,6 +147,7 @@ func allocateGPUs(ctx context.Context, coreClient corev1client.CoreV1Interface, 
 		if err != nil {
 			return err
 		}
+		logger.V(5).Info("Read GPU allocations", "gpuAllocMap", gpuAllocMap)
 		// Collect the ones used by other Pods on the same Node,
 		// and remove obsolete entries from the ConfigMap.
 		used := sets.New[string]()
@@ -155,10 +155,14 @@ func allocateGPUs(ctx context.Context, coreClient corev1client.CoreV1Interface, 
 			if holder.NodeName != nodeName {
 				continue
 			}
-			if !podUIDs.Has(holder.PodUID) {
+			if holderName, held := podMap[holder.PodUID]; !held {
+				logger.V(5).Info("Removing entry for non-existent Pod", "gpuUID", gpuUID, "holderUID", holder.PodUID)
 				delete(gpuAllocCM.Data, gpuUID)
 			} else if holder.PodUID != podUID {
+				logger.V(5).Info("Noting usage", "gpuUID", gpuUID, "holderUID", holder.PodUID, "holderName", holderName)
 				used.Insert(gpuUID)
+			} else {
+				logger.V(5).Info("Noting availability", "gpuUID", gpuUID)
 			}
 		}
 		// Compute the sorted list of unused GPUs on the right Node.
@@ -200,13 +204,15 @@ func allocateGPUs(ctx context.Context, coreClient corev1client.CoreV1Interface, 
 	return gpuUIDs
 }
 
-func getPodUIDs(ctx context.Context, podClient corev1client.PodInterface) (sets.Set[apitypes.UID], error) {
+// Returns map from Pod UID to name
+func getPodMap(ctx context.Context, podClient corev1client.PodInterface) (map[apitypes.UID]string, error) {
 	podList, err := podClient.List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, err
 	}
-	uids, _ := utils.SliceMap(podList.Items, func(pod corev1.Pod) (apitypes.UID, error) {
-		return pod.UID, nil
-	})
-	return sets.New(uids...), nil
+	ans := make(map[apitypes.UID]string, len(podList.Items))
+	for _, pod := range podList.Items {
+		ans[pod.UID] = pod.Name
+	}
+	return ans, nil
 }

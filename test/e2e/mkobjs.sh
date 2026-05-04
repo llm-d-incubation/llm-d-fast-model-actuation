@@ -191,6 +191,7 @@ spec:
           - --node=\$(NODE_NAME)
           - --pod-uid=\$(POD_UID)
           - --namespace=\$(NAMESPACE)
+          - -v=5
           env:
             - name: NODE_NAME
               valueFrom:
