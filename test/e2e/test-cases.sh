@@ -615,32 +615,41 @@ intro_case Unbound Launcher Deletion Cleanup
 # This test verifies that deleting an unbound launcher does not leave the controller
 # stuck with stale instance state.
 
+# Delete the existing server-requesting Pod.
 kubectl scale rs $rs -n "$NS" --replicas=0
 
+# Expect that Pod to be gone and the launcher to be unbound.
 expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$inst | wc -l | grep -w 0"
 expect '[ "$(kubectl get pod -n '"$NS"' $launcher1 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "" ]'
 
+# Delete the unbound launcher and expect it to be gone.
 kubectl delete pod $launcher1 -n "$NS" --wait=true
 
 ! kubectl get pods -n "$NS" -o name | grep -qw pod/$launcher1
 
+# Restore a server-requesting Pod.
 kubectl scale rs $rs -n "$NS" --replicas=1
 
 expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$inst | wc -l | grep -w 1"
 req_after_delete=$(kubectl get pods -n "$NS" -o name -l app=dp-example,instance=$inst | sed s%pod/%%)
 echo "Server-requesting Pod after delete = $req_after_delete"
 
+# Expect bound launcher Pod to exist.
 expect "kubectl get pods -n $NS -o name -l dual-pods.llm-d.ai/dual=$req_after_delete | wc -l | grep -w 1"
 launcher_after_delete=$(kubectl get pods -n "$NS" -o name -l dual-pods.llm-d.ai/dual=$req_after_delete | sed s%pod/%%)
 echo "Launcher after delete = $launcher_after_delete"
 
+# Expect that this is a new launcher pod and the new requester is bound to the new launcher.
 [ "$launcher_after_delete" != "$launcher1" ]
 expect '[ "$(kubectl get pod -n '"$NS"' $req_after_delete -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcher_after_delete" ]'
 
+# Wait for the new requester to be "ready";
+# That should imply that the new launcher is ready.
 date
 kubectl wait --for condition=Ready pod/$req_after_delete -n "$NS" --timeout=120s
 [ "$(kubectl get pod $launcher_after_delete -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
 
+# Check that the new requester has the proper GPU UUIDs annotation.
 if [ "$E2E_PLATFORM" = "openshift" ]; then check_gpu_pin $req_after_delete; fi
 
 cheer Successful unbound launcher deletion cleanup
