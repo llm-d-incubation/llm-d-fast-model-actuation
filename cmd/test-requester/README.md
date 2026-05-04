@@ -7,6 +7,20 @@ in a ConfigMap named "gpu-allocs".
 
 For details, see the comment at the start of [the source](main.go).
 
+## GPU selection
+
+Among the GPUs on the Node that are not already allocated to another
+Pod, the test requester picks `--num-gpus` of them at random. If the
+`NVIDIA_VISIBLE_DEVICES` environment variable is set to anything other
+than `all` (for example, a comma-separated list of GPU UUIDs injected
+by the NVIDIA device plugin), the requester restricts its choices to
+that subset; the special values `void` and `none` mean "no GPUs
+visible" and cause allocation to fail. Tests that need a specific GPU
+identity across scale-up should pin it via `NVIDIA_VISIBLE_DEVICES` on
+the Pod template (see `pin_gpu` in `test/e2e/test-cases.sh`), rather
+than relying on the first-available ordering used by earlier versions
+of this program.
+
 The command line arguments are as follows.
 
 ## Requester specific arguments

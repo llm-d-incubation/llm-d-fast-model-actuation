@@ -71,9 +71,10 @@ expect() {
     done
 }
 
-# pin_gpu patches the ReplicaSet to bypass OpenShift's GPU assignment.
-# Sets nvidia.com/gpu limit/request to 0 and injects NVIDIA_VISIBLE_DEVICES
-# so subsequent pods reuse the same GPU UUID without going through the device plugin.
+# pin_gpu patches the ReplicaSet so subsequent pods reuse the same GPU UUID.
+# Sets nvidia.com/gpu limit/request to 0 (bypassing OpenShift's GPU assignment
+# on that platform) and injects NVIDIA_VISIBLE_DEVICES. On kind the test-requester
+# honors this to restrict its random GPU pick to the pinned UUID.
 # Uses global $assigned_gpu_uuids and $NS.
 # Arguments: <rs-name>
 pin_gpu() {
@@ -345,8 +346,8 @@ kubectl scale rs $rs -n "$NS" --replicas=0
 
 expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$inst | wc -l | grep -w 0"
 
-# On OpenShift, pin the GPU so the next scale-up reuses the same GPU.
-if [ "$E2E_PLATFORM" = "openshift" ]; then pin_gpu $rs; fi
+# Pin the GPU so the next scale-up reuses the same GPU on every platform.
+pin_gpu $rs
 
 # Patch requester ReplicaSet to stick to testnode
 kubectl patch rs $rs -n "$NS" -p '{"spec": {"template": {"spec": {"nodeSelector": {"kubernetes.io/hostname": "'$testnode'"} }} }}'
@@ -390,7 +391,7 @@ date
 kubectl wait --for condition=Ready pod/$req2 -n "$NS" --timeout=120s
 [ "$(kubectl get pod $launcher1 -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
 
-# On OpenShift, verify the same GPU UUID was assigned after wake-up.
+# Verify the same GPU UUID was assigned after wake-up.
 check_gpu_pin $req2
 
 cheer Successful instance wake-up fast path

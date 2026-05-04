@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"strings"
 	"time"
@@ -36,6 +37,33 @@ import (
 
 	"k8s.io/klog/v2"
 )
+
+const nvidiaVisibleDevicesEnvVar = "NVIDIA_VISIBLE_DEVICES"
+
+// visibleGPUFilter reads NVIDIA_VISIBLE_DEVICES and returns (filter, restricted).
+// restricted=false means "no filter" (env unset, empty, or value "all").
+// A returned empty set with restricted=true means "no GPUs visible"
+// (values "void"/"none"); caller should refuse to allocate.
+func visibleGPUFilter() (sets.Set[string], bool) {
+	raw, present := os.LookupEnv(nvidiaVisibleDevicesEnvVar)
+	if !present {
+		return nil, false
+	}
+	switch strings.TrimSpace(raw) {
+	case "", "all":
+		return nil, false
+	case "void", "none":
+		return sets.New[string](), true
+	}
+	filter := sets.New[string]()
+	for uid := range strings.SplitSeq(raw, ",") {
+		uid = strings.TrimSpace(uid)
+		if uid != "" {
+			filter.Insert(uid)
+		}
+	}
+	return filter, true
+}
 
 // This code maintains a ConfigMap named "gpu-allocs" that holds the current test allocations
 // of GPUs. The data of this ConfigMap is a map from GPU UID to the JSON marshaling of a GPUHolder.
@@ -135,6 +163,15 @@ func allocateGPUs(ctx context.Context, coreClient corev1client.CoreV1Interface, 
 			return err
 		}
 		avail := gpuMap.onNode(nodeName)
+		if filter, restricted := visibleGPUFilter(); restricted {
+			for uid := range filter.Difference(avail) {
+				logger.V(5).Info("Ignoring NVIDIA_VISIBLE_DEVICES entry not present on node", "gpuUID", uid, "nodeName", nodeName)
+			}
+			for uid := range avail.Difference(filter) {
+				logger.V(5).Info("Excluding node GPU hidden by NVIDIA_VISIBLE_DEVICES", "gpuUID", uid, "nodeName", nodeName)
+			}
+			avail = avail.Intersection(filter)
+		}
 		podMap, err := getPodMap(ctx, podClient)
 		if err != nil {
 			return err
@@ -165,13 +202,15 @@ func allocateGPUs(ctx context.Context, coreClient corev1client.CoreV1Interface, 
 				logger.V(5).Info("Noting availability", "gpuUID", gpuUID)
 			}
 		}
-		// Compute the sorted list of unused GPUs on the right Node.
+		// Compute the list of unused GPUs on the right Node, then shuffle it so
+		// that selection is non-deterministic --- closer to what the real Kubernetes
+		// scheduler + NVIDIA device plugin would do. When NVIDIA_VISIBLE_DEVICES is
+		// set, `avail` has already been narrowed to that subset above.
 		rem := sets.List(avail.Difference(used))
 		if uint(len(rem)) < numGPUs {
 			return fmt.Errorf("fewer than %d GPUs available (%v) for node %q", numGPUs, rem, nodeName)
 		}
-		// Take the requested number
-		// FROM THE HEAD OF THE LIST --- this is a choice to aid making repeatable tests.
+		rand.Shuffle(len(rem), func(i, j int) { rem[i], rem[j] = rem[j], rem[i] })
 		gpuUIDs = rem[:numGPUs]
 		for _, gpuUID := range gpuUIDs {
 			holder := GPUHolder{NodeName: nodeName, PodUID: podUID}
