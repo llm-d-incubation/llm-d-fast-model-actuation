@@ -42,6 +42,24 @@ function clear_img_repo() (
     done
 )
 
+# pin_gpu patches the ReplicaSet so subsequent pods reuse the same GPU
+# UUID.  Sets nvidia.com/gpu limit/request to 0 (bypassing the NVIDIA
+# device plugin's fresh assignment) and injects
+# NVIDIA_VISIBLE_DEVICES, which the test-requester honors to restrict
+# its random GPU pick to the pinned UUID.
+# Uses global $assigned_gpu_uuids.
+# Arguments: <rs-name>
+pin_gpu() {
+    local rs="$1"
+    echo "Pinning GPU for ReplicaSet $rs: NVIDIA_VISIBLE_DEVICES=$assigned_gpu_uuids" >&2
+    local patch
+    patch=$(printf \
+        '{"spec":{"template":{"spec":{"containers":[{"name":"inference-server","resources":{"limits":{"nvidia.com/gpu":"0"},"requests":{"nvidia.com/gpu":"0"}},"env":[{"name":"NVIDIA_VISIBLE_DEVICES","value":"%s"}]}]}}}}' \
+        "$assigned_gpu_uuids")
+    kubectl patch rs "$rs" -p "$patch"
+}
+
+
 : Build the container images, no push
 
 clear_img_repo ko.local/test-requester
@@ -219,6 +237,10 @@ kubectl wait --for condition=Ready pod/$prv --timeout=1s
 used=$(kubectl get pod $req -o jsonpath={.spec.nodeName})
 [ "$used" == "$keeper" ]
 
+assigned_gpu_uuids=$(kubectl get pod "$req" -o jsonpath='{.metadata.annotations.dual-pods\.llm-d\.ai/accelerators}')
+echo "Assigned GPU UUID(s): $assigned_gpu_uuids"
+
+
 cheer Successful test of node deletion
 
 : Test requester deletion
@@ -232,13 +254,21 @@ sleep 10 # does it stay that way?
 
 kubectl get pods -o wide
 
-kubectl get pods -o name | grep -c "^pod/$rs" | grep -w 1
-
 kubectl get pod $prv -L dual-pods.llm-d.ai/dual
+
+kubectl get pods -o name | grep -c "^pod/$rs" | grep -w 1
 
 cheer Successful requester deletion
 
-: Scale back up and check for re-use of existing provider
+: Alter RS, to pin GPUs
+
+pin_gpu $rs
+
+: Delete provider, it becomes irrelevant after changing the RS
+
+kubectl delete pod $prv
+
+: Scale up, identify new requester and provider
 
 kubectl scale rs $rs --replicas=1
 
@@ -248,9 +278,26 @@ kubectl get pods -o wide
 
 expect "kubectl get pods -o name | grep -c '^pod/$rs' | grep -w 2"
 
-sleep 10
+pods=($(kubectl get pods -o name | grep "^pod/$rs" | sed s%pod/%%))
+req=${pods[0]}
+prv=${pods[1]}
 
-kubectl get pods -o name | grep -c "^pod/$rs" | grep -w 2
+expect '[ "$(kubectl get pod $req -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$prv" ]'
+
+expect '[ "$(kubectl get pod $prv -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$req" ]'
+
+cheer Successful pin of GPUs
+
+: Delete requester, expect replacement using same provider
+
+kubectl delete pod $req
+
+expect "kubectl get pods -o name | grep -c '^pod/$rs' | grep -vw 0 | grep -vw 1"
+
+kubectl get pods -o wide
+
+expect "kubectl get pods -o name | grep -c '^pod/$rs' | grep -w 2"
+
 kubectl get pods -o name -l app=dp-example | grep -c "^pod/$rs" | grep -w 1
 
 nrq=$(kubectl get pods -o name -l app=dp-example | grep "^pod/$rs" | sed s%pod/%%)
@@ -262,7 +309,7 @@ expect '[ "$(kubectl get pod $nrq -o jsonpath={.metadata.labels.dual-pods\\.llm-
 expect '[ "$(kubectl get pod $prv -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$nrq" ]'
 
 date
-kubectl wait --for condition=Ready pod/$nrq --timeout=10s
+kubectl wait --for condition=Ready pod/$nrq --timeout=35s
 kubectl wait --for condition=Ready pod/$prv --timeout=1s
 
 cheer Successful re-use

@@ -535,12 +535,16 @@ jobs:
         run: |
           if [ -r dual-pods-controller-first-prev.log ]
           then cat dual-pods-controller-first-prev.log
-          else echo The previous dual-pods controller ran at most once
+          else echo The first dual-pods controller ran at most once
           fi
 
       - name: Dump log of first dual-pods controller
         if: always()
-        run: cat dual-pods-controller-first.log
+        run: |
+          if [ -r dual-pods-controller-first.log ]
+          then cat dual-pods-controller-first.log
+          else echo The first dual-pods controller left no log
+          fi
 
       - name: Dump Pod logs
         if: always()

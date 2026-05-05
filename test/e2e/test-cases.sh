@@ -69,10 +69,11 @@ expect() {
     done
 }
 
-# pin_gpu patches the ReplicaSet so subsequent pods reuse the same GPU UUID.
-# Sets nvidia.com/gpu limit/request to 0 (bypassing the NVIDIA device plugin's
-# fresh assignment on OpenShift) and injects NVIDIA_VISIBLE_DEVICES, which the
-# test-requester honors to restrict its random GPU pick to the pinned UUID.
+# pin_gpu patches the ReplicaSet so subsequent pods reuse the same GPU
+# UUID.  Sets nvidia.com/gpu limit/request to 0 (bypassing the NVIDIA
+# device plugin's fresh assignment) and injects
+# NVIDIA_VISIBLE_DEVICES, which the test-requester honors to restrict
+# its random GPU pick to the pinned UUID.
 # Uses global $assigned_gpu_uuids and $NS.
 # Arguments: <rs-name>
 pin_gpu() {
