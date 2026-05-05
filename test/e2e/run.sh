@@ -182,6 +182,8 @@ date
 kubectl wait --for condition=Ready pod/$req --timeout=35s
 kubectl wait --for condition=Ready pod/$prv --timeout=1s
 
+kubectl get pods -o wide
+
 cheer Successful upside
 
 : Test node deletion
@@ -194,6 +196,11 @@ kubectl delete node $doomed
 LIMIT=100 expect '[ $(kubectl get ds -n kube-system kube-proxy -o jsonpath={.status.currentNumberScheduled}) == "2" ]'
 expect '! kubectl get pod $req'
 expect '! kubectl get pod $prv'
+
+
+expect "kubectl get pods -o name | grep -c '^pod/$rs' | grep -vw 0 | grep -vw 1"
+
+kubectl get pods -o wide
 
 expect "kubectl get pods -o name | grep -c '^pod/$rs' | grep -w 2"
 
@@ -223,6 +230,8 @@ expect "kubectl get pods -o name | grep -c '^pod/$rs' | grep -w 1"
 
 sleep 10 # does it stay that way?
 
+kubectl get pods -o wide
+
 kubectl get pods -o name | grep -c "^pod/$rs" | grep -w 1
 
 kubectl get pod $prv -L dual-pods.llm-d.ai/dual
@@ -232,6 +241,10 @@ cheer Successful requester deletion
 : Scale back up and check for re-use of existing provider
 
 kubectl scale rs $rs --replicas=1
+
+expect "kubectl get pods -o name | grep -c '^pod/$rs' | grep -vw 0 | grep -vw 1"
+
+kubectl get pods -o wide
 
 expect "kubectl get pods -o name | grep -c '^pod/$rs' | grep -w 2"
 
