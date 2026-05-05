@@ -13,7 +13,6 @@
 #   FMA_CHART_INSTANCE_NAME - Helm release name prefix (default: fma)
 #   READY_TARGET            - minimum ready launchers before proceeding (default: 2)
 #   POLICIES_ENABLED        - "true"/"false"; auto-detected if unset
-#   E2E_PLATFORM            - "openshift" or "kind" (default: openshift)
 #   POLL_LIMIT_SECS         - polling timeout seconds (default: 600)
 #   FMA_DEBUG               - "true" to enable shell tracing (set -x)
 
@@ -28,7 +27,6 @@ fi
 POLL_LIMIT_SECS="${POLL_LIMIT_SECS:-600}"
 READY_TARGET="${READY_TARGET:-2}"
 FMA_CHART_INSTANCE_NAME="${FMA_CHART_INSTANCE_NAME:-fma}"
-E2E_PLATFORM="${E2E_PLATFORM:-openshift}"
 
 NS="$FMA_NAMESPACE"
 
@@ -72,9 +70,9 @@ expect() {
 }
 
 # pin_gpu patches the ReplicaSet so subsequent pods reuse the same GPU UUID.
-# Sets nvidia.com/gpu limit/request to 0 (bypassing OpenShift's GPU assignment
-# on that platform) and injects NVIDIA_VISIBLE_DEVICES. On kind the test-requester
-# honors this to restrict its random GPU pick to the pinned UUID.
+# Sets nvidia.com/gpu limit/request to 0 (bypassing the NVIDIA device plugin's
+# fresh assignment on OpenShift) and injects NVIDIA_VISIBLE_DEVICES, which the
+# test-requester honors to restrict its random GPU pick to the pinned UUID.
 # Uses global $assigned_gpu_uuids and $NS.
 # Arguments: <rs-name>
 pin_gpu() {

@@ -169,5 +169,4 @@ FMA_NAMESPACE=default \
 MKOBJS_SCRIPT=./test/e2e/mkobjs.sh \
 FMA_CHART_INSTANCE_NAME=fma \
 READY_TARGET=1 \
-E2E_PLATFORM=kind \
 ./test/e2e/test-cases.sh
