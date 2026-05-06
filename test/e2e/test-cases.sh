@@ -526,7 +526,7 @@ echo "Proxy is configured: $proxy_resp"
 
 # Verify proxy config matches expected JSON using jq
 launcher1_ip=$(kubectl get pod "$launcher1" -n "$NS" -o jsonpath='{.status.podIP}')
-launcher1_port=8000
+launcher1_port=$(kubectl get inferenceserverconfig "$isc" -n "$NS" -o jsonpath='{.spec.modelServerConfig.port}')
 
 expected=$(printf '{"address":"%s","port":%d}' "$launcher1_ip" "$launcher1_port")
 if ! echo "$proxy_resp" | jq -e --argjson expected "$expected" '. == $expected' >/dev/null 2>&1; then
@@ -536,7 +536,7 @@ fi
 echo "Proxy config matches expected: $expected"
 
 # Verify traffic forwarding through the TCP proxy port (8082)
-# The proxy forwards to the vLLM inference port (8000), which has a /health endpoint
+# The proxy forwards to the vLLM inference port configured in the InferenceServerConfig
 echo "Verifying traffic forwarding through TCP proxy port"
 kubectl port-forward pod/"$req4" 28092:8082 -n "$NS" &
 PF_PROXY_PID=$!
