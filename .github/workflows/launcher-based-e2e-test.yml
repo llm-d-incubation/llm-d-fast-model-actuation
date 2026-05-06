@@ -68,6 +68,22 @@ jobs:
         if: always()
         run: kubectl get rs -A
 
+      - name: Dump previous log of first dual-pods controller
+        if: always()
+        run: |
+          if [ -r dual-pods-controller-first-prev.log ]
+          then cat dual-pods-controller-first-prev.log
+          else echo The first dual-pods controller ran at most once
+          fi
+
+      - name: Dump log of first dual-pods controller
+        if: always()
+        run: |
+          if [ -r dual-pods-controller-first.log ]
+          then cat dual-pods-controller-first.log
+          else echo The first dual-pods controller left no log
+          fi
+
       - name: show dual-pods controller log
         if: always()
         run: kubectl logs deploy/fma-dual-pods-controller

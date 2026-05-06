@@ -69,10 +69,11 @@ expect() {
     done
 }
 
-# pin_gpu patches the ReplicaSet so subsequent pods reuse the same GPU UUID.
-# Sets nvidia.com/gpu limit/request to 0 (bypassing the NVIDIA device plugin's
-# fresh assignment on OpenShift) and injects NVIDIA_VISIBLE_DEVICES, which the
-# test-requester honors to restrict its random GPU pick to the pinned UUID.
+# pin_gpu patches the ReplicaSet so subsequent pods reuse the same GPU
+# UUID.  Sets nvidia.com/gpu limit/request to 0 (bypassing the NVIDIA
+# device plugin's fresh assignment) and injects
+# NVIDIA_VISIBLE_DEVICES, which the test-requester honors to restrict
+# its random GPU pick to the pinned UUID.
 # Uses global $assigned_gpu_uuids and $NS.
 # Arguments: <rs-name>
 pin_gpu() {
@@ -508,6 +509,11 @@ expect '[ "$(kubectl get pod -n '"$NS"' $launcher1 -o jsonpath={.metadata.labels
 launcher_instances_before=$(kubectl exec -n "$NS" $launcher1 -- python3 -c 'import json,urllib.request; print(json.load(urllib.request.urlopen("http://127.0.0.1:8001/v2/vllm/instances"))["total_instances"])')
 echo "Launcher has $launcher_instances_before instances before controller restart"
 [ "$launcher_instances_before" -gt "0" ]
+
+# Save log(s) from the current controller Pod, which is about to be replaced
+kubectl get -n "$NS" deployment "${FMA_CHART_INSTANCE_NAME}-dual-pods-controller"
+kubectl logs -n "$NS" deployment/"${FMA_CHART_INSTANCE_NAME}-dual-pods-controller" > dual-pods-controller-first.log
+kubectl logs -n "$NS" deployment/"${FMA_CHART_INSTANCE_NAME}-dual-pods-controller" -p > dual-pods-controller-first-prev.log || true
 
 # Restart the dual-pods controller to test state recovery
 echo "Restarting dual-pods controller..."

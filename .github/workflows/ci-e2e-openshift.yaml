@@ -530,6 +530,22 @@ jobs:
         if: always()
         run: kubectl get events -n "$FMA_NAMESPACE" --sort-by='.lastTimestamp'
 
+      - name: Dump previous log of first dual-pods controller
+        if: always()
+        run: |
+          if [ -r dual-pods-controller-first-prev.log ]
+          then cat dual-pods-controller-first-prev.log
+          else echo The first dual-pods controller ran at most once
+          fi
+
+      - name: Dump log of first dual-pods controller
+        if: always()
+        run: |
+          if [ -r dual-pods-controller-first.log ]
+          then cat dual-pods-controller-first.log
+          else echo The first dual-pods controller left no log
+          fi
+
       - name: Dump Pod logs
         if: always()
         run: |
