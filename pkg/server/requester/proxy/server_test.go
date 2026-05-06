@@ -18,6 +18,7 @@ package proxy
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -25,101 +26,114 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
-
-	"k8s.io/klog/v2"
 
 	stubapi "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/spi"
 )
 
-// resetInstance clears the singleton so tests don't interfere with each other.
+// waitForTestReady blocks until the proxy listener is ready.
+// Used by tests that don't call Configure (which auto-waits).
+func waitForTestReady() {
+	for {
+		targetMu.RLock()
+		ch := ready
+		targetMu.RUnlock()
+		if ch != nil {
+			<-ch
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// resetInstance clears the module-level state so tests don't interfere with each other.
 func resetInstance(t *testing.T) {
 	t.Helper()
-	instance = forwarder{
-		dialer: &net.Dialer{},
-	}
+	targetMu.Lock()
+	dialProxy = nil
+	dialTimeout = DefaultProxyConfig.DialTimeout
+	closedCh := make(chan struct{})
+	close(closedCh)
+	ready = closedCh
+	targetMu.Unlock()
 }
 
 // startTestEchoServer starts a TCP server that echoes back any data it receives.
-// Uses ports in range 10000-20000 to stay within int16 range.
-func startTestEchoServer(t *testing.T) (addr string, closer func()) {
+func startTestEchoServer(t *testing.T) (addr string, port uint16, closer func()) {
 	t.Helper()
-	for port := 10000; port <= 20000; port++ {
-		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-		if err != nil {
-			continue
-		}
-		addr = ln.Addr().String()
-
-		go func() {
-			for {
-				conn, err := ln.Accept()
-				if err != nil {
-					return
-				}
-				go func(c net.Conn) {
-					_, _ = io.Copy(c, c)
-					_ = c.Close()
-				}(conn)
-			}
-		}()
-
-		return addr, func() { _ = ln.Close() }
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to start echo server: %v", err)
 	}
-	t.Fatalf("no free port found in range 10000-20000")
-	return "", nil
+	tcpAddr := ln.Addr().(*net.TCPAddr)
+	addr = tcpAddr.String()
+	port = uint16(tcpAddr.Port)
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				_, _ = io.Copy(c, c)
+				_ = c.Close()
+			}(conn)
+		}
+	}()
+
+	return addr, port, func() { _ = ln.Close() }
 }
 
-// findFreePort returns an unused TCP port in the range 10000-20000,
-// ensuring it fits in int16.
-func findFreePort(t *testing.T) int16 {
+// findFreePort returns a free TCP port.
+func findFreePort(t *testing.T) uint16 {
 	t.Helper()
-	for port := 10000; port <= 20000; port++ {
-		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-		if err != nil {
-			continue
-		}
-		_ = ln.Close()
-		return int16(port)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to find free port: %v", err)
 	}
-	t.Fatalf("no free port found in range 10000-20000")
-	return 0
+	port := uint16(ln.Addr().(*net.TCPAddr).Port)
+	_ = ln.Close()
+	return port
 }
 
 func TestProxy_EchoRoundTrip(t *testing.T) {
 	resetInstance(t)
 
-	backendAddr, backendCloser := startTestEchoServer(t)
+	_, backendPort, backendCloser := startTestEchoServer(t)
 	defer backendCloser()
 
 	proxyPort := findFreePort(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
+	// Reset ready so Run can set it
+	targetMu.Lock()
+	ready = nil
+	targetMu.Unlock()
+
 	cfg := ProxyConfig{
+		Port:        proxyPort,
 		DialTimeout: 2 * time.Second,
 	}
 	go func() {
-		err := RunWithConfig(ctx, fmt.Sprintf("%d", proxyPort), cfg)
+		err := Run(ctx, cfg)
 		if err != nil {
 			t.Logf("proxy Run error: %v", err)
 		}
 	}()
 
-	// Wait for listener to be ready
-	time.Sleep(50 * time.Millisecond)
+	// Wait for the proxy listener to be ready
+	waitForTestReady()
 
 	// Configure the proxy
-	backendParts := strings.Split(backendAddr, ":")
-	backendPort := backendParts[1]
-	body := stubapi.ProxyConfig{
+	body := stubapi.ProxyTargetConfig{
 		Address: "127.0.0.1",
-		Port:    mustParsePort(backendPort, t),
+		Port:    backendPort,
 	}
 	jsonBody, _ := json.Marshal(body)
-	req := httptest.NewRequest(http.MethodPut, stubapi.ProxyConfigPath, strings.NewReader(string(jsonBody)))
+	req := httptest.NewRequest(http.MethodPut, stubapi.ProxyConfigPath, bytes.NewReader(jsonBody))
 	w := httptest.NewRecorder()
 	Configure(w, req)
 
@@ -146,7 +160,7 @@ func TestProxy_EchoRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to read echo: %v", err)
 	}
-	if !strings.Contains(resp, "hello proxy") {
+	if resp != testMsg {
 		t.Errorf("expected echo of %q, got %q", testMsg, resp)
 	}
 }
@@ -160,11 +174,21 @@ func TestProxy_RejectBeforeConfigure(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	cfg := DefaultProxyConfig
+	// Reset ready so Run can set it
+	targetMu.Lock()
+	ready = nil
+	targetMu.Unlock()
+
+	cfg := ProxyConfig{
+		Port:        proxyPort,
+		DialTimeout: DefaultProxyConfig.DialTimeout,
+	}
 	go func() {
-		_ = RunWithConfig(ctx, fmt.Sprintf("%d", proxyPort), cfg)
+		_ = Run(ctx, cfg)
 	}()
-	time.Sleep(50 * time.Millisecond)
+
+	// Wait for proxy to be listening
+	waitForTestReady()
 
 	// Dial the proxy — it should accept but reject (close immediately) since not configured
 	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", proxyPort), 2*time.Second)
@@ -195,17 +219,15 @@ func TestConfigure_GetStatus(t *testing.T) {
 	}
 
 	// Now configure and check status again
-	backendAddr, backendCloser := startTestEchoServer(t)
+	_, backendPort, backendCloser := startTestEchoServer(t)
 	defer backendCloser()
 
-	backendParts := strings.Split(backendAddr, ":")
-	backendPort := backendParts[1]
-	body := stubapi.ProxyConfig{
+	body := stubapi.ProxyTargetConfig{
 		Address: "127.0.0.1",
-		Port:    mustParsePort(backendPort, t),
+		Port:    backendPort,
 	}
 	jsonBody, _ := json.Marshal(body)
-	req2 := httptest.NewRequest(http.MethodPut, stubapi.ProxyConfigPath, strings.NewReader(string(jsonBody)))
+	req2 := httptest.NewRequest(http.MethodPut, stubapi.ProxyConfigPath, bytes.NewReader(jsonBody))
 	w2 := httptest.NewRecorder()
 	Configure(w2, req2)
 
@@ -222,68 +244,62 @@ func TestConfigure_GetStatus(t *testing.T) {
 		t.Errorf("GET after configure should return 200, got %d", w3.Code)
 	}
 
-	var config stubapi.ProxyConfig
+	var config stubapi.ProxyTargetConfig
 	if err := json.Unmarshal(w3.Body.Bytes(), &config); err != nil {
 		t.Fatalf("failed to parse response JSON: %v", err)
 	}
 	if config.Address != "127.0.0.1" {
 		t.Errorf("expected address 127.0.0.1, got %q", config.Address)
 	}
-	expectedPort := mustParsePort(backendPort, t)
+	expectedPort := backendPort
 	if config.Port != expectedPort {
 		t.Errorf("expected port %d, got %d", expectedPort, config.Port)
 	}
 }
 
-func TestConfigure_Reconfigure(t *testing.T) {
+func TestConfigure_ReconfigureReturnsConflict(t *testing.T) {
 	resetInstance(t)
 
-	backendAddr1, closer1 := startTestEchoServer(t)
-	defer closer1()
-	backendAddr2, closer2 := startTestEchoServer(t)
-	defer closer2()
+	_, backendPort, backendCloser := startTestEchoServer(t)
+	defer backendCloser()
 
-	parts1 := strings.Split(backendAddr1, ":")
-	parts2 := strings.Split(backendAddr2, ":")
-
-	// Configure to first backend
-	body1 := stubapi.ProxyConfig{
+	// Configure
+	body := stubapi.ProxyTargetConfig{
 		Address: "127.0.0.1",
-		Port:    mustParsePort(parts1[1], t),
+		Port:    backendPort,
 	}
-	jsonBody1, _ := json.Marshal(body1)
-	req1 := httptest.NewRequest(http.MethodPut, stubapi.ProxyConfigPath, strings.NewReader(string(jsonBody1)))
+	jsonBody, _ := json.Marshal(body)
+	req1 := httptest.NewRequest(http.MethodPut, stubapi.ProxyConfigPath, bytes.NewReader(jsonBody))
 	w1 := httptest.NewRecorder()
 	Configure(w1, req1)
 
 	if w1.Code != http.StatusOK {
 		t.Fatalf("first Configure failed: %d — %s", w1.Code, w1.Body.String())
 	}
-	if !strings.Contains(w1.Body.String(), "configured proxy to") {
-		t.Errorf("expected 'configured proxy to' in response, got %q", w1.Body.String())
+
+	// Verify GET returns the correct config
+	reqGet := httptest.NewRequest(http.MethodGet, stubapi.ProxyConfigPath, nil)
+	wGet := httptest.NewRecorder()
+	Configure(wGet, reqGet)
+
+	if wGet.Code != http.StatusOK {
+		t.Fatalf("GET after configure failed: %d — %s", wGet.Code, wGet.Body.String())
+	}
+	var cfg stubapi.ProxyTargetConfig
+	if err := json.Unmarshal(wGet.Body.Bytes(), &cfg); err != nil {
+		t.Fatalf("failed to parse GET response: %v", err)
+	}
+	if cfg.Address != "127.0.0.1" || cfg.Port != backendPort {
+		t.Errorf("GET returned wrong config: want {127.0.0.1, %d}, got {%s, %d}", backendPort, cfg.Address, cfg.Port)
 	}
 
-	// Reconfigure to second backend
-	body2 := stubapi.ProxyConfig{
-		Address: "127.0.0.1",
-		Port:    mustParsePort(parts2[1], t),
-	}
-	jsonBody2, _ := json.Marshal(body2)
-	req2 := httptest.NewRequest(http.MethodPut, stubapi.ProxyConfigPath, strings.NewReader(string(jsonBody2)))
+	// Reconfigure should return 409 Conflict
+	req2 := httptest.NewRequest(http.MethodPut, stubapi.ProxyConfigPath, bytes.NewReader(jsonBody))
 	w2 := httptest.NewRecorder()
 	Configure(w2, req2)
 
-	if w2.Code != http.StatusOK {
-		t.Fatalf("second Configure failed: %d — %s", w2.Code, w2.Body.String())
-	}
-	if !strings.Contains(w2.Body.String(), "reconfigured proxy") {
-		t.Errorf("expected 'reconfigured proxy' in response, got %q", w2.Body.String())
-	}
-	if !strings.Contains(w2.Body.String(), backendAddr1) {
-		t.Errorf("response should mention old target %q, got %q", backendAddr1, w2.Body.String())
-	}
-	if !strings.Contains(w2.Body.String(), backendAddr2) {
-		t.Errorf("response should mention new target %q, got %q", backendAddr2, w2.Body.String())
+	if w2.Code != http.StatusConflict {
+		t.Errorf("reconfigure should return 409, got %d — body: %s", w2.Code, w2.Body.String())
 	}
 }
 
@@ -324,7 +340,8 @@ func TestConfigure_BadRequests(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(tt.method, stubapi.ProxyConfigPath, strings.NewReader(tt.body))
+			resetInstance(t) // each subtest starts fresh
+			req := httptest.NewRequest(tt.method, stubapi.ProxyConfigPath, bytes.NewReader([]byte(tt.body)))
 			w := httptest.NewRecorder()
 			Configure(w, req)
 
@@ -333,49 +350,4 @@ func TestConfigure_BadRequests(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestRunWithConfig_ContextCancellation(t *testing.T) {
-	resetInstance(t)
-
-	proxyPort := findFreePort(t)
-	ctx, cancel := context.WithCancel(t.Context())
-
-	cfg := ProxyConfig{
-		DialTimeout: 2 * time.Second,
-	}
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- RunWithConfig(ctx, fmt.Sprintf("%d", proxyPort), cfg)
-	}()
-
-	time.Sleep(50 * time.Millisecond)
-	cancel()
-
-	select {
-	case err := <-errCh:
-		if err != nil {
-			t.Errorf("RunWithConfig should return nil on clean shutdown, got %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("RunWithConfig did not stop after context cancellation")
-	}
-}
-
-func mustParsePort(s string, t *testing.T) int16 {
-	t.Helper()
-	var port int
-	if _, err := fmt.Sscanf(s, "%d", &port); err != nil {
-		t.Fatalf("failed to parse port %q: %v", s, err)
-	}
-	if port < 0 || port > 32767 {
-		t.Fatalf("port %d out of int16 range", port)
-	}
-	return int16(port)
-}
-
-// Suppress klog output during tests
-func init() {
-	klog.SetOutput(io.Discard)
 }

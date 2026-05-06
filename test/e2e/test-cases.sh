@@ -509,27 +509,34 @@ kubectl port-forward pod/"$req4" 28091:8081 -n "$NS" &
 PF_SPI_PID=$!
 sleep 2
 
-proxy_resp=$(curl -sf "http://localhost:28091/v1/proxy/config" 2>/dev/null || echo "")
+http_code=$(curl -s -o /tmp/proxy_resp.json -w '%{http_code}' "http://localhost:28091/v1/proxy/config" 2>/dev/null)
 kill "$PF_SPI_PID" 2>/dev/null || true
 wait "$PF_SPI_PID" 2>/dev/null || true
 
+proxy_resp=$(cat /tmp/proxy_resp.json)
+rm -f /tmp/proxy_resp.json
+
 # GET /v1/proxy/config returns JSON {"address":"...","port":...} or 404 if not configured
-if ! echo "$proxy_resp" | grep -q '"address"'; then
-    echo "ERROR: expected proxy to be configured, got: '$proxy_resp'" >&2
+if [ "$http_code" != "200" ]; then
+    echo "ERROR: expected proxy config to return 200, got $http_code, body: '$proxy_resp'" >&2
     exit 1
 fi
+
 echo "Proxy is configured: $proxy_resp"
 
-# Verify proxy target contains the launcher pod IP
+# Verify proxy config matches expected JSON using jq
 launcher1_ip=$(kubectl get pod "$launcher1" -n "$NS" -o jsonpath='{.status.podIP}')
-if ! echo "$proxy_resp" | grep -qF "$launcher1_ip"; then
-    echo "ERROR: proxy config does not contain launcher IP $launcher1_ip: '$proxy_resp'" >&2
+launcher1_port=8000
+
+expected=$(printf '{"address":"%s","port":%d}' "$launcher1_ip" "$launcher1_port")
+if ! echo "$proxy_resp" | jq -e --argjson expected "$expected" '. == $expected' >/dev/null 2>&1; then
+    echo "ERROR: proxy config does not match expected: expected=$expected, got='$proxy_resp'" >&2
     exit 1
 fi
-echo "Proxy config contains launcher IP: $launcher1_ip"
+echo "Proxy config matches expected: $expected"
 
 # Verify traffic forwarding through the TCP proxy port (8082)
-# The launcher has a /health endpoint that returns 200
+# The proxy forwards to the vLLM inference port (8000), which has a /health endpoint
 echo "Verifying traffic forwarding through TCP proxy port"
 kubectl port-forward pod/"$req4" 28092:8082 -n "$NS" &
 PF_PROXY_PID=$!

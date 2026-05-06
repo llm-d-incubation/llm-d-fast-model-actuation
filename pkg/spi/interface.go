@@ -69,10 +69,11 @@ const LogStartPosParam = "startPos"
 //     connections to the configured target.
 const ProxyConfigPath = "/v1/proxy/config"
 
-// ProxyConfig is the request and response body for configuring the proxy.
-type ProxyConfig struct {
+// ProxyTargetConfig is the request and response body for configuring the proxy
+// with a target address and port (sent by the dual-pods controller).
+type ProxyTargetConfig struct {
 	// Address is the target host to proxy to.
 	Address string `json:"address"`
 	// Port is the target port number.
-	Port int16 `json:"port"`
+	Port uint16 `json:"port"`
 }

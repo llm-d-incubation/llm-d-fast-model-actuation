@@ -1015,9 +1015,9 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 	requesterAddr := fmt.Sprintf("%s:%s", requestingPod.Status.PodIP, adminPort)
 	launcherAddr := fmt.Sprintf("%s:%d", providingPod.Status.PodIP, serverPort)
 	url := fmt.Sprintf("http://%s%s", requesterAddr, stubapi.ProxyConfigPath)
-	proxyConfig, _ := json.Marshal(stubapi.ProxyConfig{
+	proxyConfig, _ := json.Marshal(stubapi.ProxyTargetConfig{
 		Address: providingPod.Status.PodIP,
-		Port:    serverPort,
+		Port:    uint16(serverPort),
 	})
 
 	if err := doPut(url, bytes.NewReader(proxyConfig)); err != nil {

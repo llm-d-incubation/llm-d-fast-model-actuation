@@ -61,7 +61,7 @@ func main() {
 	numGPUs := uint(1)
 	probesPort := int16(8080)
 	spiPort := int16(8081)
-	proxyPort := int16(8082)
+	proxyCfg := proxy.DefaultProxyConfig
 
 	klog.InitFlags(nil)
 	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
@@ -69,9 +69,9 @@ func main() {
 	pflag.CommandLine.StringVar(&nodeName, "node", nodeName, "name of this Pod's Node")
 	pflag.CommandLine.StringVar(&podUID, "pod-uid", podUID, "UID of this Pod")
 	pflag.CommandLine.UintVar(&numGPUs, "num-gpus", numGPUs, "number of GPUs to allocate")
-	pflag.CommandLine.Int16Var(&probesPort, "probes-port", probesPort, "port number for /ready")
-	pflag.CommandLine.Int16Var(&spiPort, "spi-port", spiPort, "port for dual-pods requests")
-	pflag.CommandLine.Int16Var(&proxyPort, "proxy-port", proxyPort, "port for reverse proxy")
+	pflag.CommandLine.Int16Var(&probesPort, "probes-port", probesPort, "port number for readiness/liveness probes")
+	pflag.CommandLine.Int16Var(&spiPort, "spi-port", spiPort, "port for dual-pods SPI requests")
+	proxyCfg.AddFlags(*pflag.CommandLine)
 
 	pflag.Parse()
 
@@ -138,7 +138,7 @@ func main() {
 	go func() {
 		defer wg.Done()
 
-		err := proxy.Run(ctx, strconv.FormatInt(int64(proxyPort), 10))
+		err := proxy.Run(ctx, proxyCfg)
 		if err != nil {
 			logger.Error(err, "failed to run requester proxy server")
 		}
