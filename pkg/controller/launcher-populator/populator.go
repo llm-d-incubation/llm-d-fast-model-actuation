@@ -129,8 +129,33 @@ type lcItem struct {
 	cache.ObjectName
 }
 
+type podItem struct {
+	cache.ObjectName
+}
+
+type nodeItem struct {
+	cache.ObjectName
+}
+
+// isLauncherPod returns true if the Pod is a launcher pod managed by this controller.
+func isLauncherPod(pod *corev1.Pod) bool {
+	return pod.Labels[common.ComponentLabelKey] == common.LauncherComponentLabelValue
+}
+
 func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 	switch typed := obj.(type) {
+	case *corev1.Pod:
+		if !isLauncherPod(typed) {
+			ctl.enqueueLogger.V(5).Info("Ignored add of non-launcher Pod", "name", typed.Name)
+			return
+		}
+		ctl.enqueueLogger.V(5).Info("Enqueuing Pod reference due to notification of add", "name", typed.Name)
+		item := podItem{cache.MetaObjectToName(typed)}
+		ctl.Queue.Add(item)
+	case *corev1.Node:
+		ctl.enqueueLogger.V(5).Info("Enqueuing Node reference due to notification of add", "name", typed.Name)
+		item := nodeItem{cache.MetaObjectToName(typed)}
+		ctl.Queue.Add(item)
 	case *fmav1alpha1.LauncherPopulationPolicy:
 		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherPopulationPolicy reference due to notification of add", "name", typed.Name)
 		item := lppItem{cache.MetaObjectToName(typed)}
@@ -147,6 +172,18 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 
 func (ctl *controller) OnUpdate(prev, obj any) {
 	switch typed := obj.(type) {
+	case *corev1.Pod:
+		if !isLauncherPod(typed) {
+			ctl.enqueueLogger.V(5).Info("Ignored update of non-launcher Pod", "name", typed.Name)
+			return
+		}
+		ctl.enqueueLogger.V(5).Info("Enqueuing Pod reference due to notification of update", "name", typed.Name)
+		item := podItem{cache.MetaObjectToName(typed)}
+		ctl.Queue.Add(item)
+	case *corev1.Node:
+		ctl.enqueueLogger.V(5).Info("Enqueuing Node reference due to notification of update", "name", typed.Name)
+		item := nodeItem{cache.MetaObjectToName(typed)}
+		ctl.Queue.Add(item)
 	case *fmav1alpha1.LauncherPopulationPolicy:
 		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherPopulationPolicy reference due to notification of update", "name", typed.Name)
 		item := lppItem{cache.MetaObjectToName(typed)}
@@ -166,6 +203,18 @@ func (ctl *controller) OnDelete(obj any) {
 		obj = dfsu.Obj
 	}
 	switch typed := obj.(type) {
+	case *corev1.Pod:
+		if !isLauncherPod(typed) {
+			ctl.enqueueLogger.V(5).Info("Ignored delete of non-launcher Pod", "name", typed.Name)
+			return
+		}
+		ctl.enqueueLogger.V(5).Info("Enqueuing Pod reference due to notification of delete", "name", typed.Name)
+		item := podItem{cache.MetaObjectToName(typed)}
+		ctl.Queue.Add(item)
+	case *corev1.Node:
+		ctl.enqueueLogger.V(5).Info("Enqueuing Node reference due to notification of delete", "name", typed.Name)
+		item := nodeItem{cache.MetaObjectToName(typed)}
+		ctl.Queue.Add(item)
 	case *fmav1alpha1.LauncherPopulationPolicy:
 		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherPopulationPolicy reference due to notification of delete", "name", typed.Name)
 		item := lppItem{cache.MetaObjectToName(typed)}
@@ -200,6 +249,21 @@ func (item lppItem) process(ctx context.Context, ctl *controller) (error, bool) 
 func (item lcItem) process(ctx context.Context, ctl *controller) (error, bool) {
 	// No special treatment for any particular LauncherConfig;
 	// missing LauncherConfigs are handled inside buildDesiredStateFromPolicies.
+	return ctl.reconcileFromPolicies(ctx)
+}
+
+func (item podItem) process(ctx context.Context, ctl *controller) (error, bool) {
+	// Pod events trigger a full reconciliation because the controller rebuilds
+	// the entire desired state from policies on every cycle. A launcher Pod
+	// add/update/delete may change the effective population on a node, so we
+	// need to re-evaluate all policies.
+	return ctl.reconcileFromPolicies(ctx)
+}
+
+func (item nodeItem) process(ctx context.Context, ctl *controller) (error, bool) {
+	// Node events trigger a full reconciliation because changes to node labels
+	// or allocatable resources may affect which nodes match policies, altering
+	// the desired launcher population across the cluster.
 	return ctl.reconcileFromPolicies(ctx)
 }
 
