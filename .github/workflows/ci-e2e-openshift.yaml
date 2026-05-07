@@ -454,8 +454,39 @@ jobs:
             done
           fi
 
-          echo "Creating namespace $FMA_NAMESPACE..."
-          kubectl create namespace "$FMA_NAMESPACE"
+          # Namespace is kept after the run ends so shipped logs remain
+          # queryable via Loki. It carries an expires-at annotation (14 days,
+          # matching LokiStack retention); a scheduled sweeper workflow
+          # (fma-e2e-namespace-sweep.yaml) deletes namespaces past that date.
+          EXPIRES_AT=$(date -u -d '+14 days' +%Y-%m-%d 2>/dev/null \
+            || date -u -v+14d +%Y-%m-%d)
+          echo "Creating namespace $FMA_NAMESPACE (expires $EXPIRES_AT)..."
+          kubectl apply -f - <<EOF
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: ${FMA_NAMESPACE}
+            labels:
+              fma-e2e.llm-d.ai/sweep: "true"
+            annotations:
+              fma-e2e.llm-d.ai/expires-at: "${EXPIRES_AT}"
+              fma-e2e.llm-d.ai/run-id: "${{ github.run_id }}"
+          EOF
+
+      - name: Grant read access on namespace to all authenticated users
+        run: |
+          # Two namespace-scoped RoleBindings make both the Kubernetes API
+          # objects and the shipped Loki logs readable by any authenticated
+          # user. Both bindings die with the namespace, which is fine: the
+          # namespace itself is kept around until the sweeper deletes it.
+          kubectl create rolebinding fma-e2e-public-view \
+            --namespace "$FMA_NAMESPACE" \
+            --clusterrole=view \
+            --group=system:authenticated
+          kubectl create rolebinding fma-e2e-loki-view \
+            --namespace "$FMA_NAMESPACE" \
+            --clusterrole=cluster-logging-application-view \
+            --group=system:authenticated
 
       - name: Deploy FMA
         env:
@@ -607,9 +638,12 @@ jobs:
               -p="{\"metadata\":{\"finalizers\":[${keep_entries}]}}" 2>/dev/null || true
           done
 
-          # Delete namespace
-          kubectl delete namespace "$FMA_NAMESPACE" \
-            --ignore-not-found --timeout=180s || true
+          # The namespace itself is intentionally NOT deleted here; it
+          # is kept so shipped logs remain queryable via Loki. The scheduled
+          # sweeper workflow (fma-e2e-namespace-sweep.yaml) deletes it once
+          # its expires-at annotation is in the past. Re-running this job
+          # for the same PR will delete and recreate the namespace via the
+          # "Clean up resources for this PR" step at the top.
 
           # Delete cluster-scoped stuff for reading Node objects
           kubectl delete clusterrole        "${FMA_CHART_INSTANCE_NAME}-node-view" --ignore-not-found || true
