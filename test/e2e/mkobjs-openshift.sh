@@ -121,7 +121,7 @@ spec:
       e2e-test.fma.llm-d.ai/isc-label: test-value
     annotations:
       e2e-test.fma.llm-d.ai/isc-annotation: test-value
-  launcherConfigName: launcher-config-$inst
+  launcherConfigName: "$inst"
 ---
 apiVersion: fma.llm-d.ai/v1alpha1
 kind: InferenceServerConfig
@@ -141,7 +141,7 @@ spec:
       e2e-test.fma.llm-d.ai/isc-label: test-value
     annotations:
       e2e-test.fma.llm-d.ai/isc-annotation: test-value
-  launcherConfigName: launcher-config-$inst
+  launcherConfigName: "$inst"
 ---
 apiVersion: fma.llm-d.ai/v1alpha1
 kind: InferenceServerConfig
@@ -161,12 +161,12 @@ spec:
       e2e-test.fma.llm-d.ai/isc-label: test-value
     annotations:
       e2e-test.fma.llm-d.ai/isc-annotation: test-value
-  launcherConfigName: launcher-config-$inst
+  launcherConfigName: "$inst"
 ---
 apiVersion: fma.llm-d.ai/v1alpha1
 kind: LauncherConfig
 metadata:
-  name: launcher-config-$inst
+  name: "$inst"
   labels:
     fma-e2e-instance: "$inst"
 spec:
@@ -215,7 +215,7 @@ spec:
       matchLabels:
         nvidia.com/gpu.present: "true"
   countForLauncher:
-    - launcherConfigName: launcher-config-$inst
+    - launcherConfigName: "$inst"
       launcherCount: 1
 ---
 apiVersion: apps/v1
@@ -266,7 +266,7 @@ EOF
        )
 then
     echo inference-server-config-smol-$inst
-    echo launcher-config-$inst
+    echo "$inst"
     echo my-request-$inst
     echo inference-server-config-qwen-$inst
     echo inference-server-config-tinyllama-$inst
