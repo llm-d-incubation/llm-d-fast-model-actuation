@@ -626,7 +626,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		// then those with capacity for new instances.
 		// Note that multiple vLLM instances could exist in one launcher Pod, but at most one instance could be awake at a time.
 
-		launcherPod, hasSleepingInstance, someNotReady, err := ctl.selectBestLauncherPod(ctx, launcherPodAnys, iscHash, desiredPort, int(lc.Spec.MaxSleepingInstances), nodeDat)
+		launcherPod, hasSleepingInstance, someNotReady, err := ctl.selectBestLauncherPod(ctx, launcherPodAnys, iscHash, desiredPort, effectiveMaxInstances(lc)-1, nodeDat)
 		if err != nil {
 			return err, true
 		}
@@ -648,7 +648,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	// Remains: Zero matching launcher Pods, or the matching launcher Pod cannot host more instances to fulfill the request.
 
 	// TODO(waltforme): enforceSleeperBudget should be revised for launcher-based server-providing Pods
-	err, retry := ctl.enforceSleeperBudget(ctx, serverDat, requestingPod, int(lc.Spec.MaxSleepingInstances))
+	err, retry := ctl.enforceSleeperBudget(ctx, serverDat, requestingPod, effectiveMaxInstances(lc)-1)
 	if err != nil || retry {
 		return err, retry
 	}
@@ -794,6 +794,16 @@ func (ctl *controller) selectBestLauncherPod(
 	// No suitable launchers found
 	logger.V(4).Info("No suitable launcher Pod found with sleeping instance or necessary capacity")
 	return nil, false, false, nil
+}
+
+// effectiveMaxInstances returns the cap on the total number of inference-engine instances
+// per launcher pod. If MaxInstances is positive, it is used directly; otherwise the legacy
+// MaxSleepingInstances semantics apply and the cap is MaxSleepingInstances + 1.
+func effectiveMaxInstances(lc *fmav1alpha1.LauncherConfig) int {
+	if lc.Spec.MaxInstances > 0 {
+		return int(lc.Spec.MaxInstances)
+	}
+	return int(lc.Spec.MaxSleepingInstances) + 1
 }
 
 // configInferenceServer computes the VllmConfig.

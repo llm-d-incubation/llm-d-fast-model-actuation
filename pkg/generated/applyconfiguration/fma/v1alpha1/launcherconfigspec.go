@@ -22,6 +22,7 @@ package v1alpha1
 type LauncherConfigSpecApplyConfiguration struct {
 	PodTemplate          *EmbeddedPodTemplateSpecApplyConfiguration `json:"podTemplate,omitempty"`
 	MaxSleepingInstances *int32                                     `json:"maxSleepingInstances,omitempty"`
+	MaxInstances         *int32                                     `json:"maxInstances,omitempty"`
 }
 
 // LauncherConfigSpecApplyConfiguration constructs a declarative configuration of the LauncherConfigSpec type for use with
@@ -43,5 +44,13 @@ func (b *LauncherConfigSpecApplyConfiguration) WithPodTemplate(value *EmbeddedPo
 // If called multiple times, the MaxSleepingInstances field is set to the value of the last call.
 func (b *LauncherConfigSpecApplyConfiguration) WithMaxSleepingInstances(value int32) *LauncherConfigSpecApplyConfiguration {
 	b.MaxSleepingInstances = &value
+	return b
+}
+
+// WithMaxInstances sets the MaxInstances field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the MaxInstances field is set to the value of the last call.
+func (b *LauncherConfigSpecApplyConfiguration) WithMaxInstances(value int32) *LauncherConfigSpecApplyConfiguration {
+	b.MaxInstances = &value
 	return b
 }
