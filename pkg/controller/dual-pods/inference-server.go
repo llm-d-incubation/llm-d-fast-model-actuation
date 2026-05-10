@@ -74,6 +74,16 @@ type launcherSyncResult struct {
 	stoppedInstanceIDs sets.Set[string] // bound instances found stopped (not deleted by sync)
 }
 
+type vllmInstanceState struct {
+	cfg            *VllmConfig
+	instanceID     string
+	serverPort     int16
+	iscLabels      map[string]string
+	iscAnnotations map[string]string
+	labelKeys      []string
+	annotationKeys []string
+}
+
 func (ni nodeItem) process(ctx context.Context, ctl *controller) (error, bool) {
 	logger := klog.FromContext(ctx).WithValues("node", ni.NodeName)
 	ctx = klog.NewContext(ctx, logger)
@@ -314,19 +324,6 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	iscName, launcherBased := requestingPod.Annotations[api.InferenceServerConfigAnnotationName]
 	if launcherBased {
 		logger.V(5).Info("Server requesting Pod is asking for launcher-based server providing Pod")
-
-		// from the requestingPod's annotations, get the InferenceServerConfig object
-		if iscName == "" {
-			return ctl.ensureReqStatus(ctx, requestingPod, serverDat,
-				fmt.Sprintf("empty value for annotation %q", api.InferenceServerConfigAnnotationName),
-			)
-		}
-		isc, err = ctl.iscLister.InferenceServerConfigs(ctl.namespace).Get(iscName)
-		if err != nil {
-			return ctl.ensureReqStatus(ctx, requestingPod, serverDat,
-				fmt.Sprintf("failed to get InferenceServerConfig %q: %v", iscName, err),
-			)
-		}
 	}
 
 	// Fetch the assigned GPUs if that has not already been done.
@@ -362,47 +359,34 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		}
 	}
 
-	var cfg *VllmConfig
-	var iscHash string
-	if launcherBased {
-		if serverDat.InstanceConfig == nil {
-			cfg, iscHash, err = ctl.configInferenceServer(isc, serverDat.GPUIDs)
-			if err != nil {
-				return fmt.Errorf("failed to configure inference server config: %w", err), true
-			}
-			serverDat.InstanceConfig = cfg
-			serverDat.InstanceID = iscHash
-			serverDat.ServerPort = int16(isc.Spec.ModelServerConfig.Port)
-		} else {
-			cfg = serverDat.InstanceConfig
-			iscHash = serverDat.InstanceID
+	var desiredInstanceState *vllmInstanceState
+	if launcherBased && providingPod == nil {
+		// from the requestingPod's annotations, get the InferenceServerConfig object
+		if iscName == "" {
+			return ctl.ensureReqStatus(ctx, requestingPod, serverDat,
+				fmt.Sprintf("empty value for annotation %q", api.InferenceServerConfigAnnotationName),
+			)
+		}
+		isc, err = ctl.iscLister.InferenceServerConfigs(ctl.namespace).Get(iscName)
+		if err != nil {
+			return ctl.ensureReqStatus(ctx, requestingPod, serverDat,
+				fmt.Sprintf("failed to get InferenceServerConfig %q: %v", iscName, err),
+			)
+		}
+		desiredInstanceState, err = ctl.computeDesiredInstanceState(isc, serverDat.GPUIDs)
+		if err != nil {
+			return fmt.Errorf("failed to configure inference server config: %w", err), true
 		}
 	}
 
 	// If there is already a bound server-providing Pod then ensure that it is awake,
 	// ensure status reported, and relay readiness if needed.
 	if providingPod != nil {
-		// Recover ISC label/annotation keys from tracking annotations after controller restart.
-		if serverDat.ISCLabelKeys == nil {
-			if v, ok := providingPod.Annotations[iscLabelKeysAnnotationKey]; ok {
-				if v == "" {
-					serverDat.ISCLabelKeys = []string{}
-				} else {
-					serverDat.ISCLabelKeys = strings.Split(v, " ")
-				}
-			}
-		}
-		if serverDat.ISCAnnotationKeys == nil {
-			if v, ok := providingPod.Annotations[iscAnnotationKeysAnnotationKey]; ok {
-				if v == "" {
-					serverDat.ISCAnnotationKeys = []string{}
-				} else {
-					serverDat.ISCAnnotationKeys = strings.Split(v, " ")
-				}
-			}
-		}
 		var serverPort int16
 		if launcherBased {
+			if err := recoverInstanceStateFromLauncherPod(serverDat, requestingPod, providingPod); err != nil {
+				return ctl.ensureReqStatus(ctx, requestingPod, serverDat, err.Error())
+			}
 			serverPort = serverDat.ServerPort
 		} else {
 			_, serverPort, err = utils.GetInferenceServerContainerIndexAndPort(providingPod)
@@ -466,7 +450,12 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				if err != nil {
 					return err, true
 				}
-				result, err := lClient.CreateNamedInstance(ctx, serverDat.InstanceID, *cfg)
+				if serverDat.InstanceConfig == nil {
+					return ctl.ensureReqStatus(ctx, requestingPod, serverDat,
+						fmt.Sprintf("unable to create vLLM instance %q because bound launcher Pod %q is missing annotation %q",
+							serverDat.InstanceID, providingPod.Name, launcherVllmConfigAnnotationKey))
+				}
+				result, err := lClient.CreateNamedInstance(ctx, serverDat.InstanceID, *serverDat.InstanceConfig)
 				if err != nil {
 					return fmt.Errorf("failed to create vLLM instance %q: %w", serverDat.InstanceID, err), true
 				}
@@ -474,11 +463,6 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				launcherDat := ctl.getLauncherData(nodeDat, providingPod.Name)
 				launcherDat.Instances[serverDat.InstanceID] = time.Now()
 				logger.V(5).Info("Created vLLM instance", "instance_id", result.InstanceID, "status", result.Status)
-				// If ISC tracking annotations are missing (pre-bound pod), propagate the ISC metadata.
-				if _, propagated := providingPod.Annotations[iscLabelKeysAnnotationKey]; !propagated {
-					return ctl.bind(ctx, serverDat, requestingPod, providingPod, &serverDat.InstanceID, serverDat.ServerPort,
-						isc.Spec.ModelServerConfig.Labels, isc.Spec.ModelServerConfig.Annotations, true)
-				}
 			}
 			serverDat.InstanceKnownToExist = true
 		}
@@ -567,7 +551,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				logger.V(2).Info("Unexpected: multiple sleeping Pods match; using the first", "requesterName", requestingPod.Name)
 			}
 			providingPod = sleepingAnys[0].(*corev1.Pod)
-			return ctl.bind(ctx, serverDat, requestingPod, providingPod, nil, -1, nil, nil, false)
+			return ctl.bind(ctx, serverDat, requestingPod, providingPod, nil, false)
 		}
 		// What remains is to make a new server-providing Pod --- if the sleeper budget allows.
 
@@ -617,8 +601,8 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		return err, false
 	}
 
-	desiredPort := int32(serverDat.ServerPort)
-	logger.V(5).Info("Nominal hash of InferenceServerConfig", "hash", iscHash)
+	desiredPort := int32(desiredInstanceState.serverPort)
+	logger.V(5).Info("Nominal hash of InferenceServerConfig", "hash", desiredInstanceState.instanceID)
 
 	if len(launcherPodAnys) > 0 {
 		// Multiple launcher Pods could exist for one LauncherConfig object on one node.
@@ -626,7 +610,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		// then those with capacity for new instances.
 		// Note that multiple vLLM instances could exist in one launcher Pod, but at most one instance could be awake at a time.
 
-		launcherPod, hasSleepingInstance, someNotReady, err := ctl.selectBestLauncherPod(ctx, launcherPodAnys, iscHash, desiredPort, effectiveMaxInstances(lc)-1, nodeDat)
+		launcherPod, hasSleepingInstance, someNotReady, err := ctl.selectBestLauncherPod(ctx, launcherPodAnys, desiredInstanceState.instanceID, desiredPort, effectiveMaxInstances(lc)-1, nodeDat)
 		if err != nil {
 			return err, true
 		}
@@ -642,7 +626,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 			// The "bound provider" path will handle instance creation/waking.
 			// This ensures the invariant: vllm awake implies provider Pod is bound.
 			logger.V(5).Info("Selected launcher Pod, binding first", "name", launcherPod.Name, "hasSleepingInstance", hasSleepingInstance)
-			return ctl.bind(ctx, serverDat, requestingPod, launcherPod, &iscHash, serverDat.ServerPort, isc.Spec.ModelServerConfig.Labels, isc.Spec.ModelServerConfig.Annotations, true)
+			return ctl.bind(ctx, serverDat, requestingPod, launcherPod, desiredInstanceState, true)
 		}
 	}
 	// Remains: Zero matching launcher Pods, or the matching launcher Pod cannot host more instances to fulfill the request.
@@ -658,6 +642,10 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	// while the vLLM instance is being set up.
 	desiredLauncherPod.Annotations = utils.MapSet(desiredLauncherPod.Annotations, requesterAnnotationKey, string(requestingPod.UID)+" "+requestingPod.Name)
 	desiredLauncherPod.Labels = utils.MapSet(desiredLauncherPod.Labels, api.DualLabelName, requestingPod.Name)
+	problems := applyInstanceStateToLauncherPod(desiredLauncherPod, desiredInstanceState)
+	if len(problems) > 0 {
+		return ctl.ensureReqStatus(ctx, requestingPod, serverDat, problems...)
+	}
 	if !slices.Contains(desiredLauncherPod.Finalizers, providerFinalizer) {
 		desiredLauncherPod.Finalizers = append(desiredLauncherPod.Finalizers, providerFinalizer)
 	}
@@ -675,6 +663,8 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		return err, true
 	}
 	serverDat.Sleeping = nil
+	commitInstanceState(serverDat, desiredInstanceState)
+	serverDat.ProvidingPodName = echo.Name
 	logger.V(2).Info("Created launcher-based server-providing pod", "name", echo.Name, "gpus", serverDat.GPUIDsStr, "annotations", echo.Annotations, "labels", echo.Labels, "resourceVersion", echo.ResourceVersion)
 
 	return ctl.ensureReqStatus(ctx, requestingPod, serverDat)
@@ -839,6 +829,133 @@ func (ctl *controller) configInferenceServer(isc *fmav1alpha1.InferenceServerCon
 	return &vllmCfg, nominalHash, nil
 }
 
+func (ctl *controller) computeDesiredInstanceState(isc *fmav1alpha1.InferenceServerConfig, gpuUUIDs []string) (*vllmInstanceState, error) {
+	cfg, instanceID, err := ctl.configInferenceServer(isc, gpuUUIDs)
+	if err != nil {
+		return nil, err
+	}
+	return &vllmInstanceState{
+		cfg:            cfg,
+		instanceID:     instanceID,
+		serverPort:     int16(isc.Spec.ModelServerConfig.Port),
+		iscLabels:      isc.Spec.ModelServerConfig.Labels,
+		iscAnnotations: isc.Spec.ModelServerConfig.Annotations,
+	}, nil
+}
+
+func applyInstanceStateToLauncherPod(providingPod *corev1.Pod, state *vllmInstanceState) []string {
+	var problems []string
+	for k, v := range state.iscLabels {
+		if errs := k8svalidation.IsQualifiedName(k); len(errs) > 0 {
+			problems = append(problems, fmt.Sprintf("ISC label key %q is not a valid qualified name: %s", k, strings.Join(errs, "; ")))
+		} else if hasReservedPrefix(k) {
+			problems = append(problems, fmt.Sprintf("ISC label key %q uses a reserved prefix", k))
+		} else if _, exists := providingPod.Labels[k]; exists {
+			problems = append(problems, fmt.Sprintf("ISC label key %q collides with existing pod label", k))
+		}
+		if errs := k8svalidation.IsValidLabelValue(v); len(errs) > 0 {
+			problems = append(problems, fmt.Sprintf("ISC label value %q for key %q is not valid: %s", v, k, strings.Join(errs, "; ")))
+		}
+	}
+	for k := range state.iscAnnotations {
+		if errs := k8svalidation.IsQualifiedName(k); len(errs) > 0 {
+			problems = append(problems, fmt.Sprintf("ISC annotation key %q is not a valid qualified name: %s", k, strings.Join(errs, "; ")))
+		} else if hasReservedPrefix(k) {
+			problems = append(problems, fmt.Sprintf("ISC annotation key %q uses a reserved prefix", k))
+		} else if _, exists := providingPod.Annotations[k]; exists {
+			problems = append(problems, fmt.Sprintf("ISC annotation key %q collides with existing pod annotation", k))
+		}
+	}
+	if len(problems) > 0 {
+		return problems
+	}
+
+	labelKeys := make([]string, 0, len(state.iscLabels))
+	for k, v := range state.iscLabels {
+		providingPod.Labels = utils.MapSet(providingPod.Labels, k, v)
+		labelKeys = append(labelKeys, k)
+	}
+	slices.Sort(labelKeys)
+	state.labelKeys = labelKeys
+
+	annotationKeys := make([]string, 0, len(state.iscAnnotations))
+	for k, v := range state.iscAnnotations {
+		providingPod.Annotations = utils.MapSet(providingPod.Annotations, k, v)
+		annotationKeys = append(annotationKeys, k)
+	}
+	slices.Sort(annotationKeys)
+	state.annotationKeys = annotationKeys
+
+	cfgJSON, err := json.Marshal(state.cfg)
+	if err != nil {
+		return []string{fmt.Sprintf("failed to marshal launcher instance config: %s", err)}
+	}
+	providingPod.Annotations = utils.MapSet(providingPod.Annotations, launcherInstanceIDAnnotationKey, state.instanceID)
+	providingPod.Annotations[launcherServerPortAnnotationKey] = strconv.Itoa(int(state.serverPort))
+	providingPod.Annotations[launcherVllmConfigAnnotationKey] = string(cfgJSON)
+	providingPod.Annotations[iscLabelKeysAnnotationKey] = strings.Join(labelKeys, " ")
+	providingPod.Annotations[iscAnnotationKeysAnnotationKey] = strings.Join(annotationKeys, " ")
+	return nil
+}
+
+func commitInstanceState(serverDat *serverData, state *vllmInstanceState) {
+	serverDat.InstanceID = state.instanceID
+	serverDat.InstanceConfig = state.cfg
+	serverDat.ServerPort = state.serverPort
+	serverDat.ISCLabelKeys = slices.Clone(state.labelKeys)
+	serverDat.ISCAnnotationKeys = slices.Clone(state.annotationKeys)
+}
+
+func recoverInstanceStateFromLauncherPod(serverDat *serverData, requestingPod, providingPod *corev1.Pod) error {
+	instanceID := providingPod.Annotations[launcherInstanceIDAnnotationKey]
+	if instanceID == "" && requestingPod != nil {
+		instanceID = requestingPod.Labels[api.InstanceLabelName]
+	}
+	if instanceID == "" {
+		instanceID = serverDat.InstanceID
+	}
+	if instanceID == "" {
+		return fmt.Errorf("bound launcher Pod %q is missing annotation %q", providingPod.Name, launcherInstanceIDAnnotationKey)
+	}
+
+	serverPort := serverDat.ServerPort
+	if portS := providingPod.Annotations[launcherServerPortAnnotationKey]; portS != "" {
+		port, err := strconv.ParseInt(portS, 10, 16)
+		if err != nil {
+			return fmt.Errorf("bound launcher Pod %q has invalid annotation %q value %q: %w", providingPod.Name, launcherServerPortAnnotationKey, portS, err)
+		}
+		serverPort = int16(port)
+	}
+	if serverPort <= 0 {
+		return fmt.Errorf("bound launcher Pod %q is missing annotation %q", providingPod.Name, launcherServerPortAnnotationKey)
+	}
+	cfg := serverDat.InstanceConfig
+	if cfgJSON := providingPod.Annotations[launcherVllmConfigAnnotationKey]; cfgJSON != "" {
+		cfg = &VllmConfig{}
+		if err := json.Unmarshal([]byte(cfgJSON), cfg); err != nil {
+			return fmt.Errorf("bound launcher Pod %q has invalid annotation %q: %w", providingPod.Name, launcherVllmConfigAnnotationKey, err)
+		}
+	}
+
+	serverDat.InstanceID = instanceID
+	serverDat.InstanceConfig = cfg
+	serverDat.ServerPort = serverPort
+	if serverDat.ISCLabelKeys == nil {
+		serverDat.ISCLabelKeys = parseSpaceSeparatedAnnotation(providingPod.Annotations[iscLabelKeysAnnotationKey])
+	}
+	if serverDat.ISCAnnotationKeys == nil {
+		serverDat.ISCAnnotationKeys = parseSpaceSeparatedAnnotation(providingPod.Annotations[iscAnnotationKeysAnnotationKey])
+	}
+	return nil
+}
+
+func parseSpaceSeparatedAnnotation(value string) []string {
+	if value == "" {
+		return []string{}
+	}
+	return strings.Split(value, " ")
+}
+
 func getVLLMInstancePort(inst InstanceState) (int32, error) {
 	if value, ok := inst.Annotations[VllmConfigInferencePortAnnotationKey]; ok {
 		port, err := strconv.ParseInt(value, 10, 32)
@@ -942,9 +1059,8 @@ func (ctl *controller) enforceSleeperBudget(ctx context.Context, serverDat *serv
 	return nil, len(gonerNames) > 0
 }
 
-// Note: instPort is used only for launcher-based server-providing Pods.
-// instanceID is non-nil iff launcher-based
-func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requestingPod, providingPod *corev1.Pod, instanceID *string, instPort int16, iscLabels, iscAnnotations map[string]string, skipWake bool) (error, bool) {
+// launcherState is non-nil iff launcher-based.
+func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requestingPod, providingPod *corev1.Pod, launcherState *vllmInstanceState, skipWake bool) (error, bool) {
 	logger := klog.FromContext(ctx)
 	providingPod = providingPod.DeepCopy()
 	providingPod.Annotations = utils.MapSet(providingPod.Annotations, requesterAnnotationKey, string(requestingPod.UID)+" "+requestingPod.Name)
@@ -952,49 +1068,12 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 		providingPod.Finalizers = append(providingPod.Finalizers, providerFinalizer)
 	}
 	providingPod.Labels = utils.MapSet(providingPod.Labels, api.DualLabelName, requestingPod.Name)
-	launcherBased := instanceID != nil
-	var problems []string
-	for k, v := range iscLabels {
-		if errs := k8svalidation.IsQualifiedName(k); len(errs) > 0 {
-			problems = append(problems, fmt.Sprintf("ISC label key %q is not a valid qualified name: %s", k, strings.Join(errs, "; ")))
-		} else if hasReservedPrefix(k) {
-			problems = append(problems, fmt.Sprintf("ISC label key %q uses a reserved prefix", k))
-		} else if _, exists := providingPod.Labels[k]; exists {
-			problems = append(problems, fmt.Sprintf("ISC label key %q collides with existing pod label", k))
-		}
-		if errs := k8svalidation.IsValidLabelValue(v); len(errs) > 0 {
-			problems = append(problems, fmt.Sprintf("ISC label value %q for key %q is not valid: %s", v, k, strings.Join(errs, "; ")))
-		}
-	}
-	for k := range iscAnnotations {
-		if errs := k8svalidation.IsQualifiedName(k); len(errs) > 0 {
-			problems = append(problems, fmt.Sprintf("ISC annotation key %q is not a valid qualified name: %s", k, strings.Join(errs, "; ")))
-		} else if hasReservedPrefix(k) {
-			problems = append(problems, fmt.Sprintf("ISC annotation key %q uses a reserved prefix", k))
-		} else if _, exists := providingPod.Annotations[k]; exists {
-			problems = append(problems, fmt.Sprintf("ISC annotation key %q collides with existing pod annotation", k))
-		}
-	}
-	if len(problems) > 0 {
-		return ctl.ensureReqStatus(ctx, requestingPod, serverDat, problems...)
-	}
-	labelKeys := make([]string, 0, len(iscLabels))
-	for k, v := range iscLabels {
-		providingPod.Labels[k] = v
-		labelKeys = append(labelKeys, k)
-	}
-	slices.Sort(labelKeys)
-	serverDat.ISCLabelKeys = labelKeys
-	annotationKeys := make([]string, 0, len(iscAnnotations))
-	for k, v := range iscAnnotations {
-		providingPod.Annotations[k] = v
-		annotationKeys = append(annotationKeys, k)
-	}
-	slices.Sort(annotationKeys)
-	serverDat.ISCAnnotationKeys = annotationKeys
+	launcherBased := launcherState != nil
 	if launcherBased {
-		providingPod.Annotations[iscLabelKeysAnnotationKey] = strings.Join(labelKeys, " ")
-		providingPod.Annotations[iscAnnotationKeysAnnotationKey] = strings.Join(annotationKeys, " ")
+		problems := applyInstanceStateToLauncherPod(providingPod, launcherState)
+		if len(problems) > 0 {
+			return ctl.ensureReqStatus(ctx, requestingPod, serverDat, problems...)
+		}
 	}
 	serverDat.Sleeping = nil
 	echo, err := ctl.coreclient.Pods(ctl.namespace).Update(ctx, providingPod, metav1.UpdateOptions{FieldManager: ControllerName})
@@ -1003,7 +1082,7 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 	}
 	serverDat.ProvidingPodName = providingPod.Name
 	if launcherBased {
-		serverDat.InstanceID = *instanceID
+		commitInstanceState(serverDat, launcherState)
 	}
 	logger.V(2).Info("Bound server-providing Pod", "name", providingPod.Name, "node", requestingPod.Spec.NodeName, "gpus", serverDat.GPUIDsStr, "newResourceVersion", echo.ResourceVersion, "instanceID", serverDat.InstanceID)
 	var serverPort int16
@@ -1011,8 +1090,7 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 	// For direct server-providing Pods, ServerPort is written (earlier) when
 	// constructing the server-providing Pod's spec in getNominalServerProvidingPod.
 	if launcherBased {
-		serverPort = instPort
-		serverDat.ServerPort = serverPort
+		serverPort = launcherState.serverPort
 	} else {
 		_, serverPort, err = utils.GetInferenceServerContainerIndexAndPort(providingPod)
 		if err != nil { // Impossible, because such a providingPod would never be created by this controller
@@ -1182,7 +1260,12 @@ func (item instanceGCItem) process(ctx context.Context, ctl *controller, nodeDat
 			if inst.InstanceID == currentHash {
 				continue // not obsolete
 			}
-			sleeping, err := ctl.querySleeping(ctx, launcherPod, int16(isc.Spec.ModelServerConfig.Port))
+			instPort, err := getVLLMInstancePort(inst)
+			if err != nil {
+				logger.Error(err, "Failed to determine instance port during GC", "launcherPod", launcherPodName, "instanceID", inst.InstanceID)
+				continue
+			}
+			sleeping, err := ctl.querySleeping(ctx, launcherPod, int16(instPort))
 			if err != nil {
 				logger.Error(err, "Failed to query sleeping state during instance GC", "launcherPod", launcherPodName, "instanceID", inst.InstanceID)
 				continue
@@ -1207,6 +1290,11 @@ func (item instanceGCItem) process(ctx context.Context, ctl *controller, nodeDat
 // Unbinds the given server-providing Pod.
 func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData, nodeDat *nodeData, providingPod *corev1.Pod, launcherBased bool) error {
 	logger := klog.FromContext(ctx)
+	if launcherBased {
+		if err := recoverInstanceStateFromLauncherPod(serverDat, nil, providingPod); err != nil {
+			return err
+		}
+	}
 	// A providingPod with no IP is not scheduled, so we know that it is not awake.
 	// If providingPod is stale then the update will fail.
 	if (serverDat.Sleeping == nil || !*(serverDat.Sleeping)) && providingPod.Status.PodIP != "" { // need to put to sleep
@@ -1294,6 +1382,18 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 	}
 	serverDat.ISCAnnotationKeys = nil
 	// Remove tracking annotations
+	if _, have := providingPod.Annotations[launcherInstanceIDAnnotationKey]; have {
+		delete(providingPod.Annotations, launcherInstanceIDAnnotationKey)
+		aChange = true
+	}
+	if _, have := providingPod.Annotations[launcherServerPortAnnotationKey]; have {
+		delete(providingPod.Annotations, launcherServerPortAnnotationKey)
+		aChange = true
+	}
+	if _, have := providingPod.Annotations[launcherVllmConfigAnnotationKey]; have {
+		delete(providingPod.Annotations, launcherVllmConfigAnnotationKey)
+		aChange = true
+	}
 	if _, have := providingPod.Annotations[iscLabelKeysAnnotationKey]; have {
 		delete(providingPod.Annotations, iscLabelKeysAnnotationKey)
 		aChange = true

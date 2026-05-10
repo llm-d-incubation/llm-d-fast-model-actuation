@@ -93,6 +93,9 @@ import (
 
 const requesterAnnotationKey = "dual-pods.llm-d.ai/requester"
 const nominalHashAnnotationKey = "dual-pods.llm-d.ai/nominal"
+const launcherInstanceIDAnnotationKey = "dual-pods.llm-d.ai/instance-id"
+const launcherServerPortAnnotationKey = "dual-pods.llm-d.ai/server-port"
+const launcherVllmConfigAnnotationKey = "dual-pods.llm-d.ai/vllm-config"
 const iscLabelKeysAnnotationKey = "dual-pods.llm-d.ai/isc-label-keys"
 const iscAnnotationKeysAnnotationKey = "dual-pods.llm-d.ai/isc-annotation-keys"
 
