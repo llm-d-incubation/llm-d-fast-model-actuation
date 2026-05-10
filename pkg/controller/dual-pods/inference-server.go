@@ -451,9 +451,11 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 					return err, true
 				}
 				if serverDat.InstanceConfig == nil {
-					return ctl.ensureReqStatus(ctx, requestingPod, serverDat,
-						fmt.Sprintf("unable to create vLLM instance %q because bound launcher Pod %q is missing annotation %q",
-							serverDat.InstanceID, providingPod.Name, launcherVllmConfigAnnotationKey))
+					ctl.eventRecorder.Eventf(providingPod, corev1.EventTypeWarning, "MissingInstanceConfig",
+						"unable to create vLLM instance %q because bound launcher Pod is missing annotation %q",
+						serverDat.InstanceID, launcherVllmConfigAnnotationKey)
+					return fmt.Errorf("bound launcher Pod %q is missing annotation %q",
+						providingPod.Name, launcherVllmConfigAnnotationKey), false
 				}
 				result, err := lClient.CreateNamedInstance(ctx, serverDat.InstanceID, *serverDat.InstanceConfig)
 				if err != nil {

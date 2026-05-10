@@ -36,9 +36,11 @@ import (
 	apitypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	corev1preinformers "k8s.io/client-go/informers/core/v1"
+	"k8s.io/client-go/kubernetes/scheme"
 	coreclient "k8s.io/client-go/kubernetes/typed/core/v1"
 	corev1listers "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
 
 	fmav1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
@@ -167,9 +169,12 @@ func (config ControllerConfig) NewController(
 	corev1PreInformers corev1preinformers.Interface,
 	fmaInformerFactory fmainformers.SharedInformerFactory,
 ) (*controller, error) {
+	eventBroadcaster := record.NewBroadcaster()
 	ctl := &controller{
 		enqueueLogger:       logger.WithName(ControllerName),
 		coreclient:          coreClient,
+		eventBroadcaster:    eventBroadcaster,
+		eventRecorder:       eventBroadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: ControllerName}),
 		namespace:           namespace,
 		podInformer:         corev1PreInformers.Pods().Informer(),
 		podLister:           corev1PreInformers.Pods().Lister(),
@@ -232,9 +237,11 @@ func (config ControllerConfig) NewController(
 }
 
 type controller struct {
-	enqueueLogger klog.Logger
-	coreclient    coreclient.CoreV1Interface
-	namespace     string
+	enqueueLogger    klog.Logger
+	coreclient       coreclient.CoreV1Interface
+	eventBroadcaster record.EventBroadcaster
+	eventRecorder    record.EventRecorder
+	namespace        string
 	podInformer   cache.SharedIndexInformer
 	podLister     corev1listers.PodLister
 	cmInformer    cache.SharedIndexInformer
@@ -618,6 +625,12 @@ func (ctl *controller) Start(ctx context.Context) error {
 	if !cache.WaitForNamedCacheSync(ControllerName, ctx.Done(), ctl.cmInformer.HasSynced, ctl.podInformer.HasSynced, ctl.nodeInformer.HasSynced, ctl.iscInformer.HasSynced, ctl.lcInformer.HasSynced) {
 		return fmt.Errorf("caches not synced before end of Start context")
 	}
+	ctl.eventBroadcaster.StartStructuredLogging(0)
+	ctl.eventBroadcaster.StartRecordingToSink(&coreclient.EventSinkImpl{Interface: ctl.coreclient.Events("")})
+	go func() {
+		<-ctx.Done()
+		ctl.eventBroadcaster.Shutdown()
+	}()
 	err := ctl.StartWorkers(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to start workers: %w", err)
