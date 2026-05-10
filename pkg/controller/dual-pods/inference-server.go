@@ -1352,26 +1352,6 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 	}
 	// Ensure finalizer is absent
 	providingPod.Finalizers, fChange = utils.SliceRemoveOnce(providingPod.Finalizers, providerFinalizer)
-	// Recover ISC label/annotation keys if not yet cached (e.g., controller restarted
-	// and ensureUnbound is reached before the normal reconciliation path).
-	if serverDat.ISCLabelKeys == nil {
-		if v, ok := providingPod.Annotations[iscLabelKeysAnnotationKey]; ok {
-			if v == "" {
-				serverDat.ISCLabelKeys = []string{}
-			} else {
-				serverDat.ISCLabelKeys = strings.Split(v, " ")
-			}
-		}
-	}
-	if serverDat.ISCAnnotationKeys == nil {
-		if v, ok := providingPod.Annotations[iscAnnotationKeysAnnotationKey]; ok {
-			if v == "" {
-				serverDat.ISCAnnotationKeys = []string{}
-			} else {
-				serverDat.ISCAnnotationKeys = strings.Split(v, " ")
-			}
-		}
-	}
 	// Remove ISC labels
 	for _, k := range serverDat.ISCLabelKeys {
 		if _, have := providingPod.Labels[k]; have {
