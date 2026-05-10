@@ -242,16 +242,16 @@ type controller struct {
 	eventBroadcaster record.EventBroadcaster
 	eventRecorder    record.EventRecorder
 	namespace        string
-	podInformer   cache.SharedIndexInformer
-	podLister     corev1listers.PodLister
-	cmInformer    cache.SharedIndexInformer
-	cmLister      corev1listers.ConfigMapLister
-	nodeInformer  cache.SharedIndexInformer
-	nodeLister    corev1listers.NodeLister
-	iscInformer   cache.SharedIndexInformer
-	iscLister     fmalisters.InferenceServerConfigLister
-	lcInformer    cache.SharedIndexInformer
-	lcLister      fmalisters.LauncherConfigLister
+	podInformer      cache.SharedIndexInformer
+	podLister        corev1listers.PodLister
+	cmInformer       cache.SharedIndexInformer
+	cmLister         corev1listers.ConfigMapLister
+	nodeInformer     cache.SharedIndexInformer
+	nodeLister       corev1listers.NodeLister
+	iscInformer      cache.SharedIndexInformer
+	iscLister        fmalisters.InferenceServerConfigLister
+	lcInformer       cache.SharedIndexInformer
+	lcLister         fmalisters.LauncherConfigLister
 	genctlr.KnowsProcessedSync[queueItem]
 
 	sleeperLimit        int
@@ -314,8 +314,9 @@ type serverData struct {
 	GPUIndices    []string
 	GPUIndicesStr *string
 
-	ProvidingPodName     string
-	InstanceID           string // ISC hash; set when computed, independent of instance existence
+	ProvidingPodName string
+	// Snapshot of the bound launcher-based vLLM instance. Not mutated after being set.
+	InstanceID           string
 	InstanceConfig       *VllmConfig
 	InstanceKnownToExist bool     // meaningful only for launcher-based providers
 	ISCLabelKeys         []string // keys of ISC labels applied to providingPod

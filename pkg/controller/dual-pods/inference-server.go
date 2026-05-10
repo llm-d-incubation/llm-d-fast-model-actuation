@@ -74,6 +74,8 @@ type launcherSyncResult struct {
 	stoppedInstanceIDs sets.Set[string] // bound instances found stopped (not deleted by sync)
 }
 
+// vllmInstanceState holds a snapshot of the ISC-derived state for a
+// launcher-based vLLM instance. Fields are not mutated after being set.
 type vllmInstanceState struct {
 	cfg            *VllmConfig
 	instanceID     string
@@ -384,7 +386,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	if providingPod != nil {
 		var serverPort int16
 		if launcherBased {
-			if err := recoverInstanceStateFromLauncherPod(serverDat, requestingPod, providingPod); err != nil {
+			if err := recoverInstanceStateFromLauncherPod(serverDat, providingPod); err != nil {
 				return ctl.ensureReqStatus(ctx, requestingPod, serverDat, err.Error())
 			}
 			serverPort = serverDat.ServerPort
@@ -904,50 +906,53 @@ func commitInstanceState(serverDat *serverData, state *vllmInstanceState) {
 	serverDat.InstanceID = state.instanceID
 	serverDat.InstanceConfig = state.cfg
 	serverDat.ServerPort = state.serverPort
-	serverDat.ISCLabelKeys = slices.Clone(state.labelKeys)
-	serverDat.ISCAnnotationKeys = slices.Clone(state.annotationKeys)
+	serverDat.ISCLabelKeys = state.labelKeys
+	serverDat.ISCAnnotationKeys = state.annotationKeys
 }
 
-func recoverInstanceStateFromLauncherPod(serverDat *serverData, requestingPod, providingPod *corev1.Pod) error {
-	instanceID := providingPod.Annotations[launcherInstanceIDAnnotationKey]
-	if instanceID == "" && requestingPod != nil {
-		instanceID = requestingPod.Labels[api.InstanceLabelName]
+// recoverInstanceStateFromLauncherPod populates the serverData snapshot from
+// the controller-written annotations on a bound launcher Pod. The five snapshot
+// fields are written atomically by commitInstanceState and applyInstanceStateToLauncherPod,
+// so if any one is set in serverData the others are too and recovery is a no-op;
+// otherwise all five annotations must be present on the Pod.
+func recoverInstanceStateFromLauncherPod(serverDat *serverData, providingPod *corev1.Pod) error {
+	if serverDat.InstanceID != "" {
+		return nil
 	}
-	if instanceID == "" {
-		instanceID = serverDat.InstanceID
-	}
-	if instanceID == "" {
+	instanceID, ok := providingPod.Annotations[launcherInstanceIDAnnotationKey]
+	if !ok || instanceID == "" {
 		return fmt.Errorf("bound launcher Pod %q is missing annotation %q", providingPod.Name, launcherInstanceIDAnnotationKey)
 	}
-
-	serverPort := serverDat.ServerPort
-	if portS := providingPod.Annotations[launcherServerPortAnnotationKey]; portS != "" {
-		port, err := strconv.ParseInt(portS, 10, 16)
-		if err != nil {
-			return fmt.Errorf("bound launcher Pod %q has invalid annotation %q value %q: %w", providingPod.Name, launcherServerPortAnnotationKey, portS, err)
-		}
-		serverPort = int16(port)
-	}
-	if serverPort <= 0 {
+	portS, ok := providingPod.Annotations[launcherServerPortAnnotationKey]
+	if !ok {
 		return fmt.Errorf("bound launcher Pod %q is missing annotation %q", providingPod.Name, launcherServerPortAnnotationKey)
 	}
-	cfg := serverDat.InstanceConfig
-	if cfgJSON := providingPod.Annotations[launcherVllmConfigAnnotationKey]; cfgJSON != "" {
-		cfg = &VllmConfig{}
-		if err := json.Unmarshal([]byte(cfgJSON), cfg); err != nil {
-			return fmt.Errorf("bound launcher Pod %q has invalid annotation %q: %w", providingPod.Name, launcherVllmConfigAnnotationKey, err)
-		}
+	port, err := strconv.ParseInt(portS, 10, 16)
+	if err != nil {
+		return fmt.Errorf("bound launcher Pod %q has invalid annotation %q value %q: %w", providingPod.Name, launcherServerPortAnnotationKey, portS, err)
+	}
+	cfgJSON, ok := providingPod.Annotations[launcherVllmConfigAnnotationKey]
+	if !ok {
+		return fmt.Errorf("bound launcher Pod %q is missing annotation %q", providingPod.Name, launcherVllmConfigAnnotationKey)
+	}
+	cfg := &VllmConfig{}
+	if err := json.Unmarshal([]byte(cfgJSON), cfg); err != nil {
+		return fmt.Errorf("bound launcher Pod %q has invalid annotation %q: %w", providingPod.Name, launcherVllmConfigAnnotationKey, err)
+	}
+	labelKeysS, ok := providingPod.Annotations[iscLabelKeysAnnotationKey]
+	if !ok {
+		return fmt.Errorf("bound launcher Pod %q is missing annotation %q", providingPod.Name, iscLabelKeysAnnotationKey)
+	}
+	annotationKeysS, ok := providingPod.Annotations[iscAnnotationKeysAnnotationKey]
+	if !ok {
+		return fmt.Errorf("bound launcher Pod %q is missing annotation %q", providingPod.Name, iscAnnotationKeysAnnotationKey)
 	}
 
 	serverDat.InstanceID = instanceID
 	serverDat.InstanceConfig = cfg
-	serverDat.ServerPort = serverPort
-	if serverDat.ISCLabelKeys == nil {
-		serverDat.ISCLabelKeys = parseSpaceSeparatedAnnotation(providingPod.Annotations[iscLabelKeysAnnotationKey])
-	}
-	if serverDat.ISCAnnotationKeys == nil {
-		serverDat.ISCAnnotationKeys = parseSpaceSeparatedAnnotation(providingPod.Annotations[iscAnnotationKeysAnnotationKey])
-	}
+	serverDat.ServerPort = int16(port)
+	serverDat.ISCLabelKeys = parseSpaceSeparatedAnnotation(labelKeysS)
+	serverDat.ISCAnnotationKeys = parseSpaceSeparatedAnnotation(annotationKeysS)
 	return nil
 }
 
@@ -1293,7 +1298,7 @@ func (item instanceGCItem) process(ctx context.Context, ctl *controller, nodeDat
 func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData, nodeDat *nodeData, providingPod *corev1.Pod, launcherBased bool) error {
 	logger := klog.FromContext(ctx)
 	if launcherBased {
-		if err := recoverInstanceStateFromLauncherPod(serverDat, nil, providingPod); err != nil {
+		if err := recoverInstanceStateFromLauncherPod(serverDat, providingPod); err != nil {
 			return err
 		}
 	}
