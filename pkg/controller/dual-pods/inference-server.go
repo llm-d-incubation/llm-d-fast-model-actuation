@@ -75,7 +75,10 @@ type launcherSyncResult struct {
 }
 
 // vllmInstanceState holds a snapshot of the ISC-derived state for a
-// launcher-based vLLM instance. Fields are not mutated after being set.
+// launcher-based vLLM instance. Once a *vllmInstanceState has been
+// returned from computeDesiredInstanceState, neither its fields nor
+// the values they reference (pointed-to VllmConfig, map entries,
+// slice elements) are mutated.
 type vllmInstanceState struct {
 	cfg            *VllmConfig
 	instanceID     string
@@ -903,6 +906,27 @@ func commitInstanceState(serverDat *serverData, state *vllmInstanceState) {
 	serverDat.ISCAnnotationKeys = state.annotationKeys
 }
 
+// clearInstanceStateFromLauncherPod removes the five controller-managed
+// launcher-instance annotations from the providing Pod. It is the inverse
+// of applyInstanceStateToLauncherPod's annotation writes.
+// Returns true iff any annotation was removed.
+func clearInstanceStateFromLauncherPod(providingPod *corev1.Pod) bool {
+	var changed bool
+	for _, k := range []string{
+		launcherInstanceIDAnnotationKey,
+		launcherServerPortAnnotationKey,
+		launcherVllmConfigAnnotationKey,
+		iscLabelKeysAnnotationKey,
+		iscAnnotationKeysAnnotationKey,
+	} {
+		if _, have := providingPod.Annotations[k]; have {
+			delete(providingPod.Annotations, k)
+			changed = true
+		}
+	}
+	return changed
+}
+
 // recoverInstanceStateFromLauncherPod populates the serverData snapshot from
 // the controller-written annotations on a bound launcher Pod. The five snapshot
 // fields are written atomically by commitInstanceState and applyInstanceStateToLauncherPod,
@@ -1362,24 +1386,7 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 	}
 	serverDat.ISCAnnotationKeys = nil
 	// Remove tracking annotations
-	if _, have := providingPod.Annotations[launcherInstanceIDAnnotationKey]; have {
-		delete(providingPod.Annotations, launcherInstanceIDAnnotationKey)
-		aChange = true
-	}
-	if _, have := providingPod.Annotations[launcherServerPortAnnotationKey]; have {
-		delete(providingPod.Annotations, launcherServerPortAnnotationKey)
-		aChange = true
-	}
-	if _, have := providingPod.Annotations[launcherVllmConfigAnnotationKey]; have {
-		delete(providingPod.Annotations, launcherVllmConfigAnnotationKey)
-		aChange = true
-	}
-	if _, have := providingPod.Annotations[iscLabelKeysAnnotationKey]; have {
-		delete(providingPod.Annotations, iscLabelKeysAnnotationKey)
-		aChange = true
-	}
-	if _, have := providingPod.Annotations[iscAnnotationKeysAnnotationKey]; have {
-		delete(providingPod.Annotations, iscAnnotationKeysAnnotationKey)
+	if clearInstanceStateFromLauncherPod(providingPod) {
 		aChange = true
 	}
 	if aChange || fChange || lChange {

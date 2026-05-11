@@ -308,7 +308,10 @@ type serverData struct {
 	GPUIndicesStr *string
 
 	ProvidingPodName string
-	// Snapshot of the bound launcher-based vLLM instance. Not mutated after being set.
+	// The next five fields form a snapshot of the bound launcher-based
+	// vLLM instance's ISC-derived state. Each field may be reassigned
+	// over time (e.g. on rebind), but whichever value (pointer, slice)
+	// is currently stored is deeply immutable for as long as it is stored.
 	InstanceID           string
 	InstanceConfig       *VllmConfig
 	InstanceKnownToExist bool     // meaningful only for launcher-based providers
