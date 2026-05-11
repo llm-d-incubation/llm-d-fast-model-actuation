@@ -303,7 +303,7 @@ type serverData struct {
 	NominalProvidingPodHash string
 
 	// ServerPort is meaningful if NominalProvidingPod is not nil
-	ServerPort int16
+	ServerPort int32
 
 	// UUIDs of the server's GPUs
 	GPUIDs []string

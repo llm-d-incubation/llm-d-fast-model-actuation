@@ -79,7 +79,7 @@ type launcherSyncResult struct {
 type vllmInstanceState struct {
 	cfg            *VllmConfig
 	instanceID     string
-	serverPort     int16
+	serverPort     int32
 	iscLabels      map[string]string
 	iscAnnotations map[string]string
 	labelKeys      []string
@@ -384,7 +384,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	// If there is already a bound server-providing Pod then ensure that it is awake,
 	// ensure status reported, and relay readiness if needed.
 	if providingPod != nil {
-		var serverPort int16
+		var serverPort int32
 		if launcherBased {
 			if err := recoverInstanceStateFromLauncherPod(serverDat, providingPod); err != nil {
 				return ctl.ensureReqStatus(ctx, requestingPod, serverDat, err.Error())
@@ -605,7 +605,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		return err, false
 	}
 
-	desiredPort := int32(desiredInstanceState.serverPort)
+	desiredPort := desiredInstanceState.serverPort
 	logger.V(5).Info("Nominal hash of InferenceServerConfig", "hash", desiredInstanceState.instanceID)
 
 	if len(launcherPodAnys) > 0 {
@@ -841,7 +841,7 @@ func (ctl *controller) computeDesiredInstanceState(isc *fmav1alpha1.InferenceSer
 	return &vllmInstanceState{
 		cfg:            cfg,
 		instanceID:     instanceID,
-		serverPort:     int16(isc.Spec.ModelServerConfig.Port),
+		serverPort:     isc.Spec.ModelServerConfig.Port,
 		iscLabels:      isc.Spec.ModelServerConfig.Labels,
 		iscAnnotations: isc.Spec.ModelServerConfig.Annotations,
 	}, nil
@@ -927,7 +927,7 @@ func recoverInstanceStateFromLauncherPod(serverDat *serverData, providingPod *co
 	if !ok {
 		return fmt.Errorf("bound launcher Pod %q is missing annotation %q", providingPod.Name, launcherServerPortAnnotationKey)
 	}
-	port, err := strconv.ParseInt(portS, 10, 16)
+	port, err := strconv.ParseInt(portS, 10, 32)
 	if err != nil {
 		return fmt.Errorf("bound launcher Pod %q has invalid annotation %q value %q: %w", providingPod.Name, launcherServerPortAnnotationKey, portS, err)
 	}
@@ -950,7 +950,7 @@ func recoverInstanceStateFromLauncherPod(serverDat *serverData, providingPod *co
 
 	serverDat.InstanceID = instanceID
 	serverDat.InstanceConfig = cfg
-	serverDat.ServerPort = int16(port)
+	serverDat.ServerPort = int32(port)
 	serverDat.ISCLabelKeys = parseSpaceSeparatedAnnotation(labelKeysS)
 	serverDat.ISCAnnotationKeys = parseSpaceSeparatedAnnotation(annotationKeysS)
 	return nil
@@ -1092,7 +1092,7 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 		commitInstanceState(serverDat, launcherState)
 	}
 	logger.V(2).Info("Bound server-providing Pod", "name", providingPod.Name, "node", requestingPod.Spec.NodeName, "gpus", serverDat.GPUIDsStr, "newResourceVersion", echo.ResourceVersion, "instanceID", serverDat.InstanceID)
-	var serverPort int16
+	var serverPort int32
 	// For launcher-based server-providing Pods, ServerPort is written when binding.
 	// For direct server-providing Pods, ServerPort is written (earlier) when
 	// constructing the server-providing Pod's spec in getNominalServerProvidingPod.
@@ -1113,7 +1113,7 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 	return ctl.ensureReqState(ctx, requestingPod, serverDat, !slices.Contains(requestingPod.Finalizers, requesterFinalizer), false)
 }
 
-func (ctl *controller) wakeSleeper(ctx context.Context, serverDat *serverData, requestingPod, providingPod *corev1.Pod, serverPort int16, description string) error {
+func (ctl *controller) wakeSleeper(ctx context.Context, serverDat *serverData, requestingPod, providingPod *corev1.Pod, serverPort int32, description string) error {
 	if ctl.debugAccelMemory {
 		if err := ctl.accelMemoryIsLowEnough(ctx, requestingPod, serverDat); err != nil {
 			return err
@@ -1272,7 +1272,7 @@ func (item instanceGCItem) process(ctx context.Context, ctl *controller, nodeDat
 				logger.Error(err, "Failed to determine instance port during GC", "launcherPod", launcherPodName, "instanceID", inst.InstanceID)
 				continue
 			}
-			sleeping, err := ctl.querySleeping(ctx, launcherPod, int16(instPort))
+			sleeping, err := ctl.querySleeping(ctx, launcherPod, instPort)
 			if err != nil {
 				logger.Error(err, "Failed to query sleeping state during instance GC", "launcherPod", launcherPodName, "instanceID", inst.InstanceID)
 				continue
@@ -1609,7 +1609,7 @@ func getReducedInferenceContainerState(from *corev1.Pod) *reducedContainerState 
 	return &ans
 }
 
-func (ctl *controller) querySleeping(ctx context.Context, providingPod *corev1.Pod, serverPort int16) (bool, error) {
+func (ctl *controller) querySleeping(ctx context.Context, providingPod *corev1.Pod, serverPort int32) (bool, error) {
 	queryURL := fmt.Sprintf("http://%s:%d/is_sleeping", providingPod.Status.PodIP, serverPort)
 	body, err := doGet(ctx, queryURL)
 	if err != nil {

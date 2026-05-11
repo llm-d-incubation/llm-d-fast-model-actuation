@@ -82,7 +82,7 @@ spec:
                       Port is the port on which the vLLM server will listen
                       Particularly, management of vLLM instances' sleep state is done through this port
                     format: int32
-                    maximum: 32766
+                    maximum: 65535
                     minimum: 1
                     type: integer
                 required:
