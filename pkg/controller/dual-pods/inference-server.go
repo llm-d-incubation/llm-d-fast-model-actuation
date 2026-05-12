@@ -77,16 +77,14 @@ type launcherSyncResult struct {
 // vllmInstanceState holds a snapshot of the ISC-derived state for a
 // launcher-based vLLM instance. Once a *vllmInstanceState has been
 // returned from computeDesiredInstanceState, neither its fields nor
-// the values they reference (pointed-to VllmConfig, map entries,
-// slice elements) are mutated.
+// the values they reference (pointed-to VllmConfig, map entries) are
+// mutated.
 type vllmInstanceState struct {
 	cfg            *VllmConfig
 	instanceID     string
 	serverPort     int32
 	iscLabels      map[string]string
 	iscAnnotations map[string]string
-	labelKeys      []string
-	annotationKeys []string
 }
 
 func (ni nodeItem) process(ctx context.Context, ctl *controller) (error, bool) {
@@ -876,7 +874,6 @@ func applyInstanceStateToLauncherPod(providingPod *corev1.Pod, state *vllmInstan
 		labelKeys = append(labelKeys, k)
 	}
 	slices.Sort(labelKeys)
-	state.labelKeys = labelKeys
 
 	annotationKeys := make([]string, 0, len(state.iscAnnotations))
 	for k, v := range state.iscAnnotations {
@@ -884,7 +881,6 @@ func applyInstanceStateToLauncherPod(providingPod *corev1.Pod, state *vllmInstan
 		annotationKeys = append(annotationKeys, k)
 	}
 	slices.Sort(annotationKeys)
-	state.annotationKeys = annotationKeys
 
 	cfgJSON, err := json.Marshal(state.cfg)
 	if err != nil {
@@ -902,8 +898,6 @@ func commitInstanceState(serverDat *serverData, state *vllmInstanceState) {
 	serverDat.InstanceID = state.instanceID
 	serverDat.InstanceConfig = state.cfg
 	serverDat.ServerPort = state.serverPort
-	serverDat.ISCLabelKeys = state.labelKeys
-	serverDat.ISCAnnotationKeys = state.annotationKeys
 }
 
 // clearInstanceStateFromLauncherPod removes the five controller-managed
@@ -928,10 +922,10 @@ func clearInstanceStateFromLauncherPod(providingPod *corev1.Pod) bool {
 }
 
 // recoverInstanceStateFromLauncherPod populates the serverData snapshot from
-// the controller-written annotations on a bound launcher Pod. The five snapshot
+// the controller-written annotations on a bound launcher Pod. The three snapshot
 // fields are written atomically by commitInstanceState and applyInstanceStateToLauncherPod,
 // so if any one is set in serverData the others are too and recovery is a no-op;
-// otherwise all five annotations must be present on the Pod.
+// otherwise all three annotations must be present on the Pod.
 func recoverInstanceStateFromLauncherPod(serverDat *serverData, providingPod *corev1.Pod) error {
 	if serverDat.InstanceID != "" {
 		return nil
@@ -956,20 +950,10 @@ func recoverInstanceStateFromLauncherPod(serverDat *serverData, providingPod *co
 	if err := json.Unmarshal([]byte(cfgJSON), cfg); err != nil {
 		return fmt.Errorf("bound launcher Pod %q has invalid annotation %q: %w", providingPod.Name, launcherVllmConfigAnnotationKey, err)
 	}
-	labelKeysS, ok := providingPod.Annotations[iscLabelKeysAnnotationKey]
-	if !ok {
-		return fmt.Errorf("bound launcher Pod %q is missing annotation %q", providingPod.Name, iscLabelKeysAnnotationKey)
-	}
-	annotationKeysS, ok := providingPod.Annotations[iscAnnotationKeysAnnotationKey]
-	if !ok {
-		return fmt.Errorf("bound launcher Pod %q is missing annotation %q", providingPod.Name, iscAnnotationKeysAnnotationKey)
-	}
 
 	serverDat.InstanceID = instanceID
 	serverDat.InstanceConfig = cfg
 	serverDat.ServerPort = int32(port)
-	serverDat.ISCLabelKeys = parseSpaceSeparatedAnnotation(labelKeysS)
-	serverDat.ISCAnnotationKeys = parseSpaceSeparatedAnnotation(annotationKeysS)
 	return nil
 }
 
@@ -1370,21 +1354,19 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 	// Ensure finalizer is absent
 	providingPod.Finalizers, fChange = utils.SliceRemoveOnce(providingPod.Finalizers, providerFinalizer)
 	// Remove ISC labels
-	for _, k := range serverDat.ISCLabelKeys {
+	for _, k := range parseSpaceSeparatedAnnotation(providingPod.Annotations[iscLabelKeysAnnotationKey]) {
 		if _, have := providingPod.Labels[k]; have {
 			delete(providingPod.Labels, k)
 			lChange = true
 		}
 	}
-	serverDat.ISCLabelKeys = nil
 	// Remove ISC annotations
-	for _, k := range serverDat.ISCAnnotationKeys {
+	for _, k := range parseSpaceSeparatedAnnotation(providingPod.Annotations[iscAnnotationKeysAnnotationKey]) {
 		if _, have := providingPod.Annotations[k]; have {
 			delete(providingPod.Annotations, k)
 			aChange = true
 		}
 	}
-	serverDat.ISCAnnotationKeys = nil
 	// Remove tracking annotations
 	if clearInstanceStateFromLauncherPod(providingPod) {
 		aChange = true

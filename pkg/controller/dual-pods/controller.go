@@ -295,7 +295,11 @@ type serverData struct {
 	NominalProvidingPod     *corev1.Pod
 	NominalProvidingPodHash string
 
-	// ServerPort is meaningful if NominalProvidingPod is not nil
+	// ServerPort is where the inference server listens.
+	// For direct (non-launcher-based) providers it is derived from
+	// NominalProvidingPod. For launcher-based providers it is written by
+	// commitInstanceState (on fresh bind) or recoverInstanceStateFromLauncherPod
+	// (on controller-restart recovery).
 	ServerPort int32
 
 	// UUIDs of the server's GPUs
@@ -308,15 +312,15 @@ type serverData struct {
 	GPUIndicesStr *string
 
 	ProvidingPodName string
-	// The next five fields form a snapshot of the bound launcher-based
+
+	// The next two fields form a snapshot of the bound launcher-based
 	// vLLM instance's ISC-derived state. Each field may be reassigned
-	// over time (e.g. on rebind), but whichever value (pointer, slice)
-	// is currently stored is deeply immutable for as long as it is stored.
-	InstanceID           string
-	InstanceConfig       *VllmConfig
-	InstanceKnownToExist bool     // meaningful only for launcher-based providers
-	ISCLabelKeys         []string // keys of ISC labels applied to providingPod
-	ISCAnnotationKeys    []string // keys of ISC annotations applied to providingPod
+	// over time (e.g. on rebind), but whichever value (pointer) is
+	// currently stored is deeply immutable for as long as it is stored.
+	InstanceID     string
+	InstanceConfig *VllmConfig
+
+	InstanceKnownToExist bool // meaningful only for launcher-based providers
 
 	ReadinessRelayed *bool
 
