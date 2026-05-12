@@ -93,6 +93,9 @@ import (
 
 const requesterAnnotationKey = "dual-pods.llm-d.ai/requester"
 const nominalHashAnnotationKey = "dual-pods.llm-d.ai/nominal"
+const launcherInstanceIDAnnotationKey = "dual-pods.llm-d.ai/instance-id"
+const launcherServerPortAnnotationKey = "dual-pods.llm-d.ai/server-port"
+const launcherVllmConfigAnnotationKey = "dual-pods.llm-d.ai/vllm-config"
 const iscLabelKeysAnnotationKey = "dual-pods.llm-d.ai/isc-label-keys"
 const iscAnnotationKeysAnnotationKey = "dual-pods.llm-d.ai/isc-annotation-keys"
 
@@ -232,16 +235,16 @@ type controller struct {
 	enqueueLogger klog.Logger
 	coreclient    coreclient.CoreV1Interface
 	namespace     string
-	podInformer   cache.SharedIndexInformer
-	podLister     corev1listers.PodLister
-	cmInformer    cache.SharedIndexInformer
-	cmLister      corev1listers.ConfigMapLister
-	nodeInformer  cache.SharedIndexInformer
-	nodeLister    corev1listers.NodeLister
-	iscInformer   cache.SharedIndexInformer
-	iscLister     fmalisters.InferenceServerConfigLister
-	lcInformer    cache.SharedIndexInformer
-	lcLister      fmalisters.LauncherConfigLister
+	podInformer      cache.SharedIndexInformer
+	podLister        corev1listers.PodLister
+	cmInformer       cache.SharedIndexInformer
+	cmLister         corev1listers.ConfigMapLister
+	nodeInformer     cache.SharedIndexInformer
+	nodeLister       corev1listers.NodeLister
+	iscInformer      cache.SharedIndexInformer
+	iscLister        fmalisters.InferenceServerConfigLister
+	lcInformer       cache.SharedIndexInformer
+	lcLister         fmalisters.LauncherConfigLister
 	genctlr.KnowsProcessedSync[queueItem]
 
 	sleeperLimit        int
@@ -292,8 +295,12 @@ type serverData struct {
 	NominalProvidingPod     *corev1.Pod
 	NominalProvidingPodHash string
 
-	// ServerPort is meaningful if NominalProvidingPod is not nil
-	ServerPort int16
+	// ServerPort is where the inference server listens.
+	// For direct (non-launcher-based) providers it is derived from
+	// NominalProvidingPod. For launcher-based providers it is written by
+	// commitInstanceState (on fresh bind) or recoverInstanceStateFromLauncherPod
+	// (on controller-restart recovery).
+	ServerPort int32
 
 	// UUIDs of the server's GPUs
 	GPUIDs []string
@@ -304,12 +311,16 @@ type serverData struct {
 	GPUIndices    []string
 	GPUIndicesStr *string
 
-	ProvidingPodName     string
-	InstanceID           string // ISC hash; set when computed, independent of instance existence
-	InstanceConfig       *VllmConfig
-	InstanceKnownToExist bool     // meaningful only for launcher-based providers
-	ISCLabelKeys         []string // keys of ISC labels applied to providingPod
-	ISCAnnotationKeys    []string // keys of ISC annotations applied to providingPod
+	ProvidingPodName string
+
+	// The next two fields form a snapshot of the bound launcher-based
+	// vLLM instance's ISC-derived state. Each field may be reassigned
+	// over time (e.g. on rebind), but whichever value (pointer) is
+	// currently stored is deeply immutable for as long as it is stored.
+	InstanceID     string
+	InstanceConfig *VllmConfig
+
+	InstanceKnownToExist bool // meaningful only for launcher-based providers
 
 	ReadinessRelayed *bool
 

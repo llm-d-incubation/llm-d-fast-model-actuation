@@ -92,8 +92,8 @@ func removeVolumeMount(ctr *corev1.Container, volumeName string) {
 // and the port for a server-providing Pod.
 // This function is for direct (non-launcher-based) server-providing Pods.
 // The port is identified from the readinessProbe.
-// Returns (containerIndex int, inferenceServerPort int16, err error).
-func GetInferenceServerContainerIndexAndPort(pod *corev1.Pod) (int, int16, error) {
+// Returns (containerIndex int, inferenceServerPort int32, err error).
+func GetInferenceServerContainerIndexAndPort(pod *corev1.Pod) (int, int32, error) {
 	cIdx, err := GetInferenceServerContainerIndex(pod)
 	if err != nil {
 		return 0, 0, err
@@ -108,7 +108,7 @@ func GetInferenceServerContainerIndexAndPort(pod *corev1.Pod) (int, int16, error
 	portIOS := isCtr.ReadinessProbe.HTTPGet.Port
 	switch portIOS.Type {
 	case intstr.Int:
-		return cIdx, int16(portIOS.IntVal), nil
+		return cIdx, portIOS.IntVal, nil
 	case intstr.String:
 		if portIOS.StrVal == "http" || portIOS.StrVal == "HTTP" {
 			return cIdx, 80, nil
