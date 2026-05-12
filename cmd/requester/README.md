@@ -4,13 +4,17 @@ cached on local PV in the cluster.
 
 ## Requester Overview
 
+The requester binary runs inside the server-requesting Pod of the dual-pods
+architecture. It acts as a lightweight coordinator between the dual-pods
+controller and the actual inference server running in the server-providing Pod.
+
 The server-requesting Pod runs three servers:
 
 | Server | Default Port | Purpose |
 |--------|-------------|---------|
-| Probes | 8080 | Readiness relay (`/ready` endpoint) |
-| SPI | 8081 | Dual-pods controller interface (`/v1/dual-pods/accelerators`) |
-| Proxy | 8082 | TCP reverse proxy to the inference server |
+| Probes | 8080 | Readiness relay (`/ready` endpoint) — reflects the health status of the bound inference server |
+| SPI | 8081 | Dual-pods controller interface (`/v1/dual-pods/accelerators`, `/v1/proxy/config`) — exposes GPU info and accepts proxy configuration from the controller |
+| Proxy | 8082 | TCP proxy listen port — accepts client connections and forwards them to the bound vLLM instance |
 
 ### TCP Proxy
 
@@ -19,21 +23,41 @@ After the dual-pods controller binds the requester to a server-providing Pod, it
 the proxy target via a `PUT` to the SPI endpoint at `/v1/proxy/config`. You can query the
 current proxy configuration with `GET /v1/proxy/config`.
 
-**Environment variables:**
+## Command-line flags
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PROBES_PORT` | `8080` | Probes server port |
-| `SPI_PORT` | `8081` | SPI server port |
-| `PROXY_PORT` | `8082` | TCP proxy port (must be 1-65535) |
-| `PROXY_DIAL_TIMEOUT` | `10s` | Timeout for dialing the inference server |
+### Port Configuration
 
-**Command-line flags:**
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--probes-port` | `8080` | Port number for readiness/liveness probes |
+| `--spi-port` | `8081` | Port for dual-pods SPI requests |
+| `--proxy-port` | `8082` | TCP proxy listen port for forwarding client connections |
 
-```
---proxy-port uint16        port for TCP proxy (default 8082)
---proxy-dial-timeout dur   timeout for proxy backend dial (default 10s)
-```
+### Proxy Configuration
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--proxy-dial-timeout` | `10s` | Timeout for dialing the backend inference server |
+
+### Logging (klog)
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--logtostderr` | `true` | Log to standard error instead of files |
+| `--alsologtostderr` | — | Log to standard error as well as files (no effect when `--logtostderr=true`) |
+| `--log_dir` | — | If non-empty, write log files in this directory (no effect when `--logtostderr=true`) |
+| `--log_file` | — | If non-empty, use this log file (no effect when `--logtostderr=true`) |
+| `--log_file_max_size` | `1800` | Maximum size a log file can grow to, in MB (no effect when `--logtostderr=true`) |
+| `--log_backtrace_at` | `:0` | When logging hits line file:N, emit a stack trace |
+| `--v` | `0` | Number for the log level verbosity |
+| `--vmodule` | — | Comma-separated list of pattern=N settings for file-filtered logging |
+| `--stderrthreshold` | `2` | Logs at or above this threshold go to stderr (no effect when `--logtostderr=true`) |
+| `--one_output` | — | Only write logs to their native severity level (no effect when `--logtostderr=true`) |
+| `--skip_headers` | — | Avoid header prefixes in log messages |
+| `--skip_log_headers` | — | Avoid headers when opening log files (no effect when `--logtostderr=true`) |
+| `--add_dir_header` | — | Add the file directory to the header of log messages |
+
+## Local Testing
 
 Build and push the requester container image (use your favorate
 `CONTAINER_IMG_REG`) with a command like the following. You can omit
@@ -345,7 +369,7 @@ OK
 
 Make an inference request.
 
-**Direct to inference server:**
+### Direct to inference server
 ```console
 $ kubectl get po -owide
 NAME                          READY   STATUS    RESTARTS   AGE     IP           NODE               NOMINATED NODE   READINESS GATES
@@ -362,7 +386,7 @@ $ curl -s http://10.0.0.145:8000/v1/completions \
 {"id":"cmpl-cfe04f79eb904748891561c76ae29986","object":"text_completion","created":1763768447,"model":"ibm-granite/granite-3.3-2b-instruct","choices":[{"index":0,"text":" Paris, which is known for its rich history, cultural landmarks, and iconic architecture like the Eiffel Tower and Notre","logprobs":null,"finish_reason":"length","stop_reason":null,"token_ids":null,"prompt_logprobs":null,"prompt_token_ids":null}],"service_tier":null,"system_fingerprint":null,"usage":{"prompt_tokens":5,"total_tokens":35,"completion_tokens":30,"prompt_tokens_details":null},"kv_transfer_params":null}
 ```
 
-**Via the TCP proxy (on the server-requesting Pod):**
+### Via the TCP proxy
 ```console
 $ curl -s http://$REQ_IP:8082/v1/completions \
   -H "Content-Type: application/json" \

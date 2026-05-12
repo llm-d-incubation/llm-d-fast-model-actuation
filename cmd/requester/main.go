@@ -18,15 +18,14 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"os"
 	"strconv"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/spf13/pflag"
 
+	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/config"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/coordination"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/probes"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/proxy"
@@ -35,64 +34,13 @@ import (
 	"k8s.io/klog/v2"
 )
 
-// requesterConfig holds all configurable port parameters.
-type requesterConfig struct {
-	ProbesPort int16
-	SPIPort    int16
-	Proxy      proxy.ProxyConfig
-}
-
-func addFlags(fs pflag.FlagSet, cfg *requesterConfig) {
-	fs.Int16Var(&cfg.ProbesPort, "probes-port", cfg.ProbesPort, "port number for readiness/liveness probes")
-	fs.Int16Var(&cfg.SPIPort, "spi-port", cfg.SPIPort, "port for dual-pods SPI requests")
-	cfg.Proxy.AddFlags(fs)
-}
-
 func main() {
-	cfg := requesterConfig{
-		ProbesPort: 8080,
-		SPIPort:    8081,
-		Proxy:      proxy.DefaultProxyConfig,
-	}
+	cfg := config.NewDefault()
 
 	klog.InitFlags(nil)
 	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
-	addFlags(*pflag.CommandLine, &cfg)
+	cfg.AddFlags(*pflag.CommandLine)
 	pflag.Parse()
-
-	// Override from environment variables if not explicitly set via flags
-	if p := os.Getenv("PROBES_PORT"); p != "" {
-		if port, err := strconv.ParseInt(p, 10, 16); err == nil {
-			cfg.ProbesPort = int16(port)
-		} else {
-			fmt.Fprintf(os.Stderr, "invalid PROBES_PORT environment variable: %q\n", p)
-			os.Exit(1)
-		}
-	}
-	if p := os.Getenv("SPI_PORT"); p != "" {
-		if port, err := strconv.ParseInt(p, 10, 16); err == nil {
-			cfg.SPIPort = int16(port)
-		} else {
-			fmt.Fprintf(os.Stderr, "invalid SPI_PORT environment variable: %q\n", p)
-			os.Exit(1)
-		}
-	}
-	if p := os.Getenv("PROXY_PORT"); p != "" {
-		if port, err := strconv.ParseUint(p, 10, 16); err == nil {
-			cfg.Proxy.Port = uint16(port)
-		} else {
-			fmt.Fprintf(os.Stderr, "invalid PROXY_PORT environment variable: %q\n", p)
-			os.Exit(1)
-		}
-	}
-	if d := os.Getenv("PROXY_DIAL_TIMEOUT"); d != "" {
-		if dur, err := time.ParseDuration(d); err == nil {
-			cfg.Proxy.DialTimeout = dur
-		} else {
-			fmt.Fprintf(os.Stderr, "invalid PROXY_DIAL_TIMEOUT environment variable: %q\n", d)
-			os.Exit(1)
-		}
-	}
 
 	// set up signals so we handle the shutdown signal gracefully
 	ctx := signals.SetupSignalHandler()

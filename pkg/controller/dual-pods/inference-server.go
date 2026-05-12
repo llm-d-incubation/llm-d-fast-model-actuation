@@ -1022,7 +1022,7 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 
 	if err := doPut(url, bytes.NewReader(proxyConfig)); err != nil {
 		logger.Error(err, "Failed to initialize requester proxy",
-			"requesterAddr", requesterAddr, "launcherAddr", launcherAddr)
+			"requesterAddr", requesterAddr, "proxyConfig", string(proxyConfig))
 		return fmt.Errorf("failed to initialize proxy (requester %s -> launcher %s): %w",
 			requesterAddr, launcherAddr, err), true
 	}

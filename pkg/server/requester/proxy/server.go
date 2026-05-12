@@ -33,7 +33,9 @@ import (
 	stubapi "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/spi"
 )
 
-// ProxyConfig holds configuration for the proxy server
+// ProxyConfig holds the proxy server's own runtime parameters (listening port,
+// dial timeout, etc.). This is distinct from spi.ProxyTargetConfig, which
+// describes the backend target the proxy forwards traffic to.
 type ProxyConfig struct {
 	// Port is the port the proxy listens on
 	Port uint16
@@ -53,104 +55,93 @@ func (cfg *ProxyConfig) AddFlags(fs pflag.FlagSet) {
 	fs.DurationVar(&cfg.DialTimeout, "proxy-dial-timeout", cfg.DialTimeout, "timeout for proxy backend dial")
 }
 
+// lazyTarget implements tcpproxy.Target. It acts as a placeholder
+// registered with tcpproxy.Proxy before the backend target is known.
+// HandleConn rejects connections until Configure() delivers the DialProxy.
+type lazyTarget struct {
+	mu          sync.Mutex
+	dialProxy   *tcpproxy.DialProxy    // nil until Configure() delivers
+	proxyTarget *stubapi.ProxyTargetConfig
+	configured  bool                   // true once setConfig has been called
+}
+
+// HandleConn checks if the backend is configured. If not, the connection is
+// rejected immediately. Otherwise it delegates to tcpproxy.DialProxy.HandleConn.
+func (l *lazyTarget) HandleConn(conn net.Conn) {
+	l.mu.Lock()
+	dp := l.dialProxy
+	configured := l.configured
+	l.mu.Unlock()
+
+	if !configured || dp == nil {
+		_ = conn.Close()
+		return
+	}
+	dp.HandleConn(conn)
+}
+
+// setConfig delivers the DialProxy and signals readiness to HandleConn calls.
+func (l *lazyTarget) setConfig(dp *tcpproxy.DialProxy, target *stubapi.ProxyTargetConfig) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.configured {
+		return
+	}
+	l.configured = true
+	l.dialProxy = dp
+	l.proxyTarget = target
+}
+
+// config returns the current target config, or nil if not yet configured.
+func (l *lazyTarget) config() *stubapi.ProxyTargetConfig {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.proxyTarget
+}
+
 var (
-	targetMu    sync.RWMutex
-	dialProxy   *tcpproxy.DialProxy // nil until configured (set exactly once)
-	dialTimeout = DefaultProxyConfig.DialTimeout
-	ready       chan struct{} // closed once the proxy listener is ready
+	// Global state shared between Run() and Configure().
+	proxyMu     sync.Mutex
+	proxyTarget *lazyTarget        // placeholder target registered with tcpproxy.Proxy
+	proxy       *tcpproxy.Proxy
+	proxyCfg    ProxyConfig       // set by Run() before proxy starts
+	proxyStarted chan struct{}    // closed when proxy.Run() has been called
 )
 
 // Run starts the TCP proxy server with the given configuration.
+// It uses tcpproxy.Proxy as the underlying framework — the proxy creates its
+// own listener and dispatches connections to the configured backend.
+//
+// Run and Configure may be called in either order. Run registers a placeholder
+// route and starts the proxy; Configure delivers the backend target. Incoming
+// connections wait briefly for the target to be configured before being forwarded.
+//
 // It blocks until the context is cancelled or a fatal error occurs.
 func Run(ctx context.Context, cfg ProxyConfig) error {
 	logger := klog.FromContext(ctx).WithName("proxy-server")
 	logger.Info("Starting TCP proxy server", "config", cfg)
 
-	// Set dial timeout for later use in Configure()
-	targetMu.Lock()
-	dialTimeout = cfg.DialTimeout
-	targetMu.Unlock()
+	proxyMu.Lock()
+	proxyTarget = &lazyTarget{}
+	proxy = &tcpproxy.Proxy{}
+	proxy.AddRoute(fmt.Sprintf(":%d", cfg.Port), proxyTarget)
+	proxyCfg = cfg
+	proxyStarted = make(chan struct{})
+	proxyMu.Unlock()
 
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.Port))
-	if err != nil {
-		return fmt.Errorf("failed to listen on port %d: %w", cfg.Port, err)
-	}
-
-	// Signal that the proxy is now listening
-	ready = make(chan struct{})
-	close(ready)
-
-	// Start shutdown goroutine
+	// Start the proxy in a goroutine (it creates its own listener and blocks).
+	// Signal started immediately after so Configure() can proceed.
+	proxyErr := make(chan error, 1)
 	go func() {
-		<-ctx.Done()
-		logger.Info("Shutting down TCP proxy server")
-		_ = listener.Close()
+		proxyErr <- proxy.Run()
 	}()
+	close(proxyStarted)
 
-	logger.Info("TCP proxy server started")
-
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			select {
-			case <-ctx.Done():
-				return nil
-			default:
-				logger.Error(err, "Failed to accept connection")
-				continue
-			}
-		}
-		go handleConnection(ctx, conn)
-	}
-}
-
-// handleConnection forwards a single TCP connection using the configured DialProxy.
-func handleConnection(ctx context.Context, clientConn net.Conn) {
-	defer func() { _ = clientConn.Close() }()
-
-	// Monitor context cancellation to close active connections on shutdown
-	go func() {
-		<-ctx.Done()
-		_ = clientConn.Close()
-	}()
-
-	targetMu.RLock()
-	dp := dialProxy
-	targetMu.RUnlock()
-
-	if dp == nil {
-		logger := klog.FromContext(ctx).WithName("proxy-server")
-		logger.Info("Rejecting connection: proxy not configured")
-		return
-	}
-
-	dp.HandleConn(clientConn)
-}
-
-// waitForReady blocks until the proxy listener is ready.
-// Returns immediately if already ready.
-// Times out after 50ms to avoid blocking indefinitely (e.g., in unit tests).
-func waitForReady() {
-	// Quick check
-	targetMu.RLock()
-	ch := ready
-	targetMu.RUnlock()
-	if ch != nil {
-		<-ch
-		return
-	}
-	// Wait up to 50ms for Run to start and signal ready
-	deadline := time.Now().Add(50 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-		targetMu.RLock()
-		ch = ready
-		targetMu.RUnlock()
-		if ch != nil {
-			<-ch
-			return
-		}
-	}
+	// Wait for context cancellation, then shut down.
+	<-ctx.Done()
+	logger.Info("Shutting down TCP proxy server")
+	proxy.Close()
+	return <-proxyErr
 }
 
 // Configure handles the proxy configuration HTTP endpoint.
@@ -158,28 +149,31 @@ func waitForReady() {
 // GET returns the current configuration (200) or 404 if not configured.
 // PUT configures the proxy with a new target address and port (one-time only, 409 if already configured).
 func Configure(w http.ResponseWriter, r *http.Request) {
-	// Wait for the proxy listener to be ready before handling any request
-	waitForReady()
+	// Wait for Run() to have registered the proxy.
+	proxyMu.Lock()
+	ps := proxyStarted
+	lt := proxyTarget
+	proxyMu.Unlock()
+
+	if ps != nil {
+		<-ps
+	}
+
+	if lt == nil {
+		http.Error(w, "proxy server not started", http.StatusServiceUnavailable)
+		return
+	}
 
 	if r.Method == http.MethodGet {
-		targetMu.RLock()
-		dp := dialProxy
-		targetMu.RUnlock()
-
-		if dp == nil {
+		target := lt.config()
+		if target == nil {
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte("proxy not configured"))
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		addr, portStr, _ := net.SplitHostPort(dp.Addr)
-		var portVal uint16
-		if portNum, err := net.LookupPort("tcp", portStr); err == nil {
-			portVal = uint16(portNum)
-		}
-		config := stubapi.ProxyTargetConfig{Address: addr, Port: portVal}
-		_ = json.NewEncoder(w).Encode(config)
+		_ = json.NewEncoder(w).Encode(target)
 		return
 	}
 
@@ -213,18 +207,21 @@ func Configure(w http.ResponseWriter, r *http.Request) {
 
 	targetAddr := net.JoinHostPort(config.Address, fmt.Sprintf("%d", config.Port))
 
-	targetMu.Lock()
-	defer targetMu.Unlock()
+	// Check whether already configured (must hold proxyMu for this).
+	proxyMu.Lock()
+	defer proxyMu.Unlock()
 
-	if dialProxy != nil {
+	if lt.config() != nil {
 		http.Error(w, "proxy already configured", http.StatusConflict)
 		return
 	}
 
-	dialProxy = &tcpproxy.DialProxy{
+	dp := &tcpproxy.DialProxy{
 		Addr:        targetAddr,
-		DialTimeout: dialTimeout,
+		DialTimeout: proxyCfg.DialTimeout,
 	}
+
+	lt.setConfig(dp, &config)
 
 	w.WriteHeader(http.StatusOK)
 	_, _ = fmt.Fprintf(w, "configured proxy to: %s", targetAddr)
