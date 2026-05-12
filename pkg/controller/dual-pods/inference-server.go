@@ -378,7 +378,8 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		}
 		desiredInstanceState, err = ctl.computeDesiredInstanceState(isc, serverDat.GPUIDs)
 		if err != nil {
-			return fmt.Errorf("failed to configure inference server config: %w", err), true
+			return ctl.ensureReqStatus(ctx, requestingPod, serverDat,
+				fmt.Sprintf("failed to configure inference server: %v", err))
 		}
 	}
 
