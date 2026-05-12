@@ -140,7 +140,7 @@ func Run(ctx context.Context, cfg ProxyConfig) error {
 	// Wait for context cancellation, then shut down.
 	<-ctx.Done()
 	logger.Info("Shutting down TCP proxy server")
-	proxy.Close()
+	_ = proxy.Close()
 	return <-proxyErr
 }
 
