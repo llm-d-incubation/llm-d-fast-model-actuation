@@ -611,10 +611,11 @@ func (ctl *controller) createLaunchers(ctx context.Context, node corev1.Node, ke
 		}
 		pod.OwnerReferences = []metav1.OwnerReference{lcOwnerRef}
 
-		if _, err := ctl.coreclient.Pods(pod.Namespace).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
+		createdPod, err := ctl.coreclient.Pods(pod.Namespace).Create(ctx, pod, metav1.CreateOptions{})
+		if err != nil {
 			return fmt.Errorf("failed to create launcher pod: %w", err)
 		}
-		logger.Info("Created launcher pod", "pod", pod.GenerateName, "node", node.Name)
+		logger.Info("Created launcher pod", "pod", createdPod.Name, "node", node.Name)
 	}
 	return nil
 }
