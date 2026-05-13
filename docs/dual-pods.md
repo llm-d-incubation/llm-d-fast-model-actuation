@@ -125,6 +125,49 @@ assigned to the server-requesting Pod) for running `vllm serve`. To
 swap a model out, the controller issues a request that does not
 include those details.
 
+#### Requester TCP Proxy
+
+The requester container includes a TCP proxy server that forwards
+inference requests to the actual vLLM instance running in the
+server-providing Pod (typically managed by the launcher). This
+abstraction allows clients to send requests to the server-requesting
+Pod without needing to know the actual port vLLM is listening on.
+
+The proxy operates as a simple TCP-level forwarder: each incoming
+client connection results in a new outbound connection to the
+configured vLLM target. Because this operates at the TCP layer, it
+supports any protocol over TCP (HTTP/1.x, HTTP/2, HTTPS, gRPC, etc.).
+
+The proxy is configured via a RESTful resource at
+`/v1/proxy/config`. The resource supports GET and PUT:
+
+1. **Configuration** (PUT): When the dual-pods controller binds a
+   server-requesting Pod to a server-providing Pod, it sends an HTTP
+   PUT request to the requester's proxy configuration endpoint
+   (`/v1/proxy/config`). The request body contains the target address
+   (server-providing Pod IP) and the port vLLM is listening on:
+
+   ```json
+   {"address": "10.244.1.5", "port": 8005}
+   ```
+
+   A successful configuration returns HTTP 200 with a message
+   describing the change. If the proxy is already
+   configured, the request returns HTTP 409 (Conflict).
+
+2. **Status checking** (GET): The proxy's current configuration can
+   be queried via an HTTP GET request to `/v1/proxy/config`. If the
+   proxy has been configured, it returns HTTP 200 with a JSON body
+   containing the current target address and port. If not, it returns
+   HTTP 404.
+
+
+3. **Request forwarding**: Once configured, the TCP proxy forwards
+   all incoming connections to the configured vLLM instance. This
+   includes OpenAI-compatible API endpoints like `/v1/chat/completions`,
+   `/v1/completions`, etc. Because this is a TCP-level proxy, it supports
+   any protocol over TCP (HTTP/1.x, HTTP/2, HTTPS, gRPC, etc.).
+
 ### Scenarios
 
 The outer product of

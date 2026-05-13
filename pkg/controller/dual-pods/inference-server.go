@@ -1005,6 +1005,27 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 			return fmt.Errorf("unable to wake up server because port not known: %w", err), true
 		}
 	}
+	// Initialize a reverse proxy between the launcher Pod and the requester Pod.
+	// Requests can be proxied to the launcher Pod from the requester Pod.
+	// This could be done during binding.
+	adminPort := requestingPod.Annotations[api.AdminPortAnnotationName]
+	if adminPort == "" {
+		adminPort = api.AdminPortDefaultValue
+	}
+	requesterAddr := fmt.Sprintf("%s:%s", requestingPod.Status.PodIP, adminPort)
+	launcherAddr := fmt.Sprintf("%s:%d", providingPod.Status.PodIP, serverPort)
+	url := fmt.Sprintf("http://%s%s", requesterAddr, stubapi.ProxyConfigPath)
+	proxyConfig, _ := json.Marshal(stubapi.ProxyTargetConfig{
+		Address: providingPod.Status.PodIP,
+		Port:    uint16(serverPort),
+	})
+
+	if err := doPut(url, bytes.NewReader(proxyConfig)); err != nil {
+		logger.Error(err, "Failed to initialize requester proxy",
+			"requesterAddr", requesterAddr, "proxyConfig", string(proxyConfig))
+		return fmt.Errorf("failed to initialize proxy (requester %s -> launcher %s): %w",
+			requesterAddr, launcherAddr, err), true
+	}
 	if !skipWake {
 		err = ctl.wakeSleeper(ctx, serverDat, requestingPod, providingPod, serverPort, "freshly-bound")
 		if err != nil {
@@ -1615,21 +1636,35 @@ func (ctl *controller) ensureReqState(ctx context.Context, requestingPod *corev1
 	return err, err != nil
 }
 
-// doPost does the HTTP POST request/response to the given URL.
 func doPost(url string) error {
+	return doHTTPRequest(http.MethodPost, url, nil)
+}
+
+func doPut(url string, data io.Reader) error {
+	return doHTTPRequest(http.MethodPut, url, data)
+}
+
+func doHTTPRequest(method, url string, data io.Reader) error {
+	req, err := http.NewRequest(method, url, data)
+	if err != nil {
+		return fmt.Errorf("http %s %q: %w", method, url, err)
+	}
+	if data != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	client := &http.Client{
 		Timeout: 5 * time.Second,
 	}
 
-	resp, err := client.Post(url, "application/json", nil)
+	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("http post %q: %w", url, err)
+		return fmt.Errorf("http %s %q: %w", method, url, err)
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("http POST %q returned unexpected status %d; response body=%s", url, resp.StatusCode, string(body))
+		return fmt.Errorf("http %s %q returned unexpected status %d; response body=%s", method, url, resp.StatusCode, string(body))
 	}
 
 	return nil
