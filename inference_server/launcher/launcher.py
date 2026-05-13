@@ -122,7 +122,7 @@ class EventBroadcaster:
 
         :param since_revision: Resume from this revision.  Events with
             revision > since_revision are yielded.
-        :raises RevisionTooOld: If since_revision is older than the
+        :raises RevisionTooOld: If/When since_revision is older than the
             oldest event still in the buffer.
         """
         oldest = self.oldest_revision
@@ -372,18 +372,10 @@ class VllmMultiProcessManager:
     def _on_instance_stopped(self, instance_id: str, exitcode):
         """Sentinel callback: assign revision and publish a STOPPED event."""
         revision = self._next_revision()
-        if instance_id in self.instances:
-            instance = self.instances[instance_id]
-            instance.last_revision = revision
-            obj = instance.get_status()
-            obj["exit_code"] = exitcode
-        else:
-            obj = {
-                "instance_id": instance_id,
-                "status": "stopped",
-                "exit_code": exitcode,
-                "revision": revision,
-            }
+        instance = self.instances[instance_id]
+        instance.last_revision = revision
+        obj = instance.get_status()
+        obj["exit_code"] = exitcode
         event = WatchEvent(type="STOPPED", object=obj)
         self.broadcaster._append(event)
         loop = asyncio.get_running_loop()

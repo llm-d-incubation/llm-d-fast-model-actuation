@@ -378,7 +378,7 @@ Content-Type: application/octet-stream
 
 Stream instance lifecycle events as newline-delimited JSON ([NDJSON](https://github.com/ndjson/ndjson-spec)), following a design similar to a [Kubernetes watch](https://kubernetes.io/docs/reference/using-api/api-concepts/#efficient-detection-of-changes). The response uses [chunked transfer encoding](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Transfer-Encoding) with `Content-Type: application/x-ndjson` and remains open until the client disconnects.
 
-Each event carries the full state of the relevant instance and a monotonically increasing `revision` number:
+Each event has a `type` field and an `object` field carrying the full state of the relevant instance, including a monotonically increasing `revision` number:
 
 ```json
 {"type": "CREATED", "object": {"status": "running", "instance_id": "abc123", "options": "--model test", "revision": 1}}
@@ -389,13 +389,13 @@ Each event carries the full state of the relevant instance and a monotonically i
 **Event Types:**
 
 - `CREATED` — A new instance was spawned
-- `STOPPED` — An instance process terminated (detected automatically via kernel-level process monitoring, zero-polling)
+- `STOPPED` — An instance process terminated (detected automatically via kernel-level process monitoring, zero-polling). The object includes an `exit_code` field with the process exit code.
 - `DELETED` — An instance was explicitly removed via the DELETE API.
 
 **Initial state and resumption:**
 
 - **Without `?since`**: The stream begins with a synthetic `CREATED` event for every instance that exists at the time the watch starts, followed by live events. Instances deleted before the watch began are not mentioned.
-- **With `?since=N`**: The stream resumes from revision `N`, yielding only events with `revision > N`. This allows a client to reconnect without missing events. If the requested revision is older than the server's event buffer, the server responds with **410 Gone** and closes the connection. The client should start a fresh watch without `?since` to re-sync. If the revision falls out of the buffer while the stream is already open (slow client), the server silently closes the connection.
+- **With `?since=N`**: The stream resumes from revision `N`, yielding only events with `revision > N`. This allows a client to reconnect without missing events. If the requested revision is older than the server's event buffer, the server responds with **410 Gone** and closes the connection. To re-sync, the client should call the LIST endpoint to obtain the current state and its revision, then open a new watch with `?since=<list-revision>` — this way no events are missed and any instances deleted during the gap are correctly reflected as absent from the LIST. The same re-sync procedure applies if the revision falls out of the buffer while the stream is already open (slow client), in which case the server silently closes the connection.
 
 **Usage Examples:**
 
