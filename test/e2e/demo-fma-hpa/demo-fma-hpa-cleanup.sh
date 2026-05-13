@@ -58,11 +58,10 @@ echo "--- Deleting RBAC ---"
 kubectl delete rolebinding testreq testlauncher -n "$NAMESPACE" --ignore-not-found 2>/dev/null
 kubectl delete role testreq testlauncher -n "$NAMESPACE" --ignore-not-found 2>/dev/null
 kubectl delete sa testreq testlauncher -n "$NAMESPACE" --ignore-not-found 2>/dev/null
-kubectl delete cm gpu-map -n "$NAMESPACE" --ignore-not-found 2>/dev/null
 
 # Delete ClusterRole created by deploy_fma.sh
-kubectl delete clusterrole fma-node-view --ignore-not-found 2>/dev/null
 kubectl delete clusterrolebinding fma-node-view --ignore-not-found 2>/dev/null
+kubectl delete clusterrole fma-node-view --ignore-not-found 2>/dev/null
 
 if [ "$FULL_CLEANUP" = "true" ]; then
     echo ""
