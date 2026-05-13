@@ -4,8 +4,10 @@
 #
 # Idempotent: checks each component before deploying, skips if already present.
 # Run from the root of the llm-d-fast-model-actuation repository.
+# Deploys the version of FMA that is checked out locally.
 #
 # Prerequisites:
+#   - This repo (llm-d-incubation/llm-d-fast-model-actuation) cloned locally
 #   - oc CLI authenticated to an OCP cluster with GPU nodes
 #   - helm, helmfile, kubectl, jq, yq installed
 #   - Container images already pushed to registry (see CONTAINER_IMG_REG)
@@ -196,7 +198,7 @@ if [ -n "$EPP_CM" ]; then
 fi
 
 # SCC for gateway service account
-GW_SA=$(kubectl get sa -n "$NAMESPACE" -o name 2>/dev/null | grep -m1 gateway | sed 's|serviceaccount/||' || true)
+GW_SA=$(kubectl get sa -n "$NAMESPACE" -o name 2>/dev/null | grep -m1 gateway | sed 's#serviceaccount/##' || true)
 if [ -n "$GW_SA" ]; then
     oc adm policy add-scc-to-user anyuid -z "$GW_SA" -n "$NAMESPACE" 2>/dev/null || true
     oc adm policy add-scc-to-user privileged -z "$GW_SA" -n "$NAMESPACE" 2>/dev/null || true
@@ -472,17 +474,6 @@ else
         cat > /tmp/adapter-epp-values.yaml <<VALEOF
 rules:
   external:
-    - seriesQuery: 'wva_desired_replicas{variant_name!="",exported_namespace!=""}'
-      resources:
-        overrides:
-          exported_namespace:
-            resource: namespace
-          variant_name:
-            resource: deployment
-      name:
-        matches: "^wva_desired_replicas"
-        as: "wva_desired_replicas"
-      metricsQuery: 'wva_desired_replicas{<<.LabelMatchers>>}'
     - seriesQuery: 'inference_extension_flow_control_queue_size'
       resources:
         overrides:

@@ -33,7 +33,7 @@ cleanup() {
 trap cleanup EXIT
 
 # Find the gateway service ClusterIP
-GW_SVC=$(kubectl get svc -n "$NAMESPACE" -o name 2>/dev/null | grep -m1 gateway | sed 's|service/||' || true)
+GW_SVC=$(kubectl get svc -n "$NAMESPACE" -o name 2>/dev/null | grep -m1 gateway | sed 's#service/##' || true)
 if [ -z "$GW_SVC" ]; then
     echo "ERROR: No gateway service found in namespace $NAMESPACE" >&2
     exit 1
