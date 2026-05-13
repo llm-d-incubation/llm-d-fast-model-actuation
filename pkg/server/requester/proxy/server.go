@@ -28,14 +28,16 @@ import (
 
 	"github.com/inetaf/tcpproxy"
 	"github.com/spf13/pflag"
+
 	"k8s.io/klog/v2"
 
 	stubapi "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/spi"
 )
 
-// ProxyConfig holds the proxy server's own runtime parameters (listening port,
-// dial timeout, etc.). This is distinct from spi.ProxyTargetConfig, which
-// describes the backend target the proxy forwards traffic to.
+// ProxyConfig holds the proxy server's runtime parameters that are provided
+// at requester startup, via the requester command line. It is distinct from
+// stubapi.ProxyTargetConfig, which holds the runtime parameters provided
+// later by the dual-pods controller (the backend the proxy forwards to).
 type ProxyConfig struct {
 	// Port is the port the proxy listens on
 	Port uint16
@@ -50,134 +52,119 @@ var DefaultProxyConfig = ProxyConfig{
 }
 
 // AddFlags registers command-line flags for all proxy configuration fields.
-func (cfg *ProxyConfig) AddFlags(fs pflag.FlagSet) {
+func (cfg *ProxyConfig) AddFlags(fs *pflag.FlagSet) {
 	fs.Uint16Var(&cfg.Port, "proxy-port", cfg.Port, "port for TCP proxy")
 	fs.DurationVar(&cfg.DialTimeout, "proxy-dial-timeout", cfg.DialTimeout, "timeout for proxy backend dial")
 }
 
-// lazyTarget implements tcpproxy.Target. It acts as a placeholder
-// registered with tcpproxy.Proxy before the backend target is known.
-// HandleConn rejects connections until Configure() delivers the DialProxy.
-type lazyTarget struct {
-	mu          sync.Mutex
-	dialProxy   *tcpproxy.DialProxy    // nil until Configure() delivers
-	proxyTarget *stubapi.ProxyTargetConfig
-	configured  bool                   // true once setConfig has been called
-}
-
-// HandleConn checks if the backend is configured. If not, the connection is
-// rejected immediately. Otherwise it delegates to tcpproxy.DialProxy.HandleConn.
-func (l *lazyTarget) HandleConn(conn net.Conn) {
-	l.mu.Lock()
-	dp := l.dialProxy
-	configured := l.configured
-	l.mu.Unlock()
-
-	if !configured || dp == nil {
-		_ = conn.Close()
-		return
-	}
-	dp.HandleConn(conn)
-}
-
-// setConfig delivers the DialProxy and signals readiness to HandleConn calls.
-func (l *lazyTarget) setConfig(dp *tcpproxy.DialProxy, target *stubapi.ProxyTargetConfig) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.configured {
-		return
-	}
-	l.configured = true
-	l.dialProxy = dp
-	l.proxyTarget = target
-}
-
-// config returns the current target config, or nil if not yet configured.
-func (l *lazyTarget) config() *stubapi.ProxyTargetConfig {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.proxyTarget
-}
-
+// Module-level coordination state. Run and Configure may run on different
+// goroutines and in either order; the channels handle the hand-off between
+// them. configCh carries the ProxyTargetConfig from Configure to Run;
+// startedCh is closed by Run once the proxy is actively listening (or has
+// failed to start), so Configure does not return until that point.
 var (
-	// Global state shared between Run() and Configure().
-	proxyMu     sync.Mutex
-	proxyTarget *lazyTarget        // placeholder target registered with tcpproxy.Proxy
-	proxy       *tcpproxy.Proxy
-	proxyCfg    ProxyConfig       // set by Run() before proxy starts
-	proxyStarted chan struct{}    // closed when proxy.Run() has been called
+	initOnce  sync.Once
+	configCh  chan *stubapi.ProxyTargetConfig
+	startedCh chan struct{}
+
+	stateMu  sync.Mutex
+	target   *stubapi.ProxyTargetConfig // set by the first successful Configure PUT
+	startErr error                      // set by Run before closing startedCh on a Start failure
 )
 
-// Run starts the TCP proxy server with the given configuration.
-// It uses tcpproxy.Proxy as the underlying framework — the proxy creates its
-// own listener and dispatches connections to the configured backend.
+// initState lazily initializes the module-level coordination channels.
+func initState() {
+	initOnce.Do(func() {
+		configCh = make(chan *stubapi.ProxyTargetConfig, 1)
+		startedCh = make(chan struct{})
+	})
+}
+
+// Run starts the TCP proxy server. It blocks waiting for Configure to deliver
+// the backend target, then constructs and starts a tcpproxy.Proxy listening on
+// cfg.Port. It returns when the context is cancelled or the proxy stops.
 //
-// Run and Configure may be called in either order. Run registers a placeholder
-// route and starts the proxy; Configure delivers the backend target. Incoming
-// connections wait briefly for the target to be configured before being forwarded.
-//
-// It blocks until the context is cancelled or a fatal error occurs.
+// Run and Configure may be invoked in either order from different goroutines.
 func Run(ctx context.Context, cfg ProxyConfig) error {
 	logger := klog.FromContext(ctx).WithName("proxy-server")
 	logger.Info("Starting TCP proxy server", "config", cfg)
 
-	proxyMu.Lock()
-	proxyTarget = &lazyTarget{}
-	proxy = &tcpproxy.Proxy{}
-	proxy.AddRoute(fmt.Sprintf(":%d", cfg.Port), proxyTarget)
-	proxyCfg = cfg
-	proxyStarted = make(chan struct{})
-	proxyMu.Unlock()
+	initState()
 
-	// Start the proxy in a goroutine (it creates its own listener and blocks).
-	// Signal started immediately after so Configure() can proceed.
-	proxyErr := make(chan error, 1)
+	var tgt *stubapi.ProxyTargetConfig
+	select {
+	case tgt = <-configCh:
+		logger.V(2).Info("Received proxy target from Configure", "address", tgt.Address, "port", tgt.Port)
+	case <-ctx.Done():
+		logger.V(2).Info("Context cancelled before proxy was configured")
+		return nil
+	}
+
+	targetAddr := net.JoinHostPort(tgt.Address, fmt.Sprintf("%d", tgt.Port))
+	p := &tcpproxy.Proxy{}
+	p.AddRoute(fmt.Sprintf(":%d", cfg.Port), &tcpproxy.DialProxy{
+		Addr:        targetAddr,
+		DialTimeout: cfg.DialTimeout,
+	})
+
+	if err := p.Start(); err != nil {
+		stateMu.Lock()
+		startErr = fmt.Errorf("failed to start proxy listener on port %d: %w", cfg.Port, err)
+		stateMu.Unlock()
+		close(startedCh)
+		logger.Error(err, "Failed to start TCP proxy listener", "port", cfg.Port)
+		return startErr
+	}
+	close(startedCh)
+	logger.Info("TCP proxy server listening", "port", cfg.Port, "target", targetAddr)
+
 	go func() {
-		proxyErr <- proxy.Run()
+		<-ctx.Done()
+		logger.V(2).Info("Shutting down TCP proxy server")
+		_ = p.Close()
 	}()
-	close(proxyStarted)
 
-	// Wait for context cancellation, then shut down.
-	<-ctx.Done()
-	logger.Info("Shutting down TCP proxy server")
-	_ = proxy.Close()
-	return <-proxyErr
+	waitErr := p.Wait()
+	if ctx.Err() != nil {
+		logger.V(2).Info("TCP proxy server stopped after context cancellation", "waitErr", waitErr)
+		return nil
+	}
+	if waitErr != nil {
+		logger.Error(waitErr, "TCP proxy server stopped unexpectedly")
+		return waitErr
+	}
+	logger.Info("TCP proxy server stopped")
+	return nil
 }
 
-// Configure handles the proxy configuration HTTP endpoint.
-// This is the handler for the resource at ProxyConfigPath.
-// GET returns the current configuration (200) or 404 if not configured.
-// PUT configures the proxy with a new target address and port (one-time only, 409 if already configured).
+// Configure handles the proxy configuration HTTP endpoint at ProxyConfigPath.
+//
+// GET returns the configured target (200) or 404 if not yet configured.
+// PUT delivers the backend target. PUT may succeed only once; subsequent PUTs
+// return 409. PUT does not return until the proxy is actively listening, so
+// callers can rely on a 200 response to mean the proxy is ready to accept
+// connections.
 func Configure(w http.ResponseWriter, r *http.Request) {
-	// Wait for Run() to have registered the proxy.
-	proxyMu.Lock()
-	ps := proxyStarted
-	lt := proxyTarget
-	proxyMu.Unlock()
+	initState()
+	logger := klog.FromContext(r.Context()).WithName("proxy-server")
 
-	if ps != nil {
-		<-ps
-	}
-
-	if lt == nil {
-		http.Error(w, "proxy server not started", http.StatusServiceUnavailable)
-		return
-	}
-
-	if r.Method == http.MethodGet {
-		target := lt.config()
-		if target == nil {
+	switch r.Method {
+	case http.MethodGet:
+		stateMu.Lock()
+		cur := target
+		stateMu.Unlock()
+		if cur == nil {
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte("proxy not configured"))
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(target)
+		_ = json.NewEncoder(w).Encode(cur)
 		return
-	}
-
-	if r.Method != http.MethodPut {
+	case http.MethodPut:
+		// fall through
+	default:
 		http.Error(w, "method not allowed, use GET or PUT", http.StatusMethodNotAllowed)
 		return
 	}
@@ -189,40 +176,53 @@ func Configure(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = r.Body.Close() }()
 
-	var config stubapi.ProxyTargetConfig
-	if err := json.Unmarshal(body, &config); err != nil {
+	var cfg stubapi.ProxyTargetConfig
+	if err := json.Unmarshal(body, &cfg); err != nil {
 		http.Error(w, fmt.Sprintf("failed to parse JSON: %v", err), http.StatusBadRequest)
 		return
 	}
-
-	if config.Address == "" {
+	if cfg.Address == "" {
 		http.Error(w, "address is required", http.StatusBadRequest)
 		return
 	}
-
-	if config.Port == 0 {
+	if cfg.Port == 0 {
 		http.Error(w, "invalid port", http.StatusBadRequest)
 		return
 	}
 
-	targetAddr := net.JoinHostPort(config.Address, fmt.Sprintf("%d", config.Port))
-
-	// Check whether already configured (must hold proxyMu for this).
-	proxyMu.Lock()
-	defer proxyMu.Unlock()
-
-	if lt.config() != nil {
+	stateMu.Lock()
+	if target != nil {
+		stateMu.Unlock()
 		http.Error(w, "proxy already configured", http.StatusConflict)
 		return
 	}
+	target = &cfg
+	stateMu.Unlock()
 
-	dp := &tcpproxy.DialProxy{
-		Addr:        targetAddr,
-		DialTimeout: proxyCfg.DialTimeout,
+	logger.V(2).Info("Delivering proxy target to Run", "address", cfg.Address, "port", cfg.Port)
+
+	select {
+	case configCh <- &cfg:
+	case <-r.Context().Done():
+		http.Error(w, "request cancelled before proxy could receive target", http.StatusServiceUnavailable)
+		return
 	}
 
-	lt.setConfig(dp, &config)
+	select {
+	case <-startedCh:
+		stateMu.Lock()
+		sErr := startErr
+		stateMu.Unlock()
+		if sErr != nil {
+			http.Error(w, fmt.Sprintf("proxy failed to start: %v", sErr), http.StatusInternalServerError)
+			return
+		}
+	case <-r.Context().Done():
+		http.Error(w, "request cancelled before proxy started listening", http.StatusServiceUnavailable)
+		return
+	}
 
+	targetAddr := net.JoinHostPort(cfg.Address, fmt.Sprintf("%d", cfg.Port))
 	w.WriteHeader(http.StatusOK)
 	_, _ = fmt.Fprintf(w, "configured proxy to: %s", targetAddr)
 }

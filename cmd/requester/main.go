@@ -25,13 +25,14 @@ import (
 
 	"github.com/spf13/pflag"
 
+	"k8s.io/klog/v2"
+
+	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
+
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/config"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/coordination"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/probes"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/proxy"
-	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
-
-	"k8s.io/klog/v2"
 )
 
 func main() {
@@ -39,7 +40,7 @@ func main() {
 
 	klog.InitFlags(nil)
 	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
-	cfg.AddFlags(*pflag.CommandLine)
+	cfg.AddFlags(pflag.CommandLine)
 	pflag.Parse()
 
 	// set up signals so we handle the shutdown signal gracefully

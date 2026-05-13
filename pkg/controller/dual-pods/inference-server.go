@@ -1007,7 +1007,6 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 	}
 	// Initialize a reverse proxy between the launcher Pod and the requester Pod.
 	// Requests can be proxied to the launcher Pod from the requester Pod.
-	// This could be done during binding.
 	adminPort := requestingPod.Annotations[api.AdminPortAnnotationName]
 	if adminPort == "" {
 		adminPort = api.AdminPortDefaultValue

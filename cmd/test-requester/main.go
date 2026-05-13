@@ -68,7 +68,7 @@ func main() {
 	pflag.CommandLine.StringVar(&nodeName, "node", nodeName, "name of this Pod's Node")
 	pflag.CommandLine.StringVar(&podUID, "pod-uid", podUID, "UID of this Pod")
 	pflag.CommandLine.UintVar(&numGPUs, "num-gpus", numGPUs, "number of GPUs to allocate")
-	cfg.AddFlags(*pflag.CommandLine)
+	cfg.AddFlags(pflag.CommandLine)
 
 	pflag.Parse()
 

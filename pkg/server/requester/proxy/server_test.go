@@ -33,32 +33,16 @@ import (
 	stubapi "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/spi"
 )
 
-// waitForListener polls until the TCP address is accepting connections or timeout elapses.
-func waitForListener(addr string, timeout time.Duration) {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("tcp", addr, 50*time.Millisecond)
-		if err == nil {
-			_ = conn.Close()
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-}
-
-// resetInstance clears the module-level state so tests don't interfere with each other.
+// resetInstance clears module-level state so tests don't interfere with each other.
 func resetInstance(t *testing.T) {
 	t.Helper()
-	proxyMu.Lock()
-	// If a proxy exists from a previous test, close it.
-	if proxy != nil {
-		_ = proxy.Close()
-	}
-	proxy = nil
-	proxyTarget = &lazyTarget{}
-	proxyStarted = make(chan struct{})
-	close(proxyStarted)
-	proxyMu.Unlock()
+	initOnce = sync.Once{}
+	configCh = nil
+	startedCh = nil
+	stateMu.Lock()
+	target = nil
+	startErr = nil
+	stateMu.Unlock()
 }
 
 // startProxy runs Run in a goroutine and returns a stop function.
@@ -130,20 +114,16 @@ func TestProxy_EchoRoundTrip(t *testing.T) {
 	stop := startProxy(t, context.Background(), ProxyConfig{Port: proxyPort, DialTimeout: 2 * time.Second})
 	defer stop()
 
-	waitForListener(fmt.Sprintf("127.0.0.1:%d", proxyPort), 2*time.Second)
-
-	// Configure the proxy
+	// Configure does not return until the proxy is listening.
 	body := stubapi.ProxyTargetConfig{Address: "127.0.0.1", Port: backendPort}
 	jsonBody, _ := json.Marshal(body)
 	req := httptest.NewRequest(http.MethodPut, stubapi.ProxyConfigPath, bytes.NewReader(jsonBody))
 	w := httptest.NewRecorder()
 	Configure(w, req)
-
 	if w.Code != http.StatusOK {
 		t.Fatalf("Configure failed: %d — %s", w.Code, w.Body.String())
 	}
 
-	// Connect to proxy and verify echo
 	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", proxyPort), 2*time.Second)
 	if err != nil {
 		t.Fatalf("failed to dial proxy: %v", err)
@@ -151,8 +131,7 @@ func TestProxy_EchoRoundTrip(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 
 	testMsg := "hello proxy\n"
-	_, err = conn.Write([]byte(testMsg))
-	if err != nil {
+	if _, err := conn.Write([]byte(testMsg)); err != nil {
 		t.Fatalf("failed to write to proxy: %v", err)
 	}
 
@@ -166,43 +145,38 @@ func TestProxy_EchoRoundTrip(t *testing.T) {
 	}
 }
 
-func TestProxy_RejectBeforeConfigure(t *testing.T) {
+func TestProxy_NoListenerBeforeConfigure(t *testing.T) {
 	resetInstance(t)
 
 	proxyPort := findFreePort(t)
 	stop := startProxy(t, context.Background(), ProxyConfig{Port: proxyPort, DialTimeout: DefaultProxyConfig.DialTimeout})
 	defer stop()
 
-	waitForListener(fmt.Sprintf("127.0.0.1:%d", proxyPort), 2*time.Second)
-
-	// Dial the proxy — it should accept but reject since not configured
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", proxyPort), 2*time.Second)
-	if err != nil {
-		t.Fatalf("failed to dial proxy: %v", err)
-	}
-	defer func() { _ = conn.Close() }()
-
-	_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	buf := make([]byte, 1024)
-	_, err = conn.Read(buf)
+	// Run is blocked waiting for Configure, so the proxy port has no listener.
+	time.Sleep(100 * time.Millisecond)
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", proxyPort), 200*time.Millisecond)
 	if err == nil {
-		t.Error("expected read error since proxy is not configured, but got data")
+		_ = conn.Close()
+		t.Errorf("expected dial to fail before Configure, but it succeeded")
 	}
 }
 
 func TestConfigure_GetStatus(t *testing.T) {
 	resetInstance(t)
 
-	// Before configure, GET should return 404
+	// Before Configure, GET should return 404.
 	req1 := httptest.NewRequest(http.MethodGet, stubapi.ProxyConfigPath, nil)
 	w1 := httptest.NewRecorder()
 	Configure(w1, req1)
-
 	if w1.Code != http.StatusNotFound {
 		t.Errorf("GET before configure should return 404, got %d", w1.Code)
 	}
 
-	// Now configure and check status again
+	// PUT requires Run to be active, since Configure waits for listener readiness.
+	proxyPort := findFreePort(t)
+	stop := startProxy(t, context.Background(), ProxyConfig{Port: proxyPort, DialTimeout: 2 * time.Second})
+	defer stop()
+
 	_, backendPort, backendCloser := startTestEchoServer(t)
 	defer backendCloser()
 
@@ -211,7 +185,6 @@ func TestConfigure_GetStatus(t *testing.T) {
 	req2 := httptest.NewRequest(http.MethodPut, stubapi.ProxyConfigPath, bytes.NewReader(jsonBody))
 	w2 := httptest.NewRecorder()
 	Configure(w2, req2)
-
 	if w2.Code != http.StatusOK {
 		t.Fatalf("Configure failed: %d — %s", w2.Code, w2.Body.String())
 	}
@@ -219,7 +192,6 @@ func TestConfigure_GetStatus(t *testing.T) {
 	req3 := httptest.NewRequest(http.MethodGet, stubapi.ProxyConfigPath, nil)
 	w3 := httptest.NewRecorder()
 	Configure(w3, req3)
-
 	if w3.Code != http.StatusOK {
 		t.Errorf("GET after configure should return 200, got %d", w3.Code)
 	}
@@ -239,6 +211,10 @@ func TestConfigure_GetStatus(t *testing.T) {
 func TestConfigure_ReconfigureReturnsConflict(t *testing.T) {
 	resetInstance(t)
 
+	proxyPort := findFreePort(t)
+	stop := startProxy(t, context.Background(), ProxyConfig{Port: proxyPort, DialTimeout: 2 * time.Second})
+	defer stop()
+
 	_, backendPort, backendCloser := startTestEchoServer(t)
 	defer backendCloser()
 
@@ -247,7 +223,6 @@ func TestConfigure_ReconfigureReturnsConflict(t *testing.T) {
 	req1 := httptest.NewRequest(http.MethodPut, stubapi.ProxyConfigPath, bytes.NewReader(jsonBody))
 	w1 := httptest.NewRecorder()
 	Configure(w1, req1)
-
 	if w1.Code != http.StatusOK {
 		t.Fatalf("first Configure failed: %d — %s", w1.Code, w1.Body.String())
 	}
@@ -255,7 +230,6 @@ func TestConfigure_ReconfigureReturnsConflict(t *testing.T) {
 	reqGet := httptest.NewRequest(http.MethodGet, stubapi.ProxyConfigPath, nil)
 	wGet := httptest.NewRecorder()
 	Configure(wGet, reqGet)
-
 	if wGet.Code != http.StatusOK {
 		t.Fatalf("GET after configure failed: %d — %s", wGet.Code, wGet.Body.String())
 	}
@@ -270,7 +244,6 @@ func TestConfigure_ReconfigureReturnsConflict(t *testing.T) {
 	req2 := httptest.NewRequest(http.MethodPut, stubapi.ProxyConfigPath, bytes.NewReader(jsonBody))
 	w2 := httptest.NewRecorder()
 	Configure(w2, req2)
-
 	if w2.Code != http.StatusConflict {
 		t.Errorf("reconfigure should return 409, got %d — body: %s", w2.Code, w2.Body.String())
 	}

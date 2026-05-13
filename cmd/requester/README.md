@@ -4,9 +4,20 @@ cached on local PV in the cluster.
 
 ## Requester Overview
 
-The requester binary runs inside the server-requesting Pod of the dual-pods
-architecture. It acts as a lightweight coordinator between the dual-pods
-controller and the actual inference server running in the server-providing Pod.
+The requester executable runs in the requester container of a server-requesting
+Pod. Its purpose is two-fold:
+
+1. **Look to the rest of llm-d like an inference server.** The requester listens
+   on the same set of ports an inference server would and forwards client traffic
+   to the bound vLLM instance via a built-in TCP reverse proxy.
+2. **Relay controller-bound state to and from the dual-pods controller.** The
+   requester exposes a small SPI surface so that the dual-pods controller can
+   read GPU IDs, push the bound server's address, and update readiness state.
+
+Adding the reverse TCP proxy makes the requester look *more* like an inference
+server than it otherwise would: client requests can be sent directly to the
+requester Pod's IP and the proxy forwards them to the actual server-providing
+Pod after binding.
 
 The server-requesting Pod runs three servers:
 
@@ -14,7 +25,7 @@ The server-requesting Pod runs three servers:
 |--------|-------------|---------|
 | Probes | 8080 | Readiness relay (`/ready` endpoint) — reflects the health status of the bound inference server |
 | SPI | 8081 | Dual-pods controller interface (`/v1/dual-pods/accelerators`, `/v1/proxy/config`) — exposes GPU info and accepts proxy configuration from the controller |
-| Proxy | 8082 | TCP proxy listen port — accepts client connections and forwards them to the bound vLLM instance |
+| Proxy | 8082 | TCP reverse proxy listen port — accepts client connections and forwards them to the bound vLLM instance; rejects connections until configured |
 
 ### TCP Proxy
 
@@ -175,8 +186,8 @@ spec:
             containerPort: 8082
           readinessProbe:
             httpGet:
-              path: /ready
-              port: 8080
+              path: /health
+              port: 8082
             initialDelaySeconds: 2
             periodSeconds: 5
           resources:
@@ -261,8 +272,8 @@ spec:
             containerPort: 8082
           readinessProbe:
             httpGet:
-              path: /ready
-              port: 8080
+              path: /health
+              port: 8082
             initialDelaySeconds: 2
             periodSeconds: 5
           resources:
@@ -363,8 +374,8 @@ Check the relayed readiness.
 ```console
 $ kubectl wait pod/my-request-5n2m6-dual-2wn7w --for=condition=Ready --timeout=120s
 pod/my-request-5n2m6-dual-2wn7w condition met
-$ curl $REQ_IP:8080/ready
-OK
+$ curl $REQ_IP:8082/health
+{"status":"ok"}
 ```
 
 Make an inference request.

@@ -39,7 +39,7 @@ func NewDefault() Config {
 }
 
 // AddFlags registers command-line flags for all Config fields.
-func (cfg *Config) AddFlags(fs pflag.FlagSet) {
+func (cfg *Config) AddFlags(fs *pflag.FlagSet) {
 	fs.Int16Var(&cfg.ProbesPort, "probes-port", cfg.ProbesPort, "port number for readiness/liveness probes")
 	fs.Int16Var(&cfg.SPIPort, "spi-port", cfg.SPIPort, "port for dual-pods SPI requests")
 	cfg.Proxy.AddFlags(fs)
