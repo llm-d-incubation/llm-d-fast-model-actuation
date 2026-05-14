@@ -512,6 +512,7 @@ echo "Launcher has $launcher_instances_before instances before controller restar
 
 # Save log(s) from the current controller Pod, which is about to be replaced
 kubectl get -n "$NS" deployment "${FMA_CHART_INSTANCE_NAME}-dual-pods-controller"
+kubectl get -n "$NS" pods -l app.kubernetes.io/component=dual-pods-controller
 kubectl logs -n "$NS" deployment/"${FMA_CHART_INSTANCE_NAME}-dual-pods-controller" > dual-pods-controller-first.log
 kubectl logs -n "$NS" deployment/"${FMA_CHART_INSTANCE_NAME}-dual-pods-controller" -p > dual-pods-controller-first-prev.log || true
 
