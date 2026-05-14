@@ -17,6 +17,8 @@ Unit tests for Multi-Instance vLLM Launcher
 Run as:
 python -m pytest tests/test_launcher.py -v
 """
+
+import asyncio
 import os
 import signal
 import sys
@@ -37,11 +39,14 @@ sys.modules["vllm.entrypoints.utils"] = MagicMock()
 # Import the application and classes
 from launcher import (  # noqa: E402
     MAX_LOG_RESPONSE_BYTES,
+    EventBroadcaster,
     HalfMade,
     LogRangeNotAvailable,
+    RevisionTooOld,
     VllmConfig,
     VllmInstance,
     VllmMultiProcessManager,
+    WatchEvent,
     app,
     parse_range_header,
     set_env_vars,
@@ -96,6 +101,10 @@ class MockProcess:
         self.terminated = False
         self.killed = False
         self.pid = 12345
+        self.exitcode = None
+        # sentinel is a readable fd when the process exits
+        self._sentinel_r, self._sentinel_w = os.pipe()
+        self.sentinel = self._sentinel_r
 
     def start(self):
         pass
@@ -106,6 +115,7 @@ class MockProcess:
     def terminate(self):
         self.terminated = True
         self._is_alive = False
+        self.exitcode = -15
 
     def join(self, timeout=None):
         pass
@@ -113,6 +123,21 @@ class MockProcess:
     def kill(self):
         self.killed = True
         self._is_alive = False
+        self.exitcode = -9
+
+    def simulate_exit(self, exitcode=0):
+        """Simulate process termination by making sentinel fd readable."""
+        self._is_alive = False
+        self.exitcode = exitcode
+        os.write(self._sentinel_w, b"\x00")
+
+    def close_sentinel(self):
+        """Clean up pipe fds."""
+        for fd in (self._sentinel_r, self._sentinel_w):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
 
 # Tests for VllmConfig
@@ -407,7 +432,7 @@ class TestVllmMultiProcessManager:
 
         result = manager.create_instance(vllm_config)
 
-        assert result["status"] == "started"
+        assert result["status"] == "running"
         assert "instance_id" in result
         assert len(manager.instances) == 1
 
@@ -419,7 +444,7 @@ class TestVllmMultiProcessManager:
 
         result = manager.create_instance(vllm_config, "custom-id")
 
-        assert result["status"] == "started"
+        assert result["status"] == "running"
         assert result["instance_id"] == "custom-id"
         assert "custom-id" in manager.instances
 
@@ -447,7 +472,7 @@ class TestVllmMultiProcessManager:
 
         stop_result = manager.stop_instance(instance_id)
 
-        assert stop_result["status"] == "terminated"
+        assert stop_result["status"] == "stopped"
         assert instance_id not in manager.instances  # Should be cleaned up
 
     @patch("launcher.multiprocessing.Process")
@@ -593,7 +618,7 @@ class TestAPIEndpoints:
         assert data["name"] == "Multi-Instance vLLM Management API"
         assert data["version"] == "2.0"
         assert "endpoints" in data
-        assert len(data["endpoints"]) == 9
+        assert len(data["endpoints"]) == 10
 
     @patch("launcher.vllm_manager")
     def test_create_vllm_instance(self, mock_manager, client, vllm_config):
@@ -681,6 +706,7 @@ class TestAPIEndpoints:
     def test_list_instances(self, mock_manager, client):
         """Test listing instances via API"""
         mock_manager.list_instances.return_value = ["id-1", "id-2"]
+        mock_manager.revision = 5
 
         response = client.get("/v2/vllm/instances?detail=False")
 
@@ -688,8 +714,10 @@ class TestAPIEndpoints:
         data = response.json()
         assert data["count"] == 2
         assert "id-1" in data["instance_ids"]
+        assert data["revision"] == 5
 
         mock_manager.get_all_instances_status.return_value = {
+            "revision": 3,
             "total_instances": 1,
             "running_instances": 1,
             "instances": {
@@ -704,6 +732,7 @@ class TestAPIEndpoints:
         data = response.json()
         assert data["total_instances"] == 1
         assert data["running_instances"] == 1
+        assert data["revision"] == 3
 
     @patch("launcher.vllm_manager")
     def test_get_instance_status(self, mock_manager, client):
@@ -1004,6 +1033,320 @@ class TestLogFile:
         data, total = instance.get_log_bytes(start=0, end=44)
         assert data == b"A" * 20 + b"B" * 20 + b"C" * 5
         assert total == 60
+
+
+# Tests for EventBroadcaster
+class TestEventBroadcaster:
+    """Test suite for the EventBroadcaster pub/sub mechanism."""
+
+    def test_publish_and_watch(self):
+        """Published events are yielded by the watch async generator."""
+
+        async def run():
+            broadcaster = EventBroadcaster()
+            event = WatchEvent(
+                type="CREATED",
+                object={"instance_id": "abc", "status": "started", "revision": 1},
+            )
+            broadcaster._append(event)
+
+            received = []
+            async for ev in broadcaster.watch(since_revision=0):
+                received.append(ev)
+                break  # only expect one event
+            assert len(received) == 1
+            assert received[0].type == "CREATED"
+            assert received[0].object["instance_id"] == "abc"
+            assert received[0].object["revision"] == 1
+
+        asyncio.run(run())
+
+    def test_publish_tracks_sequential_revisions(self):
+        """Broadcaster tracks revision from pre-stamped events."""
+
+        async def run():
+            broadcaster = EventBroadcaster()
+            for i in range(1, 4):
+                broadcaster._append(
+                    WatchEvent(type="CREATED", object={"i": i, "revision": i})
+                )
+            assert broadcaster.revision == 3
+            assert broadcaster._events[0].object["revision"] == 1
+            assert broadcaster._events[1].object["revision"] == 2
+            assert broadcaster._events[2].object["revision"] == 3
+
+        asyncio.run(run())
+
+    def test_multiple_watchers(self):
+        """Two concurrent watchers both receive the same events."""
+
+        async def run():
+            broadcaster = EventBroadcaster()
+
+            results_a = []
+            results_b = []
+
+            async def watcher(results):
+                async for ev in broadcaster.watch():
+                    results.append(ev)
+                    if len(results) == 2:
+                        break
+
+            task_a = asyncio.create_task(watcher(results_a))
+            task_b = asyncio.create_task(watcher(results_b))
+
+            await asyncio.sleep(0)  # let watchers start
+
+            broadcaster._append(
+                WatchEvent(
+                    type="CREATED",
+                    object={"instance_id": "1", "revision": 1},
+                )
+            )
+            broadcaster._append(
+                WatchEvent(
+                    type="STOPPED",
+                    object={"instance_id": "1", "revision": 2},
+                )
+            )
+            await broadcaster._notify()
+
+            await asyncio.gather(task_a, task_b)
+
+            assert len(results_a) == 2
+            assert len(results_b) == 2
+            assert results_a[0].type == "CREATED"
+            assert results_a[1].type == "STOPPED"
+
+        asyncio.run(run())
+
+    def test_watch_since_revision(self):
+        """A watcher joining late catches up from a given revision."""
+
+        async def run():
+            broadcaster = EventBroadcaster()
+            broadcaster._append(
+                WatchEvent(
+                    type="CREATED",
+                    object={"instance_id": "1", "revision": 1},
+                )
+            )
+            broadcaster._append(
+                WatchEvent(
+                    type="STOPPED",
+                    object={"instance_id": "1", "revision": 2},
+                )
+            )
+            broadcaster._append(
+                WatchEvent(
+                    type="CREATED",
+                    object={"instance_id": "2", "revision": 3},
+                )
+            )
+
+            received = []
+            async for ev in broadcaster.watch(since_revision=1):
+                received.append(ev)
+                if len(received) == 2:
+                    break
+
+            assert len(received) == 2
+            assert received[0].type == "STOPPED"
+            assert received[0].object["revision"] == 2
+            assert received[1].object["instance_id"] == "2"
+
+        asyncio.run(run())
+
+    def test_revision_too_old_raises(self):
+        """Requesting a revision older than the buffer raises RevisionTooOld."""
+
+        async def run():
+            broadcaster = EventBroadcaster()
+            # Fill beyond buffer to force trimming
+            for i in range(1, _MAX_BROADCASTER_EVENTS + 11):
+                broadcaster._append(
+                    WatchEvent(type="CREATED", object={"i": i, "revision": i})
+                )
+
+            with pytest.raises(RevisionTooOld) as exc_info:
+                async for _ in broadcaster.watch(since_revision=0):
+                    pass
+            assert exc_info.value.requested == 0
+            assert exc_info.value.oldest > 0
+
+        from launcher import _MAX_BROADCASTER_EVENTS
+
+        asyncio.run(run())
+
+
+# Tests for sentinel watcher
+class TestSentinelWatcher:
+    """Test suite for VllmInstance sentinel-based process exit detection."""
+
+    def test_sentinel_invokes_callback_on_exit(self, gpu_translator, tmp_log_dir):
+        """When a process exits, the sentinel watcher invokes the callback."""
+
+        async def run():
+            config = VllmConfig(options="--model test --port 8000")
+            instance = VllmInstance("test-id", config, gpu_translator, tmp_log_dir)
+            mock_proc = MockProcess()
+            instance.process = mock_proc
+
+            callback_calls = []
+
+            def on_exit(instance_id, exitcode):
+                callback_calls.append((instance_id, exitcode))
+
+            instance.start_sentinel_watcher(on_exit)
+            assert instance._sentinel_active is True
+
+            # Simulate process exit
+            mock_proc.simulate_exit(exitcode=-9)
+
+            # Give the event loop a chance to fire the reader callback
+            await asyncio.sleep(0.05)
+
+            assert len(callback_calls) == 1
+            assert callback_calls[0] == ("test-id", -9)
+            assert instance._sentinel_active is False
+
+            mock_proc.close_sentinel()
+
+        asyncio.run(run())
+
+    def test_sentinel_cancelled_on_explicit_stop(self, gpu_translator, tmp_log_dir):
+        """When stop is called explicitly, sentinel is cancelled (no callback)."""
+
+        async def run():
+            config = VllmConfig(options="--model test --port 8000")
+            instance = VllmInstance("test-id", config, gpu_translator, tmp_log_dir)
+            mock_proc = MockProcess()
+            instance.process = mock_proc
+            # Create log file so stop() cleanup doesn't fail
+            open(instance._log_file_path, "wb").close()
+
+            callback_calls = []
+
+            instance.start_sentinel_watcher(lambda iid, ec: callback_calls.append(1))
+            assert instance._sentinel_active is True
+
+            instance.cancel_sentinel_watcher()
+            assert instance._sentinel_active is False
+
+            # No callback should have fired
+            assert len(callback_calls) == 0
+
+            mock_proc.close_sentinel()
+
+        asyncio.run(run())
+
+
+# Tests for watch API endpoint
+class TestWatchAPIEndpoint:
+    """Test suite for the GET /v2/vllm/instances/watch endpoint."""
+
+    def test_watch_endpoint_content_type(self, client):
+        """The watch endpoint returns application/x-ndjson."""
+        mock_manager = MagicMock()
+        mock_broadcaster = MagicMock()
+        mock_manager.revision = 0
+
+        async def mock_watch(since_revision=0):
+            yield WatchEvent(
+                type="CREATED",
+                object={"instance_id": "abc", "status": "started", "revision": 1},
+            )
+
+        mock_broadcaster.watch = mock_watch
+        mock_manager.broadcaster = mock_broadcaster
+        mock_manager.instances = {}
+
+        with patch("launcher.vllm_manager", mock_manager):
+            response = client.get("/v2/vllm/instances/watch")
+            assert response.status_code == 200
+            assert "application/x-ndjson" in response.headers["content-type"]
+
+    def test_watch_with_since_streams_events(self, client):
+        """With ?since=N, the stream yields events from that revision."""
+        import json
+
+        mock_manager = MagicMock()
+        mock_broadcaster = MagicMock()
+        mock_broadcaster.oldest_revision = 0
+
+        events = [
+            WatchEvent(
+                type="STOPPED",
+                object={
+                    "instance_id": "abc",
+                    "status": "stopped",
+                    "exit_code": 0,
+                    "revision": 2,
+                },
+            ),
+        ]
+
+        async def mock_watch(since_revision=0):
+            for ev in events:
+                yield ev
+
+        mock_broadcaster.watch = mock_watch
+        mock_manager.broadcaster = mock_broadcaster
+
+        with patch("launcher.vllm_manager", mock_manager):
+            response = client.get("/v2/vllm/instances/watch?since=1")
+            lines = response.text.strip().split("\n")
+            assert len(lines) == 1
+            event = json.loads(lines[0])
+            assert event["type"] == "STOPPED"
+            assert "revision" not in event
+            assert event["object"]["revision"] == 2
+
+    def test_watch_without_since_sends_initial_state(self, client):
+        """Without ?since, existing instances are sent as CREATED first."""
+        import json
+
+        mock_manager = MagicMock()
+        mock_broadcaster = MagicMock()
+        mock_manager.revision = 5
+
+        # No new events from broadcaster
+        async def mock_watch(since_revision=0):
+            return
+            yield  # make it an async generator
+
+        mock_broadcaster.watch = mock_watch
+
+        # One existing instance
+        mock_instance = MagicMock()
+        mock_instance.get_status.return_value = {
+            "status": "running",
+            "instance_id": "existing-1",
+            "options": "--model test",
+            "revision": 3,
+        }
+        mock_manager.instances = {"existing-1": mock_instance}
+        mock_manager.broadcaster = mock_broadcaster
+
+        with patch("launcher.vllm_manager", mock_manager):
+            response = client.get("/v2/vllm/instances/watch")
+            lines = response.text.strip().split("\n")
+            assert len(lines) == 1
+            event = json.loads(lines[0])
+            assert event["type"] == "CREATED"
+            assert event["object"]["instance_id"] == "existing-1"
+            assert event["object"]["revision"] == 3
+            assert "revision" not in event
+
+
+class TestLogStartOffset:
+    """Test suite for log retrieval with start offsets."""
+
+    def _make_instance(self, gpu_translator, log_dir):
+        """Helper to create a VllmInstance without starting a real process"""
+        config = VllmConfig(options="--model test --port 8000")
+        instance = VllmInstance("test-id", config, gpu_translator, log_dir=log_dir)
+        return instance
 
     def test_start_offset(self, gpu_translator, tmp_log_dir):
         """Test that start returns bytes from exact position"""

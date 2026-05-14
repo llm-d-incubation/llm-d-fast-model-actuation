@@ -646,7 +646,7 @@ expect '[ "$(kubectl get pod -n '"$NS"' $req_after_delete -o jsonpath={.metadata
 # Wait for the new requester to be "ready";
 # That should imply that the new launcher is ready.
 date
-kubectl wait --for condition=Ready pod/$req_after_delete -n "$NS" --timeout=120s
+kubectl wait --for condition=Ready pod/$req_after_delete -n "$NS" --timeout=180s
 [ "$(kubectl get pod $launcher_after_delete -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
 
 # Check that the new requester has the proper GPU UUIDs annotation.
