@@ -22,13 +22,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
+	v1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/api"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/common"
 )
@@ -89,8 +92,8 @@ func removeVolumeMount(ctr *corev1.Container, volumeName string) {
 // and the port for a server-providing Pod.
 // This function is for direct (non-launcher-based) server-providing Pods.
 // The port is identified from the readinessProbe.
-// Returns (containerIndex int, inferenceServerPort int16, err error).
-func GetInferenceServerContainerIndexAndPort(pod *corev1.Pod) (int, int16, error) {
+// Returns (containerIndex int, inferenceServerPort int32, err error).
+func GetInferenceServerContainerIndexAndPort(pod *corev1.Pod) (int, int32, error) {
 	cIdx, err := GetInferenceServerContainerIndex(pod)
 	if err != nil {
 		return 0, 0, err
@@ -105,7 +108,7 @@ func GetInferenceServerContainerIndexAndPort(pod *corev1.Pod) (int, int16, error
 	portIOS := isCtr.ReadinessProbe.HTTPGet.Port
 	switch portIOS.Type {
 	case intstr.Int:
-		return cIdx, int16(portIOS.IntVal), nil
+		return cIdx, portIOS.IntVal, nil
 	case intstr.String:
 		if portIOS.StrVal == "http" || portIOS.StrVal == "HTTP" {
 			return cIdx, 80, nil
@@ -130,6 +133,20 @@ func GetInferenceServerContainerIndex(pod *corev1.Pod) (int, error) {
 	return cIdx, nil
 }
 
+// ValidateLauncherPodTemplate checks whether the given EmbeddedPodTemplateSpec is valid
+// for use as a launcher pod template. It returns an error if the template is missing the
+// required inference server container. This check does not depend on any node-specific
+// information and is safe to call once per LauncherConfig rather than once per node.
+func ValidateLauncherPodTemplate(template v1alpha1.EmbeddedPodTemplateSpec) error {
+	cIdx := slices.IndexFunc(template.Spec.Containers, func(c corev1.Container) bool {
+		return c.Name == api.InferenceServerContainerName
+	})
+	if cIdx == -1 {
+		return fmt.Errorf("container %q not found", api.InferenceServerContainerName)
+	}
+	return nil
+}
+
 func IsPodReady(pod *corev1.Pod) bool {
 	for _, cond := range pod.Status.Conditions {
 		if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
@@ -141,13 +158,16 @@ func IsPodReady(pod *corev1.Pod) bool {
 
 // BuildLauncherPodFromTemplate creates a launcher pod from a LauncherConfig object's
 // Spec.PodTemplate and assigns the built launcher pod to a node
-func BuildLauncherPodFromTemplate(template corev1.PodTemplateSpec, ns, nodeName, launcherConfigName string) (*corev1.Pod, error) {
+func BuildLauncherPodFromTemplate(template v1alpha1.EmbeddedPodTemplateSpec, ns, nodeName, launcherConfigName string) (*corev1.Pod, error) {
 	pod := &corev1.Pod{
-		ObjectMeta: template.ObjectMeta,
-		Spec:       *DeIndividualize(template.Spec.DeepCopy()),
+		ObjectMeta: metav1.ObjectMeta{
+			Labels:      maps.Clone(template.Metadata.Labels),
+			Annotations: maps.Clone(template.Metadata.Annotations),
+		},
+		Spec: *DeIndividualize(template.Spec.DeepCopy()),
 	}
 	pod.Namespace = ns
-	pod.GenerateName = "launcher-"
+	pod.GenerateName = fmt.Sprintf("launcher-%s-", launcherConfigName)
 	// Ensure labels are set
 	if pod.Labels == nil {
 		pod.Labels = make(map[string]string)

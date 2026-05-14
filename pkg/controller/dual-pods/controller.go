@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -75,16 +76,28 @@ import (
 // deletion of any server-providing Pod. Nor does the controller ever try to bind
 // one that is unbound; they are only created in the bound state.
 
-// There are two types of item in the controller's work queue.
+// There are three types of item in the controller's work queue.
 // One is a reference to the gpu-map ConfigMap.
 
-// The other type of queue item is a reference to an inference server.
+// The second type of queue item is a reference to a Node.
+// The are two types for an item on a Node:
+// 1) A reference to an inference server.
 // This reference carries the inference server's UID and the name
 // of the server-requesting Pod.
 // An inference server's UID is the UID of the server-requesting Pod.
+// 2) A reference to an unbound launcher-based server-providing Pod.
+
+// The third type of queue item is a reference to an InferenceServerConfig.
+// It is enqueued when an ISC's spec changes, to trigger cleanup of any
+// sleeping launcher instances whose configuration is now obsolete.
 
 const requesterAnnotationKey = "dual-pods.llm-d.ai/requester"
 const nominalHashAnnotationKey = "dual-pods.llm-d.ai/nominal"
+const launcherInstanceIDAnnotationKey = "dual-pods.llm-d.ai/instance-id"
+const launcherServerPortAnnotationKey = "dual-pods.llm-d.ai/server-port"
+const launcherVllmConfigAnnotationKey = "dual-pods.llm-d.ai/vllm-config"
+const iscLabelKeysAnnotationKey = "dual-pods.llm-d.ai/isc-label-keys"
+const iscAnnotationKeysAnnotationKey = "dual-pods.llm-d.ai/isc-annotation-keys"
 
 const providerFinalizer = "dual-pods.llm-d.ai/provider"
 const requesterFinalizer = "dual-pods.llm-d.ai/requester"
@@ -222,16 +235,16 @@ type controller struct {
 	enqueueLogger klog.Logger
 	coreclient    coreclient.CoreV1Interface
 	namespace     string
-	podInformer   cache.SharedIndexInformer
-	podLister     corev1listers.PodLister
-	cmInformer    cache.SharedIndexInformer
-	cmLister      corev1listers.ConfigMapLister
-	nodeInformer  cache.SharedIndexInformer
-	nodeLister    corev1listers.NodeLister
-	iscInformer   cache.SharedIndexInformer
-	iscLister     fmalisters.InferenceServerConfigLister
-	lcInformer    cache.SharedIndexInformer
-	lcLister      fmalisters.LauncherConfigLister
+	podInformer      cache.SharedIndexInformer
+	podLister        corev1listers.PodLister
+	cmInformer       cache.SharedIndexInformer
+	cmLister         corev1listers.ConfigMapLister
+	nodeInformer     cache.SharedIndexInformer
+	nodeLister       corev1listers.NodeLister
+	iscInformer      cache.SharedIndexInformer
+	iscLister        fmalisters.InferenceServerConfigLister
+	lcInformer       cache.SharedIndexInformer
+	lcLister         fmalisters.LauncherConfigLister
 	genctlr.KnowsProcessedSync[queueItem]
 
 	sleeperLimit        int
@@ -282,8 +295,12 @@ type serverData struct {
 	NominalProvidingPod     *corev1.Pod
 	NominalProvidingPodHash string
 
-	// ServerPort is meaningful if NominalProvidingPod is not nil
-	ServerPort int16
+	// ServerPort is where the inference server listens.
+	// For direct (non-launcher-based) providers it is derived from
+	// NominalProvidingPod. For launcher-based providers it is written by
+	// commitInstanceState (on fresh bind) or recoverInstanceStateFromLauncherPod
+	// (on controller-restart recovery).
+	ServerPort int32
 
 	// UUIDs of the server's GPUs
 	GPUIDs []string
@@ -295,7 +312,15 @@ type serverData struct {
 	GPUIndicesStr *string
 
 	ProvidingPodName string
-	InstanceID       string // if provider launcher-based
+
+	// The next two fields form a snapshot of the bound launcher-based
+	// vLLM instance's ISC-derived state. Each field may be reassigned
+	// over time (e.g. on rebind), but whichever value (pointer) is
+	// currently stored is deeply immutable for as long as it is stored.
+	InstanceID     string
+	InstanceConfig *VllmConfig
+
+	InstanceKnownToExist bool // meaningful only for launcher-based providers
 
 	ReadinessRelayed *bool
 
@@ -332,9 +357,13 @@ type infSvrItem struct {
 	RequesterName string
 }
 
-type launcherPodItem struct {
+type unboundLauncherPodItem struct {
 	LauncherPodName string
 	NodeName        string
+}
+
+type instanceGCItem struct {
+	ISCName string
 }
 
 type infSvrItemType string
@@ -347,6 +376,7 @@ const (
 	infSvrItemBoundProvider infSvrItemType = "bound_provider"
 	// infSvrItemUnboundLauncherBasedProvider is for a server-providing Pod that
 	// is launcher-based and not bound to any server-requesting Pods.
+	// Note that technically an unbound launcher-based server-providing Pod is not part of any inference server (yet/anymore).
 	infSvrItemUnboundLauncherBasedProvider infSvrItemType = "unbound_launcher_based_provider"
 	// infSvrItemDontCare is not a real infSvrItemType but only a placeholder
 	// saying the corresponding infSvrItem is not relevant to the controller.
@@ -431,10 +461,10 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 				return
 			}
 			nd := ctl.getNodeData(nodeName)
-			launcherPodItem := launcherPodItem{LauncherPodName: typed.Name, NodeName: nodeName}
+			unboundLauncher := unboundLauncherPodItem{LauncherPodName: typed.Name, NodeName: nodeName}
 			ctl.enqueueLogger.V(5).Info("Enqueuing launcher reference due to notification of add",
 				"nodeName", nodeName, "launcherPod", typed.Name, "isInInitialList", isInInitialList, "resourceVersion", typed.ResourceVersion)
-			nd.add(launcherPodItem)
+			nd.add(unboundLauncher)
 			ctl.Queue.Add(nodeItem{nodeName})
 		} else {
 			nodeName := typed.Spec.NodeName
@@ -455,7 +485,7 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 			ctl.Queue.Add(nodeItem{nodeName})
 		}
 	case *fmav1alpha1.InferenceServerConfig:
-		ctl.enqueueRequestersByInferenceServerConfig(typed, isInInitialList)
+		ctl.enqueueInfSvrItemsByISC(typed, isInInitialList)
 	case *corev1.ConfigMap:
 		if typed.Name != GPUMapName {
 			ctl.enqueueLogger.V(5).Info("Ignoring ConfigMap that is not the GPU map", "ref", cache.MetaObjectToName(typed))
@@ -484,10 +514,10 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 				return
 			}
 			nd := ctl.getNodeData(nodeName)
-			launcherPodItem := launcherPodItem{LauncherPodName: typed.Name, NodeName: nodeName}
+			unboundLauncher := unboundLauncherPodItem{LauncherPodName: typed.Name, NodeName: nodeName}
 			ctl.enqueueLogger.V(5).Info("Enqueuing launcher reference due to notification of update",
 				"nodeName", nodeName, "launcherPod", typed.Name, "resourceVersion", typed.ResourceVersion)
-			nd.add(launcherPodItem)
+			nd.add(unboundLauncher)
 			ctl.Queue.Add(nodeItem{nodeName})
 		} else {
 			nodeName := typed.Spec.NodeName
@@ -508,7 +538,11 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 			ctl.Queue.Add(nodeItem{nodeName})
 		}
 	case *fmav1alpha1.InferenceServerConfig:
-		ctl.enqueueRequestersByInferenceServerConfig(typed, false)
+		prevTyped, ok := prev.(*fmav1alpha1.InferenceServerConfig)
+		if ok && !reflect.DeepEqual(prevTyped.Spec, typed.Spec) {
+			ctl.enqueueInstanceGCItemsForISC(typed.Name)
+		}
+		ctl.enqueueInfSvrItemsByISC(typed, false)
 	case *corev1.ConfigMap:
 		if typed.Name != GPUMapName {
 			ctl.enqueueLogger.V(5).Info("Ignoring ConfigMap that is not the GPU map", "ref", cache.MetaObjectToName(typed))
@@ -540,10 +574,10 @@ func (ctl *controller) OnDelete(obj any) {
 				return
 			}
 			nd := ctl.getNodeData(nodeName)
-			launcherPodItem := launcherPodItem{LauncherPodName: typed.Name, NodeName: nodeName}
+			unboundLauncher := unboundLauncherPodItem{LauncherPodName: typed.Name, NodeName: nodeName}
 			ctl.enqueueLogger.V(5).Info("Enqueuing launcher reference due to notification of delete",
 				"nodeName", nodeName, "launcherPod", typed.Name, "resourceVersion", typed.ResourceVersion)
-			nd.add(launcherPodItem)
+			nd.add(unboundLauncher)
 			ctl.Queue.Add(nodeItem{nodeName})
 		} else {
 			nodeName := typed.Spec.NodeName
@@ -564,7 +598,7 @@ func (ctl *controller) OnDelete(obj any) {
 			ctl.Queue.Add(nodeItem{nodeName})
 		}
 	case *fmav1alpha1.InferenceServerConfig:
-		ctl.enqueueRequestersByInferenceServerConfig(typed, false)
+		ctl.enqueueInfSvrItemsByISC(typed, false)
 	case *corev1.ConfigMap:
 		if typed.Name != GPUMapName {
 			ctl.enqueueLogger.V(5).Info("Ignoring ConfigMap that is not the GPU map", "ref", cache.MetaObjectToName(typed))
@@ -643,6 +677,15 @@ func (item cmItem) process(ctx context.Context, ctl *controller) (error, bool) {
 	return nil, false
 }
 
+func (ctl *controller) enqueueInstanceGCItemsForISC(iscName string) {
+	ctl.mutex.Lock()
+	defer ctl.mutex.Unlock()
+	for nodeName, nodeDat := range ctl.nodeNameToData {
+		nodeDat.add(instanceGCItem{ISCName: iscName})
+		ctl.Queue.Add(nodeItem{nodeName})
+	}
+}
+
 func (ctl *controller) enqueueRequesters(ctx context.Context) {
 	ctl.mutex.Lock()
 	defer ctl.mutex.Unlock()
@@ -661,7 +704,7 @@ func (ctl *controller) enqueueRequesters(ctx context.Context) {
 	}
 }
 
-func (ctl *controller) enqueueRequestersByInferenceServerConfig(isc *fmav1alpha1.InferenceServerConfig, isInInitialList bool) {
+func (ctl *controller) enqueueInfSvrItemsByISC(isc *fmav1alpha1.InferenceServerConfig, isInInitialList bool) {
 	inferenceServerConfigName := isc.Name
 	requesters, err := ctl.podInformer.GetIndexer().ByIndex(inferenceServerConfigIndexName, inferenceServerConfigName)
 	if err != nil {

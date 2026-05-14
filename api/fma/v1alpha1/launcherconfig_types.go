@@ -21,26 +21,70 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// EmbeddedObjectMeta holds the subset of metav1.ObjectMeta fields that
+// we want in the CRD schema, so that strict decoding accepts them.
+type EmbeddedObjectMeta struct {
+	// Labels for organizing and categorizing objects.
+	// +optional
+	Labels map[string]string `json:"labels,omitempty"`
+
+	// Annotations for storing arbitrary non-identifying metadata.
+	// +optional
+	Annotations map[string]string `json:"annotations,omitempty"`
+}
+
+// EmbeddedPodTemplateSpec is a PodTemplateSpec whose metadata fields
+// are explicitly declared so that the CRD schema admits them.
+type EmbeddedPodTemplateSpec struct {
+	// +optional
+	Metadata EmbeddedObjectMeta `json:"metadata,omitempty"`
+
+	// Spec defines the behavior of pods created from this template.
+	// +optional
+	Spec corev1.PodSpec `json:"spec,omitempty"`
+}
+
 // LauncherConfigSpec defines the configuration to manage the nominal server-providing pod definition.
+// At most one of `maxSleepingInstances` and `maxInstances` may be positive; setting both to positive
+// values is rejected. Either may be zero or omitted.
+// +kubebuilder:validation:XValidation:rule="!(has(self.maxInstances) && has(self.maxSleepingInstances) && self.maxInstances > 0 && self.maxSleepingInstances > 0)",message="maxInstances and maxSleepingInstances must not both be positive"
 type LauncherConfigSpec struct {
 	// PodTemplate defines the pod specification for the server-providing pod.
 	// +optional
-	PodTemplate corev1.PodTemplateSpec `json:"podTemplate,omitempty"`
+	PodTemplate EmbeddedPodTemplateSpec `json:"podTemplate,omitempty"`
 
-	// MaxSleepingInstances is the maximum number of sleeping inference engine instances allowed per launcher pod.
-	// +kubebuilder:validation:Required
+	// MaxSleepingInstances caps the number of sleeping inference-engine instances per launcher pod
+	// when an awake instance is also present. When no instance is awake, one additional sleeping
+	// instance is permitted — i.e., a launcher pod can hold up to `MaxSleepingInstances + 1`
+	// instances in total.
+	// Deprecated: use MaxInstances, which simply caps the total number of instances per launcher pod.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
 	MaxSleepingInstances int32 `json:"maxSleepingInstances,omitempty"`
+
+	// MaxInstances caps the total number of inference-engine instances per launcher pod.
+	// A value of zero means unset.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	MaxInstances int32 `json:"maxInstances,omitempty"`
 }
 
 // LauncherConfigStatus represents the current status
 type LauncherConfigStatus struct {
+	// `observedGeneration` is the `metadata.generation` last seen by the controller.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// `errors` reports problems seen in the desired state of this object.
+	// +optional
+	Errors []string `json:"errors,omitempty"`
 }
 
 // +genclient
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:shortName=ist
+// +kubebuilder:resource:shortName=lcfg
 
 // LauncherConfig is the Schema for the LauncherConfigs API.
 // It represents the configuration to manage the nominal server-providing pod definition.

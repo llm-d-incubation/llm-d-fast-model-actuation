@@ -2,7 +2,7 @@
 
 # Creates test Kubernetes objects for the OpenShift / real-cluster E2E path.
 #
-# Usage: mkobjs-openshift.sh [-n <namespace>]
+# Usage: mkobjs-openshift.sh [-n <namespace>] [--node <node-name>]
 #
 # Required environment variables:
 #   LAUNCHER_IMAGE   - container image for the launcher pod
@@ -17,8 +17,9 @@
 
 set -euo pipefail
 
-# Parse optional -n / --namespace flag
+# Parse optional flags
 ns_flag=()
+node_name=""
 while [ $# -gt 0 ]; do
     case "$1" in
         -n|--namespace)
@@ -27,6 +28,15 @@ while [ $# -gt 0 ]; do
                 shift 2
             else
                 echo "Missing --namespace argument" >&2
+                exit 1
+            fi
+            ;;
+        --node)
+            if [ $# -gt 1 ] ; then
+                node_name="$2"
+                shift 2
+            else
+                echo "Missing --node argument" >&2
                 exit 1
             fi
             ;;
@@ -46,6 +56,14 @@ inst=$(date +%d-%H-%M-%S)
 runtime_class=""
 if [ -n "${RUNTIME_CLASS_NAME:-}" ]; then
     runtime_class="runtimeClassName: ${RUNTIME_CLASS_NAME}"
+fi
+
+# When a node is specified, pin the ReplicaSet's pods to it.
+if [ -n "$node_name" ]; then
+    node_selector="nodeSelector:
+        kubernetes.io/hostname: \"$node_name\""
+else
+    node_selector=""
 fi
 
 if out=$(kubectl apply "${ns_flag[@]}" -f - 2>&1 <<EOF
@@ -100,10 +118,10 @@ spec:
       VLLM_USE_V1: "1"
       VLLM_LOGGING_LEVEL: "DEBUG"
     labels:
-      component: inference
+      e2e-test.fma.llm-d.ai/isc-label: test-value
     annotations:
-      description: "E2E test InferenceServerConfig"
-  launcherConfigName: launcher-config-$inst
+      e2e-test.fma.llm-d.ai/isc-annotation: test-value
+  launcherConfigName: "$inst"
 ---
 apiVersion: fma.llm-d.ai/v1alpha1
 kind: InferenceServerConfig
@@ -120,10 +138,10 @@ spec:
       VLLM_USE_V1: "1"
       VLLM_LOGGING_LEVEL: "DEBUG"
     labels:
-      component: inference
+      e2e-test.fma.llm-d.ai/isc-label: test-value
     annotations:
-      description: "E2E test InferenceServerConfig"
-  launcherConfigName: launcher-config-$inst
+      e2e-test.fma.llm-d.ai/isc-annotation: test-value
+  launcherConfigName: "$inst"
 ---
 apiVersion: fma.llm-d.ai/v1alpha1
 kind: InferenceServerConfig
@@ -140,20 +158,25 @@ spec:
       VLLM_USE_V1: "1"
       VLLM_LOGGING_LEVEL: "DEBUG"
     labels:
-      component: inference
+      e2e-test.fma.llm-d.ai/isc-label: test-value
     annotations:
-      description: "E2E test InferenceServerConfig"
-  launcherConfigName: launcher-config-$inst
+      e2e-test.fma.llm-d.ai/isc-annotation: test-value
+  launcherConfigName: "$inst"
 ---
 apiVersion: fma.llm-d.ai/v1alpha1
 kind: LauncherConfig
 metadata:
-  name: launcher-config-$inst
+  name: "$inst"
   labels:
     fma-e2e-instance: "$inst"
 spec:
   maxSleepingInstances: 3
   podTemplate:
+    metadata:
+      labels:
+        e2e-test.fma.llm-d.ai/template-label: from-launcher-config
+      annotations:
+        e2e-test.fma.llm-d.ai/template-annotation: from-launcher-config
     spec:
       ${runtime_class}
       serviceAccountName: launcher-$inst
@@ -192,7 +215,7 @@ spec:
       matchLabels:
         nvidia.com/gpu.present: "true"
   countForLauncher:
-    - launcherConfigName: launcher-config-$inst
+    - launcherConfigName: "$inst"
       launcherCount: 1
 ---
 apiVersion: apps/v1
@@ -218,6 +241,7 @@ spec:
         dual-pods.llm-d.ai/inference-server-config: "inference-server-config-smol-$inst"
     spec:
       ${runtime_class}
+      ${node_selector}
       containers:
         - name: inference-server
           image: ${REQUESTER_IMAGE}
@@ -242,7 +266,7 @@ EOF
        )
 then
     echo inference-server-config-smol-$inst
-    echo launcher-config-$inst
+    echo "$inst"
     echo my-request-$inst
     echo inference-server-config-qwen-$inst
     echo inference-server-config-tinyllama-$inst

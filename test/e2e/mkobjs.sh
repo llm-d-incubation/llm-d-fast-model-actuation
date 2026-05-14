@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 
-# Parse optional -n / --namespace flag
+# Parse optional flags
 ns_flag=()
+node_name=""
 while [ $# -gt 0 ]; do
     case "$1" in
         -n|--namespace)
@@ -13,12 +14,29 @@ while [ $# -gt 0 ]; do
                 exit 1
             fi
             ;;
+        --node)
+            if [ $# -gt 1 ] ; then
+                node_name="$2"
+                shift 2
+            else
+                echo "Missing --node argument" >&2
+                exit 1
+            fi
+            ;;
         *)
             echo "Unknown argument: $1" >&2
             exit 1
             ;;
     esac
 done
+
+# When a node is specified, pin the ReplicaSet's pods to it.
+if [ -n "$node_name" ]; then
+    node_selector="nodeSelector:
+        kubernetes.io/hostname: \"$node_name\""
+else
+    node_selector=""
+fi
 
 inst=$(date +%d-%H-%M-%S)
 requester_img=$(make echo-var VAR=TEST_REQUESTER_IMG)
@@ -40,10 +58,10 @@ spec:
       VLLM_LOGGING_LEVEL: "DEBUG"
       VLLM_CPU_KVCACHE_SPACE: "1" # GiB, helpful for small models to reduce CPU memory usage during testing
     labels:
-      component: inference
+      e2e-test.fma.llm-d.ai/isc-label: test-value
     annotations:
-      description: "Example InferenceServerConfig"
-  launcherConfigName: launcher-config-$inst
+      e2e-test.fma.llm-d.ai/isc-annotation: test-value
+  launcherConfigName: "$inst"
 ---
 apiVersion: fma.llm-d.ai/v1alpha1
 kind: InferenceServerConfig
@@ -61,10 +79,10 @@ spec:
       VLLM_LOGGING_LEVEL: "DEBUG"
       VLLM_CPU_KVCACHE_SPACE: "1" # GiB, helpful for small models to reduce CPU memory usage during testing
     labels:
-      component: inference
+      e2e-test.fma.llm-d.ai/isc-label: test-value
     annotations:
-      description: "Example InferenceServerConfig"
-  launcherConfigName: launcher-config-$inst
+      e2e-test.fma.llm-d.ai/isc-annotation: test-value
+  launcherConfigName: "$inst"
 ---
 apiVersion: fma.llm-d.ai/v1alpha1
 kind: InferenceServerConfig
@@ -82,21 +100,26 @@ spec:
       VLLM_LOGGING_LEVEL: "DEBUG"
       VLLM_CPU_KVCACHE_SPACE: "1" # GiB, helpful for small models to reduce CPU memory usage during testing
     labels:
-      component: inference
+      e2e-test.fma.llm-d.ai/isc-label: test-value
     annotations:
-      description: "Example InferenceServerConfig"
-  launcherConfigName: launcher-config-$inst
+      e2e-test.fma.llm-d.ai/isc-annotation: test-value
+  launcherConfigName: "$inst"
 ---
 apiVersion: fma.llm-d.ai/v1alpha1
 kind: LauncherConfig
 metadata:
-  name: launcher-config-$inst
+  name: "$inst"
   labels:
     instance: "$inst"
     fma-e2e-instance: "$inst"
 spec:
   maxSleepingInstances: 1
   podTemplate:
+    metadata:
+      labels:
+        e2e-test.fma.llm-d.ai/template-label: from-launcher-config
+      annotations:
+        e2e-test.fma.llm-d.ai/template-annotation: from-launcher-config
     spec:
       serviceAccount: testlauncher
       containers:
@@ -134,7 +157,7 @@ spec:
       matchLabels:
         nvidia.com/gpu.present: "true"
   countForLauncher:
-    - launcherConfigName: launcher-config-$inst
+    - launcherConfigName: "$inst"
       launcherCount: 1
 ---
 apiVersion: apps/v1
@@ -168,6 +191,7 @@ spec:
           - --node=\$(NODE_NAME)
           - --pod-uid=\$(POD_UID)
           - --namespace=\$(NAMESPACE)
+          - -v=5
           env:
             - name: NODE_NAME
               valueFrom:
@@ -194,14 +218,14 @@ spec:
               nvidia.com/gpu: "1"
               cpu: "200m"
               memory: 250Mi
+      ${node_selector}
       serviceAccount: testreq
-      # nodeName: fmatest-worker # try fixed node for the consistency of value of dual-pods.llm-d.ai/launcher-config-hash annotation
 EOF
         )
 then
     # output to be parsed by caller, e.g. the e2e test script
     echo inference-server-config-smol-$inst
-    echo launcher-config-$inst
+    echo "$inst"
     echo my-request-$inst
     echo inference-server-config-qwen-$inst
     echo inference-server-config-tinyllama-$inst
