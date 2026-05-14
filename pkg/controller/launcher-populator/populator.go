@@ -71,6 +71,7 @@ func NewController(
 		lppLister:     fmaInformerFactory.Fma().V1alpha1().LauncherPopulationPolicies().Lister(),
 		lcInformer:    fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Informer(),
 		lcLister:      fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Lister(),
+		expectations:  newPendingExpectations(),
 	}
 
 	// Use a single worker thread to ensure sequential processing of LauncherPopulationPolicy updates
@@ -111,6 +112,11 @@ type controller struct {
 	lcInformer    cache.SharedIndexInformer
 	lcLister      fmalisters.LauncherConfigLister
 	genctlr.KnowsProcessedSync[queueItem]
+
+	// expectations tracks pending Pod create/delete mutations not yet reflected
+	// in the informer's local cache. This prevents the controller from making
+	// decisions based on stale cache state between reconcile cycles.
+	expectations *pendingExpectations
 }
 
 var _ Controller = &controller{}
@@ -142,6 +148,14 @@ func isLauncherPod(pod *corev1.Pod) bool {
 	return pod.Labels[common.ComponentLabelKey] == common.LauncherComponentLabelValue
 }
 
+// keyFromPod extracts the NodeLauncherKey from a launcher Pod's labels.
+func keyFromPod(pod *corev1.Pod) NodeLauncherKey {
+	return NodeLauncherKey{
+		NodeName:           pod.Labels[common.NodeNameLabelKey],
+		LauncherConfigName: pod.Labels[common.LauncherConfigNameLabelKey],
+	}
+}
+
 func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 	switch typed := obj.(type) {
 	case *corev1.Pod:
@@ -149,6 +163,8 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 			ctl.enqueueLogger.V(5).Info("Ignored add of non-launcher Pod", "name", typed.Name)
 			return
 		}
+		// Fulfill pending creation expectation before enqueuing.
+		ctl.expectations.observeCreation(keyFromPod(typed))
 		ctl.enqueueLogger.V(5).Info("Enqueuing Pod reference due to notification of add", "name", typed.Name)
 		item := podItem{cache.MetaObjectToName(typed)}
 		ctl.Queue.Add(item)
@@ -208,6 +224,8 @@ func (ctl *controller) OnDelete(obj any) {
 			ctl.enqueueLogger.V(5).Info("Ignored delete of non-launcher Pod", "name", typed.Name)
 			return
 		}
+		// Fulfill pending deletion expectation before enqueuing.
+		ctl.expectations.observeDeletion(keyFromPod(typed))
 		ctl.enqueueLogger.V(5).Info("Enqueuing Pod reference due to notification of delete", "name", typed.Name)
 		item := podItem{cache.MetaObjectToName(typed)}
 		ctl.Queue.Add(item)
@@ -474,8 +492,9 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 	}
 
 	didDelete := false
-	deletionInProgress := false // tracks pods already being deleted (DeletionTimestamp set)
-	deletionShortfall := false  // excess-pod deletion loop could not delete as many as needed
+	deletionInProgress := false  // tracks pods already being deleted (DeletionTimestamp set)
+	deletionShortfall := false   // excess-pod deletion loop could not delete as many as needed
+	expectationsWaiting := false // at least one key has unsatisfied expectations
 
 	type creationInfo struct {
 		key   NodeLauncherKey
@@ -489,12 +508,16 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 	for _, key := range keys {
 		entry := desired[key]
 
-		currentLaunchers, err := ctl.getCurrentLaunchersOnNode(ctx, key)
+		currentLaunchers, expectStatus, err := ctl.getCurrentLaunchersOnNode(ctx, key)
 		if err != nil {
-			// The only error possible here is from the lister, which should never fail in practice.
 			// Log and skip this config rather than aborting the entire reconciliation.
 			logger.Error(err, "Failed to get current launchers for config",
 				"node", nodeName, "config", key.LauncherConfigName)
+			continue
+		}
+		if expectStatus == ExpectationsWaiting {
+			// Cache not yet up-to-date for this key; skip and request requeue.
+			expectationsWaiting = true
 			continue
 		}
 
@@ -548,6 +571,7 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 
 		// Delete stale pods immediately (spec changed → delete and replace)
 		staleNotDeleted := 0
+		staleDeleted := 0
 		for _, pod := range staleUnboundPods {
 			err := ctl.coreclient.Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{
 				Preconditions: &metav1.Preconditions{UID: &pod.UID, ResourceVersion: &pod.ResourceVersion},
@@ -563,6 +587,10 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 					logger.Info("Stale launcher pod was modified since read, skipping deletion", "pod", pod.Name)
 					continue
 				}
+				// Record expectations for deletions already confirmed before the error.
+				if staleDeleted > 0 {
+					ctl.expectations.expectDeletions(key, staleDeleted)
+				}
 				return false, fmt.Errorf("failed to delete stale launcher pod %s: %w", pod.Name, err)
 			}
 			logger.Info("Deleted stale launcher pod (spec changed)",
@@ -570,6 +598,10 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 				"node", nodeName,
 				"config", key.LauncherConfigName)
 			didDelete = true
+			staleDeleted++
+		}
+		if staleDeleted > 0 {
+			ctl.expectations.expectDeletions(key, staleDeleted)
 		}
 
 		// Calculate diff based on effective remaining pods after stale deletion
@@ -587,6 +619,7 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 		if diff < 0 {
 			// Need to delete excess pods from live unbound current pods
 			numToDelete := int(-diff)
+			excessDeleted := 0
 			for i := len(liveUnboundCurrentPods) - 1; i >= 0 && numToDelete > 0; i-- {
 				pod := liveUnboundCurrentPods[i]
 				err := ctl.coreclient.Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{
@@ -603,6 +636,10 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 						logger.Info("Launcher pod was modified since read, skipping deletion", "pod", pod.Name)
 						continue
 					}
+					// Record expectations for deletions already confirmed before the error.
+					if excessDeleted > 0 {
+						ctl.expectations.expectDeletions(key, excessDeleted)
+					}
 					return false, fmt.Errorf("failed to delete launcher pod %s: %w", pod.Name, err)
 				}
 				logger.Info("Deleted excess launcher pod",
@@ -611,6 +648,10 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 					"config", key.LauncherConfigName)
 				didDelete = true
 				numToDelete--
+				excessDeleted++
+			}
+			if excessDeleted > 0 {
+				ctl.expectations.expectDeletions(key, excessDeleted)
 			}
 			if numToDelete > 0 {
 				deletionShortfall = true
@@ -627,15 +668,16 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 	}
 
 	// If any deletions were performed or are in progress, or the desired reduction
-	// in launcher count was not fully achieved, requeue for later. This ensures that
-	// deletions take effect before any creations happen, so that freed resources are
-	// available for newly created pods.
-	if didDelete || deletionInProgress || deletionShortfall {
+	// in launcher count was not fully achieved, or expectations are still pending,
+	// requeue for later. This ensures that deletions take effect before any creations
+	// happen, so that freed resources are available for newly created pods.
+	if didDelete || deletionInProgress || deletionShortfall || expectationsWaiting {
 		logger.Info("Requeuing for creation later",
 			"node", nodeName,
 			"didDelete", didDelete,
 			"deletionInProgress", deletionInProgress,
-			"deletionShortfall", deletionShortfall)
+			"deletionShortfall", deletionShortfall,
+			"expectationsWaiting", expectationsWaiting)
 		return true, nil
 	}
 
@@ -664,20 +706,75 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 	return false, nil
 }
 
-// getCurrentLaunchersOnNode returns launcher pods for a specific config on a specific node
-func (ctl *controller) getCurrentLaunchersOnNode(ctx context.Context, key NodeLauncherKey) ([]*corev1.Pod, error) {
+// getCurrentLaunchersOnNode returns launcher pods for a specific config on a specific node.
+// It checks pending expectations to decide whether to use the informer cache
+// or fall back to a direct apiserver query. The returned ExpectationStatus
+// indicates which path was taken; ExpectationsWaiting means the caller should
+// requeue without acting on this key.
+func (ctl *controller) getCurrentLaunchersOnNode(ctx context.Context, key NodeLauncherKey) ([]*corev1.Pod, ExpectationStatus, error) {
+	logger := klog.FromContext(ctx)
+
+	status := ctl.expectations.check(key)
+	switch status {
+	case ExpectationsSatisfied:
+		// Fast path: informer cache is considered up-to-date.
+		pods, err := ctl.listPodsFromCache(key)
+		return pods, status, err
+
+	case ExpectationsWaiting:
+		// Pending mutations not yet reflected; caller should requeue.
+		logger.V(4).Info("Expectations not yet satisfied, requesting requeue",
+			"node", key.NodeName, "config", key.LauncherConfigName)
+		return nil, status, nil
+
+	case ExpectationsTimedOut:
+		// Timeout: fall back to direct apiserver query and reset expectations.
+		logger.Info("Expectations timed out, falling back to apiserver query",
+			"node", key.NodeName, "config", key.LauncherConfigName)
+		ctl.expectations.reset(key)
+		pods, err := ctl.listPodsFromApiserver(ctx, key)
+		return pods, status, err
+	}
+
+	// unreachable
+	return nil, ExpectationsSatisfied, nil
+}
+
+// listPodsFromCache reads launcher pods from the informer's local cache (cheap).
+func (ctl *controller) listPodsFromCache(key NodeLauncherKey) ([]*corev1.Pod, error) {
 	launcherLabels := map[string]string{
 		common.ComponentLabelKey:          common.LauncherComponentLabelValue,
 		common.LauncherConfigNameLabelKey: key.LauncherConfigName,
 		common.NodeNameLabelKey:           key.NodeName,
 	}
-	// Use podLister's List method with label selector
 	pods, err := ctl.podLister.List(labels.SelectorFromSet(launcherLabels))
 	if err != nil {
-		return nil, fmt.Errorf("failed to list pods with launcher labels: %w", err)
+		return nil, fmt.Errorf("failed to list pods from cache: %w", err)
 	}
-
 	return pods, nil
+}
+
+// listPodsFromApiserver queries the apiserver directly for launcher pods.
+// This is more expensive than the cache but provides authoritative state.
+// Used as a fallback when expectations time out.
+func (ctl *controller) listPodsFromApiserver(ctx context.Context, key NodeLauncherKey) ([]*corev1.Pod, error) {
+	launcherLabels := map[string]string{
+		common.ComponentLabelKey:          common.LauncherComponentLabelValue,
+		common.LauncherConfigNameLabelKey: key.LauncherConfigName,
+		common.NodeNameLabelKey:           key.NodeName,
+	}
+	selector := labels.SelectorFromSet(launcherLabels).String()
+	podList, err := ctl.coreclient.Pods(ctl.namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: selector,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list pods from apiserver: %w", err)
+	}
+	result := make([]*corev1.Pod, 0, len(podList.Items))
+	for i := range podList.Items {
+		result = append(result, &podList.Items[i])
+	}
+	return result, nil
 }
 
 // createLaunchers creates the specified number of launcher pods on a node
@@ -685,6 +782,7 @@ func (ctl *controller) getCurrentLaunchersOnNode(ctx context.Context, key NodeLa
 func (ctl *controller) createLaunchers(ctx context.Context, node corev1.Node, key NodeLauncherKey, count int, lcSpec *fmav1alpha1.LauncherConfigSpec, lcOwnerRef metav1.OwnerReference) error {
 	logger := klog.FromContext(ctx)
 
+	created := 0
 	// Create the specified number of launcher pods
 	for i := 0; i < count; i++ {
 		pod, err := utils.BuildLauncherPodFromTemplate(lcSpec.PodTemplate, ctl.namespace, key.NodeName, key.LauncherConfigName)
@@ -695,9 +793,19 @@ func (ctl *controller) createLaunchers(ctx context.Context, node corev1.Node, ke
 
 		createdPod, err := ctl.coreclient.Pods(pod.Namespace).Create(ctx, pod, metav1.CreateOptions{})
 		if err != nil {
+			// Record expectations for pods already successfully created before the failure.
+			if created > 0 {
+				ctl.expectations.expectCreations(key, created)
+			}
 			return fmt.Errorf("failed to create launcher pod: %w", err)
 		}
 		logger.Info("Created launcher pod", "pod", createdPod.Name, "node", node.Name)
+		created++
+	}
+
+	// Record expectations for all successfully created pods.
+	if created > 0 {
+		ctl.expectations.expectCreations(key, created)
 	}
 	return nil
 }
