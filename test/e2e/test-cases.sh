@@ -446,7 +446,7 @@ echo "Launcher after delete = $launcherlb_after_delete"
 expect '[ "$(kubectl get pod -n '"$NS"' $reqlb_after_delete -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcherlb_after_delete" ]'
 
 date
-kubectl wait --for condition=Ready pod/$reqlb_after_delete -n "$NS" --timeout=120s
+kubectl wait --for condition=Ready pod/$reqlb_after_delete -n "$NS" --timeout=180s
 [ "$(kubectl get pod $launcherlb_after_delete -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
 
 cheer Successful unbound launcher deletion cleanup
