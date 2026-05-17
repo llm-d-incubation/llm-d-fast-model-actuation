@@ -45,6 +45,8 @@ func main() {
 	klog.InitFlags(flag.CommandLine)
 	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
 	common.AddKubernetesClientFlags(*pflag.CommandLine, loadingRules, overrides)
+	expectationTimeout := pflag.Duration("expectation-timeout", launcherpopulator.DefaultExpectationTimeout,
+		"How long to wait for the informer cache to reflect pending Pod mutations before falling back to a direct apiserver query")
 	pflag.Parse()
 
 	// Create a context with cancellation signal
@@ -93,6 +95,7 @@ func main() {
 		overrides.Context.Namespace,
 		kubePreInformers.Core().V1(),
 		fmaPreInformers,
+		*expectationTimeout,
 	)
 	if err != nil {
 		klog.Fatal(err)

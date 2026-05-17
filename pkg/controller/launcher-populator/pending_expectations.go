@@ -21,13 +21,11 @@ import (
 	"time"
 )
 
-const (
-	// expectationTimeout is how long to wait for the informer cache to reflect
-	// pending mutations before falling back to a direct apiserver query.
-	// This covers the normal watch propagation delay while bounding how long
-	// the controller will defer reconciliation.
-	expectationTimeout = 5 * time.Second
-)
+// DefaultExpectationTimeout is the default duration to wait for the informer
+// cache to reflect pending mutations before falling back to a direct apiserver
+// query. This covers the normal watch propagation delay while bounding how
+// long the controller will defer reconciliation.
+const DefaultExpectationTimeout = 5 * time.Second
 
 // ExpectationStatus represents the state of expectations for a given key.
 type ExpectationStatus int
@@ -60,6 +58,9 @@ const (
 type pendingExpectations struct {
 	mu      sync.Mutex
 	entries map[NodeLauncherKey]*expectationEntry
+	// timeout is how long to wait for the informer cache to reflect pending
+	// mutations before falling back to a direct apiserver query.
+	timeout time.Duration
 }
 
 type expectationEntry struct {
@@ -72,9 +73,10 @@ type expectationEntry struct {
 	deadline time.Time
 }
 
-func newPendingExpectations() *pendingExpectations {
+func newPendingExpectations(timeout time.Duration) *pendingExpectations {
 	return &pendingExpectations{
 		entries: make(map[NodeLauncherKey]*expectationEntry),
+		timeout: timeout,
 	}
 }
 
@@ -84,7 +86,7 @@ func (pe *pendingExpectations) expectCreations(key NodeLauncherKey, count int) {
 	defer pe.mu.Unlock()
 	e := pe.getOrCreate(key)
 	e.adds += count
-	e.deadline = time.Now().Add(expectationTimeout)
+	e.deadline = time.Now().Add(pe.timeout)
 }
 
 // expectDeletions records that `count` Pod deletions are pending for the key.
@@ -93,7 +95,7 @@ func (pe *pendingExpectations) expectDeletions(key NodeLauncherKey, count int) {
 	defer pe.mu.Unlock()
 	e := pe.getOrCreate(key)
 	e.dels += count
-	e.deadline = time.Now().Add(expectationTimeout)
+	e.deadline = time.Now().Add(pe.timeout)
 }
 
 // observeCreation is called when the informer notifies of a launcher Pod

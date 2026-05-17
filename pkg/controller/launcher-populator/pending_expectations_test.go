@@ -22,7 +22,7 @@ import (
 )
 
 func TestPendingExpectations_BasicCreation(t *testing.T) {
-	pe := newPendingExpectations()
+	pe := newPendingExpectations(DefaultExpectationTimeout)
 	key := NodeLauncherKey{NodeName: "node-1", LauncherConfigName: "lc-1"}
 
 	// Initially satisfied
@@ -48,7 +48,7 @@ func TestPendingExpectations_BasicCreation(t *testing.T) {
 }
 
 func TestPendingExpectations_BasicDeletion(t *testing.T) {
-	pe := newPendingExpectations()
+	pe := newPendingExpectations(DefaultExpectationTimeout)
 	key := NodeLauncherKey{NodeName: "node-1", LauncherConfigName: "lc-1"}
 
 	pe.expectDeletions(key, 2)
@@ -69,7 +69,7 @@ func TestPendingExpectations_BasicDeletion(t *testing.T) {
 }
 
 func TestPendingExpectations_MixedCreationDeletion(t *testing.T) {
-	pe := newPendingExpectations()
+	pe := newPendingExpectations(DefaultExpectationTimeout)
 	key := NodeLauncherKey{NodeName: "node-1", LauncherConfigName: "lc-1"}
 
 	pe.expectCreations(key, 2)
@@ -90,7 +90,7 @@ func TestPendingExpectations_MixedCreationDeletion(t *testing.T) {
 }
 
 func TestPendingExpectations_Timeout(t *testing.T) {
-	pe := newPendingExpectations()
+	pe := newPendingExpectations(DefaultExpectationTimeout)
 	key := NodeLauncherKey{NodeName: "node-1", LauncherConfigName: "lc-1"}
 
 	pe.expectCreations(key, 1)
@@ -106,7 +106,7 @@ func TestPendingExpectations_Timeout(t *testing.T) {
 }
 
 func TestPendingExpectations_Reset(t *testing.T) {
-	pe := newPendingExpectations()
+	pe := newPendingExpectations(DefaultExpectationTimeout)
 	key := NodeLauncherKey{NodeName: "node-1", LauncherConfigName: "lc-1"}
 
 	pe.expectCreations(key, 5)
@@ -118,7 +118,7 @@ func TestPendingExpectations_Reset(t *testing.T) {
 }
 
 func TestPendingExpectations_ObserveWithoutExpectation(t *testing.T) {
-	pe := newPendingExpectations()
+	pe := newPendingExpectations(DefaultExpectationTimeout)
 	key := NodeLauncherKey{NodeName: "node-1", LauncherConfigName: "lc-1"}
 
 	// Should not panic when observing without any expectation
@@ -131,7 +131,7 @@ func TestPendingExpectations_ObserveWithoutExpectation(t *testing.T) {
 }
 
 func TestPendingExpectations_MultipleKeys(t *testing.T) {
-	pe := newPendingExpectations()
+	pe := newPendingExpectations(DefaultExpectationTimeout)
 	key1 := NodeLauncherKey{NodeName: "node-1", LauncherConfigName: "lc-1"}
 	key2 := NodeLauncherKey{NodeName: "node-2", LauncherConfigName: "lc-1"}
 
@@ -158,7 +158,7 @@ func TestPendingExpectations_MultipleKeys(t *testing.T) {
 }
 
 func TestPendingExpectations_OverObserve(t *testing.T) {
-	pe := newPendingExpectations()
+	pe := newPendingExpectations(DefaultExpectationTimeout)
 	key := NodeLauncherKey{NodeName: "node-1", LauncherConfigName: "lc-1"}
 
 	pe.expectCreations(key, 1)

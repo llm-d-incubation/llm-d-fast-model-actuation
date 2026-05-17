@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/common"
 	corev1 "k8s.io/api/core/v1"
@@ -57,6 +58,7 @@ func NewController(
 	namespace string,
 	corev1PreInformers corev1preinformers.Interface,
 	fmaInformerFactory fmainformers.SharedInformerFactory,
+	expectationTimeout time.Duration,
 ) (*controller, error) {
 	ctl := &controller{
 		enqueueLogger: logger.WithName(ControllerName),
@@ -71,7 +73,7 @@ func NewController(
 		lppLister:     fmaInformerFactory.Fma().V1alpha1().LauncherPopulationPolicies().Lister(),
 		lcInformer:    fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Informer(),
 		lcLister:      fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Lister(),
-		expectations:  newPendingExpectations(),
+		expectations:  newPendingExpectations(expectationTimeout),
 	}
 
 	// Use a single worker thread to ensure sequential processing of LauncherPopulationPolicy updates
