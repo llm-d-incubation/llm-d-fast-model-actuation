@@ -146,8 +146,12 @@ type nodeItem struct {
 }
 
 // isLauncherPod returns true if the Pod is a launcher pod managed by this controller.
+// It checks for the presence of the LauncherConfigNameLabelKey label, which is
+// exclusively set by the controller when creating launcher Pods and is protected
+// from external modification by a ValidatingAdmissionPolicy.
 func isLauncherPod(pod *corev1.Pod) bool {
-	return pod.Labels[common.ComponentLabelKey] == common.LauncherComponentLabelValue
+	_, exists := pod.Labels[common.LauncherConfigNameLabelKey]
+	return exists
 }
 
 // keyFromPod extracts the NodeLauncherKey from a launcher Pod's labels.
