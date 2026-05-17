@@ -19,6 +19,9 @@ package launcherpopulator
 import (
 	"sync"
 	"time"
+
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/sets"
 )
 
 // DefaultExpectationTimeout is the default duration to wait for the informer
@@ -47,9 +50,18 @@ const (
 // notifications. This prevents the controller from making incorrect decisions
 // based on stale informer cache state.
 //
+// Expectations are tracked by individual Pod UID rather than by count. This
+// is critical for correctness in two scenarios:
+//   - Other actors (including another replica of this controller) may also
+//     create or delete pods for the same key. Count-based tracking could be
+//     satisfied by unrelated mutations while our own pods remain invisible.
+//   - Watch notifications can arrive before the API write response returns.
+//     With UID-based tracking, a "lost" observe is harmless: the expectation
+//     will simply time out and fall back to an authoritative apiserver query.
+//
 // The typical lifecycle:
-//  1. Controller creates/deletes Pods → calls expectCreations/expectDeletions.
-//  2. Informer fires OnAdd/OnDelete → calls observeCreation/observeDeletion.
+//  1. Controller creates/deletes a Pod → calls expectCreation/expectDeletion with the Pod UID.
+//  2. Informer fires OnAdd/OnDelete → calls observeCreation/observeDeletion with the Pod UID.
 //  3. Next reconcile calls check() to determine if the cache is safe to use.
 //
 // If expected notifications never arrive (e.g., a Pod was created and
@@ -64,10 +76,12 @@ type pendingExpectations struct {
 }
 
 type expectationEntry struct {
-	// adds is the number of Pod creations not yet reflected in the cache.
-	adds int
-	// dels is the number of Pod deletions not yet reflected in the cache.
-	dels int
+	// pendingCreations tracks UIDs of Pods whose creation has been confirmed
+	// by the apiserver but not yet observed via informer notification.
+	pendingCreations sets.Set[types.UID]
+	// pendingDeletions tracks UIDs of Pods whose deletion has been confirmed
+	// by the apiserver but not yet observed via informer notification.
+	pendingDeletions sets.Set[types.UID]
 	// deadline is the wall-clock time after which we consider the expectations
 	// stale and fall back to querying the apiserver directly.
 	deadline time.Time
@@ -80,47 +94,49 @@ func newPendingExpectations(timeout time.Duration) *pendingExpectations {
 	}
 }
 
-// expectCreations records that `count` Pod creations are pending for the key.
-func (pe *pendingExpectations) expectCreations(key NodeLauncherKey, count int) {
+// expectCreation records that a Pod creation (identified by UID) is pending
+// for the given key. Call this immediately after a successful Create.
+func (pe *pendingExpectations) expectCreation(key NodeLauncherKey, uid types.UID) {
 	pe.mu.Lock()
 	defer pe.mu.Unlock()
 	e := pe.getOrCreate(key)
-	e.adds += count
+	e.pendingCreations.Insert(uid)
 	e.deadline = time.Now().Add(pe.timeout)
 }
 
-// expectDeletions records that `count` Pod deletions are pending for the key.
-func (pe *pendingExpectations) expectDeletions(key NodeLauncherKey, count int) {
+// expectDeletion records that a Pod deletion (identified by UID) is pending
+// for the given key. Call this immediately after a successful Delete.
+func (pe *pendingExpectations) expectDeletion(key NodeLauncherKey, uid types.UID) {
 	pe.mu.Lock()
 	defer pe.mu.Unlock()
 	e := pe.getOrCreate(key)
-	e.dels += count
+	e.pendingDeletions.Insert(uid)
 	e.deadline = time.Now().Add(pe.timeout)
 }
 
 // observeCreation is called when the informer notifies of a launcher Pod
-// creation for the given key, reducing the pending creation count.
-func (pe *pendingExpectations) observeCreation(key NodeLauncherKey) {
+// creation for the given key, removing the specific UID from pending expectations.
+func (pe *pendingExpectations) observeCreation(key NodeLauncherKey, uid types.UID) {
 	pe.mu.Lock()
 	defer pe.mu.Unlock()
 	e, ok := pe.entries[key]
 	if !ok {
 		return
 	}
-	e.adds--
+	e.pendingCreations.Delete(uid)
 	pe.cleanupIfSatisfied(key, e)
 }
 
 // observeDeletion is called when the informer notifies of a launcher Pod
-// deletion for the given key, reducing the pending deletion count.
-func (pe *pendingExpectations) observeDeletion(key NodeLauncherKey) {
+// deletion for the given key, removing the specific UID from pending expectations.
+func (pe *pendingExpectations) observeDeletion(key NodeLauncherKey, uid types.UID) {
 	pe.mu.Lock()
 	defer pe.mu.Unlock()
 	e, ok := pe.entries[key]
 	if !ok {
 		return
 	}
-	e.dels--
+	e.pendingDeletions.Delete(uid)
 	pe.cleanupIfSatisfied(key, e)
 }
 
@@ -132,7 +148,7 @@ func (pe *pendingExpectations) check(key NodeLauncherKey) ExpectationStatus {
 	if !ok {
 		return ExpectationsSatisfied
 	}
-	if e.adds <= 0 && e.dels <= 0 {
+	if e.pendingCreations.Len() == 0 && e.pendingDeletions.Len() == 0 {
 		delete(pe.entries, key)
 		return ExpectationsSatisfied
 	}
@@ -155,13 +171,16 @@ func (pe *pendingExpectations) getOrCreate(key NodeLauncherKey) *expectationEntr
 	if e, ok := pe.entries[key]; ok {
 		return e
 	}
-	e := &expectationEntry{}
+	e := &expectationEntry{
+		pendingCreations: sets.New[types.UID](),
+		pendingDeletions: sets.New[types.UID](),
+	}
 	pe.entries[key] = e
 	return e
 }
 
 func (pe *pendingExpectations) cleanupIfSatisfied(key NodeLauncherKey, e *expectationEntry) {
-	if e.adds <= 0 && e.dels <= 0 {
+	if e.pendingCreations.Len() == 0 && e.pendingDeletions.Len() == 0 {
 		delete(pe.entries, key)
 	}
 }

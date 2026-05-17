@@ -154,7 +154,7 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 			return
 		}
 		// Fulfill pending creation expectation before enqueuing.
-		ctl.expectations.observeCreation(keyFromPod(typed))
+		ctl.expectations.observeCreation(keyFromPod(typed), typed.UID)
 		ctl.enqueueLogger.V(5).Info("Enqueuing reconciliation due to launcher Pod add", "name", typed.Name)
 		ctl.Queue.Add(reconcileSentinel)
 	case *corev1.Node:
@@ -207,7 +207,7 @@ func (ctl *controller) OnDelete(obj any) {
 			return
 		}
 		// Fulfill pending deletion expectation before enqueuing.
-		ctl.expectations.observeDeletion(keyFromPod(typed))
+		ctl.expectations.observeDeletion(keyFromPod(typed), typed.UID)
 		ctl.enqueueLogger.V(5).Info("Enqueuing reconciliation due to launcher Pod delete", "name", typed.Name)
 		ctl.Queue.Add(reconcileSentinel)
 	case *corev1.Node:
@@ -525,7 +525,6 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 
 		// Delete stale pods immediately (spec changed → delete and replace)
 		staleNotDeleted := 0
-		staleDeleted := 0
 		for _, pod := range staleUnboundPods {
 			err := ctl.coreclient.Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{
 				Preconditions: &metav1.Preconditions{UID: &pod.UID, ResourceVersion: &pod.ResourceVersion},
@@ -541,21 +540,15 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 					logger.Info("Stale launcher pod was modified since read, skipping deletion", "pod", pod.Name)
 					continue
 				}
-				// Record expectations for deletions already confirmed before the error.
-				if staleDeleted > 0 {
-					ctl.expectations.expectDeletions(key, staleDeleted)
-				}
 				return false, fmt.Errorf("failed to delete stale launcher pod %s: %w", pod.Name, err)
 			}
+			// Record expectation for this specific Pod UID immediately after deletion.
+			ctl.expectations.expectDeletion(key, pod.UID)
 			logger.Info("Deleted stale launcher pod (spec changed)",
 				"pod", pod.Name,
 				"node", nodeName,
 				"config", key.LauncherConfigName)
 			didDelete = true
-			staleDeleted++
-		}
-		if staleDeleted > 0 {
-			ctl.expectations.expectDeletions(key, staleDeleted)
 		}
 
 		// Calculate diff based on effective remaining pods after stale deletion
@@ -573,7 +566,6 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 		if diff < 0 {
 			// Need to delete excess pods from live unbound current pods
 			numToDelete := int(-diff)
-			excessDeleted := 0
 			for i := len(liveUnboundCurrentPods) - 1; i >= 0 && numToDelete > 0; i-- {
 				pod := liveUnboundCurrentPods[i]
 				err := ctl.coreclient.Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{
@@ -590,22 +582,16 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 						logger.Info("Launcher pod was modified since read, skipping deletion", "pod", pod.Name)
 						continue
 					}
-					// Record expectations for deletions already confirmed before the error.
-					if excessDeleted > 0 {
-						ctl.expectations.expectDeletions(key, excessDeleted)
-					}
 					return false, fmt.Errorf("failed to delete launcher pod %s: %w", pod.Name, err)
 				}
+				// Record expectation for this specific Pod UID immediately after deletion.
+				ctl.expectations.expectDeletion(key, pod.UID)
 				logger.Info("Deleted excess launcher pod",
 					"pod", pod.Name,
 					"node", nodeName,
 					"config", key.LauncherConfigName)
 				didDelete = true
 				numToDelete--
-				excessDeleted++
-			}
-			if excessDeleted > 0 {
-				ctl.expectations.expectDeletions(key, excessDeleted)
 			}
 			if numToDelete > 0 {
 				deletionShortfall = true
@@ -736,7 +722,6 @@ func (ctl *controller) listPodsFromApiserver(ctx context.Context, key NodeLaunch
 func (ctl *controller) createLaunchers(ctx context.Context, node corev1.Node, key NodeLauncherKey, count int, lcSpec *fmav1alpha1.LauncherConfigSpec, lcOwnerRef metav1.OwnerReference) error {
 	logger := klog.FromContext(ctx)
 
-	created := 0
 	// Create the specified number of launcher pods
 	for i := 0; i < count; i++ {
 		pod, err := utils.BuildLauncherPodFromTemplate(lcSpec.PodTemplate, ctl.namespace, key.NodeName, key.LauncherConfigName)
@@ -747,20 +732,13 @@ func (ctl *controller) createLaunchers(ctx context.Context, node corev1.Node, ke
 
 		createdPod, err := ctl.coreclient.Pods(pod.Namespace).Create(ctx, pod, metav1.CreateOptions{})
 		if err != nil {
-			// Record expectations for pods already successfully created before the failure.
-			if created > 0 {
-				ctl.expectations.expectCreations(key, created)
-			}
 			return fmt.Errorf("failed to create launcher pod: %w", err)
 		}
+		// Record expectation for this specific Pod UID immediately after creation.
+		ctl.expectations.expectCreation(key, createdPod.UID)
 		logger.Info("Created launcher pod", "pod", createdPod.Name, "node", node.Name)
-		created++
 	}
 
-	// Record expectations for all successfully created pods.
-	if created > 0 {
-		ctl.expectations.expectCreations(key, created)
-	}
 	return nil
 }
 

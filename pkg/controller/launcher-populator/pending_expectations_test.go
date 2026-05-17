@@ -19,6 +19,8 @@ package launcherpopulator
 import (
 	"testing"
 	"time"
+
+	"k8s.io/apimachinery/pkg/types"
 )
 
 func TestPendingExpectations_BasicCreation(t *testing.T) {
@@ -31,15 +33,17 @@ func TestPendingExpectations_BasicCreation(t *testing.T) {
 	}
 
 	// After expecting creations, should be Waiting
-	pe.expectCreations(key, 3)
+	pe.expectCreation(key, types.UID("uid-1"))
+	pe.expectCreation(key, types.UID("uid-2"))
+	pe.expectCreation(key, types.UID("uid-3"))
 	if status := pe.check(key); status != ExpectationsWaiting {
 		t.Errorf("expected ExpectationsWaiting, got %v", status)
 	}
 
 	// Observe all 3 creations
-	pe.observeCreation(key)
-	pe.observeCreation(key)
-	pe.observeCreation(key)
+	pe.observeCreation(key, types.UID("uid-1"))
+	pe.observeCreation(key, types.UID("uid-2"))
+	pe.observeCreation(key, types.UID("uid-3"))
 
 	// Should be satisfied now
 	if status := pe.check(key); status != ExpectationsSatisfied {
@@ -51,18 +55,19 @@ func TestPendingExpectations_BasicDeletion(t *testing.T) {
 	pe := newPendingExpectations(DefaultExpectationTimeout)
 	key := NodeLauncherKey{NodeName: "node-1", LauncherConfigName: "lc-1"}
 
-	pe.expectDeletions(key, 2)
+	pe.expectDeletion(key, types.UID("uid-a"))
+	pe.expectDeletion(key, types.UID("uid-b"))
 	if status := pe.check(key); status != ExpectationsWaiting {
 		t.Errorf("expected ExpectationsWaiting, got %v", status)
 	}
 
-	pe.observeDeletion(key)
+	pe.observeDeletion(key, types.UID("uid-a"))
 	// Still one pending
 	if status := pe.check(key); status != ExpectationsWaiting {
 		t.Errorf("expected ExpectationsWaiting with 1 pending, got %v", status)
 	}
 
-	pe.observeDeletion(key)
+	pe.observeDeletion(key, types.UID("uid-b"))
 	if status := pe.check(key); status != ExpectationsSatisfied {
 		t.Errorf("expected ExpectationsSatisfied after all observations, got %v", status)
 	}
@@ -72,18 +77,19 @@ func TestPendingExpectations_MixedCreationDeletion(t *testing.T) {
 	pe := newPendingExpectations(DefaultExpectationTimeout)
 	key := NodeLauncherKey{NodeName: "node-1", LauncherConfigName: "lc-1"}
 
-	pe.expectCreations(key, 2)
-	pe.expectDeletions(key, 1)
+	pe.expectCreation(key, types.UID("uid-c1"))
+	pe.expectCreation(key, types.UID("uid-c2"))
+	pe.expectDeletion(key, types.UID("uid-d1"))
 
-	// Observe the creation but not deletion
-	pe.observeCreation(key)
-	pe.observeCreation(key)
-	// adds satisfied, dels still pending
+	// Observe the creations but not deletion
+	pe.observeCreation(key, types.UID("uid-c1"))
+	pe.observeCreation(key, types.UID("uid-c2"))
+	// creations satisfied, deletion still pending
 	if status := pe.check(key); status != ExpectationsWaiting {
 		t.Errorf("expected ExpectationsWaiting (dels pending), got %v", status)
 	}
 
-	pe.observeDeletion(key)
+	pe.observeDeletion(key, types.UID("uid-d1"))
 	if status := pe.check(key); status != ExpectationsSatisfied {
 		t.Errorf("expected ExpectationsSatisfied, got %v", status)
 	}
@@ -93,7 +99,7 @@ func TestPendingExpectations_Timeout(t *testing.T) {
 	pe := newPendingExpectations(DefaultExpectationTimeout)
 	key := NodeLauncherKey{NodeName: "node-1", LauncherConfigName: "lc-1"}
 
-	pe.expectCreations(key, 1)
+	pe.expectCreation(key, types.UID("uid-timeout"))
 
 	// Manually set the deadline to the past to simulate timeout
 	pe.mu.Lock()
@@ -109,7 +115,11 @@ func TestPendingExpectations_Reset(t *testing.T) {
 	pe := newPendingExpectations(DefaultExpectationTimeout)
 	key := NodeLauncherKey{NodeName: "node-1", LauncherConfigName: "lc-1"}
 
-	pe.expectCreations(key, 5)
+	pe.expectCreation(key, types.UID("uid-r1"))
+	pe.expectCreation(key, types.UID("uid-r2"))
+	pe.expectCreation(key, types.UID("uid-r3"))
+	pe.expectCreation(key, types.UID("uid-r4"))
+	pe.expectCreation(key, types.UID("uid-r5"))
 	pe.reset(key)
 
 	if status := pe.check(key); status != ExpectationsSatisfied {
@@ -122,8 +132,8 @@ func TestPendingExpectations_ObserveWithoutExpectation(t *testing.T) {
 	key := NodeLauncherKey{NodeName: "node-1", LauncherConfigName: "lc-1"}
 
 	// Should not panic when observing without any expectation
-	pe.observeCreation(key)
-	pe.observeDeletion(key)
+	pe.observeCreation(key, types.UID("uid-unknown"))
+	pe.observeDeletion(key, types.UID("uid-unknown"))
 
 	if status := pe.check(key); status != ExpectationsSatisfied {
 		t.Errorf("expected ExpectationsSatisfied, got %v", status)
@@ -135,8 +145,9 @@ func TestPendingExpectations_MultipleKeys(t *testing.T) {
 	key1 := NodeLauncherKey{NodeName: "node-1", LauncherConfigName: "lc-1"}
 	key2 := NodeLauncherKey{NodeName: "node-2", LauncherConfigName: "lc-1"}
 
-	pe.expectCreations(key1, 2)
-	pe.expectDeletions(key2, 1)
+	pe.expectCreation(key1, types.UID("uid-k1a"))
+	pe.expectCreation(key1, types.UID("uid-k1b"))
+	pe.expectDeletion(key2, types.UID("uid-k2a"))
 
 	// key1 waiting, key2 waiting
 	if status := pe.check(key1); status != ExpectationsWaiting {
@@ -147,7 +158,7 @@ func TestPendingExpectations_MultipleKeys(t *testing.T) {
 	}
 
 	// Satisfy key2
-	pe.observeDeletion(key2)
+	pe.observeDeletion(key2, types.UID("uid-k2a"))
 	if status := pe.check(key2); status != ExpectationsSatisfied {
 		t.Errorf("key2: expected ExpectationsSatisfied, got %v", status)
 	}
@@ -161,12 +172,34 @@ func TestPendingExpectations_OverObserve(t *testing.T) {
 	pe := newPendingExpectations(DefaultExpectationTimeout)
 	key := NodeLauncherKey{NodeName: "node-1", LauncherConfigName: "lc-1"}
 
-	pe.expectCreations(key, 1)
-	pe.observeCreation(key)
-	// Over-observe: should still be satisfied (entry cleaned up)
-	pe.observeCreation(key)
+	pe.expectCreation(key, types.UID("uid-oo"))
+	pe.observeCreation(key, types.UID("uid-oo"))
+	// Over-observe: observing a UID not in the set is a no-op
+	pe.observeCreation(key, types.UID("uid-oo"))
 
 	if status := pe.check(key); status != ExpectationsSatisfied {
 		t.Errorf("expected ExpectationsSatisfied after over-observe, got %v", status)
+	}
+}
+
+func TestPendingExpectations_OtherActorDoesNotSatisfy(t *testing.T) {
+	pe := newPendingExpectations(DefaultExpectationTimeout)
+	key := NodeLauncherKey{NodeName: "node-1", LauncherConfigName: "lc-1"}
+
+	// We expect our specific Pod UID
+	pe.expectCreation(key, types.UID("uid-ours"))
+
+	// Another actor creates a different pod for the same key
+	pe.observeCreation(key, types.UID("uid-theirs"))
+
+	// Our expectation should NOT be satisfied (different UID)
+	if status := pe.check(key); status != ExpectationsWaiting {
+		t.Errorf("expected ExpectationsWaiting (other actor's pod should not satisfy), got %v", status)
+	}
+
+	// Only observing our specific UID satisfies the expectation
+	pe.observeCreation(key, types.UID("uid-ours"))
+	if status := pe.check(key); status != ExpectationsSatisfied {
+		t.Errorf("expected ExpectationsSatisfied, got %v", status)
 	}
 }
