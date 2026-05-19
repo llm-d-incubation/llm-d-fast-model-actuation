@@ -216,7 +216,7 @@ func (ctl *controller) reconcileFromPolicies(ctx context.Context) (error, bool) 
 		return err, true
 	}
 
-	logger.Info("Final population policy", "policy", MapToLoggable(populationPolicy))
+	logger.Info("Final population policy", "policy", populationPolicy)
 
 	// Adjust launcher pods according to final requirements
 	needsRequeue, err := ctl.reconcileAllLaunchers(ctx, populationPolicy)
@@ -228,10 +228,23 @@ func (ctl *controller) reconcileFromPolicies(ctx context.Context) (error, bool) 
 	return nil, needsRequeue
 }
 
+// nodeDesiredGroup holds the per-node desired state with keys pre-collected
+// to avoid an extra iteration when passing to reconcileLaunchersOnSingleNode.
+type nodeDesiredGroup struct {
+	keys    []NodeLauncherKey
+	desired map[NodeLauncherKey]DesiredStateEntry
+}
+
+func (g *nodeDesiredGroup) String() string {
+	return fmt.Sprintf("keys=%v,desired=%v", g.keys, MapToLoggable(g.desired))
+}
+
 // buildDesiredStateFromPolicies builds the desired state map from all policies.
 // It reads each LauncherConfig from the informer's local cache to verify existence
 // and obtain the current spec. LauncherConfigs that do not exist are skipped.
-func (ctl *controller) buildDesiredStateFromPolicies(ctx context.Context) (map[NodeLauncherKey]DesiredStateEntry, error) {
+// The result is grouped by node with keys pre-collected so that the caller can
+// directly iterate over each node's desired LauncherConfigs without additional reshaping.
+func (ctl *controller) buildDesiredStateFromPolicies(ctx context.Context) (map[string]*nodeDesiredGroup, error) {
 	logger := klog.FromContext(ctx)
 
 	policies, err := ctl.lppLister.List(labels.Everything())
@@ -244,7 +257,7 @@ func (ctl *controller) buildDesiredStateFromPolicies(ctx context.Context) (map[N
 	// multiple count rules; we only need one Status update per LC per cycle.
 	lcStatusReported := make(map[string]struct{})
 
-	desired := make(map[NodeLauncherKey]DesiredStateEntry)
+	desiredByNode := make(map[string]*nodeDesiredGroup)
 	for _, lpp := range policies {
 		nodes, selectorErrs, err := ctl.getMatchingNodes(ctx, lpp.Spec.EnhancedNodeSelector)
 		// Ensure proper status for lpp.
@@ -305,8 +318,19 @@ func (ctl *controller) buildDesiredStateFromPolicies(ctx context.Context) (map[N
 					Controller:         ptr.To(false),
 					BlockOwnerDeletion: ptr.To(false),
 				}
-				if entry, exists := desired[key]; !exists || countRule.LauncherCount > entry.Count {
-					desired[key] = DesiredStateEntry{
+
+				group, exists := desiredByNode[node.Name]
+				if !exists {
+					group = &nodeDesiredGroup{
+						desired: make(map[NodeLauncherKey]DesiredStateEntry),
+					}
+					desiredByNode[node.Name] = group
+				}
+				if entry, exists := group.desired[key]; !exists || countRule.LauncherCount > entry.Count {
+					if _, keyExists := group.desired[key]; !keyExists {
+						group.keys = append(group.keys, key)
+					}
+					group.desired[key] = DesiredStateEntry{
 						Count:                  countRule.LauncherCount,
 						LauncherConfigSpec:     &lc.Spec,
 						LauncherConfigOwnerRef: ownerRef,
@@ -316,7 +340,7 @@ func (ctl *controller) buildDesiredStateFromPolicies(ctx context.Context) (map[N
 		}
 	}
 
-	return desired, nil
+	return desiredByNode, nil
 }
 
 // getMatchingNodes returns nodes that match the EnhancedNodeSelector.
@@ -347,18 +371,12 @@ func (ctl *controller) getMatchingNodes(ctx context.Context, selector fmav1alpha
 // reconcileAllLaunchers adjusts all launcher pods according to final requirements.
 // It returns true if a requeue is needed (deletions were performed or are in progress),
 // so that creations happen only after deletions have taken effect.
-func (ctl *controller) reconcileAllLaunchers(ctx context.Context, desired map[NodeLauncherKey]DesiredStateEntry) (bool, error) {
+func (ctl *controller) reconcileAllLaunchers(ctx context.Context, desiredByNode map[string]*nodeDesiredGroup) (bool, error) {
 	logger := klog.FromContext(ctx)
 
-	// Group by node to process each node separately
-	nodeGroups := make(map[string][]NodeLauncherKey)
-	for key := range desired {
-		nodeGroups[key.NodeName] = append(nodeGroups[key.NodeName], key)
-	}
-
 	anyRequeueNeeded := false
-	for nodeName, keys := range nodeGroups {
-		needsRequeue, err := ctl.reconcileLaunchersOnSingleNode(ctx, nodeName, keys, desired)
+	for nodeName, group := range desiredByNode {
+		needsRequeue, err := ctl.reconcileLaunchersOnSingleNode(ctx, nodeName, group.keys, group.desired)
 		if err != nil {
 			logger.Error(err, "Failed to reconcile launchers on node", "node", nodeName)
 			anyRequeueNeeded = true
