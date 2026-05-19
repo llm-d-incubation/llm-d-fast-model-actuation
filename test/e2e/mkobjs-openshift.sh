@@ -170,7 +170,7 @@ metadata:
   labels:
     fma-e2e-instance: "$inst"
 spec:
-  maxInstances: 4
+  maxInstances: 2
   podTemplate:
     metadata:
       labels:
