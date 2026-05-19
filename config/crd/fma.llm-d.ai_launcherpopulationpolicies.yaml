@@ -177,6 +177,29 @@ spec:
                 required:
                 - labelSelector
                 type: object
+              nodeSleepingBudget:
+                description: |-
+                  NodeSleepingBudget defines the resource budget for sleeping inference
+                  engine instances across all launcher pods on a node matched by this policy.
+                  When multiple policies match the same node, the most restrictive budget
+                  (smallest MaxInstances and MaxMemory) applies.
+                properties:
+                  maxInstances:
+                    description: |-
+                      MaxInstances limits the total number of sleeping instances across
+                      all launcher pods on the node. Zero means unlimited.
+                    format: int32
+                    type: integer
+                  maxMemory:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    description: |-
+                      MaxMemory limits the total accelerator memory used by sleeping
+                      instances across all launcher pods on the node. Zero means unlimited.
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                type: object
             required:
             - countForLauncher
             - enhancedNodeSelector

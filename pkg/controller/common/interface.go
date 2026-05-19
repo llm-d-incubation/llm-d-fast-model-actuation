@@ -36,4 +36,11 @@ const (
 	// for the management of vLLM instances.
 	// This is a contract between the controllers and the launcher implementation.
 	LauncherServicePort = 8001
+
+	// NodeSleepingBudgetAnnotationKey is the key of an annotation on a launcher Pod.
+	// The value is a JSON-serialized NodeSleepingBudget that defines the resource
+	// budget for sleeping instances across all launcher pods on the node.
+	// The launcher-populator writes this annotation when creating launcher pods;
+	// the dual-pods controller reads it to enforce node-level sleeper budgets.
+	NodeSleepingBudgetAnnotationKey = "dual-pods.llm-d.ai/node-sleeping-budget"
 )

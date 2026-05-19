@@ -59,6 +59,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &fmav1alpha1.LauncherPopulationPolicyStatusApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("ModelServerConfig"):
 		return &fmav1alpha1.ModelServerConfigApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("NodeSleepingBudget"):
+		return &fmav1alpha1.NodeSleepingBudgetApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("ResourceRange"):
 		return &fmav1alpha1.ResourceRangeApplyConfiguration{}
 
