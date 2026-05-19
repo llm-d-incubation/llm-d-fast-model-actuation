@@ -59,3 +59,21 @@ const SetLogPath = "/v1/set-log"
 // LogStartPosParam is the name of the query parameter that
 // holds that starting position of a log chunk.
 const LogStartPosParam = "startPos"
+
+// ProxyConfigPath is the path for the proxy configuration resource.
+// Supports two HTTP methods:
+//   - GET: retrieves the configuration status of the proxy.
+//     Returns 200 if configured, 404 if not.
+//   - PUT: configures the proxy with a target address and port.
+//     After successful configuration, the proxy will forward TCP
+//     connections to the configured target.
+const ProxyConfigPath = "/v1/proxy/config"
+
+// ProxyTargetConfig is the request and response body for configuring the proxy
+// with a target address and port (sent by the dual-pods controller).
+type ProxyTargetConfig struct {
+	// Address is the target host to proxy to.
+	Address string `json:"address"`
+	// Port is the target port number.
+	Port uint16 `json:"port"`
+}

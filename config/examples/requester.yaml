@@ -6,17 +6,18 @@ spec:
   containers:
     - name: requester-container
       image: ghcr.io/llm-d-incubation/llm-d-fast-model-actuation/requester:latest
+      command:
+        - /app/requester
+        - --probes-port=8080
+        - --spi-port=8081
+        - --proxy-port=8082
       ports:
         - containerPort: 8080
         - containerPort: 8081
-      env:
-        - name: PROBES_PORT
-          value: "8080"
-        - name: SPI_PORT
-          value: "8081"
+        - containerPort: 8082
       readinessProbe:
         httpGet:
-          path: /ready
-          port: 8080
+          path: /health
+          port: 8082
         initialDelaySeconds: 3
         periodSeconds: 5
