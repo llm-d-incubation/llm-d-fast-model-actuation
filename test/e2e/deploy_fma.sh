@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
 
-# Usage: $0
-# Current working directory must be the root of the Git repository.
-#
 # Deploys the FMA controllers (dual-pods controller + launcher-populator)
 # and waits for them to be available.
 #
@@ -36,6 +33,10 @@ set -euo pipefail
 if [ "${FMA_DEBUG:-false}" = "true" ]; then
     set -x
 fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+cd "$REPO_ROOT"
 
 # Preflight: verify required tools are available
 for tool in kubectl helm jq yq; do
