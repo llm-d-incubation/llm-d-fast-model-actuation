@@ -14,12 +14,12 @@
 #   - llm-d/guides repo cloned locally (for EPP/Gateway via helmfile)
 #
 # Required environment variables:
-#   LLM_D_GUIDES_DIR  - path to llm-d/guides repo (contains inference-scheduling helmfile)
+#   LLM_D_GUIDES_DIR  - path to llm-d/guides repo (contains optimized-baseline Helm values and prereqs)
 #
 # Optional environment variables (with defaults):
 #   NAMESPACE          - target namespace (default: fma-hpa)
-#   CONTAINER_IMG_REG  - image registry (default: quay.io/diego_castan)
-#   IMAGE_TAG          - image tag (default: f323a8f, the last known-good build)
+#   CONTAINER_IMG_REG  - image registry (default: ghcr.io/llm-d-incubation/llm-d-fast-model-actuation)
+#   IMAGE_TAG          - image tag (default: v0.6.0-alpha.11, latest release)
 #   LAUNCHER_IMAGE     - launcher image (default: $CONTAINER_IMG_REG/launcher:$IMAGE_TAG)
 #   REQUESTER_IMAGE    - requester image (default: $CONTAINER_IMG_REG/requester:$IMAGE_TAG)
 #   MODEL              - vLLM model (default: HuggingFaceTB/SmolLM2-360M-Instruct)
@@ -30,8 +30,8 @@
 set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-fma-hpa}"
-CONTAINER_IMG_REG="${CONTAINER_IMG_REG:-quay.io/diego_castan}"
-IMAGE_TAG="${IMAGE_TAG:-f323a8f}"
+CONTAINER_IMG_REG="${CONTAINER_IMG_REG:-ghcr.io/llm-d-incubation/llm-d-fast-model-actuation}"
+IMAGE_TAG="${IMAGE_TAG:-v0.6.0-alpha.11}"
 LAUNCHER_IMAGE="${LAUNCHER_IMAGE:-${CONTAINER_IMG_REG}/launcher:${IMAGE_TAG}}"
 REQUESTER_IMAGE="${REQUESTER_IMAGE:-${CONTAINER_IMG_REG}/requester:${IMAGE_TAG}}"
 MODEL="${MODEL:-HuggingFaceTB/SmolLM2-360M-Instruct}"
@@ -131,15 +131,15 @@ step "CRDs"
 if kubectl get crd gateways.gateway.networking.k8s.io &>/dev/null; then
     echo "  Gateway API CRDs: present"
 else
-    echo "  Installing Gateway API CRDs..."
-    kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml
+    echo "  Installing Gateway API CRDs v1.5.1..."
+    kubectl apply -k "https://github.com/kubernetes-sigs/gateway-api/config/crd?ref=v1.5.1"
 fi
 
 if kubectl get crd inferencepools.inference.networking.x-k8s.io &>/dev/null; then
     echo "  GAIE CRDs: present"
 else
-    echo "  Installing GAIE CRDs..."
-    kubectl apply -f https://github.com/kubernetes-sigs/gateway-api-inference-extension/releases/download/v0.4.0/manifests.yaml
+    echo "  Installing GAIE CRDs v1.5.0..."
+    kubectl apply -k "https://github.com/kubernetes-sigs/gateway-api-inference-extension/config/crd?ref=v1.5.0"
 fi
 
 if kubectl get crd inferenceserverconfigs.fma.llm-d.ai &>/dev/null; then
@@ -155,65 +155,50 @@ fi
 # Step 3: EPP + Gateway
 # =========================================================================
 
-step "EPP + Gateway (Inference scheduling)"
+step "EPP + Gateway (optimized-baseline)"
 
-if kubectl get inferencepool -n "$NAMESPACE" &>/dev/null 2>&1 && \
-   [ "$(kubectl get inferencepool -n "$NAMESPACE" -o name 2>/dev/null | wc -l)" -gt 0 ]; then
-    echo "  InferencePool exists in $NAMESPACE"
+if [ -z "${LLM_D_GUIDES_DIR:-}" ]; then
+    echo "  ERROR: LLM_D_GUIDES_DIR not set. Set it to deploy EPP+Gateway." >&2
+    echo "  Example: export LLM_D_GUIDES_DIR=/path/to/llm-d/guides" >&2
+    exit 1
+fi
+
+GAIE_VERSION="${GAIE_VERSION:-v1.5.0}"
+
+# Deploy agentgateway control plane in agentgateway-system (cluster-scoped prereq)
+if kubectl get deployment agentgateway -n agentgateway-system &>/dev/null; then
+    echo "  agentgateway: already deployed"
 else
-    if [ -z "${LLM_D_GUIDES_DIR:-}" ]; then
-        echo "  ERROR: LLM_D_GUIDES_DIR not set. Set it to deploy EPP+Gateway." >&2
-        echo "  Example: export LLM_D_GUIDES_DIR=/path/to/llm-d/guides" >&2
-        exit 1
-    fi
-    echo "  Deploying infra (Gateway + HTTPRoute)..."
-    pushd "${LLM_D_GUIDES_DIR}/inference-scheduling" >/dev/null
-    NAMESPACE="$NAMESPACE" helmfile apply -e agentgateway -n "$NAMESPACE" \
-        --skip-diff-on-install -l "name=infra-inference-scheduling"
-    echo "  Deploying EPP (InferencePool + Endpoint Picker)..."
-    NAMESPACE="$NAMESPACE" helmfile apply -e agentgateway -n "$NAMESPACE" \
-        --skip-diff-on-install -l "name=gaie-inference-scheduling"
-    popd >/dev/null
+    echo "  Deploying agentgateway control plane..."
+    helmfile apply -f "${LLM_D_GUIDES_DIR}/prereq/gateway-provider/agentgateway.helmfile.yaml"
 fi
 
-# Enable flowControl featureGate in EPP if not already enabled
-EPP_CM=$(kubectl get cm -n "$NAMESPACE" -l app.kubernetes.io/name=inference-scheduler \
-    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
-if [ -n "$EPP_CM" ]; then
-    if kubectl get cm "$EPP_CM" -n "$NAMESPACE" -o yaml 2>/dev/null | grep -q "flowControl"; then
-        echo "  EPP flowControl: already enabled"
-    else
-        echo "  Enabling flowControl featureGate in EPP..."
-        kubectl patch configmap "$EPP_CM" -n "$NAMESPACE" --type merge -p '{
-            "data": {
-                "default-plugins.yaml": "apiVersion: inference.networking.x-k8s.io/v1alpha1\nkind: EndpointPickerConfig\nfeatureGates:\n- flowControl\nplugins:\n- type: queue-scorer\n- type: kv-cache-utilization-scorer\n- type: prefix-cache-scorer\nschedulingProfiles:\n- name: default\n  plugins:\n    - pluginRef: queue-scorer\n      weight: 2\n    - pluginRef: kv-cache-utilization-scorer\n      weight: 2\n    - pluginRef: prefix-cache-scorer\n      weight: 3\n"
-            }
-        }'
-        kubectl rollout restart deployment -n "$NAMESPACE" \
-            -l app.kubernetes.io/name=inference-scheduler
-        echo "  Waiting for EPP rollout..."
-        kubectl rollout status deployment -n "$NAMESPACE" \
-            -l app.kubernetes.io/name=inference-scheduler --timeout=120s
-    fi
+# Deploy Gateway object (OCP-specific: uses AgentgatewayParameters for compatible security context)
+if kubectl get gateway llm-d-inference-gateway -n "$NAMESPACE" &>/dev/null; then
+    echo "  Gateway llm-d-inference-gateway: already exists"
+else
+    echo "  Creating Gateway (OCP)..."
+    kubectl apply -n "$NAMESPACE" -k "${LLM_D_GUIDES_DIR}/recipes/gateway/agentgateway-openshift/"
 fi
 
-# SCC for gateway service account
-GW_SA=$(kubectl get sa -n "$NAMESPACE" -o name 2>/dev/null | grep -m1 gateway | sed 's#serviceaccount/##' || true)
-if [ -n "$GW_SA" ]; then
-    oc adm policy add-scc-to-user anyuid -z "$GW_SA" -n "$NAMESPACE" 2>/dev/null || true
-    oc adm policy add-scc-to-user privileged -z "$GW_SA" -n "$NAMESPACE" 2>/dev/null || true
-    echo "  SCC granted to gateway SA: $GW_SA"
-    # Restart gateway if it's not running
-    GW_DEPLOY=$(kubectl get deploy -n "$NAMESPACE" -o name 2>/dev/null | grep -m1 gateway || true)
-    if [ -n "$GW_DEPLOY" ]; then
-        GW_READY=$(kubectl get "$GW_DEPLOY" -n "$NAMESPACE" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
-        if [ "${GW_READY:-0}" = "0" ]; then
-            echo "  Gateway not ready, restarting..."
-            kubectl rollout restart "$GW_DEPLOY" -n "$NAMESPACE"
-            kubectl rollout status "$GW_DEPLOY" -n "$NAMESPACE" --timeout=120s
-        fi
-    fi
+# Deploy InferencePool + EPP via Helm (optimized-baseline)
+if kubectl get inferencepool -n "$NAMESPACE" -o name 2>/dev/null | grep -q .; then
+    echo "  InferencePool: already exists"
+else
+    echo "  Deploying InferencePool + EPP (GAIE ${GAIE_VERSION})..."
+    helm upgrade --install fma-hpa \
+        oci://registry.k8s.io/gateway-api-inference-extension/charts/inferencepool \
+        -f "${LLM_D_GUIDES_DIR}/recipes/scheduler/base.values.yaml" \
+        -f "${LLM_D_GUIDES_DIR}/optimized-baseline/scheduler/optimized-baseline.values.yaml" \
+        --set provider.name=agentgateway \
+        --set experimentalHttpRoute.enabled=true \
+        --set experimentalHttpRoute.inferenceGatewayName=llm-d-inference-gateway \
+        -n "$NAMESPACE" --version "$GAIE_VERSION"
 fi
+
+echo "  Waiting for EPP to be ready..."
+kubectl rollout status deployment -n "$NAMESPACE" \
+    -l app.kubernetes.io/name=inference-scheduler --timeout=120s 2>/dev/null || true
 
 echo "  Verifying Gateway and EPP..."
 kubectl get gateway -n "$NAMESPACE" --no-headers 2>/dev/null || echo "  WARNING: no Gateway found"
@@ -230,15 +215,17 @@ if kubectl get deployment "${FMA_CHART}-dual-pods-controller" -n "$NAMESPACE" &>
     echo "  FMA controllers already deployed"
 else
     echo "  Deploying FMA controllers via deploy_fma.sh..."
-    cd "$REPO_ROOT"
-    FMA_NAMESPACE="$NAMESPACE" \
-    FMA_CHART_INSTANCE_NAME="$FMA_CHART" \
-    CONTAINER_IMG_REG="$CONTAINER_IMG_REG" \
-    IMAGE_TAG="$IMAGE_TAG" \
-    NODE_VIEW_CLUSTER_ROLE=create/please \
-    RUNTIME_CLASS_NAME=nvidia \
-    HELM_EXTRA_ARGS="--set launcherPopulator.enabled=true" \
-    "$SCRIPT_DIR/deploy_fma.sh"
+    (
+        cd "$REPO_ROOT"
+        FMA_NAMESPACE="$NAMESPACE" \
+        FMA_CHART_INSTANCE_NAME="$FMA_CHART" \
+        CONTAINER_IMG_REG="$CONTAINER_IMG_REG" \
+        IMAGE_TAG="$IMAGE_TAG" \
+        NODE_VIEW_CLUSTER_ROLE=create/please \
+        RUNTIME_CLASS_NAME=nvidia \
+        HELM_EXTRA_ARGS="--set launcherPopulator.enabled=true" \
+        "$SCRIPT_DIR/../deploy_fma.sh"
+    )
 fi
 
 # =========================================================================
@@ -286,7 +273,7 @@ spec:
       XDG_CONFIG_HOME: "/tmp"
     labels:
       llm-d.ai/inference-serving: "true"
-      llm-d.ai/guide: "inference-scheduling"
+      llm-d.ai/guide: "optimized-baseline"
       llm-d.ai/model: "SmolLM2-360M-Instruct"
     annotations:
       description: "FMA ISC for HPA demo - ${MODEL}"
@@ -467,9 +454,9 @@ else
         # Determine the EPP job name and InferencePool name from the cluster
         EPP_JOB=$(kubectl get svc -n "$NAMESPACE" \
             -l app.kubernetes.io/name=inference-scheduler \
-            -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "gaie-inference-scheduling-epp")
+            -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "fma-hpa")
         POOL_NAME=$(kubectl get inferencepool -n "$NAMESPACE" \
-            -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "gaie-inference-scheduling")
+            -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "fma-hpa")
 
         cat > /tmp/adapter-epp-values.yaml <<VALEOF
 rules:
