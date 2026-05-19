@@ -113,7 +113,7 @@ type controller struct {
 	lppLister     fmalisters.LauncherPopulationPolicyLister
 	lcInformer    cache.SharedIndexInformer
 	lcLister      fmalisters.LauncherConfigLister
-	genctlr.KnowsProcessedSync[int]
+	genctlr.KnowsProcessedSync[queueItem]
 
 	// expectations tracks pending Pod create/delete mutations not yet reflected
 	// in the informer's local cache. This prevents the controller from making
@@ -123,11 +123,39 @@ type controller struct {
 
 var _ Controller = &controller{}
 
-// reconcileSentinel is the single value enqueued for every event. Because every
-// event type triggers the same full reconciliation (reconcileFromPolicies), there
-// is no need to distinguish items in the work queue. Using a single sentinel
-// value lets the queue deduplicate bursts of events into one reconciliation.
-const reconcileSentinel = 0
+// queueItem is the work-queue element type. Each concrete kind implements
+// process so that the dispatcher in (*controller).process can fan out to the
+// right reconciliation entry point.
+//
+// Why distinct types per source kind:
+//   - lppItem and lcItem carry a cache.ObjectName, anticipating issue #472,
+//     where LauncherPopulationPolicy and LauncherConfig events are expected
+//     to drive a more targeted reconciliation keyed by the affected object
+//     rather than always running a full reconcile.
+//   - Pod and Node events do not yet have a meaningful per-object
+//     reconciliation path, so they share a single reconcileAllSentinel.
+//     When #472 is resolved, this sentinel can be replaced with concrete
+//     object references analogous to lppItem / lcItem.
+type queueItem interface {
+	// process returns (err error, retry bool).
+	// There will be a retry iff `retry`, error logged if `err != nil`.
+	process(ctx context.Context, ctl *controller) (error, bool)
+}
+
+type lppItem struct {
+	cache.ObjectName
+}
+
+type lcItem struct {
+	cache.ObjectName
+}
+
+// reconcileAllSentinel is the placeholder enqueued for Pod and Node events.
+// These event sources currently trigger a full reconciliation; the sentinel
+// lets the work queue deduplicate bursts of such events into a single cycle.
+// Once #472 introduces targeted, object-keyed reconciliation, the Pod and
+// Node paths can graduate to their own reference-bearing item types.
+type reconcileAllSentinel struct{}
 
 // isLauncherPod returns true if the Pod is a launcher pod managed by this controller.
 // It checks for the presence of the LauncherConfigNameLabelKey label, which is
@@ -156,16 +184,16 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 		// Fulfill pending creation expectation before enqueuing.
 		ctl.expectations.observeCreation(keyFromPod(typed), typed.UID)
 		ctl.enqueueLogger.V(5).Info("Enqueuing reconciliation due to launcher Pod add", "name", typed.Name)
-		ctl.Queue.Add(reconcileSentinel)
+		ctl.Queue.Add(reconcileAllSentinel{})
 	case *corev1.Node:
 		ctl.enqueueLogger.V(5).Info("Enqueuing reconciliation due to Node add", "name", typed.Name)
-		ctl.Queue.Add(reconcileSentinel)
+		ctl.Queue.Add(reconcileAllSentinel{})
 	case *fmav1alpha1.LauncherPopulationPolicy:
-		ctl.enqueueLogger.V(5).Info("Enqueuing reconciliation due to LauncherPopulationPolicy add", "name", typed.Name)
-		ctl.Queue.Add(reconcileSentinel)
+		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherPopulationPolicy reference due to notification of add", "name", typed.Name)
+		ctl.Queue.Add(lppItem{cache.MetaObjectToName(typed)})
 	case *fmav1alpha1.LauncherConfig:
-		ctl.enqueueLogger.V(5).Info("Enqueuing reconciliation due to LauncherConfig add", "name", typed.Name)
-		ctl.Queue.Add(reconcileSentinel)
+		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherConfig reference due to notification of add", "name", typed.Name)
+		ctl.Queue.Add(lcItem{cache.MetaObjectToName(typed)})
 	default:
 		ctl.enqueueLogger.V(5).Info("Notified of add of object of ignored type", "type", fmt.Sprintf("%T", obj))
 		return
@@ -180,16 +208,16 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 			return
 		}
 		ctl.enqueueLogger.V(5).Info("Enqueuing reconciliation due to launcher Pod update", "name", typed.Name)
-		ctl.Queue.Add(reconcileSentinel)
+		ctl.Queue.Add(reconcileAllSentinel{})
 	case *corev1.Node:
 		ctl.enqueueLogger.V(5).Info("Enqueuing reconciliation due to Node update", "name", typed.Name)
-		ctl.Queue.Add(reconcileSentinel)
+		ctl.Queue.Add(reconcileAllSentinel{})
 	case *fmav1alpha1.LauncherPopulationPolicy:
-		ctl.enqueueLogger.V(5).Info("Enqueuing reconciliation due to LauncherPopulationPolicy update", "name", typed.Name)
-		ctl.Queue.Add(reconcileSentinel)
+		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherPopulationPolicy reference due to notification of update", "name", typed.Name)
+		ctl.Queue.Add(lppItem{cache.MetaObjectToName(typed)})
 	case *fmav1alpha1.LauncherConfig:
-		ctl.enqueueLogger.V(5).Info("Enqueuing reconciliation due to LauncherConfig update", "name", typed.Name)
-		ctl.Queue.Add(reconcileSentinel)
+		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherConfig reference due to notification of update", "name", typed.Name)
+		ctl.Queue.Add(lcItem{cache.MetaObjectToName(typed)})
 	default:
 		ctl.enqueueLogger.V(5).Info("Notified of update of object of ignored type", "type", fmt.Sprintf("%T", obj))
 		return
@@ -209,13 +237,13 @@ func (ctl *controller) OnDelete(obj any) {
 		// Fulfill pending deletion expectation before enqueuing.
 		ctl.expectations.observeDeletion(keyFromPod(typed), typed.UID)
 		ctl.enqueueLogger.V(5).Info("Enqueuing reconciliation due to launcher Pod delete", "name", typed.Name)
-		ctl.Queue.Add(reconcileSentinel)
+		ctl.Queue.Add(reconcileAllSentinel{})
 	case *corev1.Node:
 		ctl.enqueueLogger.V(5).Info("Enqueuing reconciliation due to Node delete", "name", typed.Name)
-		ctl.Queue.Add(reconcileSentinel)
+		ctl.Queue.Add(reconcileAllSentinel{})
 	case *fmav1alpha1.LauncherPopulationPolicy:
-		ctl.enqueueLogger.V(5).Info("Enqueuing reconciliation due to LauncherPopulationPolicy delete", "name", typed.Name)
-		ctl.Queue.Add(reconcileSentinel)
+		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherPopulationPolicy reference due to notification of delete", "name", typed.Name)
+		ctl.Queue.Add(lppItem{cache.MetaObjectToName(typed)})
 	default:
 		ctl.enqueueLogger.V(5).Info("Notified of delete of object of ignored type", "type", fmt.Sprintf("%T", obj))
 		return
@@ -233,15 +261,34 @@ func (ctl *controller) Start(ctx context.Context) error {
 	return nil
 }
 
-// process is the work queue callback. Every event enqueues the same sentinel
-// value, so the queue deduplicates bursts of events into a single full
-// reconciliation cycle.
-func (ctl *controller) process(ctx context.Context, _ int) (error, bool) {
+// process returns (err error, retry bool).
+// There will be a retry iff `retry`, error logged if `err != nil`.
+func (ctl *controller) process(ctx context.Context, item queueItem) (error, bool) {
+	return item.process(ctx, ctl)
+}
+
+func (lppItem) process(ctx context.Context, ctl *controller) (error, bool) {
+	// Until #472 introduces targeted reconciliation keyed by policy,
+	// any LauncherPopulationPolicy event drives a full reconcile.
+	return ctl.reconcileFromPolicies(ctx)
+}
+
+func (lcItem) process(ctx context.Context, ctl *controller) (error, bool) {
+	// Until #472 introduces targeted reconciliation keyed by config,
+	// any LauncherConfig event drives a full reconcile. Missing
+	// LauncherConfigs are handled inside buildDesiredStateFromPolicies.
+	return ctl.reconcileFromPolicies(ctx)
+}
+
+func (reconcileAllSentinel) process(ctx context.Context, ctl *controller) (error, bool) {
+	// Pod and Node events trigger a full reconciliation: they may shift the
+	// effective population on a node or change which nodes match policies.
 	return ctl.reconcileFromPolicies(ctx)
 }
 
 // reconcileFromPolicies builds the desired state from all policies and reconciles
-// all launcher pods accordingly.
+// all launcher pods accordingly. It is the common implementation shared by
+// every queueItem.process method.
 func (ctl *controller) reconcileFromPolicies(ctx context.Context) (error, bool) {
 	logger := klog.FromContext(ctx)
 
@@ -531,6 +578,11 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 			})
 			if err != nil {
 				if apierrors.IsNotFound(err) || apierrors.IsGone(err) {
+					// Pod is already gone from the apiserver, but the informer cache
+					// may not yet reflect that. Record the deletion expectation so the
+					// next reconcile waits for cache synchronization rather than trying
+					// to act on a Pod that no longer exists.
+					ctl.expectations.expectDeletion(key, pod.UID)
 					logger.Info("Stale launcher pod already deleted", "pod", pod.Name)
 					continue
 				}
@@ -573,6 +625,11 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 				})
 				if err != nil {
 					if apierrors.IsNotFound(err) || apierrors.IsGone(err) {
+						// Pod is already gone from the apiserver, but the informer cache
+						// may not yet reflect that. Record the deletion expectation so the
+						// next reconcile waits for cache synchronization rather than trying
+						// to act on a Pod that no longer exists.
+						ctl.expectations.expectDeletion(key, pod.UID)
 						logger.Info("Launcher pod already deleted", "pod", pod.Name)
 						numToDelete--
 						continue

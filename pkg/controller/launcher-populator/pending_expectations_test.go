@@ -131,12 +131,87 @@ func TestPendingExpectations_ObserveWithoutExpectation(t *testing.T) {
 	pe := newPendingExpectations(DefaultExpectationTimeout)
 	key := NodeLauncherKey{NodeName: "node-1", LauncherConfigName: "lc-1"}
 
-	// Should not panic when observing without any expectation
+	// Should not panic when observing without any expectation. The observations
+	// are buffered as early arrivals; with no pending mutations to wait for,
+	// check() reports Satisfied so the controller does not stall.
 	pe.observeCreation(key, types.UID("uid-unknown"))
 	pe.observeDeletion(key, types.UID("uid-unknown"))
 
 	if status := pe.check(key); status != ExpectationsSatisfied {
 		t.Errorf("expected ExpectationsSatisfied, got %v", status)
+	}
+}
+
+// TestPendingExpectations_ObserveBeforeExpect_Creation reproduces the race
+// where the informer's add notification arrives before the controller has
+// recorded its expectation. The pair must still cancel out so the next
+// reconcile sees Satisfied rather than waiting until the deadline expires.
+func TestPendingExpectations_ObserveBeforeExpect_Creation(t *testing.T) {
+	pe := newPendingExpectations(DefaultExpectationTimeout)
+	key := NodeLauncherKey{NodeName: "node-1", LauncherConfigName: "lc-1"}
+	uid := types.UID("uid-race-c")
+
+	// Informer goroutine wins the race: observation arrives before expectation.
+	pe.observeCreation(key, uid)
+
+	// Controller goroutine then records the expectation; it must cancel out.
+	pe.expectCreation(key, uid)
+
+	if status := pe.check(key); status != ExpectationsSatisfied {
+		t.Errorf("expected ExpectationsSatisfied after observe-before-expect, got %v", status)
+	}
+	pe.mu.Lock()
+	_, exists := pe.entries[key]
+	pe.mu.Unlock()
+	if exists {
+		t.Errorf("entry should have been garbage-collected after the race resolved")
+	}
+}
+
+// TestPendingExpectations_ObserveBeforeExpect_Deletion mirrors the creation
+// race for deletions.
+func TestPendingExpectations_ObserveBeforeExpect_Deletion(t *testing.T) {
+	pe := newPendingExpectations(DefaultExpectationTimeout)
+	key := NodeLauncherKey{NodeName: "node-1", LauncherConfigName: "lc-1"}
+	uid := types.UID("uid-race-d")
+
+	pe.observeDeletion(key, uid)
+	pe.expectDeletion(key, uid)
+
+	if status := pe.check(key); status != ExpectationsSatisfied {
+		t.Errorf("expected ExpectationsSatisfied after observe-before-expect, got %v", status)
+	}
+	pe.mu.Lock()
+	_, exists := pe.entries[key]
+	pe.mu.Unlock()
+	if exists {
+		t.Errorf("entry should have been garbage-collected after the race resolved")
+	}
+}
+
+// TestPendingExpectations_EarlyArrivalGCByDeadline ensures buffered early
+// arrivals do not leak forever when no matching expectXxx ever appears
+// (e.g. another actor created/deleted the Pod): once the deadline passes,
+// check() drops the entry on the next call.
+func TestPendingExpectations_EarlyArrivalGCByDeadline(t *testing.T) {
+	pe := newPendingExpectations(DefaultExpectationTimeout)
+	key := NodeLauncherKey{NodeName: "node-1", LauncherConfigName: "lc-1"}
+
+	pe.observeCreation(key, types.UID("uid-foreign"))
+
+	// Force the deadline into the past to simulate elapsed time.
+	pe.mu.Lock()
+	pe.entries[key].deadline = time.Now().Add(-1 * time.Second)
+	pe.mu.Unlock()
+
+	if status := pe.check(key); status != ExpectationsSatisfied {
+		t.Errorf("expected ExpectationsSatisfied, got %v", status)
+	}
+	pe.mu.Lock()
+	_, exists := pe.entries[key]
+	pe.mu.Unlock()
+	if exists {
+		t.Errorf("stale early-arrival entry should have been garbage-collected")
 	}
 }
 
