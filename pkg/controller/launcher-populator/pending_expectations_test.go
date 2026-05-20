@@ -21,33 +21,35 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/sets"
 )
+
+// uidSet is a small helper to build the presentUIDs argument tersely.
+func uidSet(uids ...types.UID) sets.Set[types.UID] {
+	return sets.New[types.UID](uids...)
+}
 
 func TestPendingExpectations_BasicCreation(t *testing.T) {
 	pe := newPendingExpectations(DefaultExpectationTimeout)
 	key := NodeLauncherKey{NodeName: "node-1", LauncherConfigName: "lc-1"}
 
-	// Initially satisfied
-	if status := pe.check(key); status != ExpectationsSatisfied {
+	// Initially satisfied: no expectations, no cache entries.
+	if status := pe.check(key, uidSet()); status != ExpectationsSatisfied {
 		t.Errorf("expected ExpectationsSatisfied, got %v", status)
 	}
 
-	// After expecting creations, should be Waiting
+	// After expecting creations, with cache still empty, should be Waiting.
 	pe.expectCreation(key, types.UID("uid-1"))
 	pe.expectCreation(key, types.UID("uid-2"))
 	pe.expectCreation(key, types.UID("uid-3"))
-	if status := pe.check(key); status != ExpectationsWaiting {
+	if status := pe.check(key, uidSet()); status != ExpectationsWaiting {
 		t.Errorf("expected ExpectationsWaiting, got %v", status)
 	}
 
-	// Observe all 3 creations
-	pe.observeCreation(key, types.UID("uid-1"))
-	pe.observeCreation(key, types.UID("uid-2"))
-	pe.observeCreation(key, types.UID("uid-3"))
-
-	// Should be satisfied now
-	if status := pe.check(key); status != ExpectationsSatisfied {
-		t.Errorf("expected ExpectationsSatisfied after all observations, got %v", status)
+	// Once all expected UIDs appear in the informer cache, satisfied.
+	present := uidSet("uid-1", "uid-2", "uid-3")
+	if status := pe.check(key, present); status != ExpectationsSatisfied {
+		t.Errorf("expected ExpectationsSatisfied after cache convergence, got %v", status)
 	}
 }
 
@@ -57,19 +59,19 @@ func TestPendingExpectations_BasicDeletion(t *testing.T) {
 
 	pe.expectDeletion(key, types.UID("uid-a"))
 	pe.expectDeletion(key, types.UID("uid-b"))
-	if status := pe.check(key); status != ExpectationsWaiting {
+	// Both UIDs still in cache → still waiting.
+	if status := pe.check(key, uidSet("uid-a", "uid-b")); status != ExpectationsWaiting {
 		t.Errorf("expected ExpectationsWaiting, got %v", status)
 	}
 
-	pe.observeDeletion(key, types.UID("uid-a"))
-	// Still one pending
-	if status := pe.check(key); status != ExpectationsWaiting {
+	// uid-a has been evicted from cache; uid-b still present.
+	if status := pe.check(key, uidSet("uid-b")); status != ExpectationsWaiting {
 		t.Errorf("expected ExpectationsWaiting with 1 pending, got %v", status)
 	}
 
-	pe.observeDeletion(key, types.UID("uid-b"))
-	if status := pe.check(key); status != ExpectationsSatisfied {
-		t.Errorf("expected ExpectationsSatisfied after all observations, got %v", status)
+	// Both gone from cache → satisfied.
+	if status := pe.check(key, uidSet()); status != ExpectationsSatisfied {
+		t.Errorf("expected ExpectationsSatisfied after both gone, got %v", status)
 	}
 }
 
@@ -81,16 +83,13 @@ func TestPendingExpectations_MixedCreationDeletion(t *testing.T) {
 	pe.expectCreation(key, types.UID("uid-c2"))
 	pe.expectDeletion(key, types.UID("uid-d1"))
 
-	// Observe the creations but not deletion
-	pe.observeCreation(key, types.UID("uid-c1"))
-	pe.observeCreation(key, types.UID("uid-c2"))
-	// creations satisfied, deletion still pending
-	if status := pe.check(key); status != ExpectationsWaiting {
-		t.Errorf("expected ExpectationsWaiting (dels pending), got %v", status)
+	// Creations now present, but uid-d1 still in cache → still waiting.
+	if status := pe.check(key, uidSet("uid-c1", "uid-c2", "uid-d1")); status != ExpectationsWaiting {
+		t.Errorf("expected ExpectationsWaiting (deletion pending), got %v", status)
 	}
 
-	pe.observeDeletion(key, types.UID("uid-d1"))
-	if status := pe.check(key); status != ExpectationsSatisfied {
+	// uid-d1 finally evicted; all expectations met.
+	if status := pe.check(key, uidSet("uid-c1", "uid-c2")); status != ExpectationsSatisfied {
 		t.Errorf("expected ExpectationsSatisfied, got %v", status)
 	}
 }
@@ -101,12 +100,13 @@ func TestPendingExpectations_Timeout(t *testing.T) {
 
 	pe.expectCreation(key, types.UID("uid-timeout"))
 
-	// Manually set the deadline to the past to simulate timeout
+	// Manually set the deadline to the past to simulate timeout.
 	pe.mu.Lock()
 	pe.entries[key].deadline = time.Now().Add(-1 * time.Second)
 	pe.mu.Unlock()
 
-	if status := pe.check(key); status != ExpectationsTimedOut {
+	// Cache has not caught up: pending UID never appears.
+	if status := pe.check(key, uidSet()); status != ExpectationsTimedOut {
 		t.Errorf("expected ExpectationsTimedOut, got %v", status)
 	}
 }
@@ -122,96 +122,53 @@ func TestPendingExpectations_Reset(t *testing.T) {
 	pe.expectCreation(key, types.UID("uid-r5"))
 	pe.reset(key)
 
-	if status := pe.check(key); status != ExpectationsSatisfied {
+	if status := pe.check(key, uidSet()); status != ExpectationsSatisfied {
 		t.Errorf("expected ExpectationsSatisfied after reset, got %v", status)
 	}
 }
 
-func TestPendingExpectations_ObserveWithoutExpectation(t *testing.T) {
-	pe := newPendingExpectations(DefaultExpectationTimeout)
-	key := NodeLauncherKey{NodeName: "node-1", LauncherConfigName: "lc-1"}
-
-	// Should not panic when observing without any expectation. The observations
-	// are buffered as early arrivals; with no pending mutations to wait for,
-	// check() reports Satisfied so the controller does not stall.
-	pe.observeCreation(key, types.UID("uid-unknown"))
-	pe.observeDeletion(key, types.UID("uid-unknown"))
-
-	if status := pe.check(key); status != ExpectationsSatisfied {
-		t.Errorf("expected ExpectationsSatisfied, got %v", status)
-	}
-}
-
-// TestPendingExpectations_ObserveBeforeExpect_Creation reproduces the race
-// where the informer's add notification arrives before the controller has
-// recorded its expectation. The pair must still cancel out so the next
-// reconcile sees Satisfied rather than waiting until the deadline expires.
-func TestPendingExpectations_ObserveBeforeExpect_Creation(t *testing.T) {
+// TestPendingExpectations_ExpectAfterCacheAlreadyCaughtUp covers the race
+// where the informer cache reflects the new Pod before the controller calls
+// expectCreation (the watch fired while the Create response was still in
+// flight). The next check immediately reconciles the expectation against
+// the cache and reports Satisfied, with no extra bookkeeping needed.
+func TestPendingExpectations_ExpectAfterCacheAlreadyCaughtUp(t *testing.T) {
 	pe := newPendingExpectations(DefaultExpectationTimeout)
 	key := NodeLauncherKey{NodeName: "node-1", LauncherConfigName: "lc-1"}
 	uid := types.UID("uid-race-c")
 
-	// Informer goroutine wins the race: observation arrives before expectation.
-	pe.observeCreation(key, uid)
-
-	// Controller goroutine then records the expectation; it must cancel out.
+	// Controller records the expectation after the cache already shows it.
 	pe.expectCreation(key, uid)
 
-	if status := pe.check(key); status != ExpectationsSatisfied {
-		t.Errorf("expected ExpectationsSatisfied after observe-before-expect, got %v", status)
+	if status := pe.check(key, uidSet(uid)); status != ExpectationsSatisfied {
+		t.Errorf("expected ExpectationsSatisfied when cache already reflects the UID, got %v", status)
 	}
 	pe.mu.Lock()
 	_, exists := pe.entries[key]
 	pe.mu.Unlock()
 	if exists {
-		t.Errorf("entry should have been garbage-collected after the race resolved")
+		t.Errorf("entry should have been garbage-collected after expectation satisfied")
 	}
 }
 
-// TestPendingExpectations_ObserveBeforeExpect_Deletion mirrors the creation
-// race for deletions.
-func TestPendingExpectations_ObserveBeforeExpect_Deletion(t *testing.T) {
+// TestPendingExpectations_ExpectAfterCacheAlreadyEvicted mirrors the
+// expect-after-cache race for deletions.
+func TestPendingExpectations_ExpectAfterCacheAlreadyEvicted(t *testing.T) {
 	pe := newPendingExpectations(DefaultExpectationTimeout)
 	key := NodeLauncherKey{NodeName: "node-1", LauncherConfigName: "lc-1"}
 	uid := types.UID("uid-race-d")
 
-	pe.observeDeletion(key, uid)
 	pe.expectDeletion(key, uid)
 
-	if status := pe.check(key); status != ExpectationsSatisfied {
-		t.Errorf("expected ExpectationsSatisfied after observe-before-expect, got %v", status)
+	// Cache no longer holds the UID; expectation is immediately satisfied.
+	if status := pe.check(key, uidSet()); status != ExpectationsSatisfied {
+		t.Errorf("expected ExpectationsSatisfied when cache already evicted the UID, got %v", status)
 	}
 	pe.mu.Lock()
 	_, exists := pe.entries[key]
 	pe.mu.Unlock()
 	if exists {
-		t.Errorf("entry should have been garbage-collected after the race resolved")
-	}
-}
-
-// TestPendingExpectations_EarlyArrivalGCByDeadline ensures buffered early
-// arrivals do not leak forever when no matching expectXxx ever appears
-// (e.g. another actor created/deleted the Pod): once the deadline passes,
-// check() drops the entry on the next call.
-func TestPendingExpectations_EarlyArrivalGCByDeadline(t *testing.T) {
-	pe := newPendingExpectations(DefaultExpectationTimeout)
-	key := NodeLauncherKey{NodeName: "node-1", LauncherConfigName: "lc-1"}
-
-	pe.observeCreation(key, types.UID("uid-foreign"))
-
-	// Force the deadline into the past to simulate elapsed time.
-	pe.mu.Lock()
-	pe.entries[key].deadline = time.Now().Add(-1 * time.Second)
-	pe.mu.Unlock()
-
-	if status := pe.check(key); status != ExpectationsSatisfied {
-		t.Errorf("expected ExpectationsSatisfied, got %v", status)
-	}
-	pe.mu.Lock()
-	_, exists := pe.entries[key]
-	pe.mu.Unlock()
-	if exists {
-		t.Errorf("stale early-arrival entry should have been garbage-collected")
+		t.Errorf("entry should have been garbage-collected after expectation satisfied")
 	}
 }
 
@@ -224,57 +181,58 @@ func TestPendingExpectations_MultipleKeys(t *testing.T) {
 	pe.expectCreation(key1, types.UID("uid-k1b"))
 	pe.expectDeletion(key2, types.UID("uid-k2a"))
 
-	// key1 waiting, key2 waiting
-	if status := pe.check(key1); status != ExpectationsWaiting {
+	// Both keys waiting: key1 needs UIDs to appear, key2 needs uid-k2a gone.
+	if status := pe.check(key1, uidSet()); status != ExpectationsWaiting {
 		t.Errorf("key1: expected ExpectationsWaiting, got %v", status)
 	}
-	if status := pe.check(key2); status != ExpectationsWaiting {
+	if status := pe.check(key2, uidSet("uid-k2a")); status != ExpectationsWaiting {
 		t.Errorf("key2: expected ExpectationsWaiting, got %v", status)
 	}
 
-	// Satisfy key2
-	pe.observeDeletion(key2, types.UID("uid-k2a"))
-	if status := pe.check(key2); status != ExpectationsSatisfied {
+	// Satisfy key2 by evicting its UID from the cache.
+	if status := pe.check(key2, uidSet()); status != ExpectationsSatisfied {
 		t.Errorf("key2: expected ExpectationsSatisfied, got %v", status)
 	}
-	// key1 still waiting
-	if status := pe.check(key1); status != ExpectationsWaiting {
+	// key1 still waiting.
+	if status := pe.check(key1, uidSet()); status != ExpectationsWaiting {
 		t.Errorf("key1: expected ExpectationsWaiting, got %v", status)
 	}
 }
 
-func TestPendingExpectations_OverObserve(t *testing.T) {
-	pe := newPendingExpectations(DefaultExpectationTimeout)
-	key := NodeLauncherKey{NodeName: "node-1", LauncherConfigName: "lc-1"}
-
-	pe.expectCreation(key, types.UID("uid-oo"))
-	pe.observeCreation(key, types.UID("uid-oo"))
-	// Over-observe: observing a UID not in the set is a no-op
-	pe.observeCreation(key, types.UID("uid-oo"))
-
-	if status := pe.check(key); status != ExpectationsSatisfied {
-		t.Errorf("expected ExpectationsSatisfied after over-observe, got %v", status)
-	}
-}
-
+// TestPendingExpectations_OtherActorDoesNotSatisfy verifies that pods created
+// by a different actor for the same key do not accidentally satisfy our
+// UID-specific expectation. Only the appearance of our exact UID counts.
 func TestPendingExpectations_OtherActorDoesNotSatisfy(t *testing.T) {
 	pe := newPendingExpectations(DefaultExpectationTimeout)
 	key := NodeLauncherKey{NodeName: "node-1", LauncherConfigName: "lc-1"}
 
-	// We expect our specific Pod UID
+	// We expect our specific Pod UID.
 	pe.expectCreation(key, types.UID("uid-ours"))
 
-	// Another actor creates a different pod for the same key
-	pe.observeCreation(key, types.UID("uid-theirs"))
-
-	// Our expectation should NOT be satisfied (different UID)
-	if status := pe.check(key); status != ExpectationsWaiting {
+	// Cache contains only another actor's pod for the same key.
+	if status := pe.check(key, uidSet("uid-theirs")); status != ExpectationsWaiting {
 		t.Errorf("expected ExpectationsWaiting (other actor's pod should not satisfy), got %v", status)
 	}
 
-	// Only observing our specific UID satisfies the expectation
-	pe.observeCreation(key, types.UID("uid-ours"))
-	if status := pe.check(key); status != ExpectationsSatisfied {
+	// When our UID finally appears in the cache, the expectation is satisfied.
+	if status := pe.check(key, uidSet("uid-theirs", "uid-ours")); status != ExpectationsSatisfied {
 		t.Errorf("expected ExpectationsSatisfied, got %v", status)
+	}
+}
+
+// TestPendingExpectations_CheckWithoutExpectations confirms check() is a
+// no-op when nothing is pending, regardless of what the cache contains.
+func TestPendingExpectations_CheckWithoutExpectations(t *testing.T) {
+	pe := newPendingExpectations(DefaultExpectationTimeout)
+	key := NodeLauncherKey{NodeName: "node-1", LauncherConfigName: "lc-1"}
+
+	if status := pe.check(key, uidSet("uid-foreign")); status != ExpectationsSatisfied {
+		t.Errorf("expected ExpectationsSatisfied with no expectations, got %v", status)
+	}
+	pe.mu.Lock()
+	_, exists := pe.entries[key]
+	pe.mu.Unlock()
+	if exists {
+		t.Errorf("no entry should have been created by check() alone")
 	}
 }

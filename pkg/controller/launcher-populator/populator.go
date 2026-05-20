@@ -27,6 +27,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/utils/ptr"
 
 	corev1preinformers "k8s.io/client-go/informers/core/v1"
@@ -166,14 +168,6 @@ func isLauncherPod(pod *corev1.Pod) bool {
 	return exists
 }
 
-// keyFromPod extracts the NodeLauncherKey from a launcher Pod's labels.
-func keyFromPod(pod *corev1.Pod) NodeLauncherKey {
-	return NodeLauncherKey{
-		NodeName:           pod.Labels[common.NodeNameLabelKey],
-		LauncherConfigName: pod.Labels[common.LauncherConfigNameLabelKey],
-	}
-}
-
 func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 	switch typed := obj.(type) {
 	case *corev1.Pod:
@@ -181,9 +175,10 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 			ctl.enqueueLogger.V(5).Info("Ignored add of non-launcher Pod", "name", typed.Name)
 			return
 		}
-		// Fulfill pending creation expectation before enqueuing.
-		ctl.expectations.observeCreation(keyFromPod(typed), typed.UID)
-		ctl.enqueueLogger.V(5).Info("Enqueuing reconciliation due to launcher Pod add", "name", typed.Name)
+		// Pending creation expectations are reconciled lazily in check() against
+		// the informer cache, so no observation bookkeeping is required here.
+		ctl.enqueueLogger.V(5).Info("Enqueuing reconciliation due to launcher Pod add",
+			"name", typed.Name, "uid", typed.UID, "resourceVersion", typed.ResourceVersion)
 		ctl.Queue.Add(reconcileAllSentinel{})
 	case *corev1.Node:
 		ctl.enqueueLogger.V(5).Info("Enqueuing reconciliation due to Node add", "name", typed.Name)
@@ -207,7 +202,13 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 			ctl.enqueueLogger.V(5).Info("Ignored update of non-launcher Pod", "name", typed.Name)
 			return
 		}
-		ctl.enqueueLogger.V(5).Info("Enqueuing reconciliation due to launcher Pod update", "name", typed.Name)
+		prevRV := ""
+		if prevPod, ok := prev.(*corev1.Pod); ok {
+			prevRV = prevPod.ResourceVersion
+		}
+		ctl.enqueueLogger.V(5).Info("Enqueuing reconciliation due to launcher Pod update",
+			"name", typed.Name, "uid", typed.UID,
+			"prevResourceVersion", prevRV, "resourceVersion", typed.ResourceVersion)
 		ctl.Queue.Add(reconcileAllSentinel{})
 	case *corev1.Node:
 		ctl.enqueueLogger.V(5).Info("Enqueuing reconciliation due to Node update", "name", typed.Name)
@@ -234,9 +235,10 @@ func (ctl *controller) OnDelete(obj any) {
 			ctl.enqueueLogger.V(5).Info("Ignored delete of non-launcher Pod", "name", typed.Name)
 			return
 		}
-		// Fulfill pending deletion expectation before enqueuing.
-		ctl.expectations.observeDeletion(keyFromPod(typed), typed.UID)
-		ctl.enqueueLogger.V(5).Info("Enqueuing reconciliation due to launcher Pod delete", "name", typed.Name)
+		// Pending deletion expectations are reconciled lazily in check() against
+		// the informer cache, so no observation bookkeeping is required here.
+		ctl.enqueueLogger.V(5).Info("Enqueuing reconciliation due to launcher Pod delete",
+			"name", typed.Name, "uid", typed.UID, "resourceVersion", typed.ResourceVersion)
 		ctl.Queue.Add(reconcileAllSentinel{})
 	case *corev1.Node:
 		ctl.enqueueLogger.V(5).Info("Enqueuing reconciliation due to Node delete", "name", typed.Name)
@@ -583,21 +585,26 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 					// next reconcile waits for cache synchronization rather than trying
 					// to act on a Pod that no longer exists.
 					ctl.expectations.expectDeletion(key, pod.UID)
-					logger.Info("Stale launcher pod already deleted", "pod", pod.Name)
+					logger.Info("Stale launcher pod already deleted",
+						"pod", pod.Name, "uid", pod.UID, "resourceVersion", pod.ResourceVersion)
 					continue
 				}
 				if apierrors.IsConflict(err) {
 					// Pod was modified (e.g. bound) since we read it; skip deletion.
 					staleNotDeleted++
-					logger.Info("Stale launcher pod was modified since read, skipping deletion", "pod", pod.Name)
+					logger.Info("Stale launcher pod was modified since read, skipping deletion",
+						"pod", pod.Name, "uid", pod.UID, "resourceVersion", pod.ResourceVersion)
 					continue
 				}
-				return false, fmt.Errorf("failed to delete stale launcher pod %s: %w", pod.Name, err)
+				return false, fmt.Errorf("failed to delete stale launcher pod %s (uid=%s, resourceVersion=%s): %w",
+					pod.Name, pod.UID, pod.ResourceVersion, err)
 			}
 			// Record expectation for this specific Pod UID immediately after deletion.
 			ctl.expectations.expectDeletion(key, pod.UID)
 			logger.Info("Deleted stale launcher pod (spec changed)",
 				"pod", pod.Name,
+				"uid", pod.UID,
+				"resourceVersion", pod.ResourceVersion,
 				"node", nodeName,
 				"config", key.LauncherConfigName)
 			didDelete = true
@@ -630,21 +637,26 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 						// next reconcile waits for cache synchronization rather than trying
 						// to act on a Pod that no longer exists.
 						ctl.expectations.expectDeletion(key, pod.UID)
-						logger.Info("Launcher pod already deleted", "pod", pod.Name)
+						logger.Info("Launcher pod already deleted",
+							"pod", pod.Name, "uid", pod.UID, "resourceVersion", pod.ResourceVersion)
 						numToDelete--
 						continue
 					}
 					if apierrors.IsConflict(err) {
 						// Pod was modified (e.g. bound) since we read it; skip deletion.
-						logger.Info("Launcher pod was modified since read, skipping deletion", "pod", pod.Name)
+						logger.Info("Launcher pod was modified since read, skipping deletion",
+							"pod", pod.Name, "uid", pod.UID, "resourceVersion", pod.ResourceVersion)
 						continue
 					}
-					return false, fmt.Errorf("failed to delete launcher pod %s: %w", pod.Name, err)
+					return false, fmt.Errorf("failed to delete launcher pod %s (uid=%s, resourceVersion=%s): %w",
+						pod.Name, pod.UID, pod.ResourceVersion, err)
 				}
 				// Record expectation for this specific Pod UID immediately after deletion.
 				ctl.expectations.expectDeletion(key, pod.UID)
 				logger.Info("Deleted excess launcher pod",
 					"pod", pod.Name,
+					"uid", pod.UID,
+					"resourceVersion", pod.ResourceVersion,
 					"node", nodeName,
 					"config", key.LauncherConfigName)
 				didDelete = true
@@ -704,19 +716,31 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 }
 
 // getCurrentLaunchersOnNode returns launcher pods for a specific config on a specific node.
-// It checks pending expectations to decide whether to use the informer cache
-// or fall back to a direct apiserver query. The returned ExpectationStatus
-// indicates which path was taken; ExpectationsWaiting means the caller should
-// requeue without acting on this key.
+// It reads the informer cache and uses the resulting UID set to reconcile any
+// pending expectations, then returns one of:
+//   - ExpectationsSatisfied with the cache snapshot, when no expectations are
+//     pending (or all have been satisfied by the current snapshot);
+//   - ExpectationsWaiting with a nil slice, indicating the caller should
+//     requeue without acting on this key;
+//   - ExpectationsTimedOut with the authoritative apiserver snapshot, after
+//     resetting the (now stale) expectations.
 func (ctl *controller) getCurrentLaunchersOnNode(ctx context.Context, key NodeLauncherKey) ([]*corev1.Pod, ExpectationStatus, error) {
 	logger := klog.FromContext(ctx)
 
-	status := ctl.expectations.check(key)
+	pods, err := ctl.listPodsFromCache(key)
+	if err != nil {
+		return nil, ExpectationsSatisfied, err
+	}
+	presentUIDs := sets.New[types.UID]()
+	for _, p := range pods {
+		presentUIDs.Insert(p.UID)
+	}
+
+	status := ctl.expectations.check(key, presentUIDs)
 	switch status {
 	case ExpectationsSatisfied:
 		// Fast path: informer cache is considered up-to-date.
-		pods, err := ctl.listPodsFromCache(key)
-		return pods, status, err
+		return pods, status, nil
 
 	case ExpectationsWaiting:
 		// Pending mutations not yet reflected; caller should requeue.
@@ -793,7 +817,11 @@ func (ctl *controller) createLaunchers(ctx context.Context, node corev1.Node, ke
 		}
 		// Record expectation for this specific Pod UID immediately after creation.
 		ctl.expectations.expectCreation(key, createdPod.UID)
-		logger.Info("Created launcher pod", "pod", createdPod.Name, "node", node.Name)
+		logger.Info("Created launcher pod",
+			"pod", createdPod.Name,
+			"uid", createdPod.UID,
+			"resourceVersion", createdPod.ResourceVersion,
+			"node", node.Name)
 	}
 
 	return nil
