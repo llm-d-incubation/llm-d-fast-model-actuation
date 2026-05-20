@@ -511,6 +511,7 @@ jobs:
       - name: Run E2E tests
         env:
           MKOBJS_SCRIPT: ./test/e2e/mkobjs-openshift.sh
+          POLL_LIMIT_SECS: "720"
         run: ./test/e2e/test-cases.sh
 
       - name: Dump GPU allocation per node
