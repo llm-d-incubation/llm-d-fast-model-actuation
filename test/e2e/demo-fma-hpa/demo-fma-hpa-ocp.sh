@@ -436,54 +436,88 @@ fi
 
 step "prometheus-adapter External Metrics rules"
 
-ADAPTER_CM=$(kubectl get cm -n "$PROM_ADAPTER_NS" \
-    -l app.kubernetes.io/name=prometheus-adapter \
-    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+PROM_ADAPTER_REL="${PROM_ADAPTER_REL:-prometheus-adapter}"
 
-if [ -z "$ADAPTER_CM" ]; then
-    echo "  WARNING: prometheus-adapter ConfigMap not found in $PROM_ADAPTER_NS"
+if ! helm status "$PROM_ADAPTER_REL" -n "$PROM_ADAPTER_NS" &>/dev/null; then
+    echo "  WARNING: prometheus-adapter Helm release '$PROM_ADAPTER_REL' not found in $PROM_ADAPTER_NS."
     echo "  HPA will show <unknown> until adapter rules are configured."
 else
-    ADAPTER_CONFIG=$(kubectl get cm "$ADAPTER_CM" -n "$PROM_ADAPTER_NS" \
-        -o jsonpath='{.data.config\.yaml}' 2>/dev/null || true)
+    # Resolve the actual InferencePool name and EPP service name in the cluster.
+    # The rules must point at THESE — not at a generic fallback — otherwise
+    # PromQL returns no data and the HPA shows <unknown>.
+    POOL_NAME=$(kubectl get inferencepool -n "$NAMESPACE" \
+        -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+    EPP_JOB=$(kubectl get svc -n "$NAMESPACE" \
+        -l inferencepool="$POOL_NAME" \
+        -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+    # Fallback: derive from helm release name (matches chart's default service naming)
+    [ -z "$POOL_NAME" ] && POOL_NAME="fma-hpa"
+    [ -z "$EPP_JOB" ] && EPP_JOB="${POOL_NAME}-epp"
+    echo "  Detected InferencePool='$POOL_NAME', EPP job='$EPP_JOB'"
 
-    if echo "$ADAPTER_CONFIG" | grep -q "epp_running_requests"; then
-        echo "  EPP rules already present in prometheus-adapter"
+    CURRENT_VALUES=$(mktemp)
+    NEW_VALUES=$(mktemp)
+    NEW_RULES=$(mktemp)
+    trap 'rm -f "$CURRENT_VALUES" "$NEW_VALUES" "$NEW_RULES"' RETURN
+
+    helm get values "$PROM_ADAPTER_REL" -n "$PROM_ADAPTER_NS" > "$CURRENT_VALUES"
+
+    # Determine if the existing FMA rules already point to the current pool/job.
+    # If so, nothing to do. If they exist but are stale (different pool/job), or
+    # don't exist at all, we'll regenerate them below.
+    EXISTING_QS=$(yq eval '.rules.external[] | select(.name.as == "epp_queue_size") | .metricsQuery' "$CURRENT_VALUES" 2>/dev/null || echo "")
+    EXISTING_RR=$(yq eval '.rules.external[] | select(.name.as == "epp_running_requests") | .metricsQuery' "$CURRENT_VALUES" 2>/dev/null || echo "")
+
+    EXPECTED_QS_FRAG="inference_pool=\"${POOL_NAME}\""
+    EXPECTED_RR_FRAG="job=\"${EPP_JOB}\""
+
+    if [ -n "$EXISTING_QS" ] && [ -n "$EXISTING_RR" ] \
+       && echo "$EXISTING_QS" | grep -q "$EXPECTED_QS_FRAG" \
+       && echo "$EXISTING_RR" | grep -q "$EXPECTED_RR_FRAG"; then
+        echo "  EPP rules already present and pointing to current pool/job — nothing to do."
     else
-        echo "  Adding EPP External Metrics rules to prometheus-adapter..."
-        # Determine the EPP job name and InferencePool name from the cluster
-        EPP_JOB=$(kubectl get svc -n "$NAMESPACE" \
-            -l app.kubernetes.io/name=inference-scheduler \
-            -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "fma-hpa")
-        POOL_NAME=$(kubectl get inferencepool -n "$NAMESPACE" \
-            -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "fma-hpa")
+        if [ -n "$EXISTING_QS" ] || [ -n "$EXISTING_RR" ]; then
+            echo "  EPP rules present but stale (pointing to old pool/job) — replacing..."
+        else
+            echo "  Adding EPP External Metrics rules to prometheus-adapter..."
+        fi
 
-        cat > /tmp/adapter-epp-values.yaml <<VALEOF
-rules:
-  external:
-    - seriesQuery: 'inference_extension_flow_control_queue_size'
-      resources:
-        overrides:
-          namespace:
-            resource: "namespace"
-        namespaced: false
-      name:
-        as: "epp_queue_size"
-      metricsQuery: 'sum(inference_extension_flow_control_queue_size{namespace="${NAMESPACE}",inference_pool="${POOL_NAME}"})'
-    - seriesQuery: 'inference_objective_running_requests'
-      resources:
-        overrides:
-          namespace:
-            resource: "namespace"
-        namespaced: false
-      name:
-        as: "epp_running_requests"
-      metricsQuery: 'sum(inference_objective_running_requests{namespace="${NAMESPACE}",job="${EPP_JOB}"})'
-VALEOF
-        helm upgrade prometheus-adapter prometheus-community/prometheus-adapter \
-            -n "$PROM_ADAPTER_NS" --reuse-values \
-            -f /tmp/adapter-epp-values.yaml
-        rm -f /tmp/adapter-epp-values.yaml
+        # Build the two new FMA rules (as a YAML array, for yq to load+append).
+        cat > "$NEW_RULES" <<RULES_EOF
+- seriesQuery: 'inference_extension_flow_control_queue_size'
+  resources:
+    overrides:
+      namespace:
+        resource: "namespace"
+    namespaced: false
+  name:
+    as: "epp_queue_size"
+  metricsQuery: 'sum(inference_extension_flow_control_queue_size{namespace="${NAMESPACE}",inference_pool="${POOL_NAME}"})'
+- seriesQuery: 'inference_objective_running_requests'
+  resources:
+    overrides:
+      namespace:
+        resource: "namespace"
+    namespaced: false
+  name:
+    as: "epp_running_requests"
+  metricsQuery: 'sum(inference_objective_running_requests{namespace="${NAMESPACE}",job="${EPP_JOB}"})'
+RULES_EOF
+
+        # Strip any old FMA rules (preserves WVA and any other tenant's rules),
+        # then append the freshly-generated FMA rules.
+        yq eval 'del(.rules.external[] | select(.name.as == "epp_queue_size" or .name.as == "epp_running_requests"))' \
+            "$CURRENT_VALUES" \
+            | NEW_RULES_FILE="$NEW_RULES" yq eval '.rules.external = ((.rules.external // []) + load(env(NEW_RULES_FILE)))' - \
+            > "$NEW_VALUES"
+
+        # Resolve the chart from the existing release so we don't depend on a specific repo alias
+        CHART_NAME=$(helm get metadata "$PROM_ADAPTER_REL" -n "$PROM_ADAPTER_NS" -o json 2>/dev/null \
+            | yq -r '.chart' 2>/dev/null || echo "prometheus-adapter")
+
+        helm upgrade "$PROM_ADAPTER_REL" "prometheus-community/${CHART_NAME}" \
+            -n "$PROM_ADAPTER_NS" \
+            -f "$NEW_VALUES"
         echo "  Waiting for prometheus-adapter to restart..."
         kubectl rollout status deployment -n "$PROM_ADAPTER_NS" \
             -l app.kubernetes.io/name=prometheus-adapter --timeout=120s 2>/dev/null || true
