@@ -20,12 +20,15 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/common"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/utils/ptr"
 
 	corev1preinformers "k8s.io/client-go/informers/core/v1"
@@ -57,6 +60,7 @@ func NewController(
 	namespace string,
 	corev1PreInformers corev1preinformers.Interface,
 	fmaInformerFactory fmainformers.SharedInformerFactory,
+	expectationTimeout time.Duration,
 ) (*controller, error) {
 	ctl := &controller{
 		enqueueLogger: logger.WithName(ControllerName),
@@ -71,6 +75,7 @@ func NewController(
 		lppLister:     fmaInformerFactory.Fma().V1alpha1().LauncherPopulationPolicies().Lister(),
 		lcInformer:    fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Informer(),
 		lcLister:      fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Lister(),
+		expectations:  newPendingExpectations(expectationTimeout),
 	}
 
 	// Use a single worker thread to ensure sequential processing of LauncherPopulationPolicy updates
@@ -111,10 +116,28 @@ type controller struct {
 	lcInformer    cache.SharedIndexInformer
 	lcLister      fmalisters.LauncherConfigLister
 	genctlr.KnowsProcessedSync[queueItem]
+
+	// expectations tracks pending Pod create/delete mutations not yet reflected
+	// in the informer's local cache. This prevents the controller from making
+	// decisions based on stale cache state between reconcile cycles.
+	expectations *pendingExpectations
 }
 
 var _ Controller = &controller{}
 
+// queueItem is the work-queue element type. Each concrete kind implements
+// process so that the dispatcher in (*controller).process can fan out to the
+// right reconciliation entry point.
+//
+// Why distinct types per source kind:
+//   - lppItem and lcItem carry a cache.ObjectName, anticipating issue #472,
+//     where LauncherPopulationPolicy and LauncherConfig events are expected
+//     to drive a more targeted reconciliation keyed by the affected object
+//     rather than always running a full reconcile.
+//   - Pod and Node events do not yet have a meaningful per-object
+//     reconciliation path, so they share a single reconcileAllSentinel.
+//     When #472 is resolved, this sentinel can be replaced with concrete
+//     object references analogous to lppItem / lcItem.
 type queueItem interface {
 	// process returns (err error, retry bool).
 	// There will be a retry iff `retry`, error logged if `err != nil`.
@@ -129,16 +152,43 @@ type lcItem struct {
 	cache.ObjectName
 }
 
+// reconcileAllSentinel is the placeholder enqueued for Pod and Node events.
+// These event sources currently trigger a full reconciliation; the sentinel
+// lets the work queue deduplicate bursts of such events into a single cycle.
+// Once #472 introduces targeted, object-keyed reconciliation, the Pod and
+// Node paths can graduate to their own reference-bearing item types.
+type reconcileAllSentinel struct{}
+
+// isLauncherPod returns true if the Pod is a launcher pod managed by this controller.
+// It checks for the presence of the LauncherConfigNameLabelKey label, which is
+// exclusively set by the controller when creating launcher Pods and is protected
+// from external modification by a ValidatingAdmissionPolicy.
+func isLauncherPod(pod *corev1.Pod) bool {
+	_, exists := pod.Labels[common.LauncherConfigNameLabelKey]
+	return exists
+}
+
 func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 	switch typed := obj.(type) {
+	case *corev1.Pod:
+		if !isLauncherPod(typed) {
+			ctl.enqueueLogger.V(5).Info("Ignored add of non-launcher Pod", "name", typed.Name)
+			return
+		}
+		// Pending creation expectations are reconciled lazily in check() against
+		// the informer cache, so no observation bookkeeping is required here.
+		ctl.enqueueLogger.V(5).Info("Enqueuing reconciliation due to launcher Pod add",
+			"name", typed.Name, "uid", typed.UID, "resourceVersion", typed.ResourceVersion)
+		ctl.Queue.Add(reconcileAllSentinel{})
+	case *corev1.Node:
+		ctl.enqueueLogger.V(5).Info("Enqueuing reconciliation due to Node add", "name", typed.Name)
+		ctl.Queue.Add(reconcileAllSentinel{})
 	case *fmav1alpha1.LauncherPopulationPolicy:
 		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherPopulationPolicy reference due to notification of add", "name", typed.Name)
-		item := lppItem{cache.MetaObjectToName(typed)}
-		ctl.Queue.Add(item)
+		ctl.Queue.Add(lppItem{cache.MetaObjectToName(typed)})
 	case *fmav1alpha1.LauncherConfig:
 		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherConfig reference due to notification of add", "name", typed.Name)
-		item := lcItem{cache.MetaObjectToName(typed)}
-		ctl.Queue.Add(item)
+		ctl.Queue.Add(lcItem{cache.MetaObjectToName(typed)})
 	default:
 		ctl.enqueueLogger.V(5).Info("Notified of add of object of ignored type", "type", fmt.Sprintf("%T", obj))
 		return
@@ -147,14 +197,28 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 
 func (ctl *controller) OnUpdate(prev, obj any) {
 	switch typed := obj.(type) {
+	case *corev1.Pod:
+		if !isLauncherPod(typed) {
+			ctl.enqueueLogger.V(5).Info("Ignored update of non-launcher Pod", "name", typed.Name)
+			return
+		}
+		prevRV := ""
+		if prevPod, ok := prev.(*corev1.Pod); ok {
+			prevRV = prevPod.ResourceVersion
+		}
+		ctl.enqueueLogger.V(5).Info("Enqueuing reconciliation due to launcher Pod update",
+			"name", typed.Name, "uid", typed.UID,
+			"prevResourceVersion", prevRV, "resourceVersion", typed.ResourceVersion)
+		ctl.Queue.Add(reconcileAllSentinel{})
+	case *corev1.Node:
+		ctl.enqueueLogger.V(5).Info("Enqueuing reconciliation due to Node update", "name", typed.Name)
+		ctl.Queue.Add(reconcileAllSentinel{})
 	case *fmav1alpha1.LauncherPopulationPolicy:
 		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherPopulationPolicy reference due to notification of update", "name", typed.Name)
-		item := lppItem{cache.MetaObjectToName(typed)}
-		ctl.Queue.Add(item)
+		ctl.Queue.Add(lppItem{cache.MetaObjectToName(typed)})
 	case *fmav1alpha1.LauncherConfig:
 		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherConfig reference due to notification of update", "name", typed.Name)
-		item := lcItem{cache.MetaObjectToName(typed)}
-		ctl.Queue.Add(item)
+		ctl.Queue.Add(lcItem{cache.MetaObjectToName(typed)})
 	default:
 		ctl.enqueueLogger.V(5).Info("Notified of update of object of ignored type", "type", fmt.Sprintf("%T", obj))
 		return
@@ -166,10 +230,22 @@ func (ctl *controller) OnDelete(obj any) {
 		obj = dfsu.Obj
 	}
 	switch typed := obj.(type) {
+	case *corev1.Pod:
+		if !isLauncherPod(typed) {
+			ctl.enqueueLogger.V(5).Info("Ignored delete of non-launcher Pod", "name", typed.Name)
+			return
+		}
+		// Pending deletion expectations are reconciled lazily in check() against
+		// the informer cache, so no observation bookkeeping is required here.
+		ctl.enqueueLogger.V(5).Info("Enqueuing reconciliation due to launcher Pod delete",
+			"name", typed.Name, "uid", typed.UID, "resourceVersion", typed.ResourceVersion)
+		ctl.Queue.Add(reconcileAllSentinel{})
+	case *corev1.Node:
+		ctl.enqueueLogger.V(5).Info("Enqueuing reconciliation due to Node delete", "name", typed.Name)
+		ctl.Queue.Add(reconcileAllSentinel{})
 	case *fmav1alpha1.LauncherPopulationPolicy:
 		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherPopulationPolicy reference due to notification of delete", "name", typed.Name)
-		item := lppItem{cache.MetaObjectToName(typed)}
-		ctl.Queue.Add(item)
+		ctl.Queue.Add(lppItem{cache.MetaObjectToName(typed)})
 	default:
 		ctl.enqueueLogger.V(5).Info("Notified of delete of object of ignored type", "type", fmt.Sprintf("%T", obj))
 		return
@@ -193,19 +269,28 @@ func (ctl *controller) process(ctx context.Context, item queueItem) (error, bool
 	return item.process(ctx, ctl)
 }
 
-func (item lppItem) process(ctx context.Context, ctl *controller) (error, bool) {
+func (lppItem) process(ctx context.Context, ctl *controller) (error, bool) {
+	// Until #472 introduces targeted reconciliation keyed by policy,
+	// any LauncherPopulationPolicy event drives a full reconcile.
 	return ctl.reconcileFromPolicies(ctx)
 }
 
-func (item lcItem) process(ctx context.Context, ctl *controller) (error, bool) {
-	// No special treatment for any particular LauncherConfig;
-	// missing LauncherConfigs are handled inside buildDesiredStateFromPolicies.
+func (lcItem) process(ctx context.Context, ctl *controller) (error, bool) {
+	// Until #472 introduces targeted reconciliation keyed by config,
+	// any LauncherConfig event drives a full reconcile. Missing
+	// LauncherConfigs are handled inside buildDesiredStateFromPolicies.
+	return ctl.reconcileFromPolicies(ctx)
+}
+
+func (reconcileAllSentinel) process(ctx context.Context, ctl *controller) (error, bool) {
+	// Pod and Node events trigger a full reconciliation: they may shift the
+	// effective population on a node or change which nodes match policies.
 	return ctl.reconcileFromPolicies(ctx)
 }
 
 // reconcileFromPolicies builds the desired state from all policies and reconciles
 // all launcher pods accordingly. It is the common implementation shared by
-// lppItem.process and lcItem.process.
+// every queueItem.process method.
 func (ctl *controller) reconcileFromPolicies(ctx context.Context) (error, bool) {
 	logger := klog.FromContext(ctx)
 
@@ -410,8 +495,9 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 	}
 
 	didDelete := false
-	deletionInProgress := false // tracks pods already being deleted (DeletionTimestamp set)
-	deletionShortfall := false  // excess-pod deletion loop could not delete as many as needed
+	deletionInProgress := false  // tracks pods already being deleted (DeletionTimestamp set)
+	deletionShortfall := false   // excess-pod deletion loop could not delete as many as needed
+	expectationsWaiting := false // at least one key has unsatisfied expectations
 
 	type creationInfo struct {
 		key   NodeLauncherKey
@@ -425,12 +511,16 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 	for _, key := range keys {
 		entry := desired[key]
 
-		currentLaunchers, err := ctl.getCurrentLaunchersOnNode(ctx, key)
+		currentLaunchers, expectStatus, err := ctl.getCurrentLaunchersOnNode(ctx, key)
 		if err != nil {
-			// The only error possible here is from the lister, which should never fail in practice.
 			// Log and skip this config rather than aborting the entire reconciliation.
 			logger.Error(err, "Failed to get current launchers for config",
 				"node", nodeName, "config", key.LauncherConfigName)
+			continue
+		}
+		if expectStatus == ExpectationsWaiting {
+			// Cache not yet up-to-date for this key; skip and request requeue.
+			expectationsWaiting = true
 			continue
 		}
 
@@ -490,19 +580,31 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 			})
 			if err != nil {
 				if apierrors.IsNotFound(err) || apierrors.IsGone(err) {
-					logger.Info("Stale launcher pod already deleted", "pod", pod.Name)
+					// Pod is already gone from the apiserver, but the informer cache
+					// may not yet reflect that. Record the deletion expectation so the
+					// next reconcile waits for cache synchronization rather than trying
+					// to act on a Pod that no longer exists.
+					ctl.expectations.expectDeletion(key, pod.UID)
+					logger.Info("Stale launcher pod already deleted",
+						"pod", pod.Name, "uid", pod.UID, "resourceVersion", pod.ResourceVersion)
 					continue
 				}
 				if apierrors.IsConflict(err) {
 					// Pod was modified (e.g. bound) since we read it; skip deletion.
 					staleNotDeleted++
-					logger.Info("Stale launcher pod was modified since read, skipping deletion", "pod", pod.Name)
+					logger.Info("Stale launcher pod was modified since read, skipping deletion",
+						"pod", pod.Name, "uid", pod.UID, "resourceVersion", pod.ResourceVersion)
 					continue
 				}
-				return false, fmt.Errorf("failed to delete stale launcher pod %s: %w", pod.Name, err)
+				return false, fmt.Errorf("failed to delete stale launcher pod %s (uid=%s, resourceVersion=%s): %w",
+					pod.Name, pod.UID, pod.ResourceVersion, err)
 			}
+			// Record expectation for this specific Pod UID immediately after deletion.
+			ctl.expectations.expectDeletion(key, pod.UID)
 			logger.Info("Deleted stale launcher pod (spec changed)",
 				"pod", pod.Name,
+				"uid", pod.UID,
+				"resourceVersion", pod.ResourceVersion,
 				"node", nodeName,
 				"config", key.LauncherConfigName)
 			didDelete = true
@@ -530,19 +632,31 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 				})
 				if err != nil {
 					if apierrors.IsNotFound(err) || apierrors.IsGone(err) {
-						logger.Info("Launcher pod already deleted", "pod", pod.Name)
+						// Pod is already gone from the apiserver, but the informer cache
+						// may not yet reflect that. Record the deletion expectation so the
+						// next reconcile waits for cache synchronization rather than trying
+						// to act on a Pod that no longer exists.
+						ctl.expectations.expectDeletion(key, pod.UID)
+						logger.Info("Launcher pod already deleted",
+							"pod", pod.Name, "uid", pod.UID, "resourceVersion", pod.ResourceVersion)
 						numToDelete--
 						continue
 					}
 					if apierrors.IsConflict(err) {
 						// Pod was modified (e.g. bound) since we read it; skip deletion.
-						logger.Info("Launcher pod was modified since read, skipping deletion", "pod", pod.Name)
+						logger.Info("Launcher pod was modified since read, skipping deletion",
+							"pod", pod.Name, "uid", pod.UID, "resourceVersion", pod.ResourceVersion)
 						continue
 					}
-					return false, fmt.Errorf("failed to delete launcher pod %s: %w", pod.Name, err)
+					return false, fmt.Errorf("failed to delete launcher pod %s (uid=%s, resourceVersion=%s): %w",
+						pod.Name, pod.UID, pod.ResourceVersion, err)
 				}
+				// Record expectation for this specific Pod UID immediately after deletion.
+				ctl.expectations.expectDeletion(key, pod.UID)
 				logger.Info("Deleted excess launcher pod",
 					"pod", pod.Name,
+					"uid", pod.UID,
+					"resourceVersion", pod.ResourceVersion,
 					"node", nodeName,
 					"config", key.LauncherConfigName)
 				didDelete = true
@@ -563,15 +677,16 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 	}
 
 	// If any deletions were performed or are in progress, or the desired reduction
-	// in launcher count was not fully achieved, requeue for later. This ensures that
-	// deletions take effect before any creations happen, so that freed resources are
-	// available for newly created pods.
-	if didDelete || deletionInProgress || deletionShortfall {
+	// in launcher count was not fully achieved, or expectations are still pending,
+	// requeue for later. This ensures that deletions take effect before any creations
+	// happen, so that freed resources are available for newly created pods.
+	if didDelete || deletionInProgress || deletionShortfall || expectationsWaiting {
 		logger.Info("Requeuing for creation later",
 			"node", nodeName,
 			"didDelete", didDelete,
 			"deletionInProgress", deletionInProgress,
-			"deletionShortfall", deletionShortfall)
+			"deletionShortfall", deletionShortfall,
+			"expectationsWaiting", expectationsWaiting)
 		return true, nil
 	}
 
@@ -600,20 +715,87 @@ func (ctl *controller) reconcileLaunchersOnSingleNode(ctx context.Context, nodeN
 	return false, nil
 }
 
-// getCurrentLaunchersOnNode returns launcher pods for a specific config on a specific node
-func (ctl *controller) getCurrentLaunchersOnNode(ctx context.Context, key NodeLauncherKey) ([]*corev1.Pod, error) {
+// getCurrentLaunchersOnNode returns launcher pods for a specific config on a specific node.
+// It reads the informer cache and uses the resulting UID set to reconcile any
+// pending expectations, then returns one of:
+//   - ExpectationsSatisfied with the cache snapshot, when no expectations are
+//     pending (or all have been satisfied by the current snapshot);
+//   - ExpectationsWaiting with a nil slice, indicating the caller should
+//     requeue without acting on this key;
+//   - ExpectationsTimedOut with the authoritative apiserver snapshot, after
+//     resetting the (now stale) expectations.
+func (ctl *controller) getCurrentLaunchersOnNode(ctx context.Context, key NodeLauncherKey) ([]*corev1.Pod, ExpectationStatus, error) {
+	logger := klog.FromContext(ctx)
+
+	pods, err := ctl.listPodsFromCache(key)
+	if err != nil {
+		return nil, ExpectationsSatisfied, err
+	}
+	presentUIDs := sets.New[types.UID]()
+	for _, p := range pods {
+		presentUIDs.Insert(p.UID)
+	}
+
+	status := ctl.expectations.check(key, presentUIDs)
+	switch status {
+	case ExpectationsSatisfied:
+		// Fast path: informer cache is considered up-to-date.
+		return pods, status, nil
+
+	case ExpectationsWaiting:
+		// Pending mutations not yet reflected; caller should requeue.
+		logger.V(4).Info("Expectations not yet satisfied, requesting requeue",
+			"node", key.NodeName, "config", key.LauncherConfigName)
+		return nil, status, nil
+
+	case ExpectationsTimedOut:
+		// Timeout: fall back to direct apiserver query and reset expectations.
+		logger.Info("Expectations timed out, falling back to apiserver query",
+			"node", key.NodeName, "config", key.LauncherConfigName)
+		ctl.expectations.reset(key)
+		pods, err := ctl.listPodsFromApiserver(ctx, key)
+		return pods, status, err
+	}
+
+	// unreachable
+	return nil, ExpectationsSatisfied, nil
+}
+
+// listPodsFromCache reads launcher pods from the informer's local cache (cheap).
+func (ctl *controller) listPodsFromCache(key NodeLauncherKey) ([]*corev1.Pod, error) {
 	launcherLabels := map[string]string{
 		common.ComponentLabelKey:          common.LauncherComponentLabelValue,
 		common.LauncherConfigNameLabelKey: key.LauncherConfigName,
 		common.NodeNameLabelKey:           key.NodeName,
 	}
-	// Use podLister's List method with label selector
 	pods, err := ctl.podLister.List(labels.SelectorFromSet(launcherLabels))
 	if err != nil {
-		return nil, fmt.Errorf("failed to list pods with launcher labels: %w", err)
+		return nil, fmt.Errorf("failed to list pods from cache: %w", err)
 	}
-
 	return pods, nil
+}
+
+// listPodsFromApiserver queries the apiserver directly for launcher pods.
+// This is more expensive than the cache but provides authoritative state.
+// Used as a fallback when expectations time out.
+func (ctl *controller) listPodsFromApiserver(ctx context.Context, key NodeLauncherKey) ([]*corev1.Pod, error) {
+	launcherLabels := map[string]string{
+		common.ComponentLabelKey:          common.LauncherComponentLabelValue,
+		common.LauncherConfigNameLabelKey: key.LauncherConfigName,
+		common.NodeNameLabelKey:           key.NodeName,
+	}
+	selector := labels.SelectorFromSet(launcherLabels).String()
+	podList, err := ctl.coreclient.Pods(ctl.namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: selector,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list pods from apiserver: %w", err)
+	}
+	result := make([]*corev1.Pod, 0, len(podList.Items))
+	for i := range podList.Items {
+		result = append(result, &podList.Items[i])
+	}
+	return result, nil
 }
 
 // createLaunchers creates the specified number of launcher pods on a node
@@ -633,8 +815,15 @@ func (ctl *controller) createLaunchers(ctx context.Context, node corev1.Node, ke
 		if err != nil {
 			return fmt.Errorf("failed to create launcher pod: %w", err)
 		}
-		logger.Info("Created launcher pod", "pod", createdPod.Name, "node", node.Name)
+		// Record expectation for this specific Pod UID immediately after creation.
+		ctl.expectations.expectCreation(key, createdPod.UID)
+		logger.Info("Created launcher pod",
+			"pod", createdPod.Name,
+			"uid", createdPod.UID,
+			"resourceVersion", createdPod.ResourceVersion,
+			"node", node.Name)
 	}
+
 	return nil
 }
 
