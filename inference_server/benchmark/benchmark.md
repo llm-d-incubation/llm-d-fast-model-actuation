@@ -30,7 +30,7 @@ direct scope but is referenced for completeness and handoff to other frameworks.
 
 | Layer | Focus | Metrics | Measured By |
 | ----- | ----- | ------- | ----------- |
-| **L1: Actuation** | Requester pod readiness | T_actuation (requester creation to readiness), T_wake (DPC wakes sleeping vLLM instance), Hot_hit_rate (hot-start hits), Warm_hit_rate (warm-start hits), T_cold_launcher (DPC creates launcher pod then vLLM instance), T_instance_create (DPC commands new vLLM instance creation) | llm-d-benchmark new harness |
+| **L1: Actuation** | Requester pod readiness | T_actuation (requester creation to readiness), T_wake (DPC wakes sleeping vLLM instance), Hot_hit_rate (hot-start hits), Warm_hit_rate (warm-start hits), T_cold_launcher (launcher creation to vLLM readiness relay), T_instance_create (DPC instance creation request receipt to instance readiness relay) | llm-d-benchmark new harness |
 | **L2: Inference Readiness** | First inference response | T_e2e (requester creation to first inference response), T_first_token (requester ready to first inference response) | llm-d-benchmark nop/inference-perf harness |
 | **L3: Steady-State** | Throughput/latency | TPOT (time per output token), throughput, queue depth, KV cache usage, replica stability | llm-d-benchmark / WVA |
 
@@ -40,7 +40,7 @@ direct scope but is referenced for completeness and handoff to other frameworks.
 - **T_wake**: Request-response time for the DPC's `/wake_up` call to a sleeping vLLM instance on the server-providing pod. A part of T_actuation when a hot start occurs.
 - **Hot_hit_rate**: Fraction of server-requesting Pods that get satisfied by waking a sleeping vLLM instance (hot start).
 - **Warm_hit_rate**: Fraction of server-requesting Pods that get satisfied by an existing launcher pod (warm start), avoiding the cost of creating a new launcher pod.
-- **T_cold_launcher**: Time from (a) when the DPC sends the request to create the launcher Pod to (b) the DPC successfully relaying readiness to the requester pod (DPC V5 log: "Successfully relayed the readiness"). A constituent of T_actuation for cold start (with launcher) cases, covering launcher pod scheduling, launcher startup, and vLLM instance creation. Does not include the earlier portion of T_actuation (requester scheduling and DPC reconciliation before the launcher pod is created).
+- **T_cold_launcher**: Time from from launcher Pod creation (matching T_launcher_schedule) to the DPC successfully relaying readiness to the requester pod (DPC V5 log: "Successfully relayed the readiness"). A constituent of T_actuation for cold start (with launcher) cases, covering launcher pod scheduling, launcher startup, and vLLM instance creation. Does not include the earlier portion of T_actuation (requester scheduling and DPC reconciliation before the launcher pod is created).
 - **T_instance_create**: Time from the launcher receiving a create request ([#497](https://github.com/llm-d-incubation/llm-d-fast-model-actuation/issues/497) tracks adding subsecond launcher logging for this instant) to the DPC successfully relaying readiness to the requester pod (DPC V5 log: "Successfully relayed the readiness"). Includes the benefit of vLLM module preloading. Applies to both cold start (with launcher) and warm start paths.
 - **T_e2e**: Total time from requester pod creation to first successful inference response (T_actuation + T_first_token). Spans the full actuation and inference readiness path.
 - **T_first_token**: Time from requester pod readiness to receiving the first streamed token from the server-providing pod's vLLM instance (time-to-first-token, post-actuation). Requires streaming inference requests.
@@ -56,7 +56,7 @@ needs further evaluation before they are added to the benchmarking harness.
 | ------ | ---------- | -------------- |
 | **T_launcher_schedule** | Launcher pod `creationTimestamp` to `PodScheduled` condition `lastTransitionTime` | Kube pod status |
 | **T_launcher_startup** | Launcher pod `PodScheduled` to `Ready` condition `lastTransitionTime` | Kube pod status |
-| **T_dpc_react** | Launcher pod `Ready` to DPC issuing `CreateNamedInstance`. Applies to cold start (with launcher) only; in warm start, the launcher is already Ready before the requester exists, so this duration does not significantly contribute to latency. Does not include later DPC actions (e.g., updating launcher pod labels/annotations), which occur during instance creation and are captured by T_instance_ready. | DPC logs (not yet observable; [#495](https://github.com/llm-d-incubation/llm-d-fast-model-actuation/issues/495) tracks adding a pre-`CreateNamedInstance` log statement) |
+| **T_dpc_react** | Launcher pod `Ready` to DPC issuing `CreateNamedInstance`. Applies to cold start (with launcher) only; it does not include later DPC actions (e.g., updating launcher pod labels/annotations), which occur during instance creation and are captured by T_instance_ready. | DPC logs (not yet observable; [#495](https://github.com/llm-d-incubation/llm-d-fast-model-actuation/issues/495) tracks adding a pre-`CreateNamedInstance` log statement) |
 | **T_instance_ready** | `CreateNamedInstance` call to DPC successfully relaying readiness to the requester pod (DPC V5 log: "Successfully relayed the readiness") | DPC logs + Kube pod status |
 
 Relationships:
@@ -90,7 +90,7 @@ using the team's established terminology:
 | ------------------------- | ---------------- | ------------ | ---------------------- |
 | **Cold Start (no FMA)**   | No FMA involvement. Raw Kubernetes deploy-to-ready latency. | Non-FMA baseline that all FMA paths should improve upon. | `-t standalone` comparison baseline |
 | **Cold Start (with launcher)** | No suitable launcher pod exists. The DPC creates a new launcher pod, then DPC commands the launcher to create a new vLLM instance. | Worst-case FMA launcher path, relevant for dynamic situations such as LauncherConfig rollouts or newly added nodes where launchers have not yet been populated. | `-t fma` with LauncherPopulationPolicy that does not cover the target node |
-| **Warm Start**            | A launcher pod already exists but no sleeping instance is available. DPC commands the launcher to create a new vLLM instance with module preloading. | Measures the launcher's contribution when no sleeping instance is available. | `-t fma` with default `LLMDBENCH_FMA_LAUNCHER_*` env vars |
+| **Warm Start**            | A launcher pod already exists and is 'Ready', but no sleeping instance is available. DPC commands the launcher to create a new vLLM instance with module preloading. | Measures the launcher's contribution when no sleeping instance is available. | `-t fma` with default `LLMDBENCH_FMA_LAUNCHER_*` env vars |
 | **Hot Start**             | A sleeping vLLM instance exists in a suitable launcher pod. DPC sends `/wake_up`. | Best-case FMA path. Measures sleep-to-wake latency. | `-t fma` with `LLMDBENCH_VLLM_COMMON_ENABLE_SLEEP_MODE=true`, `LLMDBENCH_FMA_DUAL_POD_SLEEPER_LIMIT>=1` |
 
 > **Note on simulation:** Any of the above paths can be exercised with mock GPUs
