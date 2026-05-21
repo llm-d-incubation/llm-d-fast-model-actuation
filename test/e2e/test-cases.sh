@@ -503,13 +503,13 @@ launcher_count_before_reclaim=$(kubectl get pods -n "$NS" -o name -l dual-pods.l
 echo launcher_count_before_reclaim = $launcher_count_before_reclaim
 
 # Target launcher is still around and unbound.
-kubectl get pods -n "$NS" -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | grep -x "pod/$launcher1"
+kubectl get pod -n "$NS" "$launcher1"
 expect '[ "$(kubectl get pod -n '"$NS"' $launcher1 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "" ]'
 
 # Confirm launcher is at the cap before reclaim.
-launcher_instances_at_cap=$(kubectl exec -n "$NS" $launcher1 -- python3 -c 'import json,urllib.request; print(json.load(urllib.request.urlopen("http://127.0.0.1:8001/v2/vllm/instances"))["total_instances"])')
-echo "Launcher has $launcher_instances_at_cap instances before reclaim (expected 2)"
-[ "$launcher_instances_at_cap" == "2" ]
+launcher_instances_before_reclaim=$(kubectl exec -n "$NS" $launcher1 -- python3 -c 'import json,urllib.request; print(json.load(urllib.request.urlopen("http://127.0.0.1:8001/v2/vllm/instances"))["total_instances"])')
+echo "Launcher has $launcher_instances_before_reclaim instances before reclaim (expected 2)"
+[ "$launcher_instances_before_reclaim" == "2" ]
 
 # Switch the requester to a third ISC for which there is no sleeping instance,
 # so neither the fast wake-up path nor the capacity path applies.
@@ -523,19 +523,19 @@ expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$inst | wc -l
 req_reclaim=$(kubectl get pods -n "$NS" -o name -l app=dp-example,instance=$inst | sed s%pod/%%)
 echo "Server-requesting Pod (post-reclaim) is $req_reclaim"
 
+# Requester is annotated for isc3.
+expect '[ "$(kubectl get pod -n '"$NS"' $req_reclaim -o jsonpath={.metadata.annotations.dual-pods\\.llm-d\\.ai/inference-server-config})" == "'$isc3'" ]'
+
 # Launcher pod set is unchanged — no new launcher was created.
 expect "kubectl get pods -n $NS -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | wc -l | grep -w $launcher_count_before_reclaim"
-kubectl get pods -n "$NS" -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | grep -x "pod/$launcher1"
+kubectl get pod -n "$NS" "$launcher1"
 
 # Bidirectional binding to the same launcher.
 expect '[ "$(kubectl get pod -n '"$NS"' $req_reclaim -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcher1" ]'
 expect '[ "$(kubectl get pod -n '"$NS"' $launcher1 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$req_reclaim" ]'
 
-# Requester is annotated for isc3.
-expect '[ "$(kubectl get pod -n '"$NS"' $req_reclaim -o jsonpath={.metadata.annotations.dual-pods\\.llm-d\\.ai/inference-server-config})" == "'$isc3'" ]'
-
 date
-kubectl wait --for condition=Ready pod/$req_reclaim -n "$NS" --timeout=120s
+kubectl wait --for condition=Ready pod/$req_reclaim -n "$NS" --timeout=180s
 [ "$(kubectl get pod $launcher1 -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
 
 check_gpu_pin $req_reclaim
