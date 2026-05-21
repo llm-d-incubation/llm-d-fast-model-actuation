@@ -816,10 +816,8 @@ func (ctl *controller) reclaimLauncherCapacity(
 		if launcherPod.Status.Phase == corev1.PodFailed || launcherPod.DeletionTimestamp != nil {
 			continue
 		}
-		// Skip launcher Pods already bound to another requester. Same filter as
-		// selectBestLauncherPod.
-		requesterParts := strings.Split(launcherPod.Annotations[requesterAnnotationKey], " ")
-		if len(requesterParts) == 2 {
+		// Skip launcher Pods already bound to another requester.
+		if launcherPod.Annotations[requesterAnnotationKey] != "" {
 			continue
 		}
 
