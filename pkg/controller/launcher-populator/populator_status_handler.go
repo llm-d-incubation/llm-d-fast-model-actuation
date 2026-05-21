@@ -9,8 +9,8 @@ import (
 	"k8s.io/klog/v2"
 )
 
-// setLPPStatusErrors sets the LauncherPopulationPolicy's Status.Errors to desiredErrors using
-// Server-Side Apply. Pass nil or an empty slice to clear all errors.
+// setLPPStatusErrors sets the LauncherPopulationPolicy's Status.Errors to desiredErrors.
+// Pass nil or an empty slice to clear all errors.
 // The call is skipped when the current Status already matches (same errors and same
 // ObservedGeneration), avoiding unnecessary API round-trips.
 func (ctl *controller) setLPPStatusErrors(ctx context.Context, lpp *fmav1alpha1.LauncherPopulationPolicy, desiredErrors []string) error {
@@ -23,7 +23,7 @@ func (ctl *controller) setLPPStatusErrors(ctx context.Context, lpp *fmav1alpha1.
 		ObservedGeneration: lpp.Generation,
 		Errors:             desiredErrors,
 	}
-	echo, err := ctl.fmaclient.LauncherPopulationPolicies(lppCopy.Namespace).Update(ctx, lppCopy, metav1.UpdateOptions{FieldManager: ControllerName})
+	echo, err := ctl.fmaclient.LauncherPopulationPolicies(lppCopy.Namespace).UpdateStatus(ctx, lppCopy, metav1.UpdateOptions{FieldManager: ControllerName})
 	resourceVersion := ""
 	if err == nil {
 		resourceVersion = echo.ResourceVersion
