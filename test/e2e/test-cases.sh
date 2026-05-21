@@ -632,8 +632,8 @@ echo "Launcher had $old_total_instances instance(s) before updating ISC to make 
 # req_post_restart). Mutate isc3 in a hash-relevant way so its sleeping
 # instance becomes obsolete. We append --served-model-name to the original
 # options (rather than hardcoding the model) so the model itself stays valid.
-original_isc3_options=$(kubectl get inferenceserverconfig "$isc3" -n "$NS" -o jsonpath='{.spec.modelServerConfig.options}')
-kubectl patch inferenceserverconfig "$isc3" -n "$NS" --type=merge -p='{"spec":{"modelServerConfig":{"options":"'"$original_isc3_options"' --served-model-name obsolete-after-update"}}}'
+enhanced_options=$(kubectl get inferenceserverconfig "$isc3" -n "$NS" -o jsonpath='{.spec.modelServerConfig}' | jq '.options + " --served-model-name obsolete-after-update"')
+kubectl patch inferenceserverconfig "$isc3" -n "$NS" --type=merge -p='{"spec":{"modelServerConfig":{"options":'"$enhanced_options"'}}}'
 
 expect '[ "$(get_launcher_total_instances "$launcher1")" == "$((old_total_instances - 1))" ]'
 
