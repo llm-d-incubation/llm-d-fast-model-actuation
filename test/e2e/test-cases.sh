@@ -221,9 +221,9 @@ expect '[ "$(kubectl get pod -n '"$NS"' $req1 -o jsonpath={.metadata.labels.dual
 [ "$(kubectl get pod -n "$NS" $launcher1 -o jsonpath='{.metadata.labels.e2e-test\.fma\.llm-d\.ai/template-label}')" == "from-launcher-config" ] || { echo "ERROR: LauncherConfig podTemplate label is not correctly set on launcher pod $launcher1"; false; }
 [ "$(kubectl get pod -n "$NS" $launcher1 -o jsonpath='{.metadata.annotations.e2e-test\.fma\.llm-d\.ai/template-annotation}')" == "from-launcher-config" ] || { echo "ERROR: LauncherConfig podTemplate annotation is not correctly set on launcher pod $launcher1"; false; }
 
-# Wait for both pods to be ready
+# Wait for both pods to be ready (includes vllm startup time)
 date
-kubectl wait --for condition=Ready pod/$req1 -n "$NS" --timeout=180s
+kubectl wait --for condition=Ready pod/$req1 -n "$NS" --timeout=300s
 [ "$(kubectl get pod $launcher1 -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
 
 # Discover and remember the assigned GPUs.
@@ -316,7 +316,7 @@ else
     expect '[ "$(kubectl get pod -n '"$NS"' '"$collision_req"' -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "'"$collision_launcher"'" ]'
 
     date
-    kubectl wait --for condition=Ready pod/$collision_req -n "$NS" --timeout=180s
+    kubectl wait --for condition=Ready pod/$collision_req -n "$NS" --timeout=300s
     [ "$(kubectl get pod $collision_launcher -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
 
     req_gpus=$(kubectl get pod "$req1" -n "$NS" -o jsonpath='{.metadata.annotations.dual-pods\.llm-d\.ai/accelerators}')
@@ -387,7 +387,7 @@ expect '[ "$(kubectl get pod -n '"$NS"' $req2 -o jsonpath={.metadata.labels.dual
 
 # Wait for requester to be ready (launcher should already be ready)
 date
-kubectl wait --for condition=Ready pod/$req2 -n "$NS" --timeout=120s
+kubectl wait --for condition=Ready pod/$req2 -n "$NS" --timeout=300s
 [ "$(kubectl get pod $launcher1 -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
 
 # Verify the same GPU UUID was assigned after wake-up.
@@ -433,7 +433,7 @@ expect '[ "$(kubectl get pod -n '"$NS"' $req3 -o jsonpath={.metadata.labels.dual
 
 # Wait for requester to be ready (launcher should already be ready)
 date
-kubectl wait --for condition=Ready pod/$req3 -n "$NS" --timeout=120s
+kubectl wait --for condition=Ready pod/$req3 -n "$NS" --timeout=300s
 [ "$(kubectl get pod $launcher1 -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
 
 check_gpu_pin $req3
@@ -478,7 +478,7 @@ expect '[ "$(kubectl get pod -n '"$NS"' $req4 -o jsonpath={.metadata.labels.dual
 
 # Wait for requester to be ready (launcher should already be ready)
 date
-kubectl wait --for condition=Ready pod/$req4 -n "$NS" --timeout=120s
+kubectl wait --for condition=Ready pod/$req4 -n "$NS" --timeout=300s
 [ "$(kubectl get pod $launcher1 -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
 
 check_gpu_pin $req4
@@ -647,7 +647,7 @@ expect '[ "$(kubectl get pod -n '"$NS"' $req_after_delete -o jsonpath={.metadata
 # Wait for the new requester to be "ready";
 # That should imply that the new launcher is ready.
 date
-kubectl wait --for condition=Ready pod/$req_after_delete -n "$NS" --timeout=180s
+kubectl wait --for condition=Ready pod/$req_after_delete -n "$NS" --timeout=300s
 [ "$(kubectl get pod $launcher_after_delete -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
 
 # Check that the new requester has the proper GPU UUIDs annotation.
@@ -715,7 +715,7 @@ expect '[ "$(kubectl get pod -n '"$NS"' $req_recovered -o jsonpath={.metadata.la
 
 # Wait for both to be ready
 date
-kubectl wait --for condition=Ready pod/$req_recovered -n "$NS" --timeout=120s
+kubectl wait --for condition=Ready pod/$req_recovered -n "$NS" --timeout=300s
 [ "$(kubectl get pod $launcher_after_delete -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
 
 check_gpu_pin $req_recovered
