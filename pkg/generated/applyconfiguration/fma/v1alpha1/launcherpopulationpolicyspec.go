@@ -22,7 +22,7 @@ package v1alpha1
 type LauncherPopulationPolicySpecApplyConfiguration struct {
 	EnhancedNodeSelector *EnhancedNodeSelectorApplyConfiguration `json:"enhancedNodeSelector,omitempty"`
 	CountForLauncher     []CountForLauncherApplyConfiguration    `json:"countForLauncher,omitempty"`
-	NodeSleepingBudget   *NodeSleepingBudgetApplyConfiguration   `json:"nodeSleepingBudget,omitempty"`
+	NodeInstanceBudget   *NodeInstanceBudgetApplyConfiguration   `json:"nodeInstanceBudget,omitempty"`
 }
 
 // LauncherPopulationPolicySpecApplyConfiguration constructs a declarative configuration of the LauncherPopulationPolicySpec type for use with
@@ -52,10 +52,10 @@ func (b *LauncherPopulationPolicySpecApplyConfiguration) WithCountForLauncher(va
 	return b
 }
 
-// WithNodeSleepingBudget sets the NodeSleepingBudget field in the declarative configuration to the given value
+// WithNodeInstanceBudget sets the NodeInstanceBudget field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
-// If called multiple times, the NodeSleepingBudget field is set to the value of the last call.
-func (b *LauncherPopulationPolicySpecApplyConfiguration) WithNodeSleepingBudget(value *NodeSleepingBudgetApplyConfiguration) *LauncherPopulationPolicySpecApplyConfiguration {
-	b.NodeSleepingBudget = value
+// If called multiple times, the NodeInstanceBudget field is set to the value of the last call.
+func (b *LauncherPopulationPolicySpecApplyConfiguration) WithNodeInstanceBudget(value *NodeInstanceBudgetApplyConfiguration) *LauncherPopulationPolicySpecApplyConfiguration {
+	b.NodeInstanceBudget = value
 	return b
 }

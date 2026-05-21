@@ -81,12 +81,16 @@ type LauncherPopulationPolicySpec struct {
 	// +required
 	CountForLauncher []CountForLauncher `json:"countForLauncher"`
 
-	// NodeSleepingBudget defines the resource budget for sleeping inference
-	// engine instances across all launcher pods on a node matched by this policy.
+	// NodeInstanceBudget defines the budget for inference engine instances
+	// across all launcher pods on a node matched by this policy.
+	// This limits total instances regardless of their state (sleeping or awake),
+	// because an awake instance's CPU memory footprint is the same as when it
+	// was sleeping (model tensors remain resident in CPU memory after wake-up).
 	// When multiple policies match the same node, the most restrictive budget
-	// (smallest MaxInstances and MaxMemory) applies.
+	// (smallest MaxInstances) applies.
+	// The zero value means no budget constraint (unlimited).
 	// +optional
-	NodeSleepingBudget *NodeSleepingBudget `json:"nodeSleepingBudget,omitempty"`
+	NodeInstanceBudget NodeInstanceBudget `json:"nodeInstanceBudget,omitempty"`
 }
 
 // EnhancedNodeSelector defines node selector with label selector and resource requirements.
@@ -127,18 +131,16 @@ type CountForLauncher struct {
 	LauncherCount int32 `json:"launcherCount"`
 }
 
-// NodeSleepingBudget defines the resource budget for sleeping inference
-// engine instances across all launcher pods on a node.
-type NodeSleepingBudget struct {
-	// MaxInstances limits the total number of sleeping instances across
+// NodeInstanceBudget defines the budget for inference engine instances
+// across all launcher pods on a node. It limits total instances regardless
+// of their state (sleeping or awake), because an awake instance's CPU memory
+// footprint is the same as when it was sleeping (model tensors remain
+// resident in CPU memory after wake-up).
+type NodeInstanceBudget struct {
+	// MaxInstances limits the total number of inference engine instances across
 	// all launcher pods on the node. Zero means unlimited.
 	// +optional
 	MaxInstances int32 `json:"maxInstances,omitempty"`
-
-	// MaxMemory limits the total accelerator memory used by sleeping
-	// instances across all launcher pods on the node. Zero means unlimited.
-	// +optional
-	MaxMemory *resource.Quantity `json:"maxMemory,omitempty"`
 }
 
 type LauncherPopulationPolicyStatus struct {
