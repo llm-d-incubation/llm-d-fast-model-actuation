@@ -288,6 +288,13 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
 
+      - name: Characterize host
+        run: |
+          hostname
+          df -h
+          pwd
+          df -h /var/lib
+
       - name: Build and push images
         id: build
         env:
@@ -326,6 +333,11 @@ jobs:
           echo "requester_image=${CONTAINER_IMG_REG}/requester:${IMAGE_TAG}" >> $GITHUB_OUTPUT
           echo "launcher_image=${CONTAINER_IMG_REG}/launcher:${IMAGE_TAG}" >> $GITHUB_OUTPUT
           echo "All images built and pushed"
+
+      - name: Characterize filesystem space at end
+        if: always()
+        run: |
+          df -h
 
   # Run e2e tests on OpenShift self-hosted runner
   e2e-openshift:
@@ -513,6 +525,14 @@ jobs:
           MKOBJS_SCRIPT: ./test/e2e/mkobjs-openshift.sh
           POLL_LIMIT_SECS: "720"
         run: ./test/e2e/test-cases.sh
+
+      - name: Dump Role objects
+        if: always()
+        run: kubectl get -n "$FMA_NAMESPACE" roles.rbac.authorization.k8s.io -o yaml
+
+      - name: Dump RoleBinding objects
+        if: always()
+        run: kubectl get -n "$FMA_NAMESPACE" rolebindings.rbac.authorization.k8s.io -o yaml
 
       - name: Dump GPU allocation per node
         if: always()
