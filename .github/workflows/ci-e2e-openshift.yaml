@@ -288,6 +288,13 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
 
+      - name: Characterize host
+        run: |
+          hostname
+          df -h
+          pwd
+          df -h /var/lib
+
       - name: Build and push images
         id: build
         env:
@@ -326,6 +333,11 @@ jobs:
           echo "requester_image=${CONTAINER_IMG_REG}/requester:${IMAGE_TAG}" >> $GITHUB_OUTPUT
           echo "launcher_image=${CONTAINER_IMG_REG}/launcher:${IMAGE_TAG}" >> $GITHUB_OUTPUT
           echo "All images built and pushed"
+
+      - name: Characterize filesystem space at end
+        if: always()
+        run: |
+          df -h
 
   # Run e2e tests on OpenShift self-hosted runner
   e2e-openshift:
@@ -454,8 +466,39 @@ jobs:
             done
           fi
 
-          echo "Creating namespace $FMA_NAMESPACE..."
-          kubectl create namespace "$FMA_NAMESPACE"
+          # Namespace is kept after the run ends so shipped logs remain
+          # queryable via Loki. It carries an expires-at annotation (14 days,
+          # matching LokiStack retention); a scheduled sweeper workflow
+          # (fma-e2e-namespace-sweep.yaml) deletes namespaces past that date.
+          EXPIRES_AT=$(date -u -d '+14 days' +%Y-%m-%d 2>/dev/null \
+            || date -u -v+14d +%Y-%m-%d)
+          echo "Creating namespace $FMA_NAMESPACE (expires $EXPIRES_AT)..."
+          kubectl apply -f - <<EOF
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: ${FMA_NAMESPACE}
+            labels:
+              fma-e2e.llm-d.ai/sweep: "true"
+            annotations:
+              fma-e2e.llm-d.ai/expires-at: "${EXPIRES_AT}"
+              fma-e2e.llm-d.ai/run-id: "${{ github.run_id }}"
+          EOF
+
+      - name: Grant read access on namespace to all authenticated users
+        run: |
+          # Two namespace-scoped RoleBindings make both the Kubernetes API
+          # objects and the shipped Loki logs readable by any authenticated
+          # user. Both bindings die with the namespace, which is fine: the
+          # namespace itself is kept around until the sweeper deletes it.
+          kubectl create rolebinding fma-e2e-public-view \
+            --namespace "$FMA_NAMESPACE" \
+            --clusterrole=view \
+            --group=system:authenticated
+          kubectl create rolebinding fma-e2e-loki-view \
+            --namespace "$FMA_NAMESPACE" \
+            --clusterrole=cluster-logging-application-view \
+            --group=system:authenticated
 
       - name: Deploy FMA
         env:
@@ -480,7 +523,16 @@ jobs:
       - name: Run E2E tests
         env:
           MKOBJS_SCRIPT: ./test/e2e/mkobjs-openshift.sh
+          POLL_LIMIT_SECS: "720"
         run: ./test/e2e/test-cases.sh
+
+      - name: Dump Role objects
+        if: always()
+        run: kubectl get -n "$FMA_NAMESPACE" roles.rbac.authorization.k8s.io -o yaml
+
+      - name: Dump RoleBinding objects
+        if: always()
+        run: kubectl get -n "$FMA_NAMESPACE" rolebindings.rbac.authorization.k8s.io -o yaml
 
       - name: Dump GPU allocation per node
         if: always()
@@ -592,24 +644,27 @@ jobs:
           done
 
           # Remove dual-pods.llm-d.ai/* finalizers from all pods so namespace deletion is not blocked
-          echo "  Removing dual-pods finalizers from pods in $FMA_NAMESPACE..."
+          echo "  Removing remaining pods in $FMA_NAMESPACE..."
           for pod in $(kubectl get pods -n "$FMA_NAMESPACE" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
             all_finalizers=$(kubectl get pod "$pod" -n "$FMA_NAMESPACE" \
               -o jsonpath='{range .metadata.finalizers[*]}{@}{"\n"}{end}' 2>/dev/null || true)
-            if ! echo "$all_finalizers" | grep -q '^dual-pods\.llm-d\.ai/'; then
-              continue
+            if echo "$all_finalizers" | grep -q '^dual-pods\.llm-d\.ai/'; then
+              echo "    Patching pod $pod to remove dual-pods finalizers"
+              keep_entries=$(echo "$all_finalizers" \
+                | grep -v '^dual-pods\.llm-d\.ai/' \
+                | awk 'NR>1{printf ","} {printf "\"%s\"", $0}')
+              kubectl patch pod "$pod" -n "$FMA_NAMESPACE" --type=merge \
+                -p="{\"metadata\":{\"finalizers\":[${keep_entries}]}}" 2>/dev/null || true
             fi
-            echo "    Patching pod $pod to remove dual-pods finalizers"
-            keep_entries=$(echo "$all_finalizers" \
-              | grep -v '^dual-pods\.llm-d\.ai/' \
-              | awk 'NR>1{printf ","} {printf "\"%s\"", $0}')
-            kubectl patch pod "$pod" -n "$FMA_NAMESPACE" --type=merge \
-              -p="{\"metadata\":{\"finalizers\":[${keep_entries}]}}" 2>/dev/null || true
+            kubectl delete -n "$FMA_NAMESPACE" pod "$pod" --ignore-not-found
           done
 
-          # Delete namespace
-          kubectl delete namespace "$FMA_NAMESPACE" \
-            --ignore-not-found --timeout=180s || true
+          # The namespace itself is intentionally NOT deleted here; it
+          # is kept so shipped logs remain queryable via Loki. The scheduled
+          # sweeper workflow (fma-e2e-namespace-sweep.yaml) deletes it once
+          # its expires-at annotation is in the past. Re-running this job
+          # for the same PR will delete and recreate the namespace via the
+          # "Clean up resources for this PR" step at the top.
 
           # Delete cluster-scoped stuff for reading Node objects
           kubectl delete clusterrole        "${FMA_CHART_INSTANCE_NAME}-node-view" --ignore-not-found || true

@@ -121,7 +121,7 @@ spec:
       annotations:
         e2e-test.fma.llm-d.ai/template-annotation: from-launcher-config
     spec:
-      serviceAccount: testlauncher
+      serviceAccountName: testlauncher
       containers:
         - name: inference-server
           image: $launcher_img
