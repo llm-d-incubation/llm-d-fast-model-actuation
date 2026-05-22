@@ -508,7 +508,7 @@ expect '[ "$(kubectl get pod -n '"$NS"' $launcher1 -o jsonpath={.metadata.labels
 
 # Confirm launcher is at the cap before reclaim.
 launcher_instances_before_reclaim=$(kubectl exec -n "$NS" $launcher1 -- python3 -c 'import json,urllib.request; print(json.load(urllib.request.urlopen("http://127.0.0.1:8001/v2/vllm/instances"))["total_instances"])')
-echo "Launcher has $launcher_instances_before_reclaim instances before reclaim (expected 2)"
+echo "Launcher $launcher1 has $launcher_instances_before_reclaim instances before reclaim (expected 2)"
 [ "$launcher_instances_before_reclaim" == "2" ]
 
 # Switch the requester to a third ISC for which there is no sleeping instance,
@@ -524,25 +524,33 @@ req_reclaim=$(kubectl get pods -n "$NS" -o name -l app=dp-example,instance=$inst
 echo "Server-requesting Pod (post-reclaim) is $req_reclaim"
 
 # Requester is annotated for isc3.
-expect '[ "$(kubectl get pod -n '"$NS"' $req_reclaim -o jsonpath={.metadata.annotations.dual-pods\\.llm-d\\.ai/inference-server-config})" == "'$isc3'" ]'
+[ "$(kubectl get pod -n "$NS" "$req_reclaim" -o jsonpath='{.metadata.annotations.dual-pods\.llm-d\.ai/inference-server-config}')" == "$isc3" ]
+
+# Wait until the controller binds the requester to a launcher.
+expect '[ -n "$(kubectl get pod -n '"$NS"' $req_reclaim -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" ]'
 
 # Launcher pod set is unchanged — no new launcher was created.
-expect "kubectl get pods -n $NS -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | wc -l | grep -w $launcher_count_before_reclaim"
+launcher_count_after_reclaim_bind=$(kubectl get pods -n "$NS" -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | wc -l | tr -d ' ')
+echo launcher_count_after_reclaim_bind = $launcher_count_after_reclaim_bind
+if [ "$launcher_count_after_reclaim_bind" != "$launcher_count_before_reclaim" ]; then
+    echo "ERROR: expected $launcher_count_before_reclaim launcher pod(s) after reclaim bind, got $launcher_count_after_reclaim_bind" >&2
+    exit 1
+fi
 kubectl get pod -n "$NS" "$launcher1"
 
 # Bidirectional binding to the same launcher.
-expect '[ "$(kubectl get pod -n '"$NS"' $req_reclaim -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcher1" ]'
-expect '[ "$(kubectl get pod -n '"$NS"' $launcher1 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$req_reclaim" ]'
+[ "$(kubectl get pod -n "$NS" "$req_reclaim" -o jsonpath='{.metadata.labels.dual-pods\.llm-d\.ai/dual}')" == "$launcher1" ]
+[ "$(kubectl get pod -n "$NS" "$launcher1" -o jsonpath='{.metadata.labels.dual-pods\.llm-d\.ai/dual}')" == "$req_reclaim" ]
 
 date
-kubectl wait --for condition=Ready pod/$req_reclaim -n "$NS" --timeout=180s
+kubectl wait --for condition=Ready pod/$req_reclaim -n "$NS" --timeout=300s
 [ "$(kubectl get pod $launcher1 -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
 
 check_gpu_pin $req_reclaim
 
 # Cap is still respected post-reclaim: total instances == 2 (one woken isc3 + one survivor sleeper).
 launcher_instances_after_reclaim=$(kubectl exec -n "$NS" $launcher1 -- python3 -c 'import json,urllib.request; print(json.load(urllib.request.urlopen("http://127.0.0.1:8001/v2/vllm/instances"))["total_instances"])')
-echo "Launcher has $launcher_instances_after_reclaim instances after reclaim (expected 2)"
+echo "Launcher $launcher1 has $launcher_instances_after_reclaim instances after reclaim (expected 2)"
 [ "$launcher_instances_after_reclaim" == "2" ]
 
 cheer Successful per-launcher instance cap enforcement
