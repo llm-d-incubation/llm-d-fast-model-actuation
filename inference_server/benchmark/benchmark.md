@@ -57,7 +57,7 @@ needs further evaluation before they are added to the benchmarking harness.
 | **T_launcher_schedule** | Launcher pod `creationTimestamp` to `PodScheduled` condition `lastTransitionTime` | Kube pod status |
 | **T_launcher_startup** | Launcher pod `PodScheduled` to `Ready` condition `lastTransitionTime` | Kube pod status |
 | **T_dpc_react** | Launcher pod `Ready` to DPC issuing `CreateNamedInstance`. Applies to cold start (with launcher) only; it does not include later DPC actions (e.g., updating launcher pod labels/annotations), which occur during instance creation and are captured by T_instance_ready. | DPC logs (not yet observable; [#495](https://github.com/llm-d-incubation/llm-d-fast-model-actuation/issues/495) tracks adding a pre-`CreateNamedInstance` log statement) |
-| **T_instance_ready** | `CreateNamedInstance` call to DPC successfully relaying readiness to the requester pod (DPC V5 log: "Successfully relayed the readiness") | DPC logs + Kube pod status |
+| **T_instance_ready** | DPC issuing the `CreateNamedInstance` HTTP request to the launcher ([#495](https://github.com/llm-d-incubation/llm-d-fast-model-actuation/issues/495) tracks adding a pre-call log) to DPC successfully relaying readiness to the requester pod (DPC V5 log: "Successfully relayed the readiness"). Applies to both cold start (with launcher) and warm start paths. | DPC logs + Kube pod status |
 
 Relationships:
 - T_cold_launcher ≈ T_launcher_schedule + T_launcher_startup + T_dpc_react + T_instance_ready
