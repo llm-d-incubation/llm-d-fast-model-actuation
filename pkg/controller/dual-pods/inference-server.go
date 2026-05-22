@@ -661,6 +661,15 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	return ctl.ensureReqStatus(ctx, requestingPod, serverDat)
 }
 
+type launcherReclaimPlan struct {
+	launcherPod *corev1.Pod
+	launcherDat *launcherData
+	victims     []string
+	lruID       string
+	lruKnown    bool
+	lruTime     time.Time
+}
+
 // selectOrReclaimLauncherPod evaluates matching launcher Pods and selects one
 // for fulfilling a request. Priority 1 is a launcher with a sleeping vLLM
 // instance matching targetInstanceID. Priority 2 is a launcher with capacity
@@ -681,12 +690,7 @@ func (ctl *controller) selectOrReclaimLauncherPod(
 
 	var candidateWithCapacity *corev1.Pod
 	var somePodsNotReady bool
-	type reclaimPlan struct {
-		launcherPod *corev1.Pod
-		launcherDat *launcherData
-		victims     []string
-	}
-	var bestReclaimPlan *reclaimPlan
+	var bestReclaimPlan *launcherReclaimPlan
 
 	for _, podAny := range launcherPodAnys {
 		launcherPod := podAny.(*corev1.Pod)
@@ -716,8 +720,8 @@ func (ctl *controller) selectOrReclaimLauncherPod(
 
 		launcherDat := ctl.getLauncherData(nodeDat, launcherPod.Name)
 		hasSleepingInstance := false
-		portConflictID := ""
-		candidateVictims := make([]string, 0, len(insts.Instances))
+		portConflictVictims := make([]string, 0, 1)
+		otherVictims := make([]string, 0, len(insts.Instances))
 		hasUnusablePort := false
 		for _, inst := range insts.Instances {
 			instPort, err := getVLLMInstancePort(inst)
@@ -737,9 +741,10 @@ func (ctl *controller) selectOrReclaimLauncherPod(
 				}
 				continue
 			}
-			candidateVictims = append(candidateVictims, inst.InstanceID)
 			if instPort == desiredPort {
-				portConflictID = inst.InstanceID
+				portConflictVictims = append(portConflictVictims, inst.InstanceID)
+			} else {
+				otherVictims = append(otherVictims, inst.InstanceID)
 			}
 		}
 		if hasUnusablePort {
@@ -756,7 +761,7 @@ func (ctl *controller) selectOrReclaimLauncherPod(
 		}
 
 		// Check if this launcher has capacity for a new instance
-		if portConflictID == "" && insts.TotalInstances <= maxOthers {
+		if len(portConflictVictims) == 0 && insts.TotalInstances <= maxOthers {
 			if candidateWithCapacity == nil {
 				// Priority 2: Has capacity for new instance
 				logger.V(5).Info("Found launcher with capacity for new instance",
@@ -769,23 +774,30 @@ func (ctl *controller) selectOrReclaimLauncherPod(
 		}
 
 		toDelete := max(insts.TotalInstances-maxOthers, 1)
-		if portConflictID != "" {
-			// Deleting a different vLLM instance would leave the desired port
-			// unavailable, so only the conflicting vLLM instance is eligible.
-			candidateVictims = []string{portConflictID}
+		victims := slices.Clone(portConflictVictims)
+		if len(victims) > 0 {
+			// The conflicting vLLM instance must be deleted; deleting only
+			// other vLLM instances would leave the desired port unavailable.
+			toPick := toDelete - len(victims)
+			victims = append(victims, pickInstanceVictims(otherVictims, launcherDat.Instances, toPick)...)
+		} else {
+			victims = pickInstanceVictims(otherVictims, launcherDat.Instances, toDelete)
 		}
-		victims := pickInstanceVictims(candidateVictims, launcherDat.Instances, toDelete)
 		if len(victims) < toDelete {
 			logger.V(5).Info("Not enough deletion candidates to reclaim launcher capacity",
 				"name", launcherPod.Name, "need", toDelete, "have", len(victims))
 			continue
 		}
-		plan := &reclaimPlan{
+		lruID, lruKnown, lruTime := reclaimPlanLRU(victims, launcherDat.Instances)
+		plan := &launcherReclaimPlan{
 			launcherPod: launcherPod,
 			launcherDat: launcherDat,
 			victims:     victims,
+			lruID:       lruID,
+			lruKnown:    lruKnown,
+			lruTime:     lruTime,
 		}
-		if bestReclaimPlan == nil || compareInstanceLastUsed(victims[0], launcherDat.Instances, bestReclaimPlan.victims[0], bestReclaimPlan.launcherDat.Instances) < 0 {
+		if bestReclaimPlan == nil || compareReclaimPlanLRU(plan, bestReclaimPlan) < 0 {
 			bestReclaimPlan = plan
 		}
 	}
@@ -839,7 +851,7 @@ func pickInstanceVictims(
 	}
 	candidates = slices.Clone(candidates)
 	slices.SortFunc(candidates, func(a, b string) int {
-		return compareInstanceLastUsed(a, knownLastUsed, b, knownLastUsed)
+		return compareInstanceLastUsed(a, b, knownLastUsed)
 	})
 	if limit > len(candidates) {
 		limit = len(candidates)
@@ -847,20 +859,45 @@ func pickInstanceVictims(
 	return candidates[:limit]
 }
 
-func compareInstanceLastUsed(a string, aLastUsed map[string]time.Time, b string, bLastUsed map[string]time.Time) int {
-	ta, oka := aLastUsed[a]
-	tb, okb := bLastUsed[b]
+func reclaimPlanLRU(victims []string, knownLastUsed map[string]time.Time) (string, bool, time.Time) {
+	if len(victims) == 0 {
+		return "", false, time.Time{}
+	}
+	lruID := victims[0]
+	lruTime, lruKnown := knownLastUsed[lruID]
+	for _, victim := range victims[1:] {
+		victimTime, victimKnown := knownLastUsed[victim]
+		if compareLastUsed(victim, victimKnown, victimTime, lruID, lruKnown, lruTime) < 0 {
+			lruID = victim
+			lruKnown = victimKnown
+			lruTime = victimTime
+		}
+	}
+	return lruID, lruKnown, lruTime
+}
+
+func compareReclaimPlanLRU(a, b *launcherReclaimPlan) int {
+	return compareLastUsed(a.lruID, a.lruKnown, a.lruTime, b.lruID, b.lruKnown, b.lruTime)
+}
+
+func compareInstanceLastUsed(a, b string, knownLastUsed map[string]time.Time) int {
+	ta, oka := knownLastUsed[a]
+	tb, okb := knownLastUsed[b]
+	return compareLastUsed(a, oka, ta, b, okb, tb)
+}
+
+func compareLastUsed(a string, aKnown bool, aTime time.Time, b string, bKnown bool, bTime time.Time) int {
 	switch {
-	case oka && okb:
-		if ta.Before(tb) {
+	case aKnown && bKnown:
+		if aTime.Before(bTime) {
 			return -1
 		}
-		if tb.Before(ta) {
+		if bTime.Before(aTime) {
 			return 1
 		}
-	case oka && !okb:
+	case aKnown && !bKnown:
 		return -1
-	case !oka && okb:
+	case !aKnown && bKnown:
 		return 1
 	}
 	return strings.Compare(a, b)
