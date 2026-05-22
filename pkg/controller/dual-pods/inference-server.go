@@ -675,9 +675,11 @@ type launcherReclaimPlan struct {
 // instance matching targetInstanceID. Priority 2 is a launcher with capacity
 // for a new vLLM instance. Priority 3 is reclaiming capacity by deleting the
 // least-recently-used eligible vLLM instance across all scanned launcher Pods.
-// Returns (nil, false, false, nil) if no suitable launcher is found and all
-// launcher Pods are ready or failed. Returns (nil, false, true, nil) when
-// there are launcher Pods not ready yet and the caller should retry later.
+// Returns (selectedPod, hasSleepingInstance, retry, error).
+// hasSleepingInstance is true when selectedPod already hosts the target vLLM
+// instance and only needs binding/waking. retry tells the caller to requeue
+// and try again later. Returns (nil, false, false, nil) if no suitable
+// launcher is found and all launcher Pods are ready or failed.
 func (ctl *controller) selectOrReclaimLauncherPod(
 	ctx context.Context,
 	launcherPodAnys []interface{},
