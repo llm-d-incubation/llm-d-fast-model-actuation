@@ -25,10 +25,11 @@ import (
 	"maps"
 	"regexp"
 	"slices"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	v1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
@@ -156,9 +157,79 @@ func IsPodReady(pod *corev1.Pod) bool {
 	return false
 }
 
-// BuildLauncherPodFromTemplate creates a launcher pod from a LauncherConfig object's
-// Spec.PodTemplate and assigns the built launcher pod to a node
-func BuildLauncherPodFromTemplate(template v1alpha1.EmbeddedPodTemplateSpec, ns, nodeName, launcherConfigName string) (*corev1.Pod, error) {
+// ComputeLauncherTemplateHash returns a deterministic, node-independent hash of the launcher Pod template.
+func ComputeLauncherTemplateHash(template v1alpha1.EmbeddedPodTemplateSpec) (string, error) {
+	canonical := canonicalizeTemplateForHash(template)
+	bytes, err := json.Marshal(canonical)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal template for hashing: %w", err)
+	}
+	sum := sha256.Sum256(bytes)
+	return base64.RawStdEncoding.EncodeToString(sum[:]), nil
+}
+
+// canonicalizeTemplateForHash returns a deep-copied template with order-independent slices sorted, suitable for stable serialization.
+func canonicalizeTemplateForHash(template v1alpha1.EmbeddedPodTemplateSpec) v1alpha1.EmbeddedPodTemplateSpec {
+	out := v1alpha1.EmbeddedPodTemplateSpec{
+		Metadata: *template.Metadata.DeepCopy(),
+		Spec:     *DeIndividualize(template.Spec.DeepCopy()),
+	}
+	for i := range out.Spec.Containers {
+		canonicalizeContainer(&out.Spec.Containers[i])
+	}
+	for i := range out.Spec.InitContainers {
+		canonicalizeContainer(&out.Spec.InitContainers[i])
+	}
+	slices.SortStableFunc(out.Spec.Volumes, func(a, b corev1.Volume) int {
+		return strings.Compare(a.Name, b.Name)
+	})
+	slices.SortStableFunc(out.Spec.Tolerations, func(a, b corev1.Toleration) int {
+		if c := strings.Compare(a.Key, b.Key); c != 0 {
+			return c
+		}
+		if c := strings.Compare(string(a.Operator), string(b.Operator)); c != 0 {
+			return c
+		}
+		if c := strings.Compare(a.Value, b.Value); c != 0 {
+			return c
+		}
+		return strings.Compare(string(a.Effect), string(b.Effect))
+	})
+	slices.SortStableFunc(out.Spec.ImagePullSecrets, func(a, b corev1.LocalObjectReference) int {
+		return strings.Compare(a.Name, b.Name)
+	})
+	return out
+}
+
+func canonicalizeContainer(c *corev1.Container) {
+	slices.SortStableFunc(c.Env, func(a, b corev1.EnvVar) int {
+		return strings.Compare(a.Name, b.Name)
+	})
+	slices.SortStableFunc(c.VolumeMounts, func(a, b corev1.VolumeMount) int {
+		if cmp := strings.Compare(a.Name, b.Name); cmp != 0 {
+			return cmp
+		}
+		return strings.Compare(a.MountPath, b.MountPath)
+	})
+	slices.SortStableFunc(c.Ports, func(a, b corev1.ContainerPort) int {
+		if cmp := strings.Compare(a.Name, b.Name); cmp != 0 {
+			return cmp
+		}
+		if a.ContainerPort != b.ContainerPort {
+			if a.ContainerPort < b.ContainerPort {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(string(a.Protocol), string(b.Protocol))
+	})
+	slices.SortStableFunc(c.EnvFrom, func(a, b corev1.EnvFromSource) int {
+		return strings.Compare(a.Prefix, b.Prefix)
+	})
+}
+
+// BuildLauncherPodFromTemplate builds a launcher Pod for nodeName from the given template; templateHash (typically cached per LC.ResourceVersion) is recorded under LauncherTemplateHashAnnotationKey for spec-drift detection, alongside the legacy node-aware LauncherConfigHashAnnotationKey used by the dual-pods indexer.
+func BuildLauncherPodFromTemplate(template v1alpha1.EmbeddedPodTemplateSpec, ns, nodeName, launcherConfigName, templateHash string) (*corev1.Pod, error) {
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Labels:      maps.Clone(template.Metadata.Labels),
@@ -191,7 +262,10 @@ func BuildLauncherPodFromTemplate(template v1alpha1.EmbeddedPodTemplateSpec, ns,
 	if pod.Annotations == nil {
 		pod.Annotations = make(map[string]string)
 	}
+	// Legacy node-aware hash for the dual-pods indexer.
 	pod.Annotations = MapSet(pod.Annotations, string(common.LauncherConfigHashAnnotationKey), nominalHash)
+	// Node-independent template fingerprint for spec-drift detection; empty value is recorded as-is.
+	pod.Annotations = MapSet(pod.Annotations, string(common.LauncherTemplateHashAnnotationKey), templateHash)
 
 	cIdx, err := GetInferenceServerContainerIndex(pod)
 	if err != nil {

@@ -32,6 +32,9 @@ const (
 	// corresponding LauncherConfig object's PodTemplate that the server-providing Pod uses.
 	LauncherConfigHashAnnotationKey = "dual-pods.llm-d.ai/launcher-config-hash"
 
+	// LauncherTemplateHashAnnotationKey is the node-independent template hash on a launcher Pod, used for spec-drift detection.
+	LauncherTemplateHashAnnotationKey = "dual-pods.llm-d.ai/launcher-populator-template-hash"
+
 	// LauncherServicePort is the port number on which the launcher exposes its HTTP service
 	// for the management of vLLM instances.
 	// This is a contract between the controllers and the launcher implementation.
