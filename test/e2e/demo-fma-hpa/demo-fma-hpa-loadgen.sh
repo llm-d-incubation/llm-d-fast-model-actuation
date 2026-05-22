@@ -58,7 +58,7 @@ kubectl delete pod "$POD_NAME" -n "$NAMESPACE" --ignore-not-found 2>/dev/null
 
 echo "Starting loadgen pod..."
 kubectl run "$POD_NAME" -n "$NAMESPACE" --rm -i --restart=Never \
-    --image=curlimages/curl:latest -- sh -c "
+    --image=curlimages/curl:8.12.1 -- sh -c "
 GW=\"${GW_URL}\"
 MODEL=\"${MODEL}\"
 WORKERS=${WORKERS}

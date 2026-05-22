@@ -90,7 +90,7 @@ if [ "$SKIP_NS_OPS" = "false" ]; then
     echo "--- Deleting launcher pods ---"
     kubectl delete pods -n "$NAMESPACE" -l app.kubernetes.io/component=launcher --ignore-not-found 2>/dev/null
     kubectl delete pods -n "$NAMESPACE" -l dual-pods.llm-d.ai/sleeping --ignore-not-found 2>/dev/null
-    kubectl delete pods -n "$NAMESPACE" -l fma.llm-d.ai/launcher-config --ignore-not-found 2>/dev/null
+    kubectl delete pods -n "$NAMESPACE" -l dual-pods.llm-d.ai/launcher-config-name --ignore-not-found 2>/dev/null
 
     # 7. FMA objects (CRs)
     echo "--- Deleting FMA objects ---"

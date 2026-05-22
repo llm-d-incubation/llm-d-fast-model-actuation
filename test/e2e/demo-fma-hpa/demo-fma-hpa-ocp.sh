@@ -40,7 +40,7 @@ HPA_MAX_REPLICAS="${HPA_MAX_REPLICAS:-4}"
 PROM_ADAPTER_NS="${PROM_ADAPTER_NS:-openshift-user-workload-monitoring}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
 step_num=0
 total_steps=8
@@ -643,6 +643,6 @@ echo "  Model:      $MODEL"
 echo "  HPA:        fma-hpa (max ${HPA_MAX_REPLICAS} replicas)"
 echo ""
 echo "  Next steps:"
-echo "    Terminal 2: ./test/e2e/demo-fma-hpa-monitor.sh"
-echo "    Terminal 3: ./test/e2e/demo-fma-hpa-loadgen.sh"
+echo "    Terminal 2: ./test/e2e/demo-fma-hpa/demo-fma-hpa-monitor.sh"
+echo "    Terminal 3: ./test/e2e/demo-fma-hpa/demo-fma-hpa-loadgen.sh"
 echo ""
