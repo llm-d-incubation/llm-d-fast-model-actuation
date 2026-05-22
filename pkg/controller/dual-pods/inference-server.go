@@ -609,35 +609,22 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		// then those with capacity for new instances.
 		// Note that multiple vLLM instances could exist in one launcher Pod, but at most one instance could be awake at a time.
 
-		launcherPod, hasSleepingInstance, someNotReady, err := ctl.selectBestLauncherPod(ctx, launcherPodAnys, desiredInstanceState.instanceID, desiredPort, effectiveMaxInstances(lc)-1, nodeDat)
+		launcherPod, hasSleepingInstance, retry, err := ctl.selectOrReclaimLauncherPod(ctx, launcherPodAnys, desiredInstanceState.instanceID, desiredPort, effectiveMaxInstances(lc)-1, nodeDat)
 		if err != nil {
 			return err, true
 		}
-		if someNotReady {
+		if retry {
 			logger.V(4).Info("Launcher Pods exist but some are not ready yet, will retry later")
 			return nil, true
 		}
-		if launcherPod == nil {
-			logger.V(5).Info("No suitable launcher Pod found with sleeping instance or necessary capacity, attempting to reclaim capacity")
-			reclaimed, retry, err := ctl.reclaimLauncherCapacity(ctx, launcherPodAnys, desiredInstanceState.instanceID, desiredPort, effectiveMaxInstances(lc)-1, nodeDat)
-			if err != nil {
-				return err, true
-			}
-			if retry {
-				return nil, true
-			}
-			if reclaimed != nil {
-				logger.V(4).Info("Reclaimed launcher capacity, binding to launcher Pod", "name", reclaimed.Name)
-				return ctl.bind(ctx, serverDat, requestingPod, reclaimed, desiredInstanceState, true)
-			}
-			// Fall through to create new launcher Pod
-		} else {
+		if launcherPod != nil {
 			// Bind first, then rely on informer notification to trigger re-reconciliation.
 			// The "bound provider" path will handle instance creation/waking.
 			// This ensures the invariant: vllm awake implies provider Pod is bound.
 			logger.V(5).Info("Selected launcher Pod, binding first", "name", launcherPod.Name, "hasSleepingInstance", hasSleepingInstance)
 			return ctl.bind(ctx, serverDat, requestingPod, launcherPod, desiredInstanceState, true)
 		}
+		// Fall through to create new launcher Pod.
 	}
 	// Remains: Zero matching launcher Pods, or the matching launcher Pod cannot host more instances to fulfill the request.
 	// Make a new launcher Pod.
@@ -674,18 +661,18 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	return ctl.ensureReqStatus(ctx, requestingPod, serverDat)
 }
 
-// selectBestLauncherPod evaluates all matching launcher Pods and selects the 'best' one for fulfilling a request.
-// Currently the definition of 'best' is radically simple:
-// Priority 1: Launcher with a sleeping instance matching iscHash (fastest - just wake up);
-// Priority 2: Launcher with capacity for a new instance (slower - need to create);
-// Otherwise, no launcher Pod is selected.
-// Returns (selectedPod, hasSleepingInstance, somePodsNotReady, error).
-// Returns (nil, false, false, nil) if no suitable launcher found and all pods are ready or failed.
-// Returns (nil, false, true, nil) if there are pods not ready yet - caller should retry later.
-func (ctl *controller) selectBestLauncherPod(
+// selectOrReclaimLauncherPod evaluates matching launcher Pods and selects one
+// for fulfilling a request. Priority 1 is a launcher with a sleeping vLLM
+// instance matching targetInstanceID. Priority 2 is a launcher with capacity
+// for a new vLLM instance. Priority 3 is reclaiming capacity by deleting the
+// least-recently-used eligible vLLM instance across all scanned launcher Pods.
+// Returns (nil, false, false, nil) if no suitable launcher is found and all
+// launcher Pods are ready or failed. Returns (nil, false, true, nil) when
+// there are launcher Pods not ready yet and the caller should retry later.
+func (ctl *controller) selectOrReclaimLauncherPod(
 	ctx context.Context,
 	launcherPodAnys []interface{},
-	iscHash string,
+	targetInstanceID string,
 	desiredPort int32,
 	maxOthers int,
 	nodeDat *nodeData,
@@ -694,6 +681,12 @@ func (ctl *controller) selectBestLauncherPod(
 
 	var candidateWithCapacity *corev1.Pod
 	var somePodsNotReady bool
+	type reclaimPlan struct {
+		launcherPod *corev1.Pod
+		launcherDat *launcherData
+		victims     []string
+	}
+	var bestReclaimPlan *reclaimPlan
 
 	for _, podAny := range launcherPodAnys {
 		launcherPod := podAny.(*corev1.Pod)
@@ -701,9 +694,8 @@ func (ctl *controller) selectBestLauncherPod(
 		if launcherPod.Status.Phase == corev1.PodFailed || launcherPod.DeletionTimestamp != nil {
 			continue
 		}
-		requesterParts := strings.Split(launcherPod.Annotations[requesterAnnotationKey], " ")
-		if len(requesterParts) == 2 {
-			logger.V(5).Info("Launcher Pod already bound to another requester, skipping", "name", launcherPod.Name, "boundRequester", requesterParts[1])
+		if requesterValue := launcherPod.Annotations[requesterAnnotationKey]; requesterValue != "" {
+			logger.V(5).Info("Launcher Pod already bound to another requester, skipping", "name", launcherPod.Name, "boundRequester", requesterValue)
 			continue
 		}
 
@@ -722,9 +714,11 @@ func (ctl *controller) selectBestLauncherPod(
 		}
 		insts := syncResult.instances
 
-		// Check if this launcher has a sleeping instance matching the iscHash
+		launcherDat := ctl.getLauncherData(nodeDat, launcherPod.Name)
 		hasSleepingInstance := false
-		hasPortConflict := false
+		portConflictID := ""
+		candidateVictims := make([]string, 0, len(insts.Instances))
+		hasUnusablePort := false
 		for _, inst := range insts.Instances {
 			instPort, err := getVLLMInstancePort(inst)
 			if err != nil {
@@ -734,211 +728,142 @@ func (ctl *controller) selectBestLauncherPod(
 					"annotations", inst.Annotations,
 					"options", inst.Options,
 					"err", err)
-				hasPortConflict = true
+				hasUnusablePort = true
 				break
 			}
-			if instPort == desiredPort && inst.InstanceID != iscHash {
-				logger.V(5).Info("Skipping launcher Pod because a different instance already uses the desired port",
-					"name", launcherPod.Name,
-					"instanceID", inst.InstanceID,
-					"port", desiredPort)
-				hasPortConflict = true
-				break
+			if inst.InstanceID == targetInstanceID {
+				if inst.Status != InstanceStatusStopped {
+					hasSleepingInstance = true
+				}
+				continue
 			}
-			if inst.InstanceID == iscHash && inst.Status != InstanceStatusStopped {
-				hasSleepingInstance = true
+			candidateVictims = append(candidateVictims, inst.InstanceID)
+			if instPort == desiredPort {
+				portConflictID = inst.InstanceID
 			}
 		}
-		if hasPortConflict {
+		if hasUnusablePort {
 			continue
 		}
 		if hasSleepingInstance {
 			// Priority 1: Found a sleeping instance
 			logger.V(5).Info("Found launcher with sleeping instance (fastest path)",
 				"name", launcherPod.Name,
-				"iscHash", iscHash,
+				"instanceID", targetInstanceID,
 				"totalInstances", insts.TotalInstances,
 				"runningInstances", insts.RunningInstances)
 			return launcherPod, true, false, nil
 		}
 
 		// Check if this launcher has capacity for a new instance
-		if insts.TotalInstances <= maxOthers && candidateWithCapacity == nil {
-			// Priority 2: Has capacity for new instance
-			logger.V(5).Info("Found launcher with capacity for new instance",
-				"name", launcherPod.Name,
-				"totalInstances", insts.TotalInstances)
-			candidateWithCapacity = launcherPod
-			// Don't return yet - keep looking for sleeping instances (higher priority)
-		}
-	}
-
-	// No sleeper but we found a launcher with capacity, use it
-	if candidateWithCapacity != nil {
-		logger.V(4).Info("Selected launcher with capacity (slower path)", "name", candidateWithCapacity.Name)
-		return candidateWithCapacity, false, false, nil
-	}
-
-	// Found sleeper nor capable ones, but there are pods not ready yet, signal caller to retry later
-	if somePodsNotReady {
-		logger.V(4).Info("Found launcher Pods not ready yet, will retry later")
-		return nil, false, true, nil
-	}
-
-	// No suitable launchers found
-	logger.V(4).Info("No suitable launcher Pod found with sleeping instance or necessary capacity")
-	return nil, false, false, nil
-}
-
-// reclaimLauncherCapacity frees a slot in some unbound launcher Pod by
-// deleting non-target instances, so a new instance for targetInstanceID can
-// be created without spawning a new launcher Pod. maxOthers is the cap on
-// instances other than the target — i.e. effectiveMaxInstances(lc) - 1.
-// desiredPort is the port the new instance will bind; launchers with a
-// non-target instance already using that port are skipped (mirrors
-// selectBestLauncherPod), since deleting that instance to free the port
-// is beyond reclaim's remit.
-// Returns the launcher Pod ready to bind, or (nil, true, _) to retry.
-func (ctl *controller) reclaimLauncherCapacity(
-	ctx context.Context,
-	launcherPodAnys []interface{},
-	targetInstanceID string,
-	desiredPort int32,
-	maxOthers int,
-	nodeDat *nodeData,
-) (*corev1.Pod, bool, error) {
-	logger := klog.FromContext(ctx)
-	var somePodsNotReady bool
-
-	for _, podAny := range launcherPodAnys {
-		launcherPod := podAny.(*corev1.Pod)
-
-		if launcherPod.Status.Phase == corev1.PodFailed || launcherPod.DeletionTimestamp != nil {
-			continue
-		}
-		// Skip launcher Pods already bound to another requester.
-		if launcherPod.Annotations[requesterAnnotationKey] != "" {
+		if portConflictID == "" && insts.TotalInstances <= maxOthers {
+			if candidateWithCapacity == nil {
+				// Priority 2: Has capacity for new instance
+				logger.V(5).Info("Found launcher with capacity for new instance",
+					"name", launcherPod.Name,
+					"totalInstances", insts.TotalInstances)
+				candidateWithCapacity = launcherPod
+			}
+			// Don't return yet - keep looking for sleeping instances (higher priority).
 			continue
 		}
 
-		syncResult, err, retry := ctl.syncLauncherInstances(ctx, nodeDat, launcherPod)
-		if err != nil || retry {
-			somePodsNotReady = true
-			continue
+		toDelete := max(insts.TotalInstances-maxOthers, 1)
+		if portConflictID != "" {
+			// Deleting a different vLLM instance would leave the desired port
+			// unavailable, so only the conflicting vLLM instance is eligible.
+			candidateVictims = []string{portConflictID}
 		}
-		insts := syncResult.instances
-
-		// Skip launchers where a non-target instance already uses desiredPort.
-		// Reclaim doesn't try to resolve port collisions; it would have to
-		// force-delete the conflicting instance, and selectBestLauncherPod's
-		// own port filter already declined this launcher for the same reason.
-		if hasPortConflict(insts.Instances, targetInstanceID, desiredPort) {
-			logger.V(5).Info("Skipping launcher Pod for reclaim because a non-target instance uses the desired port",
-				"name", launcherPod.Name, "desiredPort", desiredPort)
-			continue
-		}
-
-		// This sync may see capacity that selectBestLauncherPod's earlier
-		// sync did not (e.g. a stopped instance was cleaned up between
-		// the two). Skip the deletion and just hand the launcher back.
-		if insts.TotalInstances <= maxOthers {
-			return launcherPod, false, nil
-		}
-
-		toDelete := insts.TotalInstances - maxOthers
-		launcherDat := ctl.getLauncherData(nodeDat, launcherPod.Name)
-		victims := pickInstanceVictims(insts.Instances, launcherDat.Instances, targetInstanceID, toDelete)
+		victims := pickInstanceVictims(candidateVictims, launcherDat.Instances, toDelete)
 		if len(victims) < toDelete {
 			logger.V(5).Info("Not enough deletion candidates to reclaim launcher capacity",
 				"name", launcherPod.Name, "need", toDelete, "have", len(victims))
 			continue
 		}
+		plan := &reclaimPlan{
+			launcherPod: launcherPod,
+			launcherDat: launcherDat,
+			victims:     victims,
+		}
+		if bestReclaimPlan == nil || compareInstanceLastUsed(victims[0], launcherDat.Instances, bestReclaimPlan.victims[0], bestReclaimPlan.launcherDat.Instances) < 0 {
+			bestReclaimPlan = plan
+		}
+	}
 
-		launcherBaseURL := fmt.Sprintf("http://%s:%d", launcherPod.Status.PodIP, ctlrcommon.LauncherServicePort)
+	// No sleeper but we found a launcher with capacity, use it.
+	if candidateWithCapacity != nil {
+		logger.V(4).Info("Selected launcher with capacity (slower path)", "name", candidateWithCapacity.Name)
+		return candidateWithCapacity, false, false, nil
+	}
+
+	if bestReclaimPlan != nil {
+		launcherBaseURL := fmt.Sprintf("http://%s:%d", bestReclaimPlan.launcherPod.Status.PodIP, ctlrcommon.LauncherServicePort)
 		lClient, err := NewLauncherClient(launcherBaseURL)
 		if err != nil {
-			return nil, true, err
+			return nil, false, true, err
 		}
-		for _, victim := range victims {
+		for _, victim := range bestReclaimPlan.victims {
 			if _, err := lClient.DeleteInstance(ctx, victim); err != nil && !IsInstanceNotFoundError(err) {
-				return nil, true, fmt.Errorf("delete instance %q from launcher Pod %q: %w", victim, launcherPod.Name, err)
+				return nil, false, true, fmt.Errorf("delete instance %q from launcher Pod %q: %w", victim, bestReclaimPlan.launcherPod.Name, err)
 			}
-			delete(launcherDat.Instances, victim)
-			logger.V(4).Info("Deleted sleeping instance to reclaim launcher capacity",
-				"launcherPod", launcherPod.Name, "instanceID", victim, "maxOthers", maxOthers)
+			delete(bestReclaimPlan.launcherDat.Instances, victim)
+			logger.V(4).Info("Deleted vLLM instance to reclaim launcher capacity",
+				"launcherPod", bestReclaimPlan.launcherPod.Name, "instanceID", victim, "maxOthers", maxOthers)
 		}
-		return launcherPod, false, nil
+		return bestReclaimPlan.launcherPod, false, false, nil
 	}
 
+	// Found no sleeper or capable launcher, but there are launcher Pods not
+	// ready yet. Signal caller to retry later.
 	if somePodsNotReady {
-		return nil, true, nil
+		logger.V(4).Info("Found launcher Pods not ready yet, will retry later")
+		return nil, false, true, nil
 	}
-	return nil, false, nil
+
+	// No suitable launcher Pod found.
+	logger.V(4).Info("No suitable launcher Pod found with sleeping instance, capacity, or reclaimable capacity")
+	return nil, false, false, nil
 }
 
-// hasPortConflict reports whether any non-target instance in instances has
-// instPort == desiredPort. An instance whose port cannot be determined is
-// treated as a conflict to stay on the safe side — same conservative stance
-// as selectBestLauncherPod.
-func hasPortConflict(instances []InstanceState, targetInstanceID string, desiredPort int32) bool {
-	for _, inst := range instances {
-		if inst.InstanceID == targetInstanceID {
-			continue
-		}
-		instPort, err := getVLLMInstancePort(inst)
-		if err != nil {
-			return true
-		}
-		if instPort == desiredPort {
-			return true
-		}
-	}
-	return false
-}
-
-// pickInstanceVictims chooses up to limit instance IDs to delete, never
-// picking the target. Known-stale instances come first (oldest last-used);
-// unknown instances come last so freshly-created ones we have not observed
-// are not preferred for deletion.
+// pickInstanceVictims chooses up to limit instance IDs to delete. Known
+// candidates come first (oldest last-used); unknown candidates come last so
+// freshly-created vLLM instances we have not observed are not preferred for
+// deletion.
 func pickInstanceVictims(
-	instances []InstanceState,
+	candidates []string,
 	knownLastUsed map[string]time.Time,
-	targetInstanceID string,
 	limit int,
 ) []string {
 	if limit <= 0 {
 		return nil
 	}
-	candidates := make([]string, 0, len(instances))
-	for _, inst := range instances {
-		// inst.Status reports launcher process-liveness, not sleep/awake; reclaim runs only on unbound launchers, where no instance is awake.
-		if inst.InstanceID == targetInstanceID {
-			continue
-		}
-		candidates = append(candidates, inst.InstanceID)
-	}
+	candidates = slices.Clone(candidates)
 	slices.SortFunc(candidates, func(a, b string) int {
-		ta, oka := knownLastUsed[a]
-		tb, okb := knownLastUsed[b]
-		switch {
-		case oka && okb:
-			if ta.Before(tb) {
-				return -1
-			}
-			if tb.Before(ta) {
-				return 1
-			}
-		case oka && !okb:
-			return -1
-		case !oka && okb:
-			return 1
-		}
-		return strings.Compare(a, b)
+		return compareInstanceLastUsed(a, knownLastUsed, b, knownLastUsed)
 	})
 	if limit > len(candidates) {
 		limit = len(candidates)
 	}
 	return candidates[:limit]
+}
+
+func compareInstanceLastUsed(a string, aLastUsed map[string]time.Time, b string, bLastUsed map[string]time.Time) int {
+	ta, oka := aLastUsed[a]
+	tb, okb := bLastUsed[b]
+	switch {
+	case oka && okb:
+		if ta.Before(tb) {
+			return -1
+		}
+		if tb.Before(ta) {
+			return 1
+		}
+	case oka && !okb:
+		return -1
+	case !oka && okb:
+		return 1
+	}
+	return strings.Compare(a, b)
 }
 
 // effectiveMaxInstances returns the cap on the total number of inference-engine instances
@@ -1953,7 +1878,7 @@ func (ctl *controller) syncLauncherInstances(ctx context.Context, nodeDat *nodeD
 	}
 
 	// Replace the returned instance list and counts with the filtered view
-	// so that callers (e.g. selectBestLauncherPod) see accurate capacity.
+	// so that callers (e.g. selectOrReclaimLauncherPod) see accurate capacity.
 	insts.Instances = remainingInstances
 	insts.TotalInstances = len(remainingInstances)
 	insts.RunningInstances = runningCount
