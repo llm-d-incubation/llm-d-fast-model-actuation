@@ -19,7 +19,7 @@
 # Optional environment variables (with defaults):
 #   NAMESPACE          - target namespace (default: fma-hpa)
 #   CONTAINER_IMG_REG  - image registry (default: ghcr.io/llm-d-incubation/llm-d-fast-model-actuation)
-#   IMAGE_TAG          - image tag (default: v0.6.0-alpha.11, latest release)
+#   IMAGE_TAG          - image tag (default: v0.6.0-alpha.12, latest release)
 #   LAUNCHER_IMAGE     - launcher image (default: $CONTAINER_IMG_REG/launcher:$IMAGE_TAG)
 #   REQUESTER_IMAGE    - requester image (default: $CONTAINER_IMG_REG/requester:$IMAGE_TAG)
 #   MODEL              - vLLM model (default: HuggingFaceTB/SmolLM2-360M-Instruct)
@@ -31,7 +31,7 @@ set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-fma-hpa}"
 CONTAINER_IMG_REG="${CONTAINER_IMG_REG:-ghcr.io/llm-d-incubation/llm-d-fast-model-actuation}"
-IMAGE_TAG="${IMAGE_TAG:-v0.6.0-alpha.11}"
+IMAGE_TAG="${IMAGE_TAG:-v0.6.0-alpha.12}"
 LAUNCHER_IMAGE="${LAUNCHER_IMAGE:-${CONTAINER_IMG_REG}/launcher:${IMAGE_TAG}}"
 REQUESTER_IMAGE="${REQUESTER_IMAGE:-${CONTAINER_IMG_REG}/requester:${IMAGE_TAG}}"
 MODEL="${MODEL:-HuggingFaceTB/SmolLM2-360M-Instruct}"
@@ -203,6 +203,82 @@ kubectl rollout status deployment -n "$NAMESPACE" \
 echo "  Verifying Gateway and EPP..."
 kubectl get gateway -n "$NAMESPACE" --no-headers 2>/dev/null || echo "  WARNING: no Gateway found"
 kubectl get inferencepool -n "$NAMESPACE" --no-headers 2>/dev/null || echo "  WARNING: no InferencePool found"
+
+# EPP metrics auth: the EPP validates scrape tokens via TokenReview, so its SA
+# needs the ability to create tokenreviews and subjectaccessreviews.
+EPP_SA=$(kubectl get deploy -n "$NAMESPACE" -l app.kubernetes.io/name="${NAMESPACE}-epp" \
+    -o jsonpath='{.items[0].spec.template.spec.serviceAccountName}' 2>/dev/null || echo "${NAMESPACE}-epp")
+CRB_NAME="${NAMESPACE}-${EPP_SA}"
+if kubectl get clusterrolebinding "$CRB_NAME" &>/dev/null; then
+    echo "  EPP metrics RBAC: already exists"
+else
+    echo "  Creating EPP metrics RBAC (ClusterRole + ClusterRoleBinding)..."
+    kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ${CRB_NAME}
+rules:
+- apiGroups: ["authentication.k8s.io"]
+  resources: ["tokenreviews"]
+  verbs: ["create"]
+- apiGroups: ["authorization.k8s.io"]
+  resources: ["subjectaccessreviews"]
+  verbs: ["create"]
+- nonResourceURLs: ["/metrics"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ${CRB_NAME}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ${CRB_NAME}
+subjects:
+- kind: ServiceAccount
+  name: ${EPP_SA}
+  namespace: ${NAMESPACE}
+EOF
+fi
+
+# ServiceMonitor + token secret for Prometheus to scrape EPP metrics
+if kubectl get servicemonitor "${NAMESPACE}-epp-monitor" -n "$NAMESPACE" &>/dev/null; then
+    echo "  ServiceMonitor: already exists"
+else
+    echo "  Creating ServiceMonitor and metrics token secret..."
+    kubectl apply -n "$NAMESPACE" -f - <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${EPP_SA}-metrics-reader-secret
+  annotations:
+    kubernetes.io/service-account.name: ${EPP_SA}
+type: kubernetes.io/service-account-token
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: ${NAMESPACE}-epp-monitor
+spec:
+  endpoints:
+    - authorization:
+        credentials:
+          key: token
+          name: ${EPP_SA}-metrics-reader-secret
+      interval: 10s
+      path: /metrics
+      port: http-metrics
+  jobLabel: ${EPP_SA}
+  namespaceSelector:
+    matchNames:
+      - ${NAMESPACE}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ${EPP_SA}
+EOF
+fi
 
 # =========================================================================
 # Step 4: FMA controllers (via deploy_fma.sh)
@@ -468,7 +544,7 @@ else
     EXISTING_QS=$(yq eval '.rules.external[] | select(.name.as == "epp_queue_size") | .metricsQuery' "$CURRENT_VALUES" 2>/dev/null || echo "")
     EXISTING_RR=$(yq eval '.rules.external[] | select(.name.as == "epp_running_requests") | .metricsQuery' "$CURRENT_VALUES" 2>/dev/null || echo "")
 
-    EXPECTED_QS_FRAG="inference_pool=\"${POOL_NAME}\""
+    EXPECTED_QS_FRAG="name=\"${POOL_NAME}\""
     EXPECTED_RR_FRAG="job=\"${EPP_JOB}\""
 
     if [ -n "$EXISTING_QS" ] && [ -n "$EXISTING_RR" ] \
@@ -484,7 +560,7 @@ else
 
         # Build the two new FMA rules (as a YAML array, for yq to load+append).
         cat > "$NEW_RULES" <<RULES_EOF
-- seriesQuery: 'inference_extension_flow_control_queue_size'
+- seriesQuery: 'inference_pool_average_queue_size'
   resources:
     overrides:
       namespace:
@@ -492,7 +568,7 @@ else
     namespaced: false
   name:
     as: "epp_queue_size"
-  metricsQuery: 'sum(inference_extension_flow_control_queue_size{namespace="${NAMESPACE}",inference_pool="${POOL_NAME}"})'
+  metricsQuery: 'sum(inference_pool_average_queue_size{name="${POOL_NAME}"})'
 - seriesQuery: 'inference_objective_running_requests'
   resources:
     overrides:
