@@ -185,9 +185,8 @@ spec:
                   because an awake instance's CPU memory footprint is the same as when it
                   was sleeping (model tensors remain resident in CPU memory after wake-up).
                   When multiple policies match the same node, the per-node effective
-                  budget is the MIN of all matching policies' MaxInstances. The identity
-                  element of MIN is +infinity, so a node matched by no policy (or only by
-                  policies that omit MaxInstances) has no limit.
+                  budget is the MIN of all matching policies' MaxInstances. And a node
+                  matched by no policy (or only by policies that omit MaxInstances) has no limit.
                 properties:
                   maxInstances:
                     description: |-
