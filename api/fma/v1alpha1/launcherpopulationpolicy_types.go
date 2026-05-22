@@ -86,9 +86,9 @@ type LauncherPopulationPolicySpec struct {
 	// This limits total instances regardless of their state (sleeping or awake),
 	// because an awake instance's CPU memory footprint is the same as when it
 	// was sleeping (model tensors remain resident in CPU memory after wake-up).
-	// When multiple policies match the same node, the most restrictive budget
-	// (smallest MaxInstances) applies.
-	// The zero value means no budget constraint (unlimited).
+	// When multiple policies match the same node, the per-node effective
+	// budget is the MIN of all matching policies' MaxInstances. And a node
+	// matched by no policy (or only by policies that omit MaxInstances) has no limit.
 	// +optional
 	NodeInstanceBudget NodeInstanceBudget `json:"nodeInstanceBudget,omitempty"`
 }
@@ -137,10 +137,22 @@ type CountForLauncher struct {
 // footprint is the same as when it was sleeping (model tensors remain
 // resident in CPU memory after wake-up).
 type NodeInstanceBudget struct {
-	// MaxInstances limits the total number of inference engine instances across
-	// all launcher pods on the node. Zero means unlimited.
+	// MaxInstances limits the total number of inference engine instances
+	// across all launcher pods on the node.
+	//
+	// A nil value (field omitted) means unconstrained: it is the identity
+	// element for MIN aggregation (+infinity), so it is skipped when
+	// combining MaxInstances across matching policies.
+	//
+	// A value of 0 means no inference engine instances are allowed on the
+	// node (useful for draining or blacklisting nodes via a selector without
+	// having to delete the policy).
+	//
+	// A positive value N caps the total number of instances at N.
+	//
 	// +optional
-	MaxInstances int32 `json:"maxInstances,omitempty"`
+	// +kubebuilder:validation:Minimum=0
+	MaxInstances *int32 `json:"maxInstances,omitempty"`
 }
 
 type LauncherPopulationPolicyStatus struct {
