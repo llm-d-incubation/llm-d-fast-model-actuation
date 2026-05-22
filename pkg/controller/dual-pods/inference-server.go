@@ -614,7 +614,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 			return err, true
 		}
 		if retry {
-			logger.V(4).Info("Launcher Pods exist but some are not ready yet, will retry later")
+			logger.V(4).Info("Launcher Pod selection or reclaim requested retry")
 			return nil, true
 		}
 		if launcherPod != nil {
