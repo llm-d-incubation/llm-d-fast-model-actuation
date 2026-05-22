@@ -818,10 +818,10 @@ func (ctl *controller) selectOrReclaimLauncherPod(
 		}
 		for _, victim := range bestReclaimPlan.victims {
 			if _, err := lClient.DeleteInstance(ctx, victim); err != nil && !IsInstanceNotFoundError(err) {
-				return nil, false, true, fmt.Errorf("delete instance %q from launcher Pod %q: %w", victim, bestReclaimPlan.launcherPod.Name, err)
+				return nil, false, true, fmt.Errorf("failed to delete instance %q from launcher Pod %q: %w", victim, bestReclaimPlan.launcherPod.Name, err)
 			}
 			delete(bestReclaimPlan.launcherDat.Instances, victim)
-			logger.V(4).Info("Deleted vLLM instance to reclaim launcher capacity",
+			logger.V(4).Info("Ensured vLLM instance absent to reclaim launcher capacity",
 				"launcherPod", bestReclaimPlan.launcherPod.Name, "instanceID", victim, "maxOthers", maxOthers)
 		}
 		return bestReclaimPlan.launcherPod, false, false, nil
