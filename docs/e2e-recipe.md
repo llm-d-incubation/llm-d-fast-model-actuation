@@ -542,7 +542,7 @@ kind: LauncherConfig
 metadata:
   name: my-launcher-config
 spec:
-  maxSleepingInstances: 3
+  maxInstances: 4
   podTemplate:
     spec:
       containers:
