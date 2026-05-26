@@ -69,6 +69,27 @@ The current testing documentation can be found within the respective components 
 * **All changes** must be reviewed and approved by a maintainer other than the author
 * **All repositories** must gate merges on compilation and passing tests
 
+### Reviewing dependency and GitHub Actions bump PRs
+
+When reviewing PRs that bump a dependency or a GitHub Actions version (e.g.,
+Dependabot PRs):
+
+* **Verify the pinned SHA matches the upstream tag** (for actions pinned
+  by SHA).
+* **Search [github.com/advisories](https://github.com/advisories)** for the
+  dependency.
+* **Search the web for CVEs/vulnerabilities** in the specific new version
+  being introduced.
+* **Read the upstream release notes** for security-relevant changes.
+* **Check the release age.** If the upstream release's publish timestamp
+  is less than 7 days ago (use the release's `published` field — for GitHub
+  releases, `gh release view <tag> --repo <owner>/<repo>`; not the PR's
+  creation date), flag this in the review and recommend waiting until the
+  7-day soak period has elapsed before merging. Newly published versions
+  have had little time for vulnerabilities or supply-chain compromises to
+  be discovered and reported. This applies to all dependency and GitHub
+  Actions bumps.
+
 ## Commit and Pull Request Style
 
 * **Pull requests** should describe the problem succinctly
