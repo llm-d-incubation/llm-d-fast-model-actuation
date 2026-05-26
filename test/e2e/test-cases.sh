@@ -506,7 +506,7 @@ echo launcher_count_before_reclaim = $launcher_count_before_reclaim
 kubectl get pod -n "$NS" "$launcher1"
 expect '[ "$(kubectl get pod -n '"$NS"' $launcher1 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "" ]'
 
-# Confirm launcher is at the cap before reclaim.
+# Confirm launcher1 is at the cap before reclaim.
 launcher_instances_before_reclaim=$(kubectl exec -n "$NS" $launcher1 -- python3 -c 'import json,urllib.request; print(json.load(urllib.request.urlopen("http://127.0.0.1:8001/v2/vllm/instances"))["total_instances"])')
 echo "Launcher $launcher1 has $launcher_instances_before_reclaim instances before reclaim (expected 2)"
 [ "$launcher_instances_before_reclaim" == "2" ]
