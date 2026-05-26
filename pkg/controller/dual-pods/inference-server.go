@@ -666,7 +666,6 @@ type launcherReclaimPlan struct {
 	launcherDat *launcherData
 	victims     []string
 	lruID       string
-	lruKnown    bool
 	lruTime     time.Time
 }
 
@@ -775,13 +774,12 @@ launcherPodLoop:
 		// Any conflicting vLLM instance must be deleted; deleting only other
 		// vLLM instances would leave the desired port unavailable.
 		victims := append(portConflictVictims, pickInstanceVictims(otherVictims, launcherDat.Instances, toDelete-len(portConflictVictims))...)
-		lruID, lruKnown, lruTime := reclaimPlanLRU(victims, launcherDat.Instances)
+		lruID, lruTime := reclaimPlanLRU(victims, launcherDat.Instances)
 		plan := &launcherReclaimPlan{
 			launcherPod: launcherPod,
 			launcherDat: launcherDat,
 			victims:     victims,
 			lruID:       lruID,
-			lruKnown:    lruKnown,
 			lruTime:     lruTime,
 		}
 		if bestReclaimPlan == nil || compareReclaimPlanLRU(plan, bestReclaimPlan) < 0 {
@@ -824,10 +822,7 @@ launcherPodLoop:
 	return nil, false, false, nil
 }
 
-// pickInstanceVictims chooses up to limit instance IDs to delete. Known
-// candidates come first (oldest last-used); unknown candidates come last so
-// freshly-created vLLM instances we have not observed are not preferred for
-// deletion.
+// pickInstanceVictims chooses up to limit instance IDs to delete.
 func pickInstanceVictims(
 	candidates []string,
 	knownLastUsed map[string]time.Time,
@@ -846,45 +841,32 @@ func pickInstanceVictims(
 	return candidates[:limit]
 }
 
-func reclaimPlanLRU(victims []string, knownLastUsed map[string]time.Time) (string, bool, time.Time) {
-	if len(victims) == 0 {
-		return "", false, time.Time{}
-	}
+func reclaimPlanLRU(victims []string, knownLastUsed map[string]time.Time) (string, time.Time) {
 	lruID := victims[0]
-	lruTime, lruKnown := knownLastUsed[lruID]
+	lruTime := knownLastUsed[lruID]
 	for _, victim := range victims[1:] {
-		victimTime, victimKnown := knownLastUsed[victim]
-		if compareLastUsed(victim, victimKnown, victimTime, lruID, lruKnown, lruTime) < 0 {
+		victimTime := knownLastUsed[victim]
+		if compareLastUsed(victim, victimTime, lruID, lruTime) < 0 {
 			lruID = victim
-			lruKnown = victimKnown
 			lruTime = victimTime
 		}
 	}
-	return lruID, lruKnown, lruTime
+	return lruID, lruTime
 }
 
 func compareReclaimPlanLRU(a, b *launcherReclaimPlan) int {
-	return compareLastUsed(a.lruID, a.lruKnown, a.lruTime, b.lruID, b.lruKnown, b.lruTime)
+	return compareLastUsed(a.lruID, a.lruTime, b.lruID, b.lruTime)
 }
 
 func compareInstanceLastUsed(a, b string, knownLastUsed map[string]time.Time) int {
-	ta, oka := knownLastUsed[a]
-	tb, okb := knownLastUsed[b]
-	return compareLastUsed(a, oka, ta, b, okb, tb)
+	return compareLastUsed(a, knownLastUsed[a], b, knownLastUsed[b])
 }
 
-func compareLastUsed(a string, aKnown bool, aTime time.Time, b string, bKnown bool, bTime time.Time) int {
-	switch {
-	case aKnown && bKnown:
-		if aTime.Before(bTime) {
-			return -1
-		}
-		if bTime.Before(aTime) {
-			return 1
-		}
-	case aKnown && !bKnown:
+func compareLastUsed(a string, aTime time.Time, b string, bTime time.Time) int {
+	if aTime.Before(bTime) {
 		return -1
-	case !aKnown && bKnown:
+	}
+	if bTime.Before(aTime) {
 		return 1
 	}
 	return strings.Compare(a, b)
