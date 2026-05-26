@@ -503,8 +503,7 @@ launcher_count_before_reclaim=$(kubectl get pods -n "$NS" -o name -l dual-pods.l
 echo launcher_count_before_reclaim = $launcher_count_before_reclaim
 
 # Target launcher is still around and unbound.
-kubectl get pod -n "$NS" "$launcher1"
-expect '[ "$(kubectl get pod -n '"$NS"' $launcher1 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "" ]'
+expect 'kubectl get pod -n '"$NS"' '"$launcher1"' >/dev/null && [ "$(kubectl get pod -n '"$NS"' '"$launcher1"' -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "" ]'
 
 # Confirm launcher1 is at the cap before reclaim.
 launcher_instances_before_reclaim=$(kubectl exec -n "$NS" $launcher1 -- python3 -c 'import json,urllib.request; print(json.load(urllib.request.urlopen("http://127.0.0.1:8001/v2/vllm/instances"))["total_instances"])')
