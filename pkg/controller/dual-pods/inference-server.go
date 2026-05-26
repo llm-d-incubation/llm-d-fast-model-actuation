@@ -775,11 +775,6 @@ launcherPodLoop:
 		// Any conflicting vLLM instance must be deleted; deleting only other
 		// vLLM instances would leave the desired port unavailable.
 		victims := append(portConflictVictims, pickInstanceVictims(otherVictims, launcherDat.Instances, toDelete-len(portConflictVictims))...)
-		if len(victims) < toDelete {
-			logger.V(5).Info("Not enough deletion candidates to reclaim launcher capacity",
-				"name", launcherPod.Name, "need", toDelete, "have", len(victims))
-			continue
-		}
 		lruID, lruKnown, lruTime := reclaimPlanLRU(victims, launcherDat.Instances)
 		plan := &launcherReclaimPlan{
 			launcherPod: launcherPod,
