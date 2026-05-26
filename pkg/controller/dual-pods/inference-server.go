@@ -694,6 +694,7 @@ func (ctl *controller) selectOrReclaimLauncherPod(
 	var somePodsNotReady bool
 	var bestReclaimPlan *launcherReclaimPlan
 
+launcherPodLoop:
 	for _, podAny := range launcherPodAnys {
 		launcherPod := podAny.(*corev1.Pod)
 
@@ -724,7 +725,6 @@ func (ctl *controller) selectOrReclaimLauncherPod(
 		hasSleepingInstance := false
 		portConflictVictims := make([]string, 0, 1)
 		otherVictims := make([]string, 0, len(insts.Instances))
-		hasUnusablePort := false
 		for _, inst := range insts.Instances {
 			instPort, err := getVLLMInstancePort(inst)
 			if err != nil {
@@ -734,8 +734,7 @@ func (ctl *controller) selectOrReclaimLauncherPod(
 					"annotations", inst.Annotations,
 					"options", inst.Options,
 					"err", err)
-				hasUnusablePort = true
-				break
+				continue launcherPodLoop
 			}
 			if inst.InstanceID == targetInstanceID {
 				if inst.Status != InstanceStatusStopped {
@@ -748,9 +747,6 @@ func (ctl *controller) selectOrReclaimLauncherPod(
 			} else {
 				otherVictims = append(otherVictims, inst.InstanceID)
 			}
-		}
-		if hasUnusablePort {
-			continue
 		}
 		if hasSleepingInstance {
 			// Priority 1: Found a sleeping instance
@@ -776,15 +772,9 @@ func (ctl *controller) selectOrReclaimLauncherPod(
 		}
 
 		toDelete := max(insts.TotalInstances-maxOthers, 1)
-		victims := slices.Clone(portConflictVictims)
-		if len(victims) > 0 {
-			// The conflicting vLLM instance must be deleted; deleting only
-			// other vLLM instances would leave the desired port unavailable.
-			toPick := toDelete - len(victims)
-			victims = append(victims, pickInstanceVictims(otherVictims, launcherDat.Instances, toPick)...)
-		} else {
-			victims = pickInstanceVictims(otherVictims, launcherDat.Instances, toDelete)
-		}
+		// Any conflicting vLLM instance must be deleted; deleting only other
+		// vLLM instances would leave the desired port unavailable.
+		victims := append(portConflictVictims, pickInstanceVictims(otherVictims, launcherDat.Instances, toDelete-len(portConflictVictims))...)
 		if len(victims) < toDelete {
 			logger.V(5).Info("Not enough deletion candidates to reclaim launcher capacity",
 				"name", launcherPod.Name, "need", toDelete, "have", len(victims))
