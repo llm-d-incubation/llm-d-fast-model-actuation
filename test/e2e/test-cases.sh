@@ -169,7 +169,7 @@ isc=$(echo $objs | awk '{print $1}')
 lc=$(echo $objs | awk '{print $2}')
 rs=$(echo $objs | awk '{print $3}')
 isc2=$(echo $objs | awk '{print $4}')
-# $5 is isc3 (tinyllama) — not used directly but created for completeness
+isc3=$(echo $objs | awk '{print $5}')
 lpp=$(echo $objs | awk '{print $6}')
 inst=${rs#my-request-}
 
@@ -486,6 +486,75 @@ check_gpu_pin $req4
 cheer Successful switching instances in one launcher
 
 # ---------------------------------------------------------------------------
+# Per-launcher Instance Cap Enforcement
+# ---------------------------------------------------------------------------
+
+intro_case Per-launcher Instance Cap Enforcement
+
+# Scale requester to 0 so the launcher becomes unbound and both prior instances
+# are sleeping (isc, isc2). The LauncherConfig caps total instances at 2
+# (maxInstances: 2), so the launcher is at capacity.
+kubectl scale rs $rs -n "$NS" --replicas=0
+
+expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$inst | wc -l | grep -w 0"
+
+# Capture launcher pod count so we can later assert reclaim did not spawn a new one.
+launcher_count_before_reclaim=$(kubectl get pods -n "$NS" -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | wc -l)
+echo launcher_count_before_reclaim = $launcher_count_before_reclaim
+
+# Target launcher is still around and unbound.
+expect 'kubectl get pod -n '"$NS"' '"$launcher1"' >/dev/null && [ "$(kubectl get pod -n '"$NS"' '"$launcher1"' -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "" ]'
+
+# Confirm launcher1 is at the cap before reclaim.
+launcher_instances_before_reclaim=$(kubectl exec -n "$NS" $launcher1 -- python3 -c 'import json,urllib.request; print(json.load(urllib.request.urlopen("http://127.0.0.1:8001/v2/vllm/instances"))["total_instances"])')
+echo "Launcher $launcher1 has $launcher_instances_before_reclaim instances before reclaim (expected 2)"
+[ "$launcher_instances_before_reclaim" == "2" ]
+
+# Switch the requester to a third ISC for which there is no sleeping instance,
+# so neither the fast wake-up path nor the capacity path applies.
+kubectl patch rs $rs -n "$NS" --type=json -p='[{"op": "replace", "path": "/spec/template/metadata/annotations/dual-pods.llm-d.ai~1inference-server-config", "value": "'$isc3'"}]'
+
+# Scale up. Controller must reclaim a slot in the existing launcher rather
+# than create a new one.
+kubectl scale rs $rs -n "$NS" --replicas=1
+
+expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$inst | wc -l | grep -w 1"
+req_reclaim=$(kubectl get pods -n "$NS" -o name -l app=dp-example,instance=$inst | sed s%pod/%%)
+echo "Server-requesting Pod (post-reclaim) is $req_reclaim"
+
+# Requester is annotated for isc3.
+[ "$(kubectl get pod -n "$NS" "$req_reclaim" -o jsonpath='{.metadata.annotations.dual-pods\.llm-d\.ai/inference-server-config}')" == "$isc3" ]
+
+# Wait until the controller binds the requester to a launcher.
+expect '[ -n "$(kubectl get pod -n '"$NS"' $req_reclaim -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" ]'
+
+# Launcher pod set is unchanged — no new launcher was created.
+launcher_count_after_reclaim_bind=$(kubectl get pods -n "$NS" -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | wc -l | tr -d ' ')
+echo launcher_count_after_reclaim_bind = $launcher_count_after_reclaim_bind
+if [ "$launcher_count_after_reclaim_bind" != "$launcher_count_before_reclaim" ]; then
+    echo "ERROR: expected $launcher_count_before_reclaim launcher pod(s) after reclaim bind, got $launcher_count_after_reclaim_bind" >&2
+    exit 1
+fi
+kubectl get pod -n "$NS" "$launcher1"
+
+# Bidirectional binding to the same launcher.
+[ "$(kubectl get pod -n "$NS" "$req_reclaim" -o jsonpath='{.metadata.labels.dual-pods\.llm-d\.ai/dual}')" == "$launcher1" ]
+[ "$(kubectl get pod -n "$NS" "$launcher1" -o jsonpath='{.metadata.labels.dual-pods\.llm-d\.ai/dual}')" == "$req_reclaim" ]
+
+date
+kubectl wait --for condition=Ready pod/$req_reclaim -n "$NS" --timeout=300s
+[ "$(kubectl get pod $launcher1 -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
+
+check_gpu_pin $req_reclaim
+
+# Cap is still respected post-reclaim: total instances == 2 (one woken isc3 + one survivor sleeper).
+launcher_instances_after_reclaim=$(kubectl exec -n "$NS" $launcher1 -- python3 -c 'import json,urllib.request; print(json.load(urllib.request.urlopen("http://127.0.0.1:8001/v2/vllm/instances"))["total_instances"])')
+echo "Launcher $launcher1 has $launcher_instances_after_reclaim instances after reclaim (expected 2)"
+[ "$launcher_instances_after_reclaim" == "2" ]
+
+cheer Successful per-launcher instance cap enforcement
+
+# ---------------------------------------------------------------------------
 # Controller Restart State Recovery
 # ---------------------------------------------------------------------------
 
@@ -566,8 +635,12 @@ intro_case Delete Obsolete Sleeping Instances After ISC Update
 old_total_instances=$(get_launcher_total_instances "$launcher1")
 echo "Launcher had $old_total_instances instance(s) before updating ISC to make a sleeping instance obsolete"
 
-# Mutate isc in a hash-relevant way so its sleeping instance becomes obsolete.
-kubectl patch inferenceserverconfig "$isc" -n "$NS" --type=merge -p='{"spec":{"modelServerConfig":{"options":"--model HuggingFaceTB/SmolLM2-360M-Instruct --served-model-name obsolete-after-update"}}}'
+# At this point isc3 is the sleeping instance (isc2 is the awake one bound to
+# req_post_restart). Mutate isc3 in a hash-relevant way so its sleeping
+# instance becomes obsolete. We append --served-model-name to the original
+# options (rather than hardcoding the model) so the model itself stays valid.
+enhanced_options=$(kubectl get inferenceserverconfig "$isc3" -n "$NS" -o jsonpath='{.spec.modelServerConfig}' | jq '.options + " --served-model-name obsolete-after-update"')
+kubectl patch inferenceserverconfig "$isc3" -n "$NS" --type=merge -p='{"spec":{"modelServerConfig":{"options":'"$enhanced_options"'}}}'
 
 expect '[ "$(get_launcher_total_instances "$launcher1")" == "$((old_total_instances - 1))" ]'
 
