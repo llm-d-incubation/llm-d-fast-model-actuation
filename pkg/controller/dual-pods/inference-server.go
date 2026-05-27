@@ -835,10 +835,7 @@ func pickInstanceVictims(
 	slices.SortFunc(candidates, func(a, b string) int {
 		return compareInstanceLastUsed(a, b, knownLastUsed)
 	})
-	if limit > len(candidates) {
-		limit = len(candidates)
-	}
-	return candidates[:limit]
+	return candidates[:min(limit, len(candidates))]
 }
 
 func reclaimPlanLRU(victims []string, knownLastUsed map[string]time.Time) (string, time.Time) {
