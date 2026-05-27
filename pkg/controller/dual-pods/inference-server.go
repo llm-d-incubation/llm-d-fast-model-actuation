@@ -672,8 +672,8 @@ type launcherReclaimPlan struct {
 // selectOrReclaimLauncherPod evaluates matching launcher Pods and selects one
 // for fulfilling a request. Priority 1 is a launcher with a sleeping vLLM
 // instance matching targetInstanceID. Priority 2 is a launcher with capacity
-// for a new vLLM instance. Priority 3 is reclaiming capacity by deleting the
-// least-recently-used eligible vLLM instance across all scanned launcher Pods.
+// for a new vLLM instance. Priority 3 is reclaiming capacity from the launcher
+// that needs the most vLLM instance deletions, using LRU as a tie-breaker.
 // Returns (selectedPod, hasSleepingInstance, retry, error).
 // hasSleepingInstance is true when selectedPod already hosts the target vLLM
 // instance and only needs binding/waking. retry tells the caller to requeue
@@ -782,7 +782,7 @@ launcherPodLoop:
 			lruID:       lruID,
 			lruTime:     lruTime,
 		}
-		if bestReclaimPlan == nil || compareReclaimPlanLRU(plan, bestReclaimPlan) < 0 {
+		if bestReclaimPlan == nil || compareReclaimPlans(plan, bestReclaimPlan) < 0 {
 			bestReclaimPlan = plan
 		}
 	}
@@ -854,7 +854,10 @@ func reclaimPlanLRU(victims []string, knownLastUsed map[string]time.Time) (strin
 	return lruID, lruTime
 }
 
-func compareReclaimPlanLRU(a, b *launcherReclaimPlan) int {
+func compareReclaimPlans(a, b *launcherReclaimPlan) int {
+	if len(a.victims) != len(b.victims) {
+		return len(b.victims) - len(a.victims)
+	}
 	return compareLastUsed(a.lruID, a.lruTime, b.lruID, b.lruTime)
 }
 
