@@ -493,7 +493,7 @@ intro_case Per-launcher Instance Cap Enforcement
 
 # Scale requester to 0 so the launcher becomes unbound and both prior instances
 # are sleeping (isc, isc2). The LauncherConfig caps total instances at 2
-# (maxSleepingInstances: 1), so the launcher is at capacity.
+# (maxInstances: 2), so the launcher is at capacity.
 kubectl scale rs $rs -n "$NS" --replicas=0
 
 expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$inst | wc -l | grep -w 0"
