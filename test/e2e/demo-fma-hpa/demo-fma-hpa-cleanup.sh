@@ -17,16 +17,12 @@
 #   NAMESPACE          - target namespace (default: fma-hpa)
 #   FULL_CLEANUP       - if "true", also delete namespace, node labels, and FMA prom-adapter rules (default: false)
 #   CLEAN_AGENTGATEWAY - if "true", also delete the agentgateway control plane in agentgateway-system (default: false)
-#   PROM_ADAPTER_NS    - prometheus-adapter namespace (default: openshift-user-workload-monitoring)
-#   PROM_ADAPTER_REL   - prometheus-adapter Helm release name (default: prometheus-adapter)
 
 set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-fma-hpa}"
 FULL_CLEANUP="${FULL_CLEANUP:-false}"
 CLEAN_AGENTGATEWAY="${CLEAN_AGENTGATEWAY:-false}"
-PROM_ADAPTER_NS="${PROM_ADAPTER_NS:-openshift-user-workload-monitoring}"
-PROM_ADAPTER_REL="${PROM_ADAPTER_REL:-prometheus-adapter}"
 
 echo "========================================="
 echo "  FMA + HPA Demo Cleanup"
@@ -86,27 +82,19 @@ if [ "$SKIP_NS_OPS" = "false" ]; then
     echo "--- Stripping dual-pods finalizers from pods ---"
     strip_dual_pods_finalizers
 
-    # 6. Delete launcher pods explicitly (matches old + new label conventions)
-    echo "--- Deleting launcher pods ---"
-    kubectl delete pods -n "$NAMESPACE" -l app.kubernetes.io/component=launcher --ignore-not-found 2>/dev/null
-    kubectl delete pods -n "$NAMESPACE" -l dual-pods.llm-d.ai/sleeping --ignore-not-found 2>/dev/null
-    kubectl delete pods -n "$NAMESPACE" -l dual-pods.llm-d.ai/launcher-config-name --ignore-not-found 2>/dev/null
-
-    # 7. FMA objects (CRs)
+    # 6. FMA objects (CRs) — deleting the LPP triggers launcher pod cleanup by the controller
     echo "--- Deleting FMA objects ---"
     kubectl delete launcherpopulationpolicy lpp-hpa -n "$NAMESPACE" --ignore-not-found 2>/dev/null
     kubectl delete launcherconfig lc-hpa -n "$NAMESPACE" --ignore-not-found 2>/dev/null
     kubectl delete inferenceserverconfig isc-smol -n "$NAMESPACE" --ignore-not-found 2>/dev/null
 
-    # 8. FMA controllers (Helm release)
+    echo "--- Waiting for controller to clean up resources (10s) ---"
+    sleep 10
+
+    # 7. FMA controllers (Helm release)
     echo "--- Uninstalling FMA controllers ---"
     helm uninstall fma -n "$NAMESPACE" 2>/dev/null || true
 
-    # 9. RBAC
-    echo "--- Deleting RBAC ---"
-    kubectl delete rolebinding testreq testlauncher -n "$NAMESPACE" --ignore-not-found 2>/dev/null
-    kubectl delete role testreq testlauncher -n "$NAMESPACE" --ignore-not-found 2>/dev/null
-    kubectl delete sa testreq testlauncher -n "$NAMESPACE" --ignore-not-found 2>/dev/null
 fi
 
 # 10. Cluster-scoped FMA resources
@@ -127,41 +115,39 @@ if [ "$FULL_CLEANUP" = "true" ]; then
     done
 
     # Remove FMA-specific rules from prometheus-adapter, preserving WVA and others
-    if helm status "$PROM_ADAPTER_REL" -n "$PROM_ADAPTER_NS" &>/dev/null; then
-        if ! command -v yq &>/dev/null; then
-            echo "  WARNING: yq not installed — skipping prometheus-adapter rule cleanup."
-            echo "  Install yq (https://github.com/mikefarah/yq) to enable this step."
+    PROM_ADAPTER_NS=$(kubectl get apiservice v1beta1.external.metrics.k8s.io \
+        -o jsonpath='{.spec.service.namespace}' 2>/dev/null || echo "")
+    PROM_ADAPTER_SVC=$(kubectl get apiservice v1beta1.external.metrics.k8s.io \
+        -o jsonpath='{.spec.service.name}' 2>/dev/null || echo "")
+
+    if [ -z "$PROM_ADAPTER_NS" ] || [ -z "$PROM_ADAPTER_SVC" ]; then
+        echo "  Could not find external.metrics.k8s.io APIService — skipping."
+    elif ! command -v yq &>/dev/null; then
+        echo "  WARNING: yq not installed — skipping prometheus-adapter rule cleanup."
+    else
+        CURRENT_CONFIG=$(mktemp)
+        NEW_CONFIG=$(mktemp)
+        trap 'rm -f "$CURRENT_CONFIG" "$NEW_CONFIG"' EXIT
+
+        kubectl get configmap "$PROM_ADAPTER_SVC" -n "$PROM_ADAPTER_NS" \
+            -o jsonpath='{.data.config\.yaml}' > "$CURRENT_CONFIG" 2>/dev/null
+
+        if [ ! -s "$CURRENT_CONFIG" ]; then
+            echo "  Could not read adapter configmap — skipping."
         else
-            CURRENT_VALUES=$(mktemp)
-            NEW_VALUES=$(mktemp)
-            trap 'rm -f "$CURRENT_VALUES" "$NEW_VALUES"' EXIT
+            yq eval 'del(.externalRules[] | select(.name.as == "epp_queue_size" or .name.as == "epp_running_requests"))' \
+                "$CURRENT_CONFIG" > "$NEW_CONFIG"
 
-            helm get values "$PROM_ADAPTER_REL" -n "$PROM_ADAPTER_NS" > "$CURRENT_VALUES"
-            # Remove only the rules whose name.as is one of our two FMA metrics.
-            # Anything else (WVA, other tenants, defaults) is preserved.
-            yq eval 'del(.rules.external[] | select(.name.as == "epp_queue_size" or .name.as == "epp_running_requests"))' \
-                "$CURRENT_VALUES" > "$NEW_VALUES"
-
-            if ! diff -q "$CURRENT_VALUES" "$NEW_VALUES" >/dev/null 2>&1; then
+            if ! diff -q "$CURRENT_CONFIG" "$NEW_CONFIG" >/dev/null 2>&1; then
                 echo "  Removing FMA rules from prometheus-adapter (preserving other rules)..."
-                # Resolve chart from the existing release so we don't depend on a specific repo alias
-                CHART=$(helm get metadata "$PROM_ADAPTER_REL" -n "$PROM_ADAPTER_NS" -o json 2>/dev/null \
-                    | yq -r '.chart' 2>/dev/null || echo "")
-                if [ -n "$CHART" ] && [ "$CHART" != "null" ]; then
-                    helm upgrade "$PROM_ADAPTER_REL" "prometheus-community/$CHART" \
-                        -n "$PROM_ADAPTER_NS" \
-                        -f "$NEW_VALUES" 2>&1 | tail -5 || \
-                        echo "  WARNING: helm upgrade failed. Apply manually: helm upgrade $PROM_ADAPTER_REL <chart> -n $PROM_ADAPTER_NS -f $NEW_VALUES"
-                else
-                    echo "  Could not resolve chart name. Apply manually:"
-                    echo "    helm upgrade $PROM_ADAPTER_REL prometheus-community/prometheus-adapter -n $PROM_ADAPTER_NS -f $NEW_VALUES"
-                fi
+                kubectl create configmap "$PROM_ADAPTER_SVC" -n "$PROM_ADAPTER_NS" \
+                    --from-file=config.yaml="$NEW_CONFIG" \
+                    --dry-run=client -o yaml | kubectl apply -f - 2>/dev/null
+                kubectl rollout restart deployment "$PROM_ADAPTER_SVC" -n "$PROM_ADAPTER_NS" 2>/dev/null || true
             else
                 echo "  prometheus-adapter: no FMA rules found, nothing to remove."
             fi
         fi
-    else
-        echo "  prometheus-adapter Helm release '$PROM_ADAPTER_REL' not found in $PROM_ADAPTER_NS — skipping."
     fi
 
     # Delete namespace last (removes EPP, Gateway, and everything else in it)

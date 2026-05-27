@@ -25,7 +25,6 @@
 #   MODEL              - vLLM model (default: HuggingFaceTB/SmolLM2-360M-Instruct)
 #   GPU_NODE           - node for LPP (default: first node with nvidia.com/gpu.present=true)
 #   HPA_MAX_REPLICAS   - max HPA replicas (default: 4)
-#   PROM_ADAPTER_NS    - prometheus-adapter namespace (default: openshift-user-workload-monitoring)
 
 set -euo pipefail
 
@@ -37,7 +36,6 @@ REQUESTER_IMAGE="${REQUESTER_IMAGE:-${CONTAINER_IMG_REG}/requester:${IMAGE_TAG}}
 MODEL="${MODEL:-HuggingFaceTB/SmolLM2-360M-Instruct}"
 GPU_NODE="${GPU_NODE:-}"
 HPA_MAX_REPLICAS="${HPA_MAX_REPLICAS:-4}"
-PROM_ADAPTER_NS="${PROM_ADAPTER_NS:-openshift-user-workload-monitoring}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
@@ -71,38 +69,17 @@ else
     echo "  Created namespace $NAMESPACE"
 fi
 
-for sa in testreq testlauncher; do
-    if kubectl get sa "$sa" -n "$NAMESPACE" &>/dev/null; then
-        echo "  SA $sa exists"
-    else
-        kubectl create sa "$sa" -n "$NAMESPACE"
-        echo "  Created SA $sa"
-    fi
-done
+if kubectl get sa testlauncher -n "$NAMESPACE" &>/dev/null; then
+    echo "  SA testlauncher exists"
+else
+    kubectl create sa testlauncher -n "$NAMESPACE"
+    echo "  Created SA testlauncher"
+fi
 
-if kubectl get role testreq -n "$NAMESPACE" &>/dev/null; then
+if kubectl get role testlauncher -n "$NAMESPACE" &>/dev/null; then
     echo "  RBAC roles exist"
 else
     kubectl apply -n "$NAMESPACE" -f - <<'EOF'
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: testreq
-rules:
-- apiGroups: ["fma.llm-d.ai"]
-  resources: [inferenceserverconfigs, launcherconfigs]
-  verbs: [get, list, watch]
-- apiGroups: [""]
-  resourceNames: [gpu-allocs]
-  resources: [configmaps]
-  verbs: [update, patch, get, list, watch]
-- apiGroups: [""]
-  resources: [configmaps]
-  verbs: [create]
-- apiGroups: [""]
-  resources: [pods]
-  verbs: [get, list, watch]
----
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -112,13 +89,10 @@ rules:
   resources: [pods]
   verbs: [get, patch]
 EOF
-    kubectl create rolebinding testreq \
-        --role=testreq --serviceaccount="${NAMESPACE}:testreq" \
-        -n "$NAMESPACE" 2>/dev/null || true
     kubectl create rolebinding testlauncher \
         --role=testlauncher --serviceaccount="${NAMESPACE}:testlauncher" \
         -n "$NAMESPACE" 2>/dev/null || true
-    echo "  Created RBAC roles and bindings"
+    echo "  Created RBAC role and binding"
 fi
 
 
@@ -142,14 +116,7 @@ else
     kubectl apply -k "https://github.com/kubernetes-sigs/gateway-api-inference-extension/config/crd?ref=v1.5.0"
 fi
 
-if kubectl get crd inferenceserverconfigs.fma.llm-d.ai &>/dev/null; then
-    echo "  FMA CRDs: present"
-else
-    echo "  Installing FMA CRDs..."
-    for crd_file in "$REPO_ROOT"/config/crd/*.yaml; do
-        kubectl apply --server-side --force-conflicts -f "$crd_file"
-    done
-fi
+echo "  FMA CRDs: installed by deploy_fma.sh in Step 4"
 
 # =========================================================================
 # Step 3: EPP + Gateway
@@ -340,13 +307,8 @@ spec:
     options: "--model ${MODEL} --enable-sleep-mode"
     env_vars:
       VLLM_USE_V1: "1"
+      VLLM_SERVER_DEV_MODE: "1"
       VLLM_LOGGING_LEVEL: "DEBUG"
-      HF_HOME: "/tmp"
-      VLLM_CACHE_ROOT: "/tmp"
-      FLASHINFER_WORKSPACE_BASE: "/tmp"
-      TRITON_CACHE_DIR: "/tmp"
-      XDG_CACHE_HOME: "/tmp"
-      XDG_CONFIG_HOME: "/tmp"
     labels:
       llm-d.ai/inference-serving: "true"
       llm-d.ai/guide: "optimized-baseline"
@@ -360,7 +322,7 @@ kind: LauncherConfig
 metadata:
   name: lc-hpa
 spec:
-  maxSleepingInstances: 0
+  maxInstances: 1
   podTemplate:
     spec:
       runtimeClassName: nvidia
@@ -387,12 +349,6 @@ spec:
             value: "/tmp"
           - name: XDG_CONFIG_HOME
             value: "/tmp"
-          - name: NODE_NAME
-            valueFrom:
-              fieldRef: { fieldPath: spec.nodeName }
-          - name: NAMESPACE
-            valueFrom:
-              fieldRef: { fieldPath: metadata.namespace }
 ---
 apiVersion: fma.llm-d.ai/v1alpha1
 kind: LauncherPopulationPolicy
@@ -403,6 +359,7 @@ spec:
     labelSelector:
       matchLabels:
         fma-hpa-poc: "true"
+        nvidia.com/gpu.present: "true"
   countForLauncher:
     - launcherConfigName: lc-hpa
       launcherCount: 1
@@ -427,7 +384,6 @@ spec:
         dual-pods.llm-d.ai/inference-server-config: "isc-smol"
     spec:
       runtimeClassName: nvidia
-      serviceAccountName: testreq
       containers:
         - name: inference-server
           image: ${REQUESTER_IMAGE}
@@ -512,92 +468,89 @@ fi
 
 step "prometheus-adapter External Metrics rules"
 
-PROM_ADAPTER_REL="${PROM_ADAPTER_REL:-prometheus-adapter}"
+# Discover where the external metrics adapter lives from the APIService.
+PROM_ADAPTER_NS=$(kubectl get apiservice v1beta1.external.metrics.k8s.io \
+    -o jsonpath='{.spec.service.namespace}' 2>/dev/null || echo "")
+PROM_ADAPTER_SVC=$(kubectl get apiservice v1beta1.external.metrics.k8s.io \
+    -o jsonpath='{.spec.service.name}' 2>/dev/null || echo "")
 
-if ! helm status "$PROM_ADAPTER_REL" -n "$PROM_ADAPTER_NS" &>/dev/null; then
-    echo "  WARNING: prometheus-adapter Helm release '$PROM_ADAPTER_REL' not found in $PROM_ADAPTER_NS."
+if [ -z "$PROM_ADAPTER_NS" ] || [ -z "$PROM_ADAPTER_SVC" ]; then
+    echo "  WARNING: Could not find external.metrics.k8s.io APIService."
     echo "  HPA will show <unknown> until adapter rules are configured."
 else
+    echo "  External metrics served by $PROM_ADAPTER_SVC in $PROM_ADAPTER_NS"
+
     # Resolve the actual InferencePool name and EPP service name in the cluster.
-    # The rules must point at THESE — not at a generic fallback — otherwise
-    # PromQL returns no data and the HPA shows <unknown>.
     POOL_NAME=$(kubectl get inferencepool -n "$NAMESPACE" \
         -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
     EPP_JOB=$(kubectl get svc -n "$NAMESPACE" \
         -l inferencepool="$POOL_NAME" \
         -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
-    # Fallback: derive from helm release name (matches chart's default service naming)
     [ -z "$POOL_NAME" ] && POOL_NAME="fma-hpa"
     [ -z "$EPP_JOB" ] && EPP_JOB="${POOL_NAME}-epp"
     echo "  Detected InferencePool='$POOL_NAME', EPP job='$EPP_JOB'"
 
-    CURRENT_VALUES=$(mktemp)
-    NEW_VALUES=$(mktemp)
-    NEW_RULES=$(mktemp)
-    trap 'rm -f "$CURRENT_VALUES" "$NEW_VALUES" "$NEW_RULES"' RETURN
+    # Get the adapter's configmap (same name as the service by convention)
+    ADAPTER_CM="$PROM_ADAPTER_SVC"
+    CURRENT_CONFIG=$(mktemp)
+    NEW_CONFIG=$(mktemp)
+    trap 'rm -f "$CURRENT_CONFIG" "$NEW_CONFIG"' RETURN
 
-    helm get values "$PROM_ADAPTER_REL" -n "$PROM_ADAPTER_NS" > "$CURRENT_VALUES"
+    kubectl get configmap "$ADAPTER_CM" -n "$PROM_ADAPTER_NS" \
+        -o jsonpath='{.data.config\.yaml}' > "$CURRENT_CONFIG" 2>/dev/null
 
-    # Determine if the existing FMA rules already point to the current pool/job.
-    # If so, nothing to do. If they exist but are stale (different pool/job), or
-    # don't exist at all, we'll regenerate them below.
-    EXISTING_QS=$(yq eval '.rules.external[] | select(.name.as == "epp_queue_size") | .metricsQuery' "$CURRENT_VALUES" 2>/dev/null || echo "")
-    EXISTING_RR=$(yq eval '.rules.external[] | select(.name.as == "epp_running_requests") | .metricsQuery' "$CURRENT_VALUES" 2>/dev/null || echo "")
-
-    EXPECTED_QS_FRAG="name=\"${POOL_NAME}\""
-    EXPECTED_RR_FRAG="job=\"${EPP_JOB}\""
-
-    if [ -n "$EXISTING_QS" ] && [ -n "$EXISTING_RR" ] \
-       && echo "$EXISTING_QS" | grep -q "$EXPECTED_QS_FRAG" \
-       && echo "$EXISTING_RR" | grep -q "$EXPECTED_RR_FRAG"; then
-        echo "  EPP rules already present and pointing to current pool/job — nothing to do."
+    if [ ! -s "$CURRENT_CONFIG" ]; then
+        echo "  WARNING: Could not read configmap $ADAPTER_CM in $PROM_ADAPTER_NS."
+        echo "  HPA will show <unknown> until adapter rules are configured."
     else
-        if [ -n "$EXISTING_QS" ] || [ -n "$EXISTING_RR" ]; then
-            echo "  EPP rules present but stale (pointing to old pool/job) — replacing..."
+        # Check if our rules are already present and pointing to the current pool/job
+        EXISTING_QS=$(yq eval '.externalRules[] | select(.name.as == "epp_queue_size") | .seriesQuery' "$CURRENT_CONFIG" 2>/dev/null || echo "")
+        EXISTING_RR=$(yq eval '.externalRules[] | select(.name.as == "epp_running_requests") | .seriesQuery' "$CURRENT_CONFIG" 2>/dev/null || echo "")
+
+        if [ -n "$EXISTING_QS" ] && [ -n "$EXISTING_RR" ] \
+           && echo "$EXISTING_QS" | grep -q "inference_pool_average_queue_size" \
+           && echo "$EXISTING_RR" | grep -q "inference_objective_running_requests"; then
+            echo "  EPP rules already present and up-to-date — nothing to do."
         else
-            echo "  Adding EPP External Metrics rules to prometheus-adapter..."
+            if [ -n "$EXISTING_QS" ] || [ -n "$EXISTING_RR" ]; then
+                echo "  EPP rules present but stale — replacing..."
+            else
+                echo "  Adding EPP External Metrics rules to prometheus-adapter..."
+            fi
+
+            # Remove any old FMA rules, then append fresh ones
+            yq eval 'del(.externalRules[] | select(.name.as == "epp_queue_size" or .name.as == "epp_running_requests"))' \
+                "$CURRENT_CONFIG" > "$NEW_CONFIG"
+
+            # Append our two rules
+            POOL_NAME="$POOL_NAME" EPP_JOB="$EPP_JOB" NS="$NAMESPACE" yq eval -i '
+                .externalRules += [
+                    {
+                        "seriesQuery": "inference_pool_average_queue_size{namespace!=\"\"}",
+                        "resources": {"overrides": {"namespace": {"resource": "namespace"}}},
+                        "name": {"as": "epp_queue_size", "matches": "^inference_pool_average_queue_size"},
+                        "metricsQuery": "sum(inference_pool_average_queue_size{<<.LabelMatchers>>})"
+                    },
+                    {
+                        "seriesQuery": "inference_objective_running_requests{namespace!=\"\"}",
+                        "resources": {"overrides": {"namespace": {"resource": "namespace"}}},
+                        "name": {"as": "epp_running_requests", "matches": "^inference_objective_running_requests"},
+                        "metricsQuery": "sum(inference_objective_running_requests{<<.LabelMatchers>>})"
+                    }
+                ]' "$NEW_CONFIG"
+
+            # Patch the configmap in-place
+            kubectl create configmap "$ADAPTER_CM" -n "$PROM_ADAPTER_NS" \
+                --from-file=config.yaml="$NEW_CONFIG" \
+                --dry-run=client -o yaml | kubectl apply -f - 2>/dev/null
+
+            # Restart the adapter to pick up the new config
+            kubectl rollout restart deployment "$PROM_ADAPTER_SVC" -n "$PROM_ADAPTER_NS" 2>/dev/null || true
+            echo "  Waiting for prometheus-adapter to restart..."
+            kubectl rollout status deployment "$PROM_ADAPTER_SVC" -n "$PROM_ADAPTER_NS" \
+                --timeout=120s 2>/dev/null || true
+            echo "  prometheus-adapter rules updated"
         fi
-
-        # Build the two new FMA rules (as a YAML array, for yq to load+append).
-        cat > "$NEW_RULES" <<RULES_EOF
-- seriesQuery: 'inference_pool_average_queue_size'
-  resources:
-    overrides:
-      namespace:
-        resource: "namespace"
-    namespaced: false
-  name:
-    as: "epp_queue_size"
-  metricsQuery: 'sum(inference_pool_average_queue_size{name="${POOL_NAME}"})'
-- seriesQuery: 'inference_objective_running_requests'
-  resources:
-    overrides:
-      namespace:
-        resource: "namespace"
-    namespaced: false
-  name:
-    as: "epp_running_requests"
-  metricsQuery: 'sum(inference_objective_running_requests{namespace="${NAMESPACE}",job="${EPP_JOB}"})'
-RULES_EOF
-
-        # Strip any old FMA rules (preserves WVA and any other tenant's rules),
-        # then append the freshly-generated FMA rules.
-        yq eval 'del(.rules.external[] | select(.name.as == "epp_queue_size" or .name.as == "epp_running_requests"))' \
-            "$CURRENT_VALUES" \
-            | NEW_RULES_FILE="$NEW_RULES" yq eval '.rules.external = ((.rules.external // []) + load(env(NEW_RULES_FILE)))' - \
-            > "$NEW_VALUES"
-
-        # Resolve the chart from the existing release so we don't depend on a specific repo alias
-        CHART_NAME=$(helm get metadata "$PROM_ADAPTER_REL" -n "$PROM_ADAPTER_NS" -o json 2>/dev/null \
-            | yq -r '.chart' 2>/dev/null || echo "prometheus-adapter")
-
-        helm upgrade "$PROM_ADAPTER_REL" "prometheus-community/${CHART_NAME}" \
-            -n "$PROM_ADAPTER_NS" \
-            -f "$NEW_VALUES"
-        echo "  Waiting for prometheus-adapter to restart..."
-        kubectl rollout status deployment -n "$PROM_ADAPTER_NS" \
-            -l app.kubernetes.io/name=prometheus-adapter --timeout=120s 2>/dev/null || true
-        echo "  prometheus-adapter rules updated"
     fi
 fi
 
