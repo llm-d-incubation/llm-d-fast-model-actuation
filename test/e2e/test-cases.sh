@@ -224,7 +224,7 @@ expect '[ "$(kubectl get pod -n '"$NS"' $req1 -o jsonpath={.metadata.labels.dual
 # Wait for both pods to be ready (includes vllm startup time)
 date
 kubectl wait --for condition=Ready pod/$req1 -n "$NS" --timeout=300s
-[ "$(kubectl get pod $launcher1 -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
+kubectl wait --for condition=Ready pod/$launcher1 -n "$NS" --timeout=0s
 
 # Discover and remember the assigned GPUs.
 expect '[ -n "$(kubectl get pod -n '"$NS"' $req1 -o jsonpath={.metadata.annotations.dual-pods\\.llm-d\\.ai/accelerators})" ]'
@@ -317,7 +317,7 @@ else
 
     date
     kubectl wait --for condition=Ready pod/$collision_req -n "$NS" --timeout=300s
-    [ "$(kubectl get pod $collision_launcher -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
+    kubectl wait --for condition=Ready pod/$collision_launcher -n "$NS" --timeout=0s
 
     req_gpus=$(kubectl get pod "$req1" -n "$NS" -o jsonpath='{.metadata.annotations.dual-pods\.llm-d\.ai/accelerators}')
     collision_gpus=$(kubectl get pod "$collision_req" -n "$NS" -o jsonpath='{.metadata.annotations.dual-pods\.llm-d\.ai/accelerators}')
@@ -388,7 +388,7 @@ expect '[ "$(kubectl get pod -n '"$NS"' $req2 -o jsonpath={.metadata.labels.dual
 # Wait for requester to be ready (launcher should already be ready)
 date
 kubectl wait --for condition=Ready pod/$req2 -n "$NS" --timeout=300s
-[ "$(kubectl get pod $launcher1 -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
+kubectl wait --for condition=Ready pod/$launcher1 -n "$NS" --timeout=0s
 
 # Verify the same GPU UUID was assigned after wake-up.
 check_gpu_pin $req2
@@ -434,7 +434,7 @@ expect '[ "$(kubectl get pod -n '"$NS"' $req3 -o jsonpath={.metadata.labels.dual
 # Wait for requester to be ready (launcher should already be ready)
 date
 kubectl wait --for condition=Ready pod/$req3 -n "$NS" --timeout=300s
-[ "$(kubectl get pod $launcher1 -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
+kubectl wait --for condition=Ready pod/$launcher1 -n "$NS" --timeout=0s
 
 check_gpu_pin $req3
 
@@ -479,7 +479,7 @@ expect '[ "$(kubectl get pod -n '"$NS"' $req4 -o jsonpath={.metadata.labels.dual
 # Wait for requester to be ready (launcher should already be ready)
 date
 kubectl wait --for condition=Ready pod/$req4 -n "$NS" --timeout=300s
-[ "$(kubectl get pod $launcher1 -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
+kubectl wait --for condition=Ready pod/$launcher1 -n "$NS" --timeout=0s
 
 check_gpu_pin $req4
 
@@ -514,8 +514,8 @@ echo "Launcher $launcher1 has $launcher_instances_before_reclaim instances befor
 # so neither the fast wake-up path nor the capacity path applies.
 kubectl patch rs $rs -n "$NS" --type=json -p='[{"op": "replace", "path": "/spec/template/metadata/annotations/dual-pods.llm-d.ai~1inference-server-config", "value": "'$isc3'"}]'
 
-# Scale up. Controller must reclaim a slot in the existing launcher rather
-# than create a new one.
+# Scale up. Controller is expected to reclaim a slot in the existing launcher
+# rather than create a new one.
 kubectl scale rs $rs -n "$NS" --replicas=1
 
 expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$inst | wc -l | grep -w 1"
@@ -535,7 +535,7 @@ if [ "$launcher_count_after_reclaim_bind" != "$launcher_count_before_reclaim" ];
     echo "ERROR: expected $launcher_count_before_reclaim launcher pod(s) after reclaim bind, got $launcher_count_after_reclaim_bind" >&2
     exit 1
 fi
-kubectl get pod -n "$NS" "$launcher1"
+kubectl get pods -n "$NS" -l dual-pods.llm-d.ai/launcher-config-name=$lc -o wide
 
 # Bidirectional binding to the same launcher.
 [ "$(kubectl get pod -n "$NS" "$req_reclaim" -o jsonpath='{.metadata.labels.dual-pods\.llm-d\.ai/dual}')" == "$launcher1" ]
@@ -543,7 +543,7 @@ kubectl get pod -n "$NS" "$launcher1"
 
 date
 kubectl wait --for condition=Ready pod/$req_reclaim -n "$NS" --timeout=300s
-[ "$(kubectl get pod $launcher1 -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
+kubectl wait --for condition=Ready pod/$launcher1 -n "$NS" --timeout=0s
 
 check_gpu_pin $req_reclaim
 
@@ -620,7 +620,7 @@ expect '[ "$(kubectl get pod -n '"$NS"' $launcher1 -o jsonpath={.metadata.labels
 # Verify requester becomes ready (fast wake-up path should work)
 date
 kubectl wait --for condition=Ready pod/$req_post_restart -n "$NS" --timeout=30s
-[ "$(kubectl get pod $launcher1 -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
+kubectl wait --for condition=Ready pod/$launcher1 -n "$NS" --timeout=0s
 
 check_gpu_pin $req_post_restart
 
@@ -721,7 +721,7 @@ expect '[ "$(kubectl get pod -n '"$NS"' $req_after_delete -o jsonpath={.metadata
 # That should imply that the new launcher is ready.
 date
 kubectl wait --for condition=Ready pod/$req_after_delete -n "$NS" --timeout=300s
-[ "$(kubectl get pod $launcher_after_delete -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
+kubectl wait --for condition=Ready pod/$launcher_after_delete -n "$NS" --timeout=0s
 
 # Check that the new requester has the proper GPU UUIDs annotation.
 check_gpu_pin $req_after_delete
@@ -792,7 +792,7 @@ expect '[ "$(kubectl get pod -n '"$NS"' $req_recovered -o jsonpath={.metadata.la
 # Wait for both to be ready
 date
 kubectl wait --for condition=Ready pod/$req_recovered -n "$NS" --timeout=300s
-[ "$(kubectl get pod $launcher_after_delete -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" = "True" ]
+kubectl wait --for condition=Ready pod/$launcher_after_delete -n "$NS" --timeout=0s
 
 check_gpu_pin $req_recovered
 
