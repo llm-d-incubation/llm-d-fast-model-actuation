@@ -389,7 +389,13 @@ class VllmMultiProcessManager:
             instance_id = str(uuid.uuid4())
 
         if instance_id in self.instances:
+            logger.warning(
+                "Rejecting request to create vLLM instance: id=%s already exists",
+                instance_id,
+            )
             raise ValueError(f"Instance with ID {instance_id} already exists")
+
+        logger.info("Accepted request to create vLLM instance with id=%s", instance_id)
 
         instance = VllmInstance(
             instance_id, vllm_config, self.gpu_translator, self.log_dir
