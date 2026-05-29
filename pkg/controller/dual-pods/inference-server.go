@@ -1473,15 +1473,15 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 			}
 			endpoint := fmt.Sprintf("%s:%d", providingPod.Status.PodIP, serverPort)
 			sleepURL := "http://" + endpoint + "/sleep"
-			resp, err := http.Post(sleepURL, "", nil)
+			sleepStart := time.Now()
+			err := doPost(ctx, sleepURL)
+			sleepDurationSec := time.Since(sleepStart).Seconds()
 			if err != nil {
-				return fmt.Errorf("failed to put provider %q to sleep, POST %s got error: %w", serverDat.ProvidingPodName, sleepURL, err)
-			}
-			if sc := resp.StatusCode; sc != http.StatusOK {
-				return fmt.Errorf("failed to put provider %q to sleep, POST %s returned status %d", serverDat.ProvidingPodName, sleepURL, sc)
+				logger.V(2).Info("Failed to put inference server to sleep", "endpoint", endpoint, "httpCallDurationSec", sleepDurationSec, "err", err.Error())
+				return fmt.Errorf("failed to put provider %q to sleep, POST %s: %w", serverDat.ProvidingPodName, sleepURL, err)
 			}
 			serverDat.Sleeping = ptr.To(true)
-			logger.V(2).Info("Put inference server to sleep", "endpoint", endpoint)
+			logger.V(2).Info("Put inference server to sleep", "endpoint", endpoint, "httpCallDurationSec", sleepDurationSec)
 		}
 	}
 	providingPod = providingPod.DeepCopy()
