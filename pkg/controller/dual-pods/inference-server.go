@@ -228,14 +228,17 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 					return err, true
 				}
 			}
+			delStart := time.Now()
 			err := podOps.Delete(ctx, requestingPod.Name, metav1.DeleteOptions{
 				PropagationPolicy: ptr.To(metav1.DeletePropagationBackground),
 				Preconditions:     &metav1.Preconditions{UID: &item.UID, ResourceVersion: &gonerRV}})
+			k8sCallDurationSec := time.Since(delStart).Seconds()
 			if err == nil {
-				logger.V(2).Info("Requested deletion of server-requesting Pod because of deletion of server-providing Pod")
+				logger.V(2).Info("Requested deletion of server-requesting Pod because of deletion of server-providing Pod", "k8sCallDurationSec", k8sCallDurationSec)
 			} else if apierrors.IsGone(err) || apierrors.IsNotFound(err) {
-				logger.V(5).Info("The server-requesting Pod is already gone")
+				logger.V(2).Info("The server-requesting Pod is already gone", "k8sCallDurationSec", k8sCallDurationSec)
 			} else {
+				logger.V(2).Info("Failed to delete server-requesting Pod", "k8sCallDurationSec", k8sCallDurationSec, "err", err.Error())
 				return fmt.Errorf("failed to delete server-requesting Pod: %w", err), true
 			}
 			serverDat.RequesterDeleteRequested = true
@@ -258,18 +261,20 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		// Time to unbind.
 		// As a special favor, delete providingPod if it is in trouble.
 		if utils.PodIsInTrouble(providingPod) {
+			delStart := time.Now()
 			err := podOps.Delete(ctx, providingPod.Name, metav1.DeleteOptions{
 				Preconditions:     &metav1.Preconditions{UID: &providingPod.UID, ResourceVersion: &providingPod.ResourceVersion},
 				PropagationPolicy: ptr.To(metav1.DeletePropagationBackground),
 			})
+			k8sCallDurationSec := time.Since(delStart).Seconds()
 			if err == nil {
 				stJSON, marshalErr := json.Marshal(providingPod.Status)
-				logger.V(2).Info("Deleted server-providing Pod because it is in trouble", "providerName", providingPod.Name, "status", string(stJSON), "marshalErr", marshalErr)
+				logger.V(2).Info("Deleted server-providing Pod because it is in trouble", "providerName", providingPod.Name, "status", string(stJSON), "marshalErr", marshalErr, "k8sCallDurationSec", k8sCallDurationSec)
 				return nil, false
 			} else if apierrors.IsNotFound(err) || apierrors.IsGone(err) {
-				logger.V(5).Info("Troubled server-providing Pod was concurrently deleted", "providerName", providingPod.Name)
+				logger.V(2).Info("Troubled server-providing Pod was concurrently deleted", "providerName", providingPod.Name, "k8sCallDurationSec", k8sCallDurationSec)
 			} else {
-				logger.V(2).Info("Failed to delete troubled server-providing Pod", "providerName", providingPod.Name)
+				logger.V(2).Info("Failed to delete troubled server-providing Pod", "providerName", providingPod.Name, "k8sCallDurationSec", k8sCallDurationSec, "err", err.Error())
 			}
 		}
 		// since now requestingPod could be nil, use the providingPod's launcherConfigNameLabelKey
@@ -433,14 +438,17 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 					// Mark as sleeping so that ensureUnbound (called during requester deletion)
 					// does not attempt to POST /sleep on the dead instance.
 					serverDat.Sleeping = ptr.To(true)
+					delStart := time.Now()
 					err = podOps.Delete(ctx, requestingPod.Name, metav1.DeleteOptions{
 						PropagationPolicy: ptr.To(metav1.DeletePropagationBackground),
 						Preconditions:     &metav1.Preconditions{UID: &item.UID, ResourceVersion: &requestingPod.ResourceVersion}})
+					k8sCallDurationSec := time.Since(delStart).Seconds()
 					if err == nil {
-						logger.V(2).Info("Requested deletion of server-requesting Pod because bound instance stopped")
+						logger.V(2).Info("Requested deletion of server-requesting Pod because bound instance stopped", "k8sCallDurationSec", k8sCallDurationSec)
 					} else if apierrors.IsGone(err) || apierrors.IsNotFound(err) {
-						logger.V(5).Info("The server-requesting Pod is already gone")
+						logger.V(2).Info("The server-requesting Pod is already gone", "k8sCallDurationSec", k8sCallDurationSec)
 					} else {
+						logger.V(2).Info("Failed to delete server-requesting Pod for stopped instance", "k8sCallDurationSec", k8sCallDurationSec, "err", err.Error())
 						return fmt.Errorf("failed to delete server-requesting Pod for stopped instance: %w", err), true
 					}
 					serverDat.RequesterDeleteRequested = true
@@ -454,14 +462,17 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				if err != nil {
 					return err, true
 				}
+				createStart := time.Now()
 				result, err := lClient.CreateNamedInstance(ctx, serverDat.InstanceID, *serverDat.InstanceConfig)
+				createDurationSec := time.Since(createStart).Seconds()
 				if err != nil {
+					logger.V(2).Info("Failed to create vLLM instance", "instance_id", serverDat.InstanceID, "httpCallDurationSec", createDurationSec, "err", err.Error())
 					return fmt.Errorf("failed to create vLLM instance %q: %w", serverDat.InstanceID, err), true
 				}
 				serverDat.InstanceKnownToExist = true
 				launcherDat := ctl.getLauncherData(nodeDat, providingPod.Name)
 				launcherDat.Instances[serverDat.InstanceID] = time.Now()
-				logger.V(5).Info("Created vLLM instance", "instance_id", result.InstanceID, "status", result.Status)
+				logger.V(2).Info("Created vLLM instance", "instance_id", result.InstanceID, "status", result.Status, "httpCallDurationSec", createDurationSec)
 			}
 			serverDat.InstanceKnownToExist = true
 		}
@@ -504,13 +515,15 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				url += stubapi.BecomeUnreadyPath
 				readiness = "unready"
 			}
-			err = doPost(url)
+			postStart := time.Now()
+			err = doPost(ctx, url)
+			postDurationSec := time.Since(postStart).Seconds()
 			if err != nil {
-				logger.Error(err, "Failed to relay the readiness", "name", providingPod.Name, "readiness", readiness)
+				logger.Error(err, "Failed to relay the readiness", "name", providingPod.Name, "readiness", readiness, "url", url, "httpCallDurationSec", postDurationSec)
 				return err, true
 			}
 			serverDat.ReadinessRelayed = &ready
-			logger.V(5).Info("Successfully relayed the readiness", "name", providingPod.Name, "readiness", readiness)
+			logger.V(2).Info("Successfully relayed the readiness", "name", providingPod.Name, "readiness", readiness, "url", url, "httpCallDurationSec", postDurationSec)
 		}
 		// TODO: sync desired and actual providingPod wrt labels (spec is mostly immutable, possible mutations are allowed)
 		logger.V(5).Info("Nothing more to do")
@@ -521,7 +534,14 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	if node.Spec.Unschedulable {
 		// Reflect the inability to serve back to the client/user
 		logger.V(2).Info("Deleting server-requesting Pod because it is bound to an unschedulable Node and has no server-providing Pod")
+		delStart := time.Now()
 		err := podOps.Delete(ctx, requestingPod.Name, metav1.DeleteOptions{PropagationPolicy: ptr.To(metav1.DeletePropagationBackground)})
+		k8sCallDurationSec := time.Since(delStart).Seconds()
+		if err != nil {
+			logger.V(2).Info("Failed to delete server-requesting Pod on unschedulable Node", "k8sCallDurationSec", k8sCallDurationSec, "err", err.Error())
+		} else {
+			logger.V(2).Info("Deleted server-requesting Pod on unschedulable Node", "k8sCallDurationSec", k8sCallDurationSec)
+		}
 		return err, false
 	}
 	// What remains to be done is to wake or create a server-providing Pod
@@ -561,9 +581,12 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		// Sleeper budget is met. Make the new Pod.
 
 		logger.V(3).Info("Creating server-providing pod", "node", requestingPod.Spec.NodeName, "gpus", serverDat.GPUIndicesStr, "labels", desiredProvidingPod.Labels)
+		createStart := time.Now()
 		echo, err := podOps.Create(ctx, desiredProvidingPod, metav1.CreateOptions{})
+		k8sCallDurationSec := time.Since(createStart).Seconds()
 		if err != nil {
 			errMsg := err.Error()
+			logger.V(2).Info("Failed to create server-providing Pod", "node", requestingPod.Spec.NodeName, "gpus", serverDat.GPUIndicesStr, "k8sCallDurationSec", k8sCallDurationSec, "err", errMsg)
 			if invalidPodRE.MatchString(errMsg) {
 				return ctl.ensureReqStatus(ctx, requestingPod, serverDat, "the nominal server-providing "+errMsg)
 			}
@@ -574,7 +597,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 			return err, true
 		}
 		serverDat.Sleeping = ptr.To(false)
-		logger.V(2).Info("Created server-providing pod", "name", echo.Name, "gpus", serverDat.GPUIndicesStr, "annotations", echo.Annotations, "labels", echo.Labels, "resourceVersion", echo.ResourceVersion)
+		logger.V(2).Info("Created server-providing pod", "name", echo.Name, "gpus", serverDat.GPUIndicesStr, "annotations", echo.Annotations, "labels", echo.Labels, "resourceVersion", echo.ResourceVersion, "k8sCallDurationSec", k8sCallDurationSec)
 
 		return ctl.ensureReqStatus(ctx, requestingPod, serverDat)
 	}
@@ -641,9 +664,12 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		desiredLauncherPod.Finalizers = append(desiredLauncherPod.Finalizers, providerFinalizer)
 	}
 
+	createStart := time.Now()
 	echo, err := podOps.Create(ctx, desiredLauncherPod, metav1.CreateOptions{})
+	k8sCallDurationSec := time.Since(createStart).Seconds()
 	if err != nil {
 		errMsg := err.Error()
+		logger.V(2).Info("Failed to create launcher-based server-providing Pod", "node", requestingPod.Spec.NodeName, "k8sCallDurationSec", k8sCallDurationSec, "err", errMsg)
 		if invalidPodRE.MatchString(errMsg) {
 			return ctl.ensureReqStatus(ctx, requestingPod, serverDat, "the desired launcher-based server-providing "+errMsg)
 		}
@@ -656,7 +682,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	serverDat.Sleeping = nil
 	commitInstanceState(serverDat, desiredInstanceState)
 	serverDat.ProvidingPodName = echo.Name
-	logger.V(2).Info("Created launcher-based server-providing pod", "name", echo.Name, "gpus", serverDat.GPUIDsStr, "annotations", echo.Annotations, "labels", echo.Labels, "resourceVersion", echo.ResourceVersion)
+	logger.V(2).Info("Created launcher-based server-providing pod", "name", echo.Name, "gpus", serverDat.GPUIDsStr, "annotations", echo.Annotations, "labels", echo.Labels, "resourceVersion", echo.ResourceVersion, "k8sCallDurationSec", k8sCallDurationSec)
 
 	return ctl.ensureReqStatus(ctx, requestingPod, serverDat)
 }
@@ -800,12 +826,17 @@ launcherPodLoop:
 			return nil, false, true, err
 		}
 		for _, victim := range bestReclaimPlan.victims {
-			if _, err := lClient.DeleteInstance(ctx, victim); err != nil && !IsInstanceNotFoundError(err) {
+			delStart := time.Now()
+			_, err := lClient.DeleteInstance(ctx, victim)
+			delDurationSec := time.Since(delStart).Seconds()
+			if err != nil && !IsInstanceNotFoundError(err) {
+				logger.V(2).Info("Failed to delete vLLM instance during reclaim",
+					"launcherPod", bestReclaimPlan.launcherPod.Name, "instanceID", victim, "httpCallDurationSec", delDurationSec, "err", err.Error())
 				return nil, false, true, fmt.Errorf("failed to delete instance %q from launcher Pod %q: %w", victim, bestReclaimPlan.launcherPod.Name, err)
 			}
 			delete(bestReclaimPlan.launcherDat.Instances, victim)
-			logger.V(4).Info("Ensured vLLM instance absent to reclaim launcher capacity",
-				"launcherPod", bestReclaimPlan.launcherPod.Name, "instanceID", victim, "maxOthers", maxOthers)
+			logger.V(2).Info("Ensured vLLM instance absent to reclaim launcher capacity",
+				"launcherPod", bestReclaimPlan.launcherPod.Name, "instanceID", victim, "maxOthers", maxOthers, "httpCallDurationSec", delDurationSec)
 		}
 		return bestReclaimPlan.launcherPod, false, false, nil
 	}
@@ -1069,12 +1100,15 @@ func (ctl *controller) ensureSleepingLabel(ctx context.Context, providingPod *co
 	if providingPod.Labels[api.SleepingLabelName] != desiredStr {
 		providingPod = providingPod.DeepCopy()
 		providingPod.Labels = utils.MapSet(providingPod.Labels, api.SleepingLabelName, desiredStr)
+		updStart := time.Now()
 		echo, err := ctl.coreclient.Pods(ctl.namespace).Update(ctx, providingPod, metav1.UpdateOptions{
 			FieldManager: ControllerName})
+		k8sCallDurationSec := time.Since(updStart).Seconds()
 		if err != nil {
+			logger.V(2).Info("Failed to revise sleeping label on server-providing Pod", "sleeping", desiredStr, "k8sCallDurationSec", k8sCallDurationSec, "err", err.Error())
 			return fmt.Errorf("failed to revise sleeping label on server-providing Pod to %s: %w", desiredStr, err)
 		}
-		logger.V(3).Info("Updated sleeping label on sever-providing Pod", "sleeping", desiredStr, "newResourceVersion", echo.ResourceVersion)
+		logger.V(2).Info("Updated sleeping label on server-providing Pod", "sleeping", desiredStr, "newResourceVersion", echo.ResourceVersion, "k8sCallDurationSec", k8sCallDurationSec)
 	}
 	return nil
 }
@@ -1139,15 +1173,18 @@ func (ctl *controller) enforceSleeperBudget(ctx context.Context, serverDat *serv
 		slices.SortFunc(sleepingPods, comparePods)
 		for idx, goner := range sleepingPods[:toGo] {
 			gonerNames.Insert(goner.Name)
+			delStart := time.Now()
 			err := podOps.Delete(ctx, goner.Name, metav1.DeleteOptions{
 				Preconditions:     &metav1.Preconditions{UID: &goner.UID, ResourceVersion: &goner.ResourceVersion},
 				PropagationPolicy: ptr.To(metav1.DeletePropagationBackground),
 			})
+			k8sCallDurationSec := time.Since(delStart).Seconds()
 			if err == nil {
-				logger.V(2).Info("Deleted server-providing Pod with sleeping server, to respect sleeper-limit", "idx", idx, "total", len(sleepingPods), "limit", sleeperLimit, "name", goner.Name, "resourceVersion", goner.ResourceVersion)
+				logger.V(2).Info("Deleted server-providing Pod with sleeping server, to respect sleeper-limit", "idx", idx, "total", len(sleepingPods), "limit", sleeperLimit, "name", goner.Name, "resourceVersion", goner.ResourceVersion, "k8sCallDurationSec", k8sCallDurationSec)
 			} else if apierrors.IsNotFound(err) || apierrors.IsGone(err) {
-				logger.V(5).Info("Server-providing Pod was concurrently deleted", "name", goner.Name)
+				logger.V(2).Info("Server-providing Pod was concurrently deleted", "name", goner.Name, "k8sCallDurationSec", k8sCallDurationSec)
 			} else {
+				logger.V(2).Info("Failed to delete server-providing Pod for sleeper-limit", "name", goner.Name, "k8sCallDurationSec", k8sCallDurationSec, "err", err.Error())
 				return fmt.Errorf("unable to delete server-providing Pod %s (RV=%s): %w", goner.Name, goner.ResourceVersion, err), true
 			}
 		}
@@ -1172,15 +1209,18 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 		}
 	}
 	serverDat.Sleeping = nil
+	updStart := time.Now()
 	echo, err := ctl.coreclient.Pods(ctl.namespace).Update(ctx, providingPod, metav1.UpdateOptions{FieldManager: ControllerName})
+	k8sCallDurationSec := time.Since(updStart).Seconds()
 	if err != nil {
+		logger.V(2).Info("Failed to bind server-providing Pod", "name", providingPod.Name, "k8sCallDurationSec", k8sCallDurationSec, "err", err.Error())
 		return fmt.Errorf("failed to bind server-providing Pod %s: %w", providingPod.Name, err), true
 	}
 	serverDat.ProvidingPodName = providingPod.Name
 	if launcherBased {
 		commitInstanceState(serverDat, launcherState)
 	}
-	logger.V(2).Info("Bound server-providing Pod", "name", providingPod.Name, "node", requestingPod.Spec.NodeName, "gpus", serverDat.GPUIDsStr, "newResourceVersion", echo.ResourceVersion, "instanceID", serverDat.InstanceID)
+	logger.V(2).Info("Bound server-providing Pod", "name", providingPod.Name, "node", requestingPod.Spec.NodeName, "gpus", serverDat.GPUIDsStr, "newResourceVersion", echo.ResourceVersion, "instanceID", serverDat.InstanceID, "k8sCallDurationSec", k8sCallDurationSec)
 	var serverPort int32
 	// For launcher-based server-providing Pods, ServerPort is written when binding.
 	// For direct server-providing Pods, ServerPort is written (earlier) when
@@ -1210,12 +1250,15 @@ func (ctl *controller) wakeSleeper(ctx context.Context, serverDat *serverData, r
 	}
 	endpoint := fmt.Sprintf("%s:%d", providingPod.Status.PodIP, serverPort)
 	wakeURL := "http://" + endpoint + "/wake_up"
-	err := doPost(wakeURL)
+	logger := klog.FromContext(ctx)
+	wakeStart := time.Now()
+	err := doPost(ctx, wakeURL)
+	wakeDurationSec := time.Since(wakeStart).Seconds()
 	if err != nil {
+		logger.V(2).Info("Failed to wake inference server", "endpoint", endpoint, "description", description, "httpCallDurationSec", wakeDurationSec, "err", err.Error())
 		return err
 	}
-	logger := klog.FromContext(ctx)
-	logger.V(2).Info("Woke inference server", "endpoint", endpoint, "description", description)
+	logger.V(2).Info("Woke inference server", "endpoint", endpoint, "description", description, "httpCallDurationSec", wakeDurationSec)
 	if err := ctl.ensureSleepingLabel(ctx, providingPod, false); err != nil {
 		return err
 	}
@@ -1257,12 +1300,15 @@ func (ctl *controller) maybeRemoveRequesterFinalizer(ctx context.Context, reques
 	podOps := ctl.coreclient.Pods(ctl.namespace)
 	requestingPod = requestingPod.DeepCopy()
 	requestingPod.Finalizers = slices.Delete(requestingPod.Finalizers, finIdx, finIdx+1)
+	logger := klog.FromContext(ctx)
+	updStart := time.Now()
 	echo, err := podOps.Update(ctx, requestingPod, metav1.UpdateOptions{FieldManager: ControllerName})
+	k8sCallDurationSec := time.Since(updStart).Seconds()
 	if err != nil {
+		logger.V(2).Info("Failed to remove requester finalizer", "k8sCallDurationSec", k8sCallDurationSec, "err", err.Error())
 		return false, false, fmt.Errorf("failed to remove finalizer from server-requesting Pod: %w", err), true
 	}
-	logger := klog.FromContext(ctx)
-	logger.V(2).Info("Removed requester finalizer", "newResourceVersion", echo.ResourceVersion)
+	logger.V(2).Info("Removed requester finalizer", "newResourceVersion", echo.ResourceVersion, "k8sCallDurationSec", k8sCallDurationSec)
 	return true, false, nil, false
 }
 
@@ -1278,12 +1324,15 @@ func (ctl *controller) addRequesterFinalizer(ctx context.Context, requestingPod 
 		requestingPod.Labels = utils.MapSet(requestingPod.Labels, api.InstanceLabelName, instanceID)
 	}
 	requestingPod.Finalizers = append(requestingPod.Finalizers, requesterFinalizer)
+	logger := klog.FromContext(ctx)
+	updStart := time.Now()
 	echo, err := podOps.Update(ctx, requestingPod, metav1.UpdateOptions{FieldManager: ControllerName})
+	k8sCallDurationSec := time.Since(updStart).Seconds()
 	if err != nil {
+		logger.V(2).Info("Failed to add requester finalizer", "k8sCallDurationSec", k8sCallDurationSec, "err", err.Error())
 		return "", fmt.Errorf("failed to add finalizer from server-requesting Pod: %w", err)
 	}
-	logger := klog.FromContext(ctx)
-	logger.V(2).Info("Added requester finalizer", "newResourceVersion", echo.ResourceVersion)
+	logger.V(2).Info("Added requester finalizer", "newResourceVersion", echo.ResourceVersion, "k8sCallDurationSec", k8sCallDurationSec)
 	return echo.ResourceVersion, nil
 }
 
@@ -1296,11 +1345,14 @@ func (ctl *controller) removeProviderFinalizer(ctx context.Context, providingPod
 	if newFinalizers, changed := utils.SliceRemoveOnce(providingPod.Finalizers, providerFinalizer); changed {
 		providingPod = providingPod.DeepCopy()
 		providingPod.Finalizers = newFinalizers
+		updStart := time.Now()
 		echo, err := podOps.Update(ctx, providingPod, metav1.UpdateOptions{FieldManager: ctl.ControllerName})
+		k8sCallDurationSec := time.Since(updStart).Seconds()
 		if err != nil {
+			logger.V(2).Info("Failed to remove provider finalizer", "provider", providingPod.Name, "k8sCallDurationSec", k8sCallDurationSec, "err", err.Error())
 			return false, fmt.Errorf("failed to remove finalizer from server-providing Pod %s (RV %s): %w", providingPod.Name, providingPod.ResourceVersion, err)
 		}
-		logger.V(2).Info("Removed finalizer from server-providing Pod", "provider", providingPod.Name, "newResourceVersion", echo.ResourceVersion)
+		logger.V(2).Info("Removed finalizer from server-providing Pod", "provider", providingPod.Name, "newResourceVersion", echo.ResourceVersion, "k8sCallDurationSec", k8sCallDurationSec)
 		return true, nil // update and/or delete event will trigger more processing
 	}
 	return false, nil // no change
@@ -1335,11 +1387,14 @@ func (item instanceGCItem) process(ctx context.Context, ctl *controller, nodeDat
 			logger.Error(err, "Failed to create launcher client during instance GC", "launcherPod", launcherPodName)
 			continue
 		}
+		listStart := time.Now()
 		allInsts, err := lClient.ListInstances(ctx)
+		listDurationSec := time.Since(listStart).Seconds()
 		if err != nil {
-			logger.Error(err, "Failed to list instances during instance GC", "launcherPod", launcherPodName)
+			logger.Error(err, "Failed to list instances during instance GC", "launcherPod", launcherPodName, "httpCallDurationSec", listDurationSec)
 			continue
 		}
+		logger.V(4).Info("Listed launcher instances during GC", "launcherPod", launcherPodName, "totalInstances", allInsts.TotalInstances, "httpCallDurationSec", listDurationSec)
 		for _, inst := range allInsts.Instances {
 			if inst.Annotations[VllmConfigISCNameAnnotationKey] != isc.Name {
 				continue
@@ -1370,14 +1425,17 @@ func (item instanceGCItem) process(ctx context.Context, ctl *controller, nodeDat
 				logger.V(4).Info("Skipping instance GC: instance not explicitly sleeping", "launcherPod", launcherPodName, "instanceID", inst.InstanceID)
 				continue
 			}
-			if _, err := lClient.DeleteInstance(ctx, inst.InstanceID); err != nil {
+			delStart := time.Now()
+			_, err = lClient.DeleteInstance(ctx, inst.InstanceID)
+			delDurationSec := time.Since(delStart).Seconds()
+			if err != nil {
 				if !IsInstanceNotFoundError(err) {
-					logger.Error(err, "Failed to delete obsolete sleeping instance during GC", "launcherPod", launcherPodName, "instanceID", inst.InstanceID)
+					logger.Error(err, "Failed to delete obsolete sleeping instance during GC", "launcherPod", launcherPodName, "instanceID", inst.InstanceID, "httpCallDurationSec", delDurationSec)
 				}
 				continue
 			}
 			delete(launcherDat.Instances, inst.InstanceID)
-			logger.V(2).Info("Deleted obsolete sleeping instance", "launcherPod", launcherPodName, "instanceID", inst.InstanceID, "currentHash", currentHash)
+			logger.V(2).Info("Deleted obsolete sleeping instance", "launcherPod", launcherPodName, "instanceID", inst.InstanceID, "currentHash", currentHash, "httpCallDurationSec", delDurationSec)
 		}
 	}
 	return nil, false
@@ -1464,11 +1522,14 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 			delete(providingPod.Labels, api.DualLabelName)
 		}
 		podOps := ctl.coreclient.Pods(ctl.namespace)
+		updStart := time.Now()
 		echo, err := podOps.Update(ctx, providingPod, metav1.UpdateOptions{FieldManager: ControllerName})
+		k8sCallDurationSec := time.Since(updStart).Seconds()
 		if err != nil {
+			logger.V(2).Info("Failed to unbind server-providing Pod", "name", providingPod.Name, "k8sCallDurationSec", k8sCallDurationSec, "err", err.Error())
 			return fmt.Errorf("failed to unbind server-providing Pod %s: %w", providingPod.Name, err)
 		}
-		logger.V(2).Info("Unbound server-providing Pod", "name", providingPod.Name, "node", providingPod.Spec.NodeName, "gpus", serverDat.GPUIDsStr, "newResourceVersion", echo.ResourceVersion)
+		logger.V(2).Info("Unbound server-providing Pod", "name", providingPod.Name, "node", providingPod.Spec.NodeName, "gpus", serverDat.GPUIDsStr, "newResourceVersion", echo.ResourceVersion, "k8sCallDurationSec", k8sCallDurationSec)
 	} else {
 		logger.V(3).Info("Server-providing Pod remains unbound", "name", providingPod.Name, "resourceVersion", providingPod.ResourceVersion)
 	}
@@ -1490,11 +1551,14 @@ func (ctl *controller) maybeDeleteObsoleteInstance(ctx context.Context, serverDa
 		logger.V(4).Info("Cannot check instance obsolescence: failed to create launcher client", "err", err)
 		return false
 	}
+	getStart := time.Now()
 	instState, err := lClient.GetInstanceState(ctx, serverDat.InstanceID)
+	getDurationSec := time.Since(getStart).Seconds()
 	if err != nil {
-		logger.V(4).Info("Cannot check instance obsolescence: failed to get instance state", "instanceID", serverDat.InstanceID, "err", err)
+		logger.V(4).Info("Cannot check instance obsolescence: failed to get instance state", "instanceID", serverDat.InstanceID, "httpCallDurationSec", getDurationSec, "err", err)
 		return false
 	}
+	logger.V(4).Info("Got vLLM instance state", "instanceID", serverDat.InstanceID, "httpCallDurationSec", getDurationSec)
 	iscName := instState.Annotations[VllmConfigISCNameAnnotationKey]
 	if iscName == "" {
 		logger.V(4).Info("Cannot check instance obsolescence: no ISC name annotation on instance", "instanceID", serverDat.InstanceID)
@@ -1518,10 +1582,13 @@ func (ctl *controller) maybeDeleteObsoleteInstance(ctx context.Context, serverDa
 		return false // not obsolete
 	}
 	// Instance is obsolete — delete from launcher instead of sleeping.
-	if _, err := lClient.DeleteInstance(ctx, serverDat.InstanceID); err != nil {
-		if !IsInstanceNotFoundError(err) {
-			logger.Error(err, "Failed to delete obsolete instance during unbinding",
-				"instanceID", serverDat.InstanceID)
+	delStart := time.Now()
+	_, delErr := lClient.DeleteInstance(ctx, serverDat.InstanceID)
+	delDurationSec := time.Since(delStart).Seconds()
+	if delErr != nil {
+		if !IsInstanceNotFoundError(delErr) {
+			logger.Error(delErr, "Failed to delete obsolete instance during unbinding",
+				"instanceID", serverDat.InstanceID, "httpCallDurationSec", delDurationSec)
 			return false
 		}
 	}
@@ -1529,7 +1596,7 @@ func (ctl *controller) maybeDeleteObsoleteInstance(ctx context.Context, serverDa
 		delete(launcherDat.Instances, serverDat.InstanceID)
 	}
 	logger.V(2).Info("Deleted obsolete instance during unbinding",
-		"instanceID", serverDat.InstanceID, "currentHash", currentHash, "iscName", iscName)
+		"instanceID", serverDat.InstanceID, "currentHash", currentHash, "iscName", iscName, "httpCallDurationSec", delDurationSec)
 	return true
 }
 
@@ -1681,15 +1748,20 @@ func getReducedInferenceContainerState(from *corev1.Pod) *reducedContainerState 
 
 func (ctl *controller) querySleeping(ctx context.Context, providingPod *corev1.Pod, serverPort int32) (bool, error) {
 	queryURL := fmt.Sprintf("http://%s:%d/is_sleeping", providingPod.Status.PodIP, serverPort)
+	logger := klog.FromContext(ctx)
+	getStart := time.Now()
 	body, err := doGet(ctx, queryURL)
+	httpCallDurationSec := time.Since(getStart).Seconds()
 	if err != nil {
+		logger.V(2).Info("Failed is_sleeping query", "url", queryURL, "httpCallDurationSec", httpCallDurationSec, "err", err.Error())
 		return false, err
 	}
 	sleepState := api.SleepState{}
-	err = json.Unmarshal(body, &sleepState)
-	if err != nil {
+	if err := json.Unmarshal(body, &sleepState); err != nil {
+		logger.V(2).Info("Failed to parse is_sleeping response body (HTTP call already succeeded)", "url", queryURL, "httpCallDurationSec", httpCallDurationSec, "err", err.Error())
 		return false, fmt.Errorf("failed to parse response body to is_sleeping query: %w", err)
 	}
+	logger.V(4).Info("Queried sleeping state", "url", queryURL, "isSleeping", sleepState.IsSleeping, "httpCallDurationSec", httpCallDurationSec)
 	return sleepState.IsSleeping, nil
 }
 
@@ -1699,16 +1771,20 @@ func (ctl *controller) accelMemoryIsLowEnough(ctx context.Context, requestingPod
 		adminPort = api.AdminPortDefaultValue
 	}
 	url := fmt.Sprintf("http://%s:%s%s", requestingPod.Status.PodIP, adminPort, stubapi.AcceleratorMemoryQueryPath)
+	logger := klog.FromContext(ctx)
+	getStart := time.Now()
 	body, err := doGet(ctx, url)
+	httpCallDurationSec := time.Since(getStart).Seconds()
 	if err != nil {
+		logger.V(2).Info("Failed accelerator memory query", "url", url, "httpCallDurationSec", httpCallDurationSec, "err", err.Error())
 		return err
 	}
+	logger.V(4).Info("Queried accelerator memory usage", "url", url, "httpCallDurationSec", httpCallDurationSec)
 	usageMap := map[string]int64{}
 	err = json.Unmarshal(body, &usageMap)
 	if err != nil {
 		return fmt.Errorf("failed to parse memory usage map: %w", err)
 	}
-	logger := klog.FromContext(ctx)
 	for _, gpuID := range serverDat.GPUIDs {
 		if used, have := usageMap[gpuID]; !have {
 			return fmt.Errorf("no GPU usage information for GPU %s", gpuID)
@@ -1773,22 +1849,29 @@ func (ctl *controller) ensureReqState(ctx context.Context, requestingPod *corev1
 		delete(requestingPod.Labels, api.DualLabelName)
 		delete(requestingPod.Labels, api.InstanceLabelName)
 	}
+	updStart := time.Now()
 	echo, err := ctl.coreclient.Pods(requestingPod.Namespace).Update(ctx, requestingPod, metav1.UpdateOptions{FieldManager: ctl.ControllerName})
+	k8sCallDurationSec := time.Since(updStart).Seconds()
 	if err == nil {
-		logger.V(2).Info("Set status/finalizers", "serverRequestingPod", requestingPod.Name, "status", status, "accelerators", desiredAccelerators, "boundName", serverDat.ProvidingPodName, "instanceID", desiredInstanceID, "finalizers", requestingPod.Finalizers, "newResourceVersion", echo.ResourceVersion)
+		logger.V(2).Info("Set status/finalizers", "serverRequestingPod", requestingPod.Name, "status", status, "accelerators", desiredAccelerators, "boundName", serverDat.ProvidingPodName, "instanceID", desiredInstanceID, "finalizers", requestingPod.Finalizers, "newResourceVersion", echo.ResourceVersion, "k8sCallDurationSec", k8sCallDurationSec)
 	} else {
-		logger.V(3).Info("Failed to set status/finalizers", "serverRequestingPod", requestingPod.Name, "status", status, "accelerators", desiredAccelerators, "boundName", serverDat.ProvidingPodName, "instanceID", desiredInstanceID, "finalizers", requestingPod.Finalizers, "resourceVersion", requestingPod.ResourceVersion)
+		logger.V(2).Info("Failed to set status/finalizers", "serverRequestingPod", requestingPod.Name, "status", status, "accelerators", desiredAccelerators, "boundName", serverDat.ProvidingPodName, "instanceID", desiredInstanceID, "finalizers", requestingPod.Finalizers, "resourceVersion", requestingPod.ResourceVersion, "k8sCallDurationSec", k8sCallDurationSec, "err", err.Error())
 	}
 	return err, err != nil
 }
 
 // doPost does the HTTP POST request/response to the given URL.
-func doPost(url string) error {
+func doPost(ctx context.Context, url string) error {
 	client := &http.Client{
 		Timeout: 5 * time.Second,
 	}
 
-	resp, err := client.Post(url, "application/json", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	if err != nil {
+		return fmt.Errorf("http post %q: %w", url, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("http post %q: %w", url, err)
 	}
@@ -1833,9 +1916,11 @@ func (ctl *controller) syncLauncherInstances(ctx context.Context, nodeDat *nodeD
 		return nil, err, true
 	}
 
+	listStart := time.Now()
 	insts, err := lClient.ListInstances(ctx)
+	listDurationSec := time.Since(listStart).Seconds()
 	if err != nil {
-		logger.Error(err, "Failed to list instances from launcher")
+		logger.Error(err, "Failed to list instances from launcher", "httpCallDurationSec", listDurationSec)
 		return nil, err, true
 	}
 
@@ -1861,13 +1946,15 @@ func (ctl *controller) syncLauncherInstances(ctx context.Context, nodeDat *nodeD
 				logger.V(2).Info("Found stopped bound instance, deferring cleanup",
 					"instanceID", inst.InstanceID)
 			} else {
+				delStart := time.Now()
 				_, delErr := lClient.DeleteInstance(ctx, inst.InstanceID)
+				delDurationSec := time.Since(delStart).Seconds()
 				if delErr != nil && !IsInstanceNotFoundError(delErr) {
-					logger.V(3).Info("Failed to delete stopped instance from launcher during sync",
-						"instanceID", inst.InstanceID, "err", delErr)
+					logger.V(2).Info("Failed to delete stopped instance from launcher during sync",
+						"instanceID", inst.InstanceID, "httpCallDurationSec", delDurationSec, "err", delErr)
 				} else {
 					logger.V(2).Info("Deleted stopped instance from launcher during sync",
-						"instanceID", inst.InstanceID)
+						"instanceID", inst.InstanceID, "httpCallDurationSec", delDurationSec)
 				}
 			}
 			continue
@@ -1896,7 +1983,8 @@ func (ctl *controller) syncLauncherInstances(ctx context.Context, nodeDat *nodeD
 		"launcherPod", launcherPod.Name,
 		"totalInstances", insts.TotalInstances,
 		"runningInstances", insts.RunningInstances,
-		"instanceCount", len(newInstances))
+		"instanceCount", len(newInstances),
+		"httpCallDurationSec", listDurationSec)
 
 	return &launcherSyncResult{
 		instances:          insts,
@@ -1942,15 +2030,20 @@ func doGet(ctx context.Context, url string) ([]byte, error) {
 
 // getGPUUUIDs does the HTTP GET on the given URL to fetch the assigned GPU UUIDs.
 func getGPUUUIDs(ctx context.Context, url string) ([]string, error) {
+	logger := klog.FromContext(ctx)
+	getStart := time.Now()
 	body, err := doGet(ctx, url)
+	httpCallDurationSec := time.Since(getStart).Seconds()
 	if err != nil {
+		logger.V(2).Info("Failed GPU UUIDs query", "url", url, "httpCallDurationSec", httpCallDurationSec, "err", err.Error())
 		return nil, err
 	}
 	var uuids []string
 	if err := json.Unmarshal(body, &uuids); err != nil {
+		logger.V(2).Info("Failed to parse GPU UUIDs response body (HTTP call already succeeded)", "url", url, "httpCallDurationSec", httpCallDurationSec, "err", err.Error())
 		return nil, fmt.Errorf("unmarshal uuids: %w", err)
 	}
-
+	logger.V(4).Info("Got GPU UUIDs", "url", url, "httpCallDurationSec", httpCallDurationSec)
 	return uuids, nil
 }
 
