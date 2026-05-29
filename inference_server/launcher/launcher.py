@@ -42,6 +42,9 @@ from vllm.utils.argparse_utils import FlexibleArgumentParser
 
 MAX_LOG_RESPONSE_BYTES = 1 * 1024 * 1024  # 1 MB default for API response
 _MAX_BROADCASTER_EVENTS = 1000
+LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, force=True)
 
 
 class LogRangeNotAvailable(Exception):
@@ -894,11 +897,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # Configure root logger so launcher messages are visible before uvicorn
-    logging.basicConfig(
-        level=getattr(logging, args.log_level.upper()),
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
+    logging.getLogger().setLevel(getattr(logging, args.log_level.upper()))
 
     # Get node name from environment variable
     node_name = os.getenv("NODE_NAME")
@@ -924,4 +923,6 @@ if __name__ == "__main__":
         namespace=namespace,
     )
 
-    uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
+    uvicorn.run(
+        app, host=args.host, port=args.port, log_level=args.log_level, log_config=None
+    )
