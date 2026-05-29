@@ -69,7 +69,7 @@ send_request() {
   while true; do
     curl -s -o /dev/null -w '' \"\$GW/v1/completions\" \
       -H 'Content-Type: application/json' \
-      -d '{\"model\":\"\$MODEL\",\"prompt\":\"Write a very long and detailed essay about the history of artificial intelligence from the 1950s to the present day, covering all major breakthroughs, researchers, institutions, and technological advances in great detail.\",\"max_tokens\":'\$MAX_TOKENS',\"temperature\":0.9,\"stream\":false}' 2>/dev/null
+      -d '{\"model\":\"\$MODEL\",\"prompt\":\"Write a very long and detailed essay about the history of artificial intelligence from the 1950s to the present day, covering all major breakthroughs, researchers, institutions, and technological advances.\",\"max_tokens\":'\$MAX_TOKENS',\"temperature\":0.9,\"stream\":false}' 2>/dev/null
   done
 }
 

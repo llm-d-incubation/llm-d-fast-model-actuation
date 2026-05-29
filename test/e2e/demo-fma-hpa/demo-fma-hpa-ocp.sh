@@ -19,7 +19,7 @@
 # Optional environment variables (with defaults):
 #   NAMESPACE          - target namespace (default: fma-hpa)
 #   CONTAINER_IMG_REG  - image registry (default: ghcr.io/llm-d-incubation/llm-d-fast-model-actuation)
-#   IMAGE_TAG          - image tag (default: v0.6.0-alpha.12, latest release)
+#   IMAGE_TAG          - image tag (default: v0.6.0-alpha.12)
 #   LAUNCHER_IMAGE     - launcher image (default: $CONTAINER_IMG_REG/launcher:$IMAGE_TAG)
 #   REQUESTER_IMAGE    - requester image (default: $CONTAINER_IMG_REG/requester:$IMAGE_TAG)
 #   MODEL              - vLLM model (default: HuggingFaceTB/SmolLM2-360M-Instruct)
@@ -36,9 +36,17 @@ REQUESTER_IMAGE="${REQUESTER_IMAGE:-${CONTAINER_IMG_REG}/requester:${IMAGE_TAG}}
 MODEL="${MODEL:-HuggingFaceTB/SmolLM2-360M-Instruct}"
 GPU_NODE="${GPU_NODE:-}"
 HPA_MAX_REPLICAS="${HPA_MAX_REPLICAS:-4}"
+GATEWAY_API_VERSION="${GATEWAY_API_VERSION:-v1.5.1}"
+GAIE_VERSION="${GAIE_VERSION:-v1.5.0}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+
+if [ -z "${LLM_D_GUIDES_DIR:-}" ]; then
+    echo "ERROR: LLM_D_GUIDES_DIR not set. Set it to the path of your llm-d/guides clone." >&2
+    echo "  Example: export LLM_D_GUIDES_DIR=/path/to/llm-d/guides" >&2
+    exit 1
+fi
 
 step_num=0
 total_steps=8
@@ -52,9 +60,6 @@ step() {
     echo ""
 }
 
-check_skip() {
-    echo "  -> Already exists, skipping"
-}
 
 # =========================================================================
 # Step 1: Namespace + RBAC
@@ -105,15 +110,15 @@ step "CRDs"
 if kubectl get crd gateways.gateway.networking.k8s.io &>/dev/null; then
     echo "  Gateway API CRDs: present"
 else
-    echo "  Installing Gateway API CRDs v1.5.1..."
-    kubectl apply -k "https://github.com/kubernetes-sigs/gateway-api/config/crd?ref=v1.5.1"
+    echo "  Installing Gateway API CRDs ${GATEWAY_API_VERSION}..."
+    kubectl apply -k "https://github.com/kubernetes-sigs/gateway-api/config/crd?ref=${GATEWAY_API_VERSION}"
 fi
 
 if kubectl get crd inferencepools.inference.networking.x-k8s.io &>/dev/null; then
     echo "  GAIE CRDs: present"
 else
-    echo "  Installing GAIE CRDs v1.5.0..."
-    kubectl apply -k "https://github.com/kubernetes-sigs/gateway-api-inference-extension/config/crd?ref=v1.5.0"
+    echo "  Installing GAIE CRDs ${GAIE_VERSION}..."
+    kubectl apply -k "https://github.com/kubernetes-sigs/gateway-api-inference-extension/config/crd?ref=${GAIE_VERSION}"
 fi
 
 echo "  FMA CRDs: installed by deploy_fma.sh in Step 4"
@@ -123,14 +128,6 @@ echo "  FMA CRDs: installed by deploy_fma.sh in Step 4"
 # =========================================================================
 
 step "EPP + Gateway (optimized-baseline)"
-
-if [ -z "${LLM_D_GUIDES_DIR:-}" ]; then
-    echo "  ERROR: LLM_D_GUIDES_DIR not set. Set it to deploy EPP+Gateway." >&2
-    echo "  Example: export LLM_D_GUIDES_DIR=/path/to/llm-d/guides" >&2
-    exit 1
-fi
-
-GAIE_VERSION="${GAIE_VERSION:-v1.5.0}"
 
 # Deploy agentgateway control plane in agentgateway-system (cluster-scoped prereq)
 if kubectl get deployment agentgateway -n agentgateway-system &>/dev/null; then
@@ -522,7 +519,9 @@ else
             yq eval 'del(.externalRules[] | select(.name.as == "epp_queue_size" or .name.as == "epp_running_requests"))' \
                 "$CURRENT_CONFIG" > "$NEW_CONFIG"
 
-            # Append our two rules
+            # Append two external metric rules that bridge Prometheus → K8s External Metrics API:
+            #   epp_queue_size: number of requests queued in the EPP (drives HPA scale-up)
+            #   epp_running_requests: number of requests actively being processed (prevents premature scale-down)
             POOL_NAME="$POOL_NAME" EPP_JOB="$EPP_JOB" NS="$NAMESPACE" yq eval -i '
                 .externalRules += [
                     {

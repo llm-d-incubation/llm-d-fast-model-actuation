@@ -17,6 +17,7 @@
 #   NAMESPACE          - target namespace (default: fma-hpa)
 #   FULL_CLEANUP       - if "true", also delete namespace, node labels, and FMA prom-adapter rules (default: false)
 #   CLEAN_AGENTGATEWAY - if "true", also delete the agentgateway control plane in agentgateway-system (default: false)
+#   LLM_D_GUIDES_DIR   - path to llm-d/guides repo (only required when CLEAN_AGENTGATEWAY=true; see demo-fma-hpa-ocp.sh)
 
 set -euo pipefail
 
@@ -179,12 +180,12 @@ if [ "$CLEAN_AGENTGATEWAY" = "true" ]; then
     echo "--- Removing agentgateway control plane ---"
     if ! kubectl get ns agentgateway-system &>/dev/null; then
         echo "  agentgateway-system not present — skipping."
-    elif ! command -v helmfile &>/dev/null; then
-        echo "  WARNING: helmfile not installed. Run manually:"
-        echo "    helmfile destroy -f \${LLM_D_GUIDES_DIR}/prereq/gateway-provider/agentgateway.helmfile.yaml"
     elif [ -z "${LLM_D_GUIDES_DIR:-}" ]; then
         echo "  WARNING: LLM_D_GUIDES_DIR not set. Run manually:"
         echo "    helmfile destroy -f \${LLM_D_GUIDES_DIR}/prereq/gateway-provider/agentgateway.helmfile.yaml"
+    elif ! command -v helmfile &>/dev/null; then
+        echo "  WARNING: helmfile not installed. Run manually:"
+        echo "    helmfile destroy -f ${LLM_D_GUIDES_DIR}/prereq/gateway-provider/agentgateway.helmfile.yaml"
     else
         helmfile destroy -f "${LLM_D_GUIDES_DIR}/prereq/gateway-provider/agentgateway.helmfile.yaml" || true
     fi
