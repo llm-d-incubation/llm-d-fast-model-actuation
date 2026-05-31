@@ -25,7 +25,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 
@@ -223,13 +222,13 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 			"node", nodeName, "config", lcName)
 		ctl.keyQueue.Queue.Add(keyItem{NodeLauncherKey{NodeName: nodeName, LauncherConfigName: lcName}})
 	case *corev1.Node:
-		ctl.enqueueLogger.V(5).Info("Enqueuing digest update due to Node add", "name", typed.Name)
+		ctl.enqueueLogger.V(5).Info("Enqueuing Node reference due to Node add", "name", typed.Name)
 		ctl.digestQueue.Queue.Add(funcItem{kind: kindNode, name: typed.Name})
 	case *fmav1alpha1.LauncherPopulationPolicy:
-		ctl.enqueueLogger.V(5).Info("Enqueuing digest update due to LPP add", "name", typed.Name)
+		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherPopulationPolicy reference due to LPP add", "name", typed.Name)
 		ctl.digestQueue.Queue.Add(funcItem{kind: kindLPP, name: typed.Name})
 	case *fmav1alpha1.LauncherConfig:
-		ctl.enqueueLogger.V(5).Info("Enqueuing digest update due to LC add", "name", typed.Name)
+		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherConfig reference due to LC add", "name", typed.Name)
 		ctl.digestQueue.Queue.Add(funcItem{kind: kindLC, name: typed.Name})
 	default:
 		ctl.enqueueLogger.V(5).Info("Notified of add of object of ignored type", "type", fmt.Sprintf("%T", obj))
@@ -256,13 +255,13 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 			"node", nodeName, "config", lcName)
 		ctl.keyQueue.Queue.Add(keyItem{NodeLauncherKey{NodeName: nodeName, LauncherConfigName: lcName}})
 	case *corev1.Node:
-		ctl.enqueueLogger.V(5).Info("Enqueuing digest update due to Node update", "name", typed.Name)
+		ctl.enqueueLogger.V(5).Info("Enqueuing Node reference due to Node update", "name", typed.Name)
 		ctl.digestQueue.Queue.Add(funcItem{kind: kindNode, name: typed.Name})
 	case *fmav1alpha1.LauncherPopulationPolicy:
-		ctl.enqueueLogger.V(5).Info("Enqueuing digest update due to LPP update", "name", typed.Name)
+		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherPopulationPolicy reference due to LPP update", "name", typed.Name)
 		ctl.digestQueue.Queue.Add(funcItem{kind: kindLPP, name: typed.Name})
 	case *fmav1alpha1.LauncherConfig:
-		ctl.enqueueLogger.V(5).Info("Enqueuing digest update due to LC update", "name", typed.Name)
+		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherConfig reference due to LC update", "name", typed.Name)
 		ctl.digestQueue.Queue.Add(funcItem{kind: kindLC, name: typed.Name})
 	default:
 		ctl.enqueueLogger.V(5).Info("Notified of update of object of ignored type", "type", fmt.Sprintf("%T", obj))
@@ -287,13 +286,13 @@ func (ctl *controller) OnDelete(obj any) {
 			"node", nodeName, "config", lcName)
 		ctl.keyQueue.Queue.Add(keyItem{NodeLauncherKey{NodeName: nodeName, LauncherConfigName: lcName}})
 	case *corev1.Node:
-		ctl.enqueueLogger.V(5).Info("Enqueuing digest update due to Node delete", "name", typed.Name)
+		ctl.enqueueLogger.V(5).Info("Enqueuing Node reference due to Node delete", "name", typed.Name)
 		ctl.digestQueue.Queue.Add(funcItem{kind: kindNode, name: typed.Name})
 	case *fmav1alpha1.LauncherPopulationPolicy:
-		ctl.enqueueLogger.V(5).Info("Enqueuing digest update due to LPP delete", "name", typed.Name)
+		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherPopulationPolicy reference due to LPP delete", "name", typed.Name)
 		ctl.digestQueue.Queue.Add(funcItem{kind: kindLPP, name: typed.Name})
 	case *fmav1alpha1.LauncherConfig:
-		ctl.enqueueLogger.V(5).Info("Enqueuing digest update due to LC delete", "name", typed.Name)
+		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherConfig reference due to LC delete", "name", typed.Name)
 		ctl.digestQueue.Queue.Add(funcItem{kind: kindLC, name: typed.Name})
 	default:
 		ctl.enqueueLogger.V(5).Info("Notified of delete of object of ignored type", "type", fmt.Sprintf("%T", obj))
@@ -306,55 +305,15 @@ func (ctl *controller) Start(ctx context.Context) error {
 		return fmt.Errorf("caches not synced before end of Start context")
 	}
 
-	// Enqueue all currently-known LCs/LPPs/Nodes into the digest queue. The
-	// initial batch is processed through the same incremental code paths
-	// (updateDigestForLC/LPP/Node) used at runtime, so there is no separate
-	// "initial digest" code path.
-	if err := ctl.enqueueInitialBatch(); err != nil {
-		return fmt.Errorf("failed to enqueue initial batch: %w", err)
-	}
-
 	// Start digest workers. KnowsProcessedSync appends sentinels behind the
 	// initial batch and invokes onDigestSyncProcessed when those sentinels are
 	// drained, which is when keyQueue starts its workers.
 	return ctl.digestQueue.StartWorkers(ctx)
 }
 
-// enqueueInitialBatch lists all currently-cached LCs, LPPs, and Nodes and
-// enqueues a digest funcItem for each. Required ordering (LCs before LPPs) is
-// not strictly necessary because LC processing re-enqueues dependent LPPs on
-// existence transitions; doing it anyway keeps the typical no-flap path
-// shorter.
-func (ctl *controller) enqueueInitialBatch() error {
-	lcs, err := ctl.lcLister.LauncherConfigs(ctl.namespace).List(labels.Everything())
-	if err != nil {
-		return fmt.Errorf("failed to list LauncherConfigs: %w", err)
-	}
-	for _, lc := range lcs {
-		ctl.digestQueue.Queue.Add(funcItem{kind: kindLC, name: lc.Name})
-	}
-
-	lpps, err := ctl.lppLister.LauncherPopulationPolicies(ctl.namespace).List(labels.Everything())
-	if err != nil {
-		return fmt.Errorf("failed to list LauncherPopulationPolicies: %w", err)
-	}
-	for _, lpp := range lpps {
-		ctl.digestQueue.Queue.Add(funcItem{kind: kindLPP, name: lpp.Name})
-	}
-
-	nodes, err := ctl.nodeLister.List(labels.Everything())
-	if err != nil {
-		return fmt.Errorf("failed to list Nodes: %w", err)
-	}
-	for _, n := range nodes {
-		ctl.digestQueue.Queue.Add(funcItem{kind: kindNode, name: n.Name})
-	}
-	return nil
-}
-
-// onDigestSyncProcessed is invoked once by KnowsProcessedSync after the
-// initial batch of digest items has been drained. It starts keyQueue workers,
-// which process per-NodeLauncherKey reconciliation requests.
+// onDigestSyncProcessed is invoked by KnowsProcessedSync after the initial
+// batch of digest items has been drained. It starts keyQueue workers, which
+// process per-NodeLauncherKey reconciliation requests.
 func (ctl *controller) onDigestSyncProcessed(ctx context.Context) {
 	logger := klog.FromContext(ctx)
 	logger.V(1).Info("Initial digest batch processed; starting key workers",
@@ -424,7 +383,7 @@ func (ctl *controller) processKey(ctx context.Context, key NodeLauncherKey) (err
 }
 
 // reconcileKey adjusts launcher pods for a single NodeLauncherKey to match the desired count.
-func (ctl *controller) reconcileKey(ctx context.Context, key NodeLauncherKey, desiredCount int32, lcSpec *fmav1alpha1.LauncherConfigSpec, ownerRef metav1.OwnerReference, nominalHash string) (error, bool) {
+func (ctl *controller) reconcileKey(ctx context.Context, key NodeLauncherKey, desiredCount int32, lcSpec *fmav1alpha1.LauncherConfigSpec, ownerRef metav1.OwnerReference, templateHash string) (error, bool) {
 	logger := klog.FromContext(ctx)
 
 	// Check node existence.
@@ -449,7 +408,7 @@ func (ctl *controller) reconcileKey(ctx context.Context, key NodeLauncherKey, de
 	// Read the node-independent template hash from the snapshot taken in
 	// processKey under RLock. Empty when LC is missing or template invalid.
 	if lcSpec == nil {
-		nominalHash = ""
+		templateHash = ""
 	}
 
 	// Categorize pods.
@@ -468,10 +427,9 @@ func (ctl *controller) reconcileKey(ctx context.Context, key NodeLauncherKey, de
 			liveBoundCount++
 			continue
 		}
-		if nominalHash != "" {
+		if templateHash != "" {
 			podHash := pod.Annotations[string(common.LauncherTemplateHashAnnotationKey)]
-			// Pre-rollout Pods lack this annotation; treat empty as drift-free to avoid mass replacement.
-			if podHash != "" && podHash != nominalHash {
+			if podHash != "" && podHash != templateHash {
 				staleUnboundPods = append(staleUnboundPods, pod)
 				continue
 			}
@@ -496,7 +454,7 @@ func (ctl *controller) reconcileKey(ctx context.Context, key NodeLauncherKey, de
 				staleNotDeleted++
 				continue
 			}
-			return fmt.Errorf("failed to delete stale launcher pod %s: %w", pod.Name, err), false
+			return fmt.Errorf("failed to delete stale launcher pod %s: %w", pod.Name, err), true
 		}
 		ctl.expectations.expectDeletion(key, pod.UID)
 		logger.Info("Deleted stale launcher pod", "pod", pod.Name, "uid", pod.UID, "node", key.NodeName)
@@ -529,7 +487,7 @@ func (ctl *controller) reconcileKey(ctx context.Context, key NodeLauncherKey, de
 				if apierrors.IsConflict(err) {
 					continue
 				}
-				return fmt.Errorf("failed to delete launcher pod %s: %w", pod.Name, err), false
+				return fmt.Errorf("failed to delete launcher pod %s: %w", pod.Name, err), true
 			}
 			ctl.expectations.expectDeletion(key, pod.UID)
 			logger.Info("Deleted excess launcher pod", "pod", pod.Name, "uid", pod.UID, "node", key.NodeName)
@@ -546,7 +504,7 @@ func (ctl *controller) reconcileKey(ctx context.Context, key NodeLauncherKey, de
 	// Create pods if needed.
 	if diff > 0 && lcSpec != nil {
 		node, _ := ctl.nodeLister.Get(key.NodeName)
-		if err := ctl.createLaunchers(ctx, *node, key, int(diff), lcSpec, ownerRef, nominalHash); err != nil {
+		if err := ctl.createLaunchers(ctx, *node, key, int(diff), lcSpec, ownerRef, templateHash); err != nil {
 			return err, true
 		}
 		logger.Info("Created launchers", "node", key.NodeName, "config", key.LauncherConfigName, "count", diff)
