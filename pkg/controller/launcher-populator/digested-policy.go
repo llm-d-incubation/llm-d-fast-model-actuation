@@ -17,7 +17,6 @@ limitations under the License.
 package launcherpopulator
 
 import (
-	"iter"
 	"sync"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -136,25 +135,6 @@ func (dp *digestedPolicy) setEntry(nodeName, lcName string, entry *digestEntry) 
 		dp.digest[nodeName] = nodeMap
 	}
 	nodeMap[lcName] = entry
-}
-
-// entriesForLC yields every (key, entry) pair that references lcName. Each
-// yielded entry is non-nil. The caller must not insert into or delete from
-// dp.digest while iterating; mutating fields on the yielded *digestEntry is
-// allowed.
-func (dp *digestedPolicy) entriesForLC(lcName string) iter.Seq2[NodeLauncherKey, *digestEntry] {
-	return func(yield func(NodeLauncherKey, *digestEntry) bool) {
-		for nodeName, nodeMap := range dp.digest {
-			entry, ok := nodeMap[lcName]
-			if !ok {
-				continue
-			}
-			key := NodeLauncherKey{NodeName: nodeName, LauncherConfigName: lcName}
-			if !yield(key, entry) {
-				return
-			}
-		}
-	}
 }
 
 // allKeys returns all NodeLauncherKeys in the digest.
