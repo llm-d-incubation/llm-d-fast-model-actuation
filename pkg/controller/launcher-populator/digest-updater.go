@@ -54,14 +54,8 @@ func (ctl *controller) updateDigestForLC(ctx context.Context, name string) error
 		if !prevExists {
 			return nil
 		}
-		logger.Info("LC deleted, marking referencing keys as handsOff", "config", name)
+		logger.Info("LC deleted, requeuing referencing LPPs", "config", name)
 		delete(ctl.policy.lcs, name)
-		for key, entry := range ctl.policy.entriesForLC(name) {
-			entry.handsOff = true
-			entry.spec = nil
-			entry.count = 0
-			ctl.keyQueue.Queue.Add(keyItem{key})
-		}
 		for _, lppName := range ctl.policy.lppNamesRefByLC(name) {
 			ctl.digestQueue.Queue.Add(funcItem{kind: kindLPP, name: lppName})
 		}
@@ -89,8 +83,10 @@ func (ctl *controller) updateDigestForLC(ctx context.Context, name string) error
 	}
 
 	prevTemplateErr := ""
+	prevTemplateHash := ""
 	if prev != nil {
 		prevTemplateErr = prev.templateErr
+		prevTemplateHash = prev.templateHash
 	}
 
 	ctl.policy.lcs[name] = &lcDigest{
@@ -100,26 +96,10 @@ func (ctl *controller) updateDigestForLC(ctx context.Context, name string) error
 		ownerRef:     makeLCOwnerRef(lc),
 	}
 
-	// If the LC just became existent, or its template-validity flipped, the
-	// LPPs that reference it must be re-evaluated.
-	if !prevExists || prevTemplateErr != templateErr {
+	if !prevExists || prevTemplateErr != templateErr || prevTemplateHash != templateHash {
 		for _, lppName := range ctl.policy.lppNamesRefByLC(name) {
 			ctl.digestQueue.Queue.Add(funcItem{kind: kindLPP, name: lppName})
 		}
-	}
-
-	// Refresh per-key entries that reference this LC.
-	lcd := ctl.policy.lcs[name]
-	for key, entry := range ctl.policy.entriesForLC(name) {
-		if templateErr != "" {
-			entry.handsOff = true
-			entry.spec = nil
-		} else {
-			entry.handsOff = false
-			entry.spec = &lcd.object.Spec
-			entry.ownerRef = lcd.ownerRef
-		}
-		ctl.keyQueue.Queue.Add(keyItem{key})
 	}
 	return nil
 }
@@ -325,16 +305,22 @@ func (ctl *controller) removeLPPFromEntry(entry *digestEntry, lppName string) {
 }
 
 func (ctl *controller) detachLPPFromEntry(nodeMap map[string]*digestEntry, lppName, nodeName, lcName string, entry *digestEntry) {
+	prevHandsOff, prevCount := entry.handsOff, entry.count
+
 	ctl.removeLPPFromEntry(entry, lppName)
 	if len(entry.lpps) == 0 {
 		delete(nodeMap, lcName)
 		if len(nodeMap) == 0 {
 			delete(ctl.policy.digest, nodeName)
 		}
-	} else {
-		ctl.recomputeEntryFromLPPs(entry, lcName)
+		ctl.keyQueue.Queue.Add(keyItem{NodeLauncherKey{NodeName: nodeName, LauncherConfigName: lcName}})
+		return
 	}
-	ctl.keyQueue.Queue.Add(keyItem{NodeLauncherKey{NodeName: nodeName, LauncherConfigName: lcName}})
+
+	ctl.recomputeEntryFromLPPs(entry, lcName)
+	if entry.handsOff != prevHandsOff || entry.count != prevCount {
+		ctl.keyQueue.Queue.Add(keyItem{NodeLauncherKey{NodeName: nodeName, LauncherConfigName: lcName}})
+	}
 }
 
 // recomputeEntryFromLPPs recomputes the (handsOff, count, spec, ownerRef) of a
