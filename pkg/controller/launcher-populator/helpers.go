@@ -61,7 +61,7 @@ func (ctl *controller) getMatchingNodes(ctx context.Context, selector fmav1alpha
 	// Convert the label selector. A failure here is a user error (malformed LabelSelector).
 	labelSelector, selectorErr := metav1.LabelSelectorAsSelector(&selector.LabelSelector)
 	if selectorErr != nil {
-		return nil, []string{fmt.Sprintf("invalid label selector: %v", selectorErr)}, nil
+		return nil, []string{fmt.Sprintf("invalid label selector %#v: %v", selector.LabelSelector, selectorErr)}, nil
 	}
 	nodes, err := ctl.nodeLister.List(labelSelector)
 	if err != nil {

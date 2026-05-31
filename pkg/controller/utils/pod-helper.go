@@ -251,10 +251,6 @@ func BuildLauncherPodFromTemplate(template v1alpha1.EmbeddedPodTemplateSpec, ns,
 	hasher := sha256.New()
 	modifiedJSON, _ := json.Marshal(pod)
 	hasher.Write(modifiedJSON)
-	hasher.Write([]byte(";gpus="))
-	hasher.Write([]byte("all")) //@TODO will be refined
-	hasher.Write([]byte(";node="))
-	hasher.Write([]byte(nodeName))
 	var modifiedHash [sha256.Size]byte
 	modifiedHashSl := hasher.Sum(modifiedHash[:0])
 	nominalHash := base64.RawStdEncoding.EncodeToString(modifiedHashSl)
@@ -262,10 +258,10 @@ func BuildLauncherPodFromTemplate(template v1alpha1.EmbeddedPodTemplateSpec, ns,
 	if pod.Annotations == nil {
 		pod.Annotations = make(map[string]string)
 	}
-	// Legacy node-aware hash for the dual-pods indexer.
-	pod.Annotations = MapSet(pod.Annotations, string(common.LauncherConfigHashAnnotationKey), nominalHash)
+	// Legacy Pod hash for the dual-pods indexer (SHA256 of the Pod JSON above).
+	pod.Annotations[string(common.LauncherConfigHashAnnotationKey)] = nominalHash
 	// Node-independent template fingerprint for spec-drift detection; empty value is recorded as-is.
-	pod.Annotations = MapSet(pod.Annotations, string(common.LauncherTemplateHashAnnotationKey), templateHash)
+	pod.Annotations[string(common.LauncherTemplateHashAnnotationKey)] = templateHash
 
 	cIdx, err := GetInferenceServerContainerIndex(pod)
 	if err != nil {
