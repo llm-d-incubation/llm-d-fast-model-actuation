@@ -22,6 +22,7 @@ import (
 
 	fmav1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/utils"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -50,23 +51,19 @@ func (ctl *controller) updateDigestForLC(ctx context.Context, name string) error
 		if !apierrors.IsNotFound(err) {
 			return fmt.Errorf("failed to get LC %s: %w", name, err)
 		}
-		// LC deleted.
+		if !prevExists {
+			return nil
+		}
 		logger.Info("LC deleted, marking referencing keys as handsOff", "config", name)
 		delete(ctl.policy.lcs, name)
-		for _, key := range ctl.policy.keysForLC(name) {
-			if entry := ctl.policy.getEntry(key.NodeName, key.LauncherConfigName); entry != nil {
-				entry.handsOff = true
-				entry.spec = nil
-				entry.count = 0
-				ctl.keyQueue.Queue.Add(keyItem{key})
-			}
+		for key, entry := range ctl.policy.entriesForLC(name) {
+			entry.handsOff = true
+			entry.spec = nil
+			entry.count = 0
+			ctl.keyQueue.Queue.Add(keyItem{key})
 		}
-		// Existence flip: re-enqueue LPPs that reference this LC so they can
-		// recompute missingLCs.
-		if prevExists {
-			for _, lppName := range ctl.policy.lppNamesRefByLC(name) {
-				ctl.digestQueue.Queue.Add(funcItem{kind: kindLPP, name: lppName})
-			}
+		for _, lppName := range ctl.policy.lppNamesRefByLC(name) {
+			ctl.digestQueue.Queue.Add(funcItem{kind: kindLPP, name: lppName})
 		}
 		return nil
 	}
@@ -81,9 +78,11 @@ func (ctl *controller) updateDigestForLC(ctx context.Context, name string) error
 	if templateErr == "" {
 		h, hashErr := utils.ComputeLauncherTemplateHash(lc.Spec.PodTemplate)
 		if hashErr != nil {
-			return fmt.Errorf("failed to compute template hash for LC %s: %w", name, hashErr)
+			templateErr = hashErr.Error()
+			logger.Error(hashErr, "Failed to hash PodTemplate, reporting in Status", "config", name)
+		} else {
+			templateHash = h
 		}
-		templateHash = h
 	}
 	if statusErr := ctl.setLCStatusErrors(ctx, lc, nonNilSlice(templateErr)); statusErr != nil {
 		return fmt.Errorf("failed to set Status for LC %s: %w", name, statusErr)
@@ -110,18 +109,15 @@ func (ctl *controller) updateDigestForLC(ctx context.Context, name string) error
 	}
 
 	// Refresh per-key entries that reference this LC.
-	for _, key := range ctl.policy.keysForLC(name) {
-		entry := ctl.policy.getEntry(key.NodeName, key.LauncherConfigName)
-		if entry == nil {
-			continue
-		}
+	lcd := ctl.policy.lcs[name]
+	for key, entry := range ctl.policy.entriesForLC(name) {
 		if templateErr != "" {
 			entry.handsOff = true
 			entry.spec = nil
 		} else {
 			entry.handsOff = false
-			entry.spec = &lc.Spec
-			entry.ownerRef = makeLCOwnerRef(lc)
+			entry.spec = &lcd.object.Spec
+			entry.ownerRef = lcd.ownerRef
 		}
 		ctl.keyQueue.Queue.Add(keyItem{key})
 	}
@@ -216,8 +212,9 @@ func (ctl *controller) updateDigestForLPP(ctx context.Context, name string) erro
 	}
 
 	// Apply LPP to each matched node and enqueue affected keys.
-	for _, node := range currentMatchedNodes {
-		ctl.applyLPPToDigestForNode(lpp, node.Name)
+	for i := range currentMatchedNodes {
+		node := &currentMatchedNodes[i]
+		ctl.applyLPPToDigestForNode(lpp, node)
 		for _, cr := range lpp.Spec.CountForLauncher {
 			ctl.keyQueue.Queue.Add(keyItem{NodeLauncherKey{NodeName: node.Name, LauncherConfigName: cr.LauncherConfigName}})
 		}
@@ -233,52 +230,41 @@ func (ctl *controller) updateDigestForLPP(ctx context.Context, name string) erro
 func (ctl *controller) updateDigestForNode(ctx context.Context, nodeName string) error {
 	logger := klog.FromContext(ctx)
 
-	_, err := ctl.nodeLister.Get(nodeName)
+	node, err := ctl.nodeLister.Get(nodeName)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			logger.Info("Node deleted, removing from digest", "node", nodeName)
-			removedKeys := ctl.policy.removeNode(nodeName)
-			for _, key := range removedKeys {
-				ctl.keyQueue.Queue.Add(keyItem{key})
-			}
+			delete(ctl.policy.digest, nodeName)
 			return nil
 		}
 		return fmt.Errorf("failed to get node %s: %w", nodeName, err)
 	}
-	return ctl.recomputeDigestForNode(nodeName)
+	ctl.recomputeDigestForNode(node)
+	return nil
 }
 
 // recomputeDigestForNode rebuilds digest entries for a single node by replaying
 // every cached LPP. Pure read of ctl.policy.lpps + ctl.policy.lcs.
-func (ctl *controller) recomputeDigestForNode(nodeName string) error {
-	ctl.policy.digest[nodeName] = make(map[string]*digestEntry)
+func (ctl *controller) recomputeDigestForNode(node *corev1.Node) {
+	ctl.policy.digest[node.Name] = make(map[string]*digestEntry)
 
 	for _, lppd := range ctl.policy.lpps {
-		if lppd == nil || lppd.object == nil {
-			continue
-		}
-		ctl.applyLPPToDigestForNode(lppd.object, nodeName)
+		ctl.applyLPPToDigestForNode(lppd.object, node)
 	}
 
-	nodeMap := ctl.policy.digest[nodeName]
+	nodeMap := ctl.policy.digest[node.Name]
 	for lcName := range nodeMap {
-		ctl.keyQueue.Queue.Add(keyItem{NodeLauncherKey{NodeName: nodeName, LauncherConfigName: lcName}})
+		ctl.keyQueue.Queue.Add(keyItem{NodeLauncherKey{NodeName: node.Name, LauncherConfigName: lcName}})
 	}
 	if len(nodeMap) == 0 {
-		delete(ctl.policy.digest, nodeName)
+		delete(ctl.policy.digest, node.Name)
 	}
-	return nil
 }
 
 // applyLPPToDigestForNode evaluates one LPP for one node and updates the digest
 // using ONLY ctl.policy.lcs as the source of truth for LC status. It never
 // validates templates, writes Status, or fetches from listers.
-func (ctl *controller) applyLPPToDigestForNode(lpp *fmav1alpha1.LauncherPopulationPolicy, nodeName string) {
-	node, err := ctl.nodeLister.Get(nodeName)
-	if err != nil {
-		// Node missing or transient lister error: nothing to apply.
-		return
-	}
+func (ctl *controller) applyLPPToDigestForNode(lpp *fmav1alpha1.LauncherPopulationPolicy, node *corev1.Node) {
 	labelSelector, selectorErr := metav1.LabelSelectorAsSelector(&lpp.Spec.EnhancedNodeSelector.LabelSelector)
 	if selectorErr != nil {
 		return
@@ -293,10 +279,10 @@ func (ctl *controller) applyLPPToDigestForNode(lpp *fmav1alpha1.LauncherPopulati
 	for _, cr := range lpp.Spec.CountForLauncher {
 		lcName := cr.LauncherConfigName
 
-		entry := ctl.policy.getEntry(nodeName, lcName)
+		entry := ctl.policy.getEntry(node.Name, lcName)
 		if entry == nil {
 			entry = &digestEntry{lpps: make(map[string]*fmav1alpha1.LauncherPopulationPolicy)}
-			ctl.policy.setEntry(nodeName, lcName, entry)
+			ctl.policy.setEntry(node.Name, lcName, entry)
 		}
 
 		lcd := ctl.policy.lcDigestFor(lcName)
@@ -388,5 +374,3 @@ func (ctl *controller) recomputeEntryFromLPPs(entry *digestEntry, lcName string)
 		entry.ownerRef = lcd.ownerRef
 	}
 }
-
-

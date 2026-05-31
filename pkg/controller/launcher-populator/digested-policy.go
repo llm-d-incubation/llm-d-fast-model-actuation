@@ -17,6 +17,7 @@ limitations under the License.
 package launcherpopulator
 
 import (
+	"iter"
 	"sync"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -137,29 +138,23 @@ func (dp *digestedPolicy) setEntry(nodeName, lcName string, entry *digestEntry) 
 	nodeMap[lcName] = entry
 }
 
-// removeNode removes all digest entries for a node and returns the removed keys.
-func (dp *digestedPolicy) removeNode(nodeName string) []NodeLauncherKey {
-	nodeMap, ok := dp.digest[nodeName]
-	if !ok {
-		return nil
-	}
-	keys := make([]NodeLauncherKey, 0, len(nodeMap))
-	for lcName := range nodeMap {
-		keys = append(keys, NodeLauncherKey{NodeName: nodeName, LauncherConfigName: lcName})
-	}
-	delete(dp.digest, nodeName)
-	return keys
-}
-
-// keysForLC returns all NodeLauncherKeys that reference the given LC name.
-func (dp *digestedPolicy) keysForLC(lcName string) []NodeLauncherKey {
-	var keys []NodeLauncherKey
-	for nodeName, nodeMap := range dp.digest {
-		if _, ok := nodeMap[lcName]; ok {
-			keys = append(keys, NodeLauncherKey{NodeName: nodeName, LauncherConfigName: lcName})
+// entriesForLC yields every (key, entry) pair that references lcName. Each
+// yielded entry is non-nil. The caller must not insert into or delete from
+// dp.digest while iterating; mutating fields on the yielded *digestEntry is
+// allowed.
+func (dp *digestedPolicy) entriesForLC(lcName string) iter.Seq2[NodeLauncherKey, *digestEntry] {
+	return func(yield func(NodeLauncherKey, *digestEntry) bool) {
+		for nodeName, nodeMap := range dp.digest {
+			entry, ok := nodeMap[lcName]
+			if !ok {
+				continue
+			}
+			key := NodeLauncherKey{NodeName: nodeName, LauncherConfigName: lcName}
+			if !yield(key, entry) {
+				return
+			}
 		}
 	}
-	return keys
 }
 
 // allKeys returns all NodeLauncherKeys in the digest.
