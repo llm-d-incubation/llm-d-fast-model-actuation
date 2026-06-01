@@ -111,7 +111,7 @@ func (ctl *controller) updateDigestForLC(ctx context.Context, name string) error
 //   - records the per-LPP derived data into ctl.policy.lpps[name];
 //   - applies the LPP to digest entries on every matched node.
 //
-// Other code paths must NOT call setLPPStatusErrors or ValidateLauncherPodTemplate.
+// Other code paths must NOT call setLPPStatusErrors or getMatchingNodes.
 func (ctl *controller) updateDigestForLPP(ctx context.Context, name string) error {
 	logger := klog.FromContext(ctx)
 
@@ -191,9 +191,30 @@ func (ctl *controller) updateDigestForLPP(ctx context.Context, name string) erro
 		}
 	}
 
+	// LC names currently referenced by this LPP. Used to detach the LPP from
+	// digest entries whose lcName has been dropped from CountForLauncher even
+	// though the node still matches the selector.
+	newLCNames := sets.New[string]()
+	for _, cr := range lpp.Spec.CountForLauncher {
+		newLCNames.Insert(cr.LauncherConfigName)
+	}
+
 	// Apply LPP to each matched node and enqueue affected keys.
 	for i := range currentMatchedNodes {
 		node := &currentMatchedNodes[i]
+		// Detach the LPP from entries on this still-matching node whose lcName
+		// is no longer referenced by lpp.Spec.CountForLauncher.
+		if nodeMap, ok := ctl.policy.digest[node.Name]; ok {
+			for lcName, entry := range nodeMap {
+				if _, hasLPP := entry.lpps[name]; !hasLPP {
+					continue
+				}
+				if newLCNames.Has(lcName) {
+					continue
+				}
+				ctl.detachLPPFromEntry(nodeMap, name, node.Name, lcName, entry)
+			}
+		}
 		ctl.applyLPPToDigestForNode(lpp, node)
 		for _, cr := range lpp.Spec.CountForLauncher {
 			ctl.keyQueue.Queue.Add(keyItem{NodeLauncherKey{NodeName: node.Name, LauncherConfigName: cr.LauncherConfigName}})
@@ -226,6 +247,16 @@ func (ctl *controller) updateDigestForNode(ctx context.Context, nodeName string)
 // recomputeDigestForNode rebuilds digest entries for a single node by replaying
 // every cached LPP. Pure read of ctl.policy.lpps + ctl.policy.lcs.
 func (ctl *controller) recomputeDigestForNode(node *corev1.Node) {
+	// Snapshot LC names currently in the digest for this node so we can also
+	// enqueue keys for entries that disappear after replay (e.g., a previously
+	// matching LPP no longer matches this node).
+	affected := sets.New[string]()
+	if oldMap, ok := ctl.policy.digest[node.Name]; ok {
+		for lcName := range oldMap {
+			affected.Insert(lcName)
+		}
+	}
+
 	ctl.policy.digest[node.Name] = make(map[string]*digestEntry)
 
 	for _, lppd := range ctl.policy.lpps {
@@ -234,6 +265,9 @@ func (ctl *controller) recomputeDigestForNode(node *corev1.Node) {
 
 	nodeMap := ctl.policy.digest[node.Name]
 	for lcName := range nodeMap {
+		affected.Insert(lcName)
+	}
+	for lcName := range affected {
 		ctl.keyQueue.Queue.Add(keyItem{NodeLauncherKey{NodeName: node.Name, LauncherConfigName: lcName}})
 	}
 	if len(nodeMap) == 0 {
