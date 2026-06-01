@@ -137,17 +137,6 @@ func (dp *digestedPolicy) setEntry(nodeName, lcName string, entry *digestEntry) 
 	nodeMap[lcName] = entry
 }
 
-// allKeys returns all NodeLauncherKeys in the digest.
-func (dp *digestedPolicy) allKeys() []NodeLauncherKey {
-	var keys []NodeLauncherKey
-	for nodeName, nodeMap := range dp.digest {
-		for lcName := range nodeMap {
-			keys = append(keys, NodeLauncherKey{NodeName: nodeName, LauncherConfigName: lcName})
-		}
-	}
-	return keys
-}
-
 // snapshotForKey returns a value-typed snapshot of the digestEntry and its
 // LC's templateHash, taken under RLock. Concurrency-safe; callers must drop
 // the snapshot before treating any pointer fields (spec) as still belonging

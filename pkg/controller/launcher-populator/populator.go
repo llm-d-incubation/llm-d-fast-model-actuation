@@ -75,8 +75,8 @@ func NewController(
 	}
 	ctl.policy = newDigestedPolicy()
 
-	// digestQueue carries funcItem (LC/LPP/Node references). One worker keeps
-	// digest mutations sequential and lock-free. KnowsProcessedSync emits the
+	// digestQueue carries funcItem (LC/LPP/Node references). Single worker, so
+	// digest mutations are serial. KnowsProcessedSync emits the
 	// onDigestSyncProcessed hook after the initial batch drains, which is when
 	// keyQueue's workers start.
 	digestQueue := genctlr.NewKnowsProcessedSync[queueItem](
@@ -317,7 +317,7 @@ func (ctl *controller) Start(ctx context.Context) error {
 func (ctl *controller) onDigestSyncProcessed(ctx context.Context) {
 	logger := klog.FromContext(ctx)
 	logger.V(1).Info("Initial digest batch processed; starting key workers",
-		"lpps", len(ctl.policy.lpps), "lcs", len(ctl.policy.lcs), "keys", len(ctl.policy.allKeys()))
+		"lpps", len(ctl.policy.lpps), "lcs", len(ctl.policy.lcs), "keys", ctl.keyQueue.Queue.Len())
 	if err := ctl.keyQueue.StartWorkers(ctx); err != nil {
 		logger.Error(err, "Failed to start key workers")
 	}
