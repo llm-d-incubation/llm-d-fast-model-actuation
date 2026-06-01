@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 
+# Usage: $0
 # Deploys the FMA controllers (dual-pods controller + launcher-populator)
 # and waits for them to be available.
+# Can be run from any directory (auto-detects the repository root).
 #
 # Required tools: kubectl, helm, jq, yq (https://github.com/mikefarah/yq).
 #
