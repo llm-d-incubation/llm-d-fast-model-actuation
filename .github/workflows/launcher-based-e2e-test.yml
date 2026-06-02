@@ -2,6 +2,9 @@
 name: Launcher-Based E2E Test
 
 on:
+  # So we can trigger manually if needed
+  workflow_dispatch:
+
   push:
     paths:
       - ".github/workflows/launcher-based-e2e-test.yml"
@@ -14,6 +17,7 @@ on:
       - pkg/**
       - test/e2e/run-launcher-based.sh
       - test/e2e/mkobjs.sh
+
   pull_request:
     branches:
       - main
