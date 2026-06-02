@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/common"
+	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/utils"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -369,7 +370,7 @@ func (ctl *controller) processKey(ctx context.Context, key NodeLauncherKey) (err
 		// Clean up any orphaned launchers.
 		logger.V(4).Info("Key not in digest, cleaning up orphaned launchers",
 			"node", key.NodeName, "config", key.LauncherConfigName)
-		return ctl.reconcileKey(ctx, key, 0, nil, metav1.OwnerReference{}, "")
+		return ctl.reconcileKey(ctx, key, 0, snap.templateHash, nil)
 	}
 
 	if snap.handsOff {
@@ -379,15 +380,16 @@ func (ctl *controller) processKey(ctx context.Context, key NodeLauncherKey) (err
 		return nil, false
 	}
 
-	return ctl.reconcileKey(ctx, key, snap.count, snap.spec, snap.ownerRef, snap.templateHash)
+	return ctl.reconcileKey(ctx, key, snap.count, snap.templateHash, snap.nodeIndependentLauncherTemplate)
 }
 
 // reconcileKey adjusts launcher pods for a single NodeLauncherKey to match the desired count.
-func (ctl *controller) reconcileKey(ctx context.Context, key NodeLauncherKey, desiredCount int32, lcSpec *fmav1alpha1.LauncherConfigSpec, ownerRef metav1.OwnerReference, templateHash string) (error, bool) {
+func (ctl *controller) reconcileKey(ctx context.Context, key NodeLauncherKey, desiredCount int32, templateHash string, nodeIndependentLauncherTemplate *corev1.Pod) (error, bool) {
 	logger := klog.FromContext(ctx)
 
 	// Check node existence.
-	if _, err := ctl.nodeLister.Get(key.NodeName); err != nil {
+	node, err := ctl.nodeLister.Get(key.NodeName)
+	if err != nil {
 		if apierrors.IsNotFound(err) {
 			logger.V(4).Info("Node no longer exists, skipping key reconciliation", "node", key.NodeName)
 			return nil, false
@@ -403,12 +405,6 @@ func (ctl *controller) reconcileKey(ctx context.Context, key NodeLauncherKey, de
 	}
 	if expectStatus == ExpectationsWaiting {
 		return nil, true // requeue
-	}
-
-	// Read the node-independent template hash from the snapshot taken in
-	// processKey under RLock. Empty when LC is missing or template invalid.
-	if lcSpec == nil {
-		templateHash = ""
 	}
 
 	// Categorize pods.
@@ -427,12 +423,9 @@ func (ctl *controller) reconcileKey(ctx context.Context, key NodeLauncherKey, de
 			liveBoundCount++
 			continue
 		}
-		if templateHash != "" {
-			podHash := pod.Annotations[string(common.LauncherTemplateHashAnnotationKey)]
-			if podHash != "" && podHash != templateHash {
-				staleUnboundPods = append(staleUnboundPods, pod)
-				continue
-			}
+		if templateHash != pod.Annotations[common.LauncherTemplateHashAnnotationKey] {
+			staleUnboundPods = append(staleUnboundPods, pod)
+			continue
 		}
 		liveUnboundCurrentPods = append(liveUnboundCurrentPods, pod)
 	}
@@ -502,9 +495,9 @@ func (ctl *controller) reconcileKey(ctx context.Context, key NodeLauncherKey, de
 	}
 
 	// Create pods if needed.
-	if diff > 0 && lcSpec != nil {
-		node, _ := ctl.nodeLister.Get(key.NodeName)
-		if err := ctl.createLaunchers(ctx, *node, key, int(diff), lcSpec, ownerRef, templateHash); err != nil {
+	if diff > 0 {
+		nodeSpecificLauncherTemplate := utils.SpecializeLauncherTemplateToNode(nodeIndependentLauncherTemplate, node.Name)
+		if err := ctl.createLaunchers(ctx, node, key, int(diff), nodeSpecificLauncherTemplate); err != nil {
 			return err, true
 		}
 		logger.Info("Created launchers", "node", key.NodeName, "config", key.LauncherConfigName, "count", diff)

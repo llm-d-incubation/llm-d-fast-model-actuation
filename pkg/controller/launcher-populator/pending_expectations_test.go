@@ -26,7 +26,7 @@ import (
 
 // uidSet is a small helper to build the presentUIDs argument tersely.
 func uidSet(uids ...types.UID) sets.Set[types.UID] {
-	return sets.New[types.UID](uids...)
+	return sets.New(uids...)
 }
 
 func TestPendingExpectations_BasicCreation(t *testing.T) {

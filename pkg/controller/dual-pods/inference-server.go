@@ -609,14 +609,11 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		)
 	}
 
-	desiredLauncherTemplateHash, err := utils.ComputeLauncherTemplateHash(lc.Spec.PodTemplate)
-	if err != nil {
-		return fmt.Errorf("failed to compute template hash for LauncherConfig %q: %w", lcName, err), true
-	}
-	desiredLauncherPod, err := utils.BuildLauncherPodFromTemplate(lc.Spec.PodTemplate, ctl.namespace, requestingPod.Spec.NodeName, lcName, desiredLauncherTemplateHash)
+	nodeIndependentLauncherTemplate, _, err := utils.BuildNodeIndependentLauncherTemplate(lc)
 	if err != nil {
 		return fmt.Errorf("failed to build launcher Pod from LauncherConfig %q: %w", lcName, err), true
 	}
+	desiredLauncherPod := utils.SpecializeLauncherTemplateToNode(nodeIndependentLauncherTemplate, requestingPod.Spec.NodeName)
 	lcHash := desiredLauncherPod.Annotations[ctlrcommon.LauncherConfigHashAnnotationKey]
 	logger.V(5).Info("LauncherConfig's hash", "hash", lcHash)
 	launcherPodAnys, err := ctl.podInformer.GetIndexer().ByIndex(launcherConfigHashIndexName, lcHash)
