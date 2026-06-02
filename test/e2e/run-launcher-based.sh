@@ -53,7 +53,6 @@ kubectl get pods -A -o wide
 
 kubectl create clusterrole node-viewer --verb=get,list,watch --resource=nodes
 
-kubectl create -f ./config/crd/
 
 kubectl apply -f - <<EOF
 apiVersion: rbac.authorization.k8s.io/v1
