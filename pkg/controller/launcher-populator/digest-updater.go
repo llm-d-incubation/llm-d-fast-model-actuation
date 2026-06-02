@@ -250,12 +250,7 @@ func (ctl *controller) recomputeDigestForNode(node *corev1.Node) {
 	// Snapshot LC names currently in the digest for this node so we can also
 	// enqueue keys for entries that disappear after replay (e.g., a previously
 	// matching LPP no longer matches this node).
-	affected := sets.New[string]()
-	if oldMap, ok := ctl.policy.digest[node.Name]; ok {
-		for lcName := range oldMap {
-			affected.Insert(lcName)
-		}
-	}
+	affected := sets.KeySet(ctl.policy.digest[node.Name])
 
 	ctl.policy.digest[node.Name] = make(map[string]*digestEntry)
 
