@@ -79,6 +79,8 @@ type LauncherPopulationPolicySpec struct {
 	// CountForLauncher declares the desired number of launchers on the
 	// relevant Node, for various LauncherConfigs.
 	// +required
+	// +listType=map
+	// +listMapKey=launcherConfigName
 	CountForLauncher []CountForLauncher `json:"countForLauncher"`
 }
 

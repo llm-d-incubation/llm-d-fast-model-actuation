@@ -78,6 +78,9 @@ spec:
                   - launcherCount
                   type: object
                 type: array
+                x-kubernetes-list-map-keys:
+                - launcherConfigName
+                x-kubernetes-list-type: map
               enhancedNodeSelector:
                 description: |-
                   Selector describes the hardware characteristics of target nodes.

@@ -234,6 +234,39 @@ echo "Assigned GPU UUID(s): $assigned_gpu_uuids"
 cheer Successful launcher-based pod creation
 
 # ---------------------------------------------------------------------------
+# Test enforcement of LPP.Spec.CountForLauncher key uniqueness
+# ---------------------------------------------------------------------------
+
+intro_case Test enforcement of LPP.Spec.CountForLauncher key uniqueness
+echo Expect kubectl to complain
+
+if kubectl create -f - <<EOF
+apiVersion: fma.llm-d.ai/v1alpha1
+kind: LauncherPopulationPolicy
+metadata:
+  name: bad-$inst
+  labels:
+    instance: "$inst"
+    fma-e2e-instance: "$inst"
+spec:
+  enhancedNodeSelector:
+    labelSelector:
+      matchLabels:
+        nvidia.com/gpu.present: "true"
+  countForLauncher:
+    - launcherConfigName: foo
+      launcherCount: 1
+    - launcherConfigName: foo
+      launcherCount: 2
+EOF
+then
+    echo "A LauncherPopulationPolicy with non-unique keys was accepted!" >&2
+    exit 1
+fi
+
+cheer The malformed LauncherPopulationPolicy was properly rejected
+
+# ---------------------------------------------------------------------------
 # CEL policy verification (if enabled)
 # ---------------------------------------------------------------------------
 
