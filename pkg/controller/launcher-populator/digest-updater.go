@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 
-	fmav1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/utils"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -97,113 +96,91 @@ func (ctl *controller) updateDigestForLC(ctx context.Context, name string) error
 //   - applies the LPP to digest entries on every matched node.
 //
 // Other code paths must NOT call setLPPStatusErrors or getMatchingNodes.
-func (ctl *controller) updateDigestForLPP(ctx context.Context, name string) error {
-	logger := klog.FromContext(ctx)
+func (ctl *controller) updateDigestForLPP(ctx context.Context, lppName string) error {
+	logger := klog.FromContext(ctx).WithValues("lppName", lppName)
+	ctx = klog.NewContext(ctx, logger)
 
-	lpp, err := ctl.lppLister.LauncherPopulationPolicies(ctl.namespace).Get(name)
-	if err != nil {
+	// This method needs to visit two outer products in the (Node,LauncherConfig) space:
+	// 1. Those for which the LPP is currently relevant in ctl.policy, and
+	// 2. Those that a fresh evaluation decides are relevant.
+	// These two outer products can overlap in any way.
+
+	// First compute the fresh evaluation, yielding
+	// `currentMatchedNodes` and `digested`.
+	// Next: enumerate the nodes that are currently recorded
+	// in ctl.policy as being relevant to the LPP,
+	// and for those that are no longer relevant update as such.
+	// Finally, enumerate the nodes that are now relevant
+	// and update each, passing both the old and new LCName→count maps.
+
+	prevDigest := ctl.policy.lpps[lppName]
+	var currentMatchedNodeNames sets.Set[string]
+	var prevDigested, digested map[string]int // lcName to count, for this LPP
+	if prevDigest != nil {
+		prevDigested = prevDigest.digested
+	}
+	if lpp, err := ctl.lppLister.LauncherPopulationPolicies(ctl.namespace).Get(lppName); err != nil {
 		if !apierrors.IsNotFound(err) {
-			return fmt.Errorf("failed to get LPP %s: %w", name, err)
+			return fmt.Errorf("failed to get LPP %s: %w", lppName, err)
 		}
-		// LPP deleted: detach from all referencing entries.
-		logger.Info("LPP deleted, updating digest incrementally", "policy", name)
-		for nodeName, nodeMap := range ctl.policy.digest {
-			for lcName, entry := range nodeMap {
-				if _, hasLPP := entry.lpps[name]; !hasLPP {
-					continue
+		delete(ctl.policy.lpps, lppName)
+	} else {
+		var selectorErrs []string
+		labelSelector, selectorErr := metav1.LabelSelectorAsSelector(&lpp.Spec.EnhancedNodeSelector.LabelSelector)
+		if selectorErr != nil {
+			selectorErrs = []string{selectorErr.Error()}
+		} else {
+			if prevDigest != nil && prevDigest.object.Generation == lpp.Generation {
+				digested = prevDigest.digested
+			} else {
+				digested = make(map[string]int, len(lpp.Spec.CountForLauncher))
+				for _, cfl := range lpp.Spec.CountForLauncher {
+					digested[cfl.LauncherConfigName] = max(digested[cfl.LauncherConfigName], int(cfl.LauncherCount))
 				}
-				ctl.detachLPPFromEntry(nodeMap, name, nodeName, lcName, entry)
+			}
+
+			// Resolve matched nodes and selector errors.
+			var matchErr error
+			currentMatchedNodeNames, matchErr = ctl.getMatchingNodeNames(ctx, labelSelector, lpp.Spec.EnhancedNodeSelector.AllocatableResources)
+			if matchErr != nil {
+				return fmt.Errorf("failed to get matching nodes for policy %s: %w", lpp.Name, matchErr)
 			}
 		}
-		delete(ctl.policy.lpps, name)
-		return nil
-	}
-
-	// Resolve matched nodes and selector errors.
-	currentMatchedNodes, selectorErrs, matchErr := ctl.getMatchingNodes(ctx, lpp.Spec.EnhancedNodeSelector)
-	if matchErr != nil {
-		return fmt.Errorf("failed to get matching nodes for policy %s: %w", lpp.Name, matchErr)
-	}
-
-	// Compute missing-LC errors by consulting ctl.policy.lcs only.
-	var missingLCs []string
-	for _, cr := range lpp.Spec.CountForLauncher {
-		lcd := ctl.policy.lcDigestFor(cr.LauncherConfigName)
-		if lcd == nil || lcd.object == nil {
-			missingLCs = append(missingLCs, fmt.Sprintf(
-				"LauncherConfig %q referenced in CountForLauncher does not exist", cr.LauncherConfigName))
-		}
-	}
-
-	// Combine all user-facing errors and write LPP.Status (the SOLE writer).
-	allErrs := append([]string(nil), selectorErrs...)
-	allErrs = append(allErrs, missingLCs...)
-	if statusErr := ctl.setLPPStatusErrors(ctx, lpp, allErrs); statusErr != nil {
-		return fmt.Errorf("failed to set Status for policy %s: %w", lpp.Name, statusErr)
-	}
-
-	// Snapshot the LPP digest.
-	ctl.policy.lpps[name] = &lppDigest{
-		object:       lpp,
-		selectorErrs: selectorErrs,
-		missingLCs:   missingLCs,
-	}
-
-	// Determine old matched nodes from existing digest entries.
-	oldNodes := sets.New[string]()
-	for nodeName, nodeMap := range ctl.policy.digest {
-		for _, entry := range nodeMap {
-			if _, hasLPP := entry.lpps[name]; hasLPP {
-				oldNodes.Insert(nodeName)
-				break
+		// Compute missing-LC errors by consulting ctl.policy.lcs only.
+		var missingLCs []string
+		for _, cr := range lpp.Spec.CountForLauncher {
+			lcd := ctl.policy.lcDigestFor(cr.LauncherConfigName)
+			if lcd == nil || lcd.object == nil {
+				missingLCs = append(missingLCs, fmt.Sprintf(
+					"LauncherConfig %q referenced in CountForLauncher does not exist", cr.LauncherConfigName))
 			}
 		}
-	}
-	currentMatched := sets.New[string]()
-	for _, node := range currentMatchedNodes {
-		currentMatched.Insert(node.Name)
-	}
-	removedNodes := oldNodes.Difference(currentMatched).UnsortedList()
 
-	// Detach the LPP from entries on nodes it no longer matches.
-	for _, nodeName := range removedNodes {
-		nodeMap := ctl.policy.digest[nodeName]
-		for lcName, entry := range nodeMap {
-			if _, hasLPP := entry.lpps[name]; !hasLPP {
-				continue
-			}
-			ctl.detachLPPFromEntry(nodeMap, name, nodeName, lcName, entry)
+		// Combine all user-facing errors and write LPP.Status (the SOLE writer).
+		allErrs := append(selectorErrs, missingLCs...)
+		if statusErr := ctl.setLPPStatusErrors(ctx, lpp, allErrs); statusErr != nil {
+			return fmt.Errorf("failed to set Status for policy %s: %w", lpp.Name, statusErr)
+		}
+
+		// Snapshot the LPP digest.
+		ctl.policy.lpps[lppName] = &lppDigest{
+			object:        lpp,
+			labelSelector: labelSelector,
+			selectorErr:   selectorErr,
+			digested:      digested,
 		}
 	}
 
-	// LC names currently referenced by this LPP. Used to detach the LPP from
-	// digest entries whose lcName has been dropped from CountForLauncher even
-	// though the node still matches the selector.
-	newLCNames := sets.New[string]()
-	for _, cr := range lpp.Spec.CountForLauncher {
-		newLCNames.Insert(cr.LauncherConfigName)
+	for nodeName := range ctl.policy.nodeNamesRefingLPP(lppName) {
+		if currentMatchedNodeNames.Has(nodeName) {
+			continue
+		}
+		ctl.applyLPPToDigestForNode(lppName, prevDigested, nil, nodeName)
 	}
 
 	// Apply LPP to each matched node and enqueue affected keys.
-	for i := range currentMatchedNodes {
-		node := &currentMatchedNodes[i]
-		// Detach the LPP from entries on this still-matching node whose lcName
-		// is no longer referenced by lpp.Spec.CountForLauncher.
-		if nodeMap, ok := ctl.policy.digest[node.Name]; ok {
-			for lcName, entry := range nodeMap {
-				if _, hasLPP := entry.lpps[name]; !hasLPP {
-					continue
-				}
-				if newLCNames.Has(lcName) {
-					continue
-				}
-				ctl.detachLPPFromEntry(nodeMap, name, node.Name, lcName, entry)
-			}
-		}
-		ctl.applyLPPToDigestForNode(lpp, node)
-		for _, cr := range lpp.Spec.CountForLauncher {
-			ctl.keyQueue.Queue.Add(keyItem{NodeLauncherKey{NodeName: node.Name, LauncherConfigName: cr.LauncherConfigName}})
-		}
+	for nodeName := range currentMatchedNodeNames {
+		ctl.applyLPPToDigestForNode(lppName, prevDigested, digested, nodeName)
 	}
 
 	return nil
@@ -232,115 +209,77 @@ func (ctl *controller) updateDigestForNode(ctx context.Context, nodeName string)
 // recomputeDigestForNode rebuilds digest entries for a single node by replaying
 // every cached LPP. Pure read of ctl.policy.lpps + ctl.policy.lcs.
 func (ctl *controller) recomputeDigestForNode(node *corev1.Node) {
-	// Snapshot LC names currently in the digest for this node so we can also
-	// enqueue keys for entries that disappear after replay (e.g., a previously
-	// matching LPP no longer matches this node).
-	affected := sets.KeySet(ctl.policy.digest[node.Name])
-
 	ctl.policy.digest[node.Name] = make(map[string]*digestEntry)
-
-	for _, lppd := range ctl.policy.lpps {
-		ctl.applyLPPToDigestForNode(lppd.object, node)
+	for lppName, lppd := range ctl.policy.lpps {
+		newDigested := lppd.digested
+		matches := lppd.selectorErr == nil && lppd.labelSelector.Matches(labels.Set(node.Labels)) && matchesResourceConditions(node.Status.Allocatable, lppd.object.Spec.EnhancedNodeSelector.AllocatableResources)
+		if !matches {
+			newDigested = nil
+		}
+		ctl.applyLPPToDigestForNode(lppName, lppd.digested, newDigested, node.Name)
 	}
 
-	nodeMap := ctl.policy.digest[node.Name]
-	for lcName := range nodeMap {
-		affected.Insert(lcName)
-	}
-	for lcName := range affected {
-		ctl.keyQueue.Queue.Add(keyItem{NodeLauncherKey{NodeName: node.Name, LauncherConfigName: lcName}})
-	}
-	if len(nodeMap) == 0 {
+	if len(ctl.policy.digest[node.Name]) == 0 {
 		delete(ctl.policy.digest, node.Name)
 	}
 }
 
-// applyLPPToDigestForNode evaluates one LPP for one node and updates the digest
-// using ONLY ctl.policy.lcs as the source of truth for LC status. It never
-// validates templates, writes Status, or fetches from listers.
-func (ctl *controller) applyLPPToDigestForNode(lpp *fmav1alpha1.LauncherPopulationPolicy, node *corev1.Node) {
-	labelSelector, selectorErr := metav1.LabelSelectorAsSelector(&lpp.Spec.EnhancedNodeSelector.LabelSelector)
-	if selectorErr != nil {
-		return
+// applyLPPToDigestForNode updates the digested policy map regarding
+// a particular node and LPP, given the previous and new result of digesting
+// that LPP.
+// It never validates templates, writes Status, or fetches from listers.
+// Enqueues keys for which this made a difference.
+func (ctl *controller) applyLPPToDigestForNode(lppName string, prevLCToCount, lcToCount map[string]int, nodeName string) {
+	for lcName := range lcToCount {
+		entry := ctl.policy.getEntry(nodeName, lcName, true)
+		entry.lpps[lppName] = lcToCount
+		changed := ctl.recomputeEntryFromLPPs(entry, lcName)
+		if changed {
+			ctl.keyQueue.Queue.Add(keyItem{NodeLauncherKey{NodeName: nodeName, LauncherConfigName: lcName}})
+		}
 	}
-	if !labelSelector.Matches(labels.Set(node.Labels)) {
-		return
-	}
-	if !matchesResourceConditions(node.Status.Allocatable, lpp.Spec.EnhancedNodeSelector.AllocatableResources) {
-		return
-	}
-
-	for _, cr := range lpp.Spec.CountForLauncher {
-		lcName := cr.LauncherConfigName
-
-		entry := ctl.policy.getEntry(node.Name, lcName)
+	for lcName := range prevLCToCount {
+		if _, has := lcToCount[lcName]; has {
+			continue
+		}
+		entry := ctl.policy.getEntry(nodeName, lcName, false)
 		if entry == nil {
-			entry = &digestEntry{lpps: make(map[string]*fmav1alpha1.LauncherPopulationPolicy)}
-			ctl.policy.setEntry(node.Name, lcName, entry)
+			continue
 		}
-		entry.lpps[lpp.Name] = lpp
-		ctl.recomputeEntryFromLPPs(entry, lcName)
-	}
-}
-
-// removeLPPFromEntry removes an LPP reference from a digest entry.
-// If the entry has no remaining LPPs, it is reset to a zero state.
-func (ctl *controller) removeLPPFromEntry(entry *digestEntry, lppName string) {
-	delete(entry.lpps, lppName)
-	if len(entry.lpps) == 0 {
-		entry.count = 0
-		entry.handsOff = false
-	}
-}
-
-func (ctl *controller) detachLPPFromEntry(nodeMap map[string]*digestEntry, lppName, nodeName, lcName string, entry *digestEntry) {
-	prevHandsOff, prevCount := entry.handsOff, entry.count
-
-	ctl.removeLPPFromEntry(entry, lppName)
-	if len(entry.lpps) == 0 {
-		delete(nodeMap, lcName)
-		if len(nodeMap) == 0 {
-			delete(ctl.policy.digest, nodeName)
+		delete(entry.lpps, lppName)
+		if len(entry.lpps) == 0 {
+			ctl.policy.deleteEntry(nodeName, lcName)
 		}
-		ctl.keyQueue.Queue.Add(keyItem{NodeLauncherKey{NodeName: nodeName, LauncherConfigName: lcName}})
-		return
-	}
-
-	ctl.recomputeEntryFromLPPs(entry, lcName)
-	if entry.handsOff != prevHandsOff || entry.count != prevCount {
-		ctl.keyQueue.Queue.Add(keyItem{NodeLauncherKey{NodeName: nodeName, LauncherConfigName: lcName}})
+		changed := ctl.recomputeEntryFromLPPs(entry, lcName)
+		if changed {
+			ctl.keyQueue.Queue.Add(keyItem{NodeLauncherKey{NodeName: nodeName, LauncherConfigName: lcName}})
+		}
 	}
 }
 
-// recomputeEntryFromLPPs recomputes the (handsOff, count, spec, ownerRef) of a
+// recomputeEntryFromLPPs recomputes the desiredPopulation of a
 // digestEntry from its remaining LPP references and the cached lcDigest.
-// Pure read; no Status writes or template validation.
-func (ctl *controller) recomputeEntryFromLPPs(entry *digestEntry, lcName string) {
-	if len(entry.lpps) == 0 {
-		entry.count = 0
-		entry.handsOff = false
-		return
-	}
-
-	var maxCount int32
-	for _, lpp := range entry.lpps {
-		for _, cr := range lpp.Spec.CountForLauncher {
-			if cr.LauncherConfigName == lcName && cr.LauncherCount > maxCount {
-				maxCount = cr.LauncherCount
+// Pure read of other objects; no Status writes or template validation.
+// Return value indicates whether there was a change.
+func (ctl *controller) recomputeEntryFromLPPs(entry *digestEntry, lcName string) bool {
+	oldDesired := entry.desiredCount
+	var newDesired int
+	var lcd *lcDigest
+	if len(entry.lpps) > 0 {
+		lcd = ctl.policy.lcDigestFor(lcName)
+		if lcd == nil || lcd.object == nil || lcd.templateErr != "" {
+			newDesired = HandsOff
+		} else {
+			for _, lcToCount := range entry.lpps {
+				if thisCount, have := lcToCount[lcName]; have {
+					newDesired = max(newDesired, thisCount)
+				}
 			}
 		}
 	}
-
-	lcd := ctl.policy.lcDigestFor(lcName)
-	switch {
-	case lcd == nil || lcd.object == nil:
-		entry.handsOff = true
-		entry.count = maxCount
-	case lcd.templateErr != "":
-		entry.handsOff = true
-		entry.count = maxCount
-	default:
-		entry.handsOff = false
-		entry.count = maxCount
+	if oldDesired == newDesired {
+		return false
 	}
+	entry.desiredCount = newDesired
+	return true
 }

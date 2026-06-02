@@ -25,6 +25,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/klog/v2"
 
 	fmav1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
@@ -38,29 +39,23 @@ func nonNilSlice(s string) []string {
 	return []string{s}
 }
 
-// getMatchingNodes returns nodes that match the EnhancedNodeSelector.
-// It returns three values: the matched nodes, user-facing selector errors (non-nil when the
-// LabelSelector itself is malformed — this is a user configuration error), and an internal
+// getMatchingNodeNames returns the names of the nodes that match an EnhancedNodeSelector,
+// expressed in internal form.
+// It returns two values: the matched node names, and an internal
 // error (non-nil for unexpected infrastructure failures such as lister errors).
-// Callers should handle selectorErrs and err independently.
-func (ctl *controller) getMatchingNodes(ctx context.Context, selector fmav1alpha1.EnhancedNodeSelector) ([]corev1.Node, []string, error) {
-	// Convert the label selector. A failure here is a user error (malformed LabelSelector).
-	labelSelector, selectorErr := metav1.LabelSelectorAsSelector(&selector.LabelSelector)
-	if selectorErr != nil {
-		return nil, []string{fmt.Sprintf("invalid label selector %#v: %v", selector.LabelSelector, selectorErr)}, nil
-	}
+func (ctl *controller) getMatchingNodeNames(ctx context.Context, labelSelector labels.Selector, allocatableResources fmav1alpha1.ResourceRanges) (sets.Set[string], error) {
 	nodes, err := ctl.nodeLister.List(labelSelector)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to list nodes using nodeLister: %w", err)
+		return nil, fmt.Errorf("failed to list nodes using nodeLister: %w", err)
 	}
 
-	var matchedNodes []corev1.Node
+	ans := sets.New[string]()
 	for _, node := range nodes {
-		if matchesResourceConditions(node.Status.Allocatable, selector.AllocatableResources) {
-			matchedNodes = append(matchedNodes, *node)
+		if matchesResourceConditions(node.Status.Allocatable, allocatableResources) {
+			ans.Insert(node.Name)
 		}
 	}
-	return matchedNodes, nil, nil
+	return ans, nil
 }
 
 // isLauncherBoundToServerRequestingPod checks if the launcher pod is bound to any server-requesting pod

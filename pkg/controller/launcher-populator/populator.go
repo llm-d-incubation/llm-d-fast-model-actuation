@@ -373,18 +373,18 @@ func (ctl *controller) processKey(ctx context.Context, key NodeLauncherKey) (err
 		return ctl.reconcileKey(ctx, key, 0, snap.templateHash, nil)
 	}
 
-	if snap.handsOff {
+	if snap.desiredCount < 0 {
 		// User error (LC missing or invalid template): take no action.
 		logger.V(4).Info("Key is handsOff due to user error, skipping",
 			"node", key.NodeName, "config", key.LauncherConfigName)
 		return nil, false
 	}
 
-	return ctl.reconcileKey(ctx, key, snap.count, snap.templateHash, snap.nodeIndependentLauncherTemplate)
+	return ctl.reconcileKey(ctx, key, snap.desiredCount, snap.templateHash, snap.nodeIndependentLauncherTemplate)
 }
 
 // reconcileKey adjusts launcher pods for a single NodeLauncherKey to match the desired count.
-func (ctl *controller) reconcileKey(ctx context.Context, key NodeLauncherKey, desiredCount int32, templateHash string, nodeIndependentLauncherTemplate *corev1.Pod) (error, bool) {
+func (ctl *controller) reconcileKey(ctx context.Context, key NodeLauncherKey, desiredCount int, templateHash string, nodeIndependentLauncherTemplate *corev1.Pod) (error, bool) {
 	logger := klog.FromContext(ctx)
 
 	// Check node existence.
@@ -456,7 +456,7 @@ func (ctl *controller) reconcileKey(ctx context.Context, key NodeLauncherKey, de
 
 	// Calculate diff.
 	effectiveRemaining := liveBoundCount + len(liveUnboundCurrentPods) + staleNotDeleted
-	diff := desiredCount - int32(effectiveRemaining)
+	diff := desiredCount - effectiveRemaining
 
 	logger.Info("Analyzed key",
 		"node", key.NodeName, "config", key.LauncherConfigName,
@@ -465,7 +465,7 @@ func (ctl *controller) reconcileKey(ctx context.Context, key NodeLauncherKey, de
 
 	// Delete excess pods.
 	if diff < 0 {
-		numToDelete := int(-diff)
+		numToDelete := -diff
 		for i := len(liveUnboundCurrentPods) - 1; i >= 0 && numToDelete > 0; i-- {
 			pod := liveUnboundCurrentPods[i]
 			err := ctl.coreclient.Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{
@@ -497,7 +497,7 @@ func (ctl *controller) reconcileKey(ctx context.Context, key NodeLauncherKey, de
 	// Create pods if needed.
 	if diff > 0 {
 		nodeSpecificLauncherTemplate := utils.SpecializeLauncherTemplateToNode(nodeIndependentLauncherTemplate, node.Name)
-		if err := ctl.createLaunchers(ctx, node, key, int(diff), nodeSpecificLauncherTemplate); err != nil {
+		if err := ctl.createLaunchers(ctx, node, key, diff, nodeSpecificLauncherTemplate); err != nil {
 			return err, true
 		}
 		logger.Info("Created launchers", "node", key.NodeName, "config", key.LauncherConfigName, "count", diff)

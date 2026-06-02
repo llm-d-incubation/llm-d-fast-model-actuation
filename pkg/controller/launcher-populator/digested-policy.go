@@ -17,20 +17,31 @@ limitations under the License.
 package launcherpopulator
 
 import (
+	"iter"
 	"sync"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
 
 	fmav1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
 )
+
+// A special value for desired count that means "hands off" ---
+// that is, make no changes. This is used when there is a user
+// error wrt the relevant LauncherConfig.
+const HandsOff = -1
 
 // digestEntry is the per-NodeLauncherKey entry in the digestedPolicy.
 // It holds the digested desired count and supporting details needed for
 // creating launcher Pods.
 type digestEntry struct {
-	handsOff bool                                             // true when user error (LC missing or invalid template) precludes action
-	count    int32                                            // max over relevant (existing, well-formed) CountForLauncher
-	lpps     map[string]*fmav1alpha1.LauncherPopulationPolicy // LPPs contributing to this entry
+	// The result of digesting lpps and the current lcDigest values.
+	// A value of -1 codes for "hands off".
+	desiredCount int
+
+	// Maps LPP name to LC name to desired count.
+	// From the digested LPPs.
+	lpps map[string]map[string]int
 }
 
 // lcDigest holds all node-independent derived data for a LauncherConfig.
@@ -45,9 +56,10 @@ type lcDigest struct {
 // lppDigest holds all derived data for a LauncherPopulationPolicy.
 // Written exclusively by updateDigestForLPP; read by all other paths.
 type lppDigest struct {
-	object       *fmav1alpha1.LauncherPopulationPolicy
-	selectorErrs []string // user-facing errors from getMatchingNodes
-	missingLCs   []string // CountForLauncher entries referencing a non-existent LC
+	object        *fmav1alpha1.LauncherPopulationPolicy
+	labelSelector labels.Selector
+	selectorErr   error
+	digested      map[string]int // maps LauncherConfig name to desired count
 }
 
 // digestedPolicy holds the controller's digested view of all policies.
@@ -75,8 +87,7 @@ type digestedPolicy struct {
 // Nothing modifies any part of the Pod template.
 type keySnapshot struct {
 	exists                          bool
-	handsOff                        bool
-	count                           int32
+	desiredCount                    int // HandsOff or non-negative
 	templateHash                    string
 	nodeIndependentLauncherTemplate *corev1.Pod
 }
@@ -94,6 +105,24 @@ func newDigestedPolicy() *digestedPolicy {
 // processed yet.
 func (dp *digestedPolicy) lcDigestFor(lcName string) *lcDigest {
 	return dp.lcs[lcName]
+}
+
+// nodeNamesRefingLPP returns an enumerator of node names for which dp
+// records that the given LPP is relevant.
+func (dp *digestedPolicy) nodeNamesRefingLPP(lppName string) iter.Seq[string] {
+	return func(yield func(nodeName string) bool) {
+		for nodeName, nodeMap := range dp.digest {
+			for _, de := range nodeMap {
+				if _, has := de.lpps[lppName]; has {
+					if !yield(nodeName) {
+						return
+					} else {
+						break
+					}
+				}
+			}
+		}
+	}
 }
 
 // lppNamesRefByLC returns names of all cached LPPs that reference lcName in
@@ -116,21 +145,36 @@ func (dp *digestedPolicy) lppNamesRefByLC(lcName string) []string {
 }
 
 // getEntry returns the digestEntry for the given key, or nil if absent.
-func (dp *digestedPolicy) getEntry(nodeName, lcName string) *digestEntry {
-	if nodeMap, ok := dp.digest[nodeName]; ok {
-		return nodeMap[lcName]
-	}
-	return nil
-}
-
-// setEntry sets or replaces the digestEntry for the given key.
-func (dp *digestedPolicy) setEntry(nodeName, lcName string, entry *digestEntry) {
+func (dp *digestedPolicy) getEntry(nodeName, lcName string, addIfMissing bool) *digestEntry {
 	nodeMap, ok := dp.digest[nodeName]
 	if !ok {
+		if !addIfMissing {
+			return nil
+		}
 		nodeMap = make(map[string]*digestEntry)
 		dp.digest[nodeName] = nodeMap
 	}
-	nodeMap[lcName] = entry
+	entry, ok := nodeMap[lcName]
+	if !ok {
+		if !addIfMissing {
+			return nil
+		}
+		entry = &digestEntry{lpps: make(map[string]map[string]int)}
+		nodeMap[lcName] = entry
+	}
+	return entry
+}
+
+// deleteEntry removes the digestEntry for the given key
+func (dp *digestedPolicy) deleteEntry(nodeName, lcName string) {
+	nodeMap, ok := dp.digest[nodeName]
+	if !ok {
+		return
+	}
+	delete(nodeMap, lcName)
+	if len(nodeMap) == 0 {
+		delete(dp.digest, nodeName)
+	}
 }
 
 // snapshotForKey returns a value-typed snapshot of the digestEntry and its
@@ -141,10 +185,9 @@ func (dp *digestedPolicy) snapshotForKey(key NodeLauncherKey) keySnapshot {
 	dp.mu.RLock()
 	defer dp.mu.RUnlock()
 	var snap keySnapshot
-	if entry := dp.getEntry(key.NodeName, key.LauncherConfigName); entry != nil {
+	if entry := dp.getEntry(key.NodeName, key.LauncherConfigName, false); entry != nil {
 		snap.exists = true
-		snap.handsOff = entry.handsOff
-		snap.count = entry.count
+		snap.desiredCount = entry.desiredCount
 	}
 	if lcd := dp.lcs[key.LauncherConfigName]; lcd != nil {
 		snap.templateHash = lcd.templateHash
