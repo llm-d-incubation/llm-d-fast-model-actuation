@@ -293,32 +293,8 @@ func (ctl *controller) applyLPPToDigestForNode(lpp *fmav1alpha1.LauncherPopulati
 			entry = &digestEntry{lpps: make(map[string]*fmav1alpha1.LauncherPopulationPolicy)}
 			ctl.policy.setEntry(node.Name, lcName, entry)
 		}
-
-		lcd := ctl.policy.lcDigestFor(lcName)
-		switch {
-		case lcd == nil || lcd.object == nil:
-			// LC not yet processed or known to be absent: handsOff. The LC's
-			// own update path (updateDigestForLC) will re-enqueue this LPP
-			// when the LC becomes existent.
-			entry.handsOff = true
-			entry.spec = nil
-		case lcd.templateErr != "":
-			// Template invalid; error is already in LC.Status.
-			entry.handsOff = true
-			entry.spec = nil
-		default:
-			entry.handsOff = false
-			entry.spec = &lcd.object.Spec
-			entry.ownerRef = lcd.ownerRef
-		}
-
-		if cr.LauncherCount > entry.count {
-			entry.count = cr.LauncherCount
-		}
-		if entry.lpps == nil {
-			entry.lpps = make(map[string]*fmav1alpha1.LauncherPopulationPolicy)
-		}
 		entry.lpps[lpp.Name] = lpp
+		ctl.recomputeEntryFromLPPs(entry, lcName)
 	}
 }
 
