@@ -203,7 +203,8 @@ expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$inst | wc -l
 
 export req1=$(kubectl get pods -n "$NS" -o name -l app=dp-example,instance=$inst | sed s%pod/%%)
 echo "Server-requesting Pod is $req1"
-[ "$(kubectl get pod $req1 -n "$NS" -o jsonpath='{.spec.nodeName}')" = "$testnode" ]
+# Expect it to get scheduled to the chosen test node
+expect "kubectl get pod $req1 -n $NS -o jsonpath='{.spec.nodeName}' | grep -x $testnode"
 
 # Wait for launcher-to-requester binding, then capture the launcher name
 expect "kubectl get pods -n $NS -o name -l dual-pods.llm-d.ai/dual=$req1 | wc -l | grep -w 1"
