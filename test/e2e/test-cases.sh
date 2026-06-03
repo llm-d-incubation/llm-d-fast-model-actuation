@@ -108,6 +108,18 @@ get_launcher_total_instances() {
 }
 
 # ---------------------------------------------------------------------------
+# Echo the relevant environment variables
+# ---------------------------------------------------------------------------
+
+echo "FMA_NAMESPACE=${FMA_NAMESPACE:-«unset»}"
+echo "MKOBJS_SCRIPT=${MKOBJS_SCRIPT:-«unset»}"
+echo "FMA_CHART_INSTANCE_NAME=${FMA_CHART_INSTANCE_NAME:-«unset»}"
+echo "READY_TARGET=${READY_TARGET:-«unset»}"
+echo "POLICIES_ENABLED=${POLICIES_ENABLED:-«unset»}"
+echo "POLL_LIMIT_SECS=${POLL_LIMIT_SECS:-«unset»}"
+echo "FMA_DEBUG=${FMA_DEBUG:-«unset»}"
+
+# ---------------------------------------------------------------------------
 # Probe for a node with 2 free GPUs
 # ---------------------------------------------------------------------------
 # Create a throwaway Pod that requests 2 GPUs.  The scheduler will place it
