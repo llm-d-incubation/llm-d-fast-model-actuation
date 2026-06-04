@@ -34,6 +34,7 @@ import (
 	dpctlr "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/dual-pods"
 	fmaclient "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/generated/clientset/versioned"
 	fmainformers "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/generated/informers/externalversions"
+	fmaobs "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/observability"
 )
 
 func main() {
@@ -42,6 +43,7 @@ func main() {
 		NumWorkers:                        2,
 		AcceleratorSleepingMemoryLimitMiB: math.MaxInt64,
 	}
+	obsOpts := fmaobs.DefaultOptions()
 	debugAccelMemory := true
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 	overrides := &clientcmd.ConfigOverrides{}
@@ -52,6 +54,7 @@ func main() {
 	pflag.CommandLine.IntVar(&config.NumWorkers, "num-workers", config.NumWorkers, "number of queue worker goroutines")
 	pflag.CommandLine.BoolVar(&debugAccelMemory, "debug-accelerator-memory", debugAccelMemory, "whether to check accelerator memory usage before wake-up")
 	AddFlags(*pflag.CommandLine, loadingRules, overrides)
+	obsOpts.AddToFlagSet(pflag.CommandLine)
 	pflag.Parse()
 	ctx := context.Background()
 	logger := klog.FromContext(ctx)
@@ -99,6 +102,7 @@ func main() {
 	}
 	kubePreInformers.Start(ctx.Done())
 	fmaPreInformers.Start(ctx.Done())
+	obsOpts.Start(ctx)
 	err = ctlr.Start(ctx)
 	if err != nil {
 		klog.Fatal(err)
