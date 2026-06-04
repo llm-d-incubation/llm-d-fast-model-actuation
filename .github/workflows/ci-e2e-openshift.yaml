@@ -301,7 +301,7 @@ jobs:
           GIT_REF: ${{ needs.gate.outputs.pr_head_sha }}
         run: |
           # Use first 8 chars of the git ref (POSIX-compliant)
-          IMAGE_TAG="ref-$(printf '%s' "$GIT_REF" | cut -c1-8)"
+          IMAGE_TAG="ref-$(printf '%s' "$GIT_REF" | cut -c1-8)-$(date +%Y%m%d)"
           reg="${{ github.repository }}"
           CONTAINER_IMG_REG="ghcr.io/${reg@L}"
 
