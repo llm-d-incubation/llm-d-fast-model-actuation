@@ -44,21 +44,10 @@ spec:
             description: Spec defines the desired state of the LauncherConfig.
             properties:
               maxInstances:
-                description: |-
-                  MaxInstances caps the total number of inference-engine instances per launcher pod.
-                  A value of zero means unset.
+                description: MaxInstances caps the total number of inference-engine
+                  instances per launcher pod.
                 format: int32
-                minimum: 0
-                type: integer
-              maxSleepingInstances:
-                description: |-
-                  MaxSleepingInstances caps the number of sleeping inference-engine instances per launcher pod
-                  when an awake instance is also present. When no instance is awake, one additional sleeping
-                  instance is permitted — i.e., a launcher pod can hold up to `MaxSleepingInstances + 1`
-                  instances in total.
-                  Deprecated: use MaxInstances, which simply caps the total number of instances per launcher pod.
-                format: int32
-                minimum: 0
+                minimum: 1
                 type: integer
               podTemplate:
                 description: PodTemplate defines the pod specification for the server-providing
@@ -8485,11 +8474,9 @@ spec:
                     - containers
                     type: object
                 type: object
+            required:
+            - maxInstances
             type: object
-            x-kubernetes-validations:
-            - message: maxInstances and maxSleepingInstances must not both be positive
-              rule: '!(has(self.maxInstances) && has(self.maxSleepingInstances) &&
-                self.maxInstances > 0 && self.maxSleepingInstances > 0)'
           status:
             description: Status represents the observed status of the LauncherConfig.
             properties:

@@ -633,7 +633,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		// then those with capacity for new instances.
 		// Note that multiple vLLM instances could exist in one launcher Pod, but at most one instance could be awake at a time.
 
-		launcherPod, hasSleepingInstance, retry, err := ctl.selectOrReclaimLauncherPod(ctx, launcherPodAnys, desiredInstanceState.instanceID, desiredPort, effectiveMaxInstances(lc)-1, nodeDat)
+		launcherPod, hasSleepingInstance, retry, err := ctl.selectOrReclaimLauncherPod(ctx, launcherPodAnys, desiredInstanceState.instanceID, desiredPort, int(lc.Spec.MaxInstances)-1, nodeDat)
 		if err != nil {
 			return err, true
 		}
@@ -901,16 +901,6 @@ func compareLastUsed(a string, aTime time.Time, b string, bTime time.Time) int {
 		return 1
 	}
 	return strings.Compare(a, b)
-}
-
-// effectiveMaxInstances returns the cap on the total number of inference-engine instances
-// per launcher pod. If MaxInstances is positive, it is used directly; otherwise the legacy
-// MaxSleepingInstances semantics apply and the cap is MaxSleepingInstances + 1.
-func effectiveMaxInstances(lc *fmav1alpha1.LauncherConfig) int {
-	if lc.Spec.MaxInstances > 0 {
-		return int(lc.Spec.MaxInstances)
-	}
-	return int(lc.Spec.MaxSleepingInstances) + 1
 }
 
 // configInferenceServer computes the VllmConfig.

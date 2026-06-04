@@ -45,28 +45,15 @@ type EmbeddedPodTemplateSpec struct {
 }
 
 // LauncherConfigSpec defines the configuration to manage the nominal server-providing pod definition.
-// At most one of `maxSleepingInstances` and `maxInstances` may be positive; setting both to positive
-// values is rejected. Either may be zero or omitted.
-// +kubebuilder:validation:XValidation:rule="!(has(self.maxInstances) && has(self.maxSleepingInstances) && self.maxInstances > 0 && self.maxSleepingInstances > 0)",message="maxInstances and maxSleepingInstances must not both be positive"
 type LauncherConfigSpec struct {
 	// PodTemplate defines the pod specification for the server-providing pod.
 	// +optional
 	PodTemplate EmbeddedPodTemplateSpec `json:"podTemplate,omitempty"`
 
-	// MaxSleepingInstances caps the number of sleeping inference-engine instances per launcher pod
-	// when an awake instance is also present. When no instance is awake, one additional sleeping
-	// instance is permitted — i.e., a launcher pod can hold up to `MaxSleepingInstances + 1`
-	// instances in total.
-	// Deprecated: use MaxInstances, which simply caps the total number of instances per launcher pod.
-	// +optional
-	// +kubebuilder:validation:Minimum=0
-	MaxSleepingInstances int32 `json:"maxSleepingInstances,omitempty"`
-
 	// MaxInstances caps the total number of inference-engine instances per launcher pod.
-	// A value of zero means unset.
-	// +optional
-	// +kubebuilder:validation:Minimum=0
-	MaxInstances int32 `json:"maxInstances,omitempty"`
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Minimum=1
+	MaxInstances int32 `json:"maxInstances"`
 }
 
 // LauncherConfigStatus represents the current status
