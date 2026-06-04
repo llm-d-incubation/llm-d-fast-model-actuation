@@ -545,7 +545,7 @@ kubectl scale rs $rs -n "$NS" --replicas=0
 expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$inst | wc -l | grep -w 0"
 
 # Capture launcher pod count so we can later assert reclaim did not spawn a new one.
-launcher_count_before_reclaim=$(kubectl get pods -n "$NS" -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | wc -l)
+launcher_count_before_reclaim=$(kubectl get pods -n "$NS" -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | wc -l | tr -d ' ')
 echo launcher_count_before_reclaim = $launcher_count_before_reclaim
 
 # Target launcher is still around and unbound.
