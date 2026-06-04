@@ -108,6 +108,18 @@ get_launcher_total_instances() {
 }
 
 # ---------------------------------------------------------------------------
+# Echo the relevant environment variables
+# ---------------------------------------------------------------------------
+
+echo "FMA_NAMESPACE=${FMA_NAMESPACE:-«unset»}"
+echo "MKOBJS_SCRIPT=${MKOBJS_SCRIPT:-«unset»}"
+echo "FMA_CHART_INSTANCE_NAME=${FMA_CHART_INSTANCE_NAME:-«unset»}"
+echo "READY_TARGET=${READY_TARGET:-«unset»}"
+echo "POLICIES_ENABLED=${POLICIES_ENABLED:-«unset»}"
+echo "POLL_LIMIT_SECS=${POLL_LIMIT_SECS:-«unset»}"
+echo "FMA_DEBUG=${FMA_DEBUG:-«unset»}"
+
+# ---------------------------------------------------------------------------
 # Probe for a node with 2 free GPUs
 # ---------------------------------------------------------------------------
 # Create a throwaway Pod that requests 2 GPUs.  The scheduler will place it
@@ -203,7 +215,8 @@ expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$inst | wc -l
 
 export req1=$(kubectl get pods -n "$NS" -o name -l app=dp-example,instance=$inst | sed s%pod/%%)
 echo "Server-requesting Pod is $req1"
-[ "$(kubectl get pod $req1 -n "$NS" -o jsonpath='{.spec.nodeName}')" = "$testnode" ]
+# Expect it to get scheduled to the chosen test node
+expect "kubectl get pod $req1 -n $NS -o jsonpath='{.spec.nodeName}' | fgrep -x $testnode"
 
 # Wait for launcher-to-requester binding, then capture the launcher name
 expect "kubectl get pods -n $NS -o name -l dual-pods.llm-d.ai/dual=$req1 | wc -l | grep -w 1"
@@ -604,7 +617,7 @@ expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$inst | wc -l
 # Verify launcher set is unchanged and target launcher is unbound
 launcher_count_pre_restart=$(kubectl get pods -n "$NS" -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | wc -l)
 echo launcher_count_pre_restart = $launcher_count_pre_restart
-kubectl get pods -n "$NS" -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | grep -x "pod/$launcher1"
+kubectl get pods -n "$NS" -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | fgrep -x "pod/$launcher1"
 expect '[ "$(kubectl get pod -n '"$NS"' $launcher1 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "" ]'
 
 # Verify launcher has sleeping instances before restart
@@ -631,7 +644,7 @@ sleep 30
 
 # Verify launcher pod set size is unchanged and target launcher is still running
 expect "kubectl get pods -n $NS -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | wc -l | grep -w $launcher_count_pre_restart"
-kubectl get pods -n "$NS" -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | grep -x "pod/$launcher1"
+kubectl get pods -n "$NS" -o name -l dual-pods.llm-d.ai/launcher-config-name=$lc | fgrep -x "pod/$launcher1"
 
 # Verify launcher still has the same number of instances after controller restart
 launcher_instances_after=$(kubectl exec -n "$NS" $launcher1 -- python3 -c 'import json,urllib.request; print(json.load(urllib.request.urlopen("http://127.0.0.1:8001/v2/vllm/instances"))["total_instances"])')

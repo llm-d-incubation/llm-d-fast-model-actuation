@@ -60,15 +60,15 @@ jobs:
       - name: Run launcher-based E2E test
         run: test/e2e/run-launcher-based.sh
 
-      - name: show all pods
+      - name: list all pods
         if: always()
         run: kubectl get pods -A -o wide
 
-      - name: show test pods with labels
+      - name: list test pods with labels
         if: always()
         run: kubectl get pods -L dual-pods.llm-d.ai/dual,dual-pods.llm-d.ai/sleeping,dual-pods.llm-d.ai/instance,dual-pods.llm-d.ai/launcher-config-name
 
-      - name: show ReplicaSets
+      - name: list ReplicaSets
         if: always()
         run: kubectl get rs -A
 
@@ -88,35 +88,35 @@ jobs:
           else echo The first dual-pods controller left no log
           fi
 
-      - name: show dual-pods controller log
+      - name: dump dual-pods controller log
         if: always()
         run: kubectl logs deploy/fma-dual-pods-controller
 
-      - name: show launcher-populator log
+      - name: dump launcher-populator log
         if: always()
         run: kubectl logs deploy/fma-launcher-populator || echo "launcher-populator not deployed"
 
-      - name: show GPU allocations
+      - name: dump GPU allocations
         if: always()
         run: kubectl get cm gpu-allocs -o yaml
 
-      - name: show GPU map
+      - name: dump GPU map
         if: always()
         run: kubectl get cm gpu-map -o yaml
 
-      - name: show InferenceServerConfigs
+      - name: dump InferenceServerConfigs
         if: always()
         run: kubectl get inferenceserverconfigs -o yaml
 
-      - name: show LauncherConfigs
+      - name: dump LauncherConfigs
         if: always()
         run: kubectl get launcherconfigs -o yaml
 
-      - name: show YAML of test pods
+      - name: dump YAML of test pods
         if: always()
         run: kubectl get pods -o yaml
 
-      - name: show launcher pod logs
+      - name: dump launcher pod logs
         if: always()
         run: |
           for pod in $(kubectl get pods -l dual-pods.llm-d.ai/launcher-config-name -o name); do
@@ -124,6 +124,6 @@ jobs:
             kubectl logs $pod || echo "Failed to get logs for $pod"
           done
 
-      - name: show vLLM instance logs from launchers
+      - name: dump vLLM instance logs from launchers
         if: always()
         run: scripts/dump-launcher-vllm-logs.sh
