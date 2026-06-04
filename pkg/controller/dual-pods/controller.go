@@ -235,16 +235,16 @@ type controller struct {
 	enqueueLogger klog.Logger
 	coreclient    coreclient.CoreV1Interface
 	namespace     string
-	podInformer      cache.SharedIndexInformer
-	podLister        corev1listers.PodLister
-	cmInformer       cache.SharedIndexInformer
-	cmLister         corev1listers.ConfigMapLister
-	nodeInformer     cache.SharedIndexInformer
-	nodeLister       corev1listers.NodeLister
-	iscInformer      cache.SharedIndexInformer
-	iscLister        fmalisters.InferenceServerConfigLister
-	lcInformer       cache.SharedIndexInformer
-	lcLister         fmalisters.LauncherConfigLister
+	podInformer   cache.SharedIndexInformer
+	podLister     corev1listers.PodLister
+	cmInformer    cache.SharedIndexInformer
+	cmLister      corev1listers.ConfigMapLister
+	nodeInformer  cache.SharedIndexInformer
+	nodeLister    corev1listers.NodeLister
+	iscInformer   cache.SharedIndexInformer
+	iscLister     fmalisters.InferenceServerConfigLister
+	lcInformer    cache.SharedIndexInformer
+	lcLister      fmalisters.LauncherConfigLister
 	genctlr.KnowsProcessedSync[queueItem]
 
 	sleeperLimit        int
@@ -353,7 +353,7 @@ type cmItem struct {
 
 type infSvrItem struct {
 	UID apitypes.UID
-	// RequesterName is the name of the Pod that had this UID
+	// RequesterName is the name of the server-requesting Pod that had this UID.
 	RequesterName string
 }
 
@@ -369,21 +369,24 @@ type instanceGCItem struct {
 type infSvrItemType string
 
 const (
-	// infSvrItemRequester is for a server-requesting Pod.
+	// infSvrItemRequester means the corresponding infSvrItem identifies the
+	// server-requesting Pod.
 	infSvrItemRequester infSvrItemType = "requester"
-	// infSvrItemBoundProvider is for a server-providing Pod that
-	// is bound to a server-requesting Pod.
+	// infSvrItemBoundProvider means the corresponding infSvrItem identifies the
+	// server-requesting Pod to which the server-providing Pod is bound.
 	infSvrItemBoundProvider infSvrItemType = "bound_provider"
-	// infSvrItemUnboundLauncherBasedProvider is for a server-providing Pod that
-	// is launcher-based and not bound to any server-requesting Pods.
-	// Note that technically an unbound launcher-based server-providing Pod is not part of any inference server (yet/anymore).
+	// infSvrItemUnboundLauncherBasedProvider is for a launcher-based
+	// server-providing Pod that is not bound to any server-requesting Pod.
+	// There is no corresponding infSvrItem because the Pod is not part of any
+	// inference server yet.
 	infSvrItemUnboundLauncherBasedProvider infSvrItemType = "unbound_launcher_based_provider"
-	// infSvrItemDontCare is not a real infSvrItemType but only a placeholder
-	// saying the corresponding infSvrItem is not relevant to the controller.
+	// infSvrItemDontCare means the Pod is not relevant to the controller and
+	// there is no corresponding infSvrItem.
 	infSvrItemDontCare infSvrItemType = "dont_care"
 )
 
-// careAbout returns an infSvrItem and an infSvrItemType.
+// careAbout returns an infSvrItem and an infSvrItemType. The infSvrItem is
+// meaningful only when the type is infSvrItemRequester or infSvrItemBoundProvider.
 // The controller cares about
 // - server-requesting Pods,
 // - bound server-providing Pods,
@@ -399,8 +402,7 @@ func careAbout(pod *corev1.Pod) (item infSvrItem, it infSvrItemType) {
 		return infSvrItem{apitypes.UID(requesterParts[0]), requesterParts[1]}, infSvrItemBoundProvider
 	}
 	if _, hasLauncherLabel := pod.Labels[ctlrcommon.LauncherConfigNameLabelKey]; hasLauncherLabel {
-		// For an unbound launcher-based server-providing Pod, use the Pod's own UID and name
-		return infSvrItem{pod.UID, pod.Name}, infSvrItemUnboundLauncherBasedProvider
+		return infSvrItem{}, infSvrItemUnboundLauncherBasedProvider
 	}
 	return infSvrItem{}, infSvrItemDontCare
 }
