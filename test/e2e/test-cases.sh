@@ -778,9 +778,6 @@ cheer Successful unbound launcher deletion cleanup
 # Stopped Instance Recovery
 # ---------------------------------------------------------------------------
 
-if false; then
-# temporarily disabled because of Issue 506
-
 intro_case Stopped Instance Recovery
 
 # This test verifies that the dual-pods controller detects a stopped vLLM
@@ -843,7 +840,5 @@ kubectl wait --for condition=Ready pod/$launcher_after_delete -n "$NS" --timeout
 check_gpu_pin $req_recovered
 
 cheer Successful stopped instance recovery
-
-fi
 
 cheer All launcher-based tests passed
