@@ -21,11 +21,10 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	_ "net/http/pprof"
 
 	"github.com/spf13/pflag"
 
-	"k8s.io/apiserver/pkg/server/mux"
-	"k8s.io/apiserver/pkg/server/routes"
 	"k8s.io/component-base/metrics/legacyregistry"
 	_ "k8s.io/component-base/metrics/prometheus/clientgo"
 	_ "k8s.io/component-base/metrics/prometheus/version"
@@ -51,9 +50,11 @@ func (opts *Options) AddToFlagSet(fs *pflag.FlagSet) {
 
 func (opts *Options) Start(ctx context.Context) {
 	logger := klog.FromContext(ctx)
+	metMux := http.NewServeMux()
+	metMux.Handle("GET /metrics", legacyregistry.Handler())
 	metricsServer := http.Server{
 		Addr:        fmt.Sprintf(":%d", opts.MetricsPort),
-		Handler:     legacyregistry.Handler(),
+		Handler:     metMux,
 		BaseContext: func(l net.Listener) context.Context { return ctx },
 	}
 	go func() {
@@ -63,11 +64,11 @@ func (opts *Options) Start(ctx context.Context) {
 		}
 	}()
 
-	mymux := mux.NewPathRecorderMux("debug")
-	routes.Profiling{}.Install(mymux)
+	// debMux := http.NewServeMux()
+	// debMux.Handle("GET /debug/pprof", http.HandlerFunc(pprof.Index))
 	debugServer := http.Server{
 		Addr:        fmt.Sprintf(":%d", opts.DebugPort),
-		Handler:     mymux,
+		Handler:     http.DefaultServeMux,
 		BaseContext: func(l net.Listener) context.Context { return ctx },
 	}
 	go func() {
