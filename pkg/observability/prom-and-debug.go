@@ -64,8 +64,6 @@ func (opts *Options) Start(ctx context.Context) {
 		}
 	}()
 
-	// debMux := http.NewServeMux()
-	// debMux.Handle("GET /debug/pprof", http.HandlerFunc(pprof.Index))
 	debugServer := http.Server{
 		Addr:        fmt.Sprintf(":%d", opts.DebugPort),
 		Handler:     http.DefaultServeMux,
