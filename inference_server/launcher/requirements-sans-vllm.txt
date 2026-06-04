@@ -4,4 +4,4 @@ uvicorn==0.42.0
 uvloop==0.22.1
 httpx==0.28.1
 nvidia-ml-py==13.590.48
-kubernetes==31.0.0
+kubernetes==34.1.0
