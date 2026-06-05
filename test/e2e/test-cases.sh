@@ -208,6 +208,7 @@ launcher2=${launcher2:-}
 launcher3=${launcher3:-}
 launcher4=${launcher4:-}
 testnode=${testnode:-}
+if [ -n "${pfpid:-}" ]; then kill $pfpid; fi
 "' EXIT
 
 # Expect requester pod to be created
@@ -631,6 +632,14 @@ kubectl get -n "$NS" pods -l app.kubernetes.io/component=dual-pods-controller
 kubectl logs -n "$NS" deployment/"${FMA_CHART_INSTANCE_NAME}-dual-pods-controller" > dual-pods-controller-first.log
 kubectl logs -n "$NS" deployment/"${FMA_CHART_INSTANCE_NAME}-dual-pods-controller" -p > dual-pods-controller-first-prev.log || true
 
+echo "Saving a scrape of the dual-pods controller before it is replaced; expect port-forward and curl noise"
+kubectl port-forward -n "$NS" deployment/"${FMA_CHART_INSTANCE_NAME}-dual-pods-controller" 18002:8002 &
+pfpid=$!
+sleep 5
+expect "curl http://localhost:18002/metrics > scrape1.metrics"
+kill $pfpid
+pfpid=""
+
 # Restart the dual-pods controller to test state recovery
 echo "Restarting dual-pods controller..."
 kubectl rollout restart deployment "${FMA_CHART_INSTANCE_NAME}-dual-pods-controller" -n "$NS"
@@ -842,3 +851,11 @@ check_gpu_pin $req_recovered
 cheer Successful stopped instance recovery
 
 cheer All launcher-based tests passed
+
+echo "Saving a final scrape of the dual-pods controller; expect port-forward and curl noise"
+kubectl port-forward -n "$NS" deployment/"${FMA_CHART_INSTANCE_NAME}-dual-pods-controller" 28002:8002 &
+pfpid=$!
+sleep 5
+expect "curl http://localhost:28002/metrics > scrape2.metrics"
+kill $pfpid
+pfpid=""

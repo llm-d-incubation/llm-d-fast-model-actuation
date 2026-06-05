@@ -127,3 +127,11 @@ jobs:
       - name: dump vLLM instance logs from launchers
         if: always()
         run: scripts/dump-launcher-vllm-logs.sh
+
+      - name: dump scrape of first dual-pods controller
+        if: always()
+        run: cat scrape1.metrics || true
+
+      - name: dump scrape of final dual-pods controller
+        if: always()
+        run: cat scrape2.metrics || true
