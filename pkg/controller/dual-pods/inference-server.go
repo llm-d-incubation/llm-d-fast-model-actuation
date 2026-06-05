@@ -1884,7 +1884,7 @@ func (ctl *controller) syncLauncherInstances(ctx context.Context, nodeDat *nodeD
 
 	if launcherPod.Status.PodIP == "" || !utils.IsPodReady(launcherPod) {
 		logger.V(5).Info("Launcher pod not ready yet, waiting for another Pod event", "name", launcherPod.Name)
-		return nil, nil, true
+		return nil, nil, false
 	}
 
 	launcherBaseURL := fmt.Sprintf("http://%s:%d", launcherPod.Status.PodIP, ctlrcommon.LauncherServicePort)

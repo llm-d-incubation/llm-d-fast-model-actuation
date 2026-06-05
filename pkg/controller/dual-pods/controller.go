@@ -518,7 +518,8 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 			nd := ctl.getNodeData(nodeName)
 			unboundLauncher := unboundLauncherPodItem{LauncherPodName: typed.Name, NodeName: nodeName}
 			ctl.enqueueLogger.V(5).Info("Enqueuing launcher reference due to notification of update",
-				"nodeName", nodeName, "launcherPod", typed.Name, "resourceVersion", typed.ResourceVersion)
+				"nodeName", nodeName, "launcherPod", typed.Name, "resourceVersion", typed.ResourceVersion,
+				"lastWrite", getLastWrite(&typed.ObjectMeta))
 			nd.add(unboundLauncher)
 			ctl.Queue.Add(nodeItem{nodeName})
 		} else {
@@ -535,7 +536,9 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 				return
 			}
 			nd := ctl.getNodeData(nodeName)
-			ctl.enqueueLogger.V(5).Info("Enqueuing inference server reference due to notification of update", "nodeName", nodeName, "item", item, "infSvrItemType", it, "resourceVersion", typed.ResourceVersion)
+			ctl.enqueueLogger.V(5).Info("Enqueuing inference server reference due to notification of update",
+				"nodeName", nodeName, "item", item, "infSvrItemType", it, "resourceVersion", typed.ResourceVersion,
+				"lastWrite", getLastWrite(&typed.ObjectMeta))
 			nd.add(item)
 			ctl.Queue.Add(nodeItem{nodeName})
 		}
@@ -558,6 +561,36 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 		ctl.enqueueLogger.Error(nil, "Notified of update of unexpected type of object", "type", fmt.Sprintf("%T", obj))
 		return
 	}
+}
+
+type lastWrite struct {
+	Manager string
+	Time    *metav1.Time
+}
+
+func getLastWrite(om *metav1.ObjectMeta) lastWrite {
+	lastIndex := -1
+	lastTime := om.CreationTimestamp
+	for index, entry := range om.ManagedFields {
+		if lastIndex < 0 || entry.Time != nil && entry.Time.After(lastTime.Time) {
+			lastIndex = index
+			if entry.Time != nil {
+				lastTime = *entry.Time
+			}
+		}
+	}
+	if lastIndex < 0 {
+		return lastWrite{
+			Manager: "<creator>",
+			Time:    &om.CreationTimestamp,
+		}
+	}
+	entry := om.ManagedFields[lastIndex]
+	lw := lastWrite{
+		Manager: entry.Manager,
+		Time:    entry.Time,
+	}
+	return lw
 }
 
 func (ctl *controller) OnDelete(obj any) {
