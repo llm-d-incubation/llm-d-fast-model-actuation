@@ -39,6 +39,15 @@ kind delete cluster --name fmatest
 kind create cluster --name fmatest --config - <<EOF
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
+kubeadmConfigPatches:
+- |
+  apiVersion: kubeadm.k8s.io/v1beta4
+  kind: ClusterConfiguration
+  ---
+  apiVersion: kubelet.config.k8s.io/v1beta1
+  kind: KubeletConfiguration
+  containerLogMaxSize: 200Mi
+  containerLogMaxFiles: 5
 nodes:
 - role: control-plane
 - role: worker
