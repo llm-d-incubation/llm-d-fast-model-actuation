@@ -39,7 +39,7 @@ func FuzzServer(f *testing.F) {
 	ctx, cancel := context.WithCancel(f.Context())
 	port := "28083"
 	go func() {
-		err := RunWithGPUUUIDs(ctx, port, &ready, nil, gpuIDs)
+		err := RunWithGPUUUIDs(ctx, port, &ready, nil, gpuIDs, http.NotFound)
 		if err != nil {
 			f.Logf("Run failed: %s", err.Error())
 		}
@@ -89,7 +89,7 @@ func TestLogChunking(t *testing.T) {
 	var ready atomic.Bool
 	port := "28084"
 	go func() {
-		err := RunWithGPUUUIDs(ctx, port, &ready, &logBuilder, []string{"x"})
+		err := RunWithGPUUUIDs(ctx, port, &ready, &logBuilder, []string{"x"}, http.NotFound)
 		if err != nil {
 			t.Logf("Run failed: %s", err.Error())
 		}
