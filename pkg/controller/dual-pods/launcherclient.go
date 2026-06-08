@@ -63,6 +63,9 @@ func NewLauncherClient(baseURL string) (*LauncherClient, error) {
 		baseURL: parsedURL,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
+			Transport: &http.Transport{
+				DisableKeepAlives: true,
+			},
 		},
 	}
 
