@@ -629,6 +629,26 @@ jobs:
         if: always()
         run: scripts/dump-launcher-vllm-logs.sh "$FMA_NAMESPACE"
 
+      - name: dump scrape of first dual-pods controller
+        if: always()
+        run: cat scrape1.metrics || true
+
+      - name: dump scrape of final dual-pods controller
+        if: always()
+        run: cat scrape2.metrics || true
+
+      - name: Prometheus snapshot
+        if: always()
+        run: scripts/take-prom-snapshot.sh "$FMA_NAMESPACE" prometheus-it-0 9090 snaps/snap
+
+      - name: upload Prometheus snapshot
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: snap
+          path: snaps
+          retention-days: 14
+
       - name: Clean up test objects
         if: always()
         run: |
