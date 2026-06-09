@@ -500,6 +500,20 @@ jobs:
             --clusterrole=cluster-logging-application-view \
             --group=system:authenticated
 
+      - name: Create PodMonitor for FMA
+        run: |
+          kubectl apply -n "$FMA_NAMESPACE" -f - <<EOF
+          apiVersion: monitoring.coreos.com/v1
+          kind: PodMonitor
+          metadata:
+            name: scrape-me
+          spec:
+            podMetricsEndpoints:
+            - port: metrics
+            selector:
+              matchLabels: {"scrape": "true"}
+          EOF
+
       - name: Deploy FMA
         env:
           CONTAINER_IMG_REG: ghcr.io/${{ github.repository }}
@@ -628,6 +642,14 @@ jobs:
       - name: Dump vLLM instance logs from launchers
         if: always()
         run: scripts/dump-launcher-vllm-logs.sh "$FMA_NAMESPACE"
+
+      - name: dump scrape of first dual-pods controller
+        if: always()
+        run: cat scrape1.metrics || true
+
+      - name: dump scrape of final dual-pods controller
+        if: always()
+        run: cat scrape2.metrics || true
 
       - name: Clean up test objects
         if: always()
