@@ -208,7 +208,7 @@ launcher2=${launcher2:-}
 launcher3=${launcher3:-}
 launcher4=${launcher4:-}
 testnode=${testnode:-}
-if [ -n "${pfpid:-}" ]; then kill ${pfpid:-}; fi
+if [ -n "${pfpid:-}" ]; then kill $pfpid; fi
 "' EXIT
 
 # Expect requester pod to be created

@@ -496,8 +496,11 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		}
 		// After a controller restart the binding may have been persisted
 		// but the proxy config never sent. Ensure it is configured now.
-		if err := ensureProxyConfigured(ctx, requestingPod, providingPod, adminPort, serverPort); err != nil {
-			return err, true
+		if !serverDat.ProxyConfigured {
+			if err := ensureProxyConfigured(ctx, requestingPod, providingPod, adminPort, serverPort); err != nil {
+				return err, true
+			}
+			serverDat.ProxyConfigured = true
 		}
 		// Relay readiness if not already done.
 		// For launcher-based providers, readiness follows the bound instance's

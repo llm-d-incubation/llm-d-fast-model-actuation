@@ -64,13 +64,9 @@ type Server struct {
 	// configCh carries the target from Configure to Run; sent on at most once.
 	configCh chan stubapi.ProxyTargetConfig
 	// startedCh carries the result of starting the listener (nil on success).
-	// Run sends on it exactly once iff it has read from configCh.
+	// Run sends exactly one value then closes: nil on success, an error on
+	// Start failure or shutdown-before-configuration.
 	startedCh chan error
-
-	// runCtx is the context handed to Run. Configure consults it so process
-	// shutdown unblocks any in-flight PUT without waiting for server.Shutdown.
-	runCtxMu sync.Mutex
-	runCtx   context.Context
 
 	// target is the most recently delivered backend target; guarded by stateMu
 	// because GET and the duplicate-PUT check race with the first PUT writer.
@@ -84,14 +80,7 @@ func New(cfg ProxyConfig) *Server {
 		cfg:       cfg,
 		configCh:  make(chan stubapi.ProxyTargetConfig, 1),
 		startedCh: make(chan error, 1),
-		runCtx:    context.Background(),
 	}
-}
-
-func (s *Server) currentRunCtx() context.Context {
-	s.runCtxMu.Lock()
-	defer s.runCtxMu.Unlock()
-	return s.runCtx
 }
 
 // Run starts the TCP proxy server. It blocks waiting for Configure to deliver
@@ -103,16 +92,13 @@ func (s *Server) Run(ctx context.Context) error {
 	logger := klog.FromContext(ctx).WithName("proxy-server")
 	logger.Info("Starting TCP proxy server", "port", s.cfg.Port, "dialTimeout", s.cfg.DialTimeout)
 
-	s.runCtxMu.Lock()
-	s.runCtx = ctx
-	s.runCtxMu.Unlock()
-
 	var tgt stubapi.ProxyTargetConfig
 	select {
 	case tgt = <-s.configCh:
 		logger.V(2).Info("Received proxy target from Configure", "target", tgt)
 	case <-ctx.Done():
 		logger.V(2).Info("Context cancelled before proxy was configured")
+		s.startedCh <- fmt.Errorf("proxy shutdown cancelled before configuration")
 		close(s.startedCh)
 		return nil
 	}
@@ -170,8 +156,7 @@ func (s *Server) Configure(w http.ResponseWriter, r *http.Request) {
 		cur := s.target
 		s.stateMu.Unlock()
 		if cur == nil {
-			w.WriteHeader(http.StatusNotFound)
-			_, _ = w.Write([]byte("proxy not configured"))
+			http.Error(w, "proxy not configured", http.StatusNotFound)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -221,8 +206,9 @@ func (s *Server) Configure(w http.ResponseWriter, r *http.Request) {
 	// so the send never blocks.
 	s.configCh <- cfg
 
-	// Wait for Run to confirm the listener is up. Abort if either the request
-	// is cancelled or the proxy itself is shutting down.
+	// Wait for Run to confirm the listener is up. Abort if the request
+	// is cancelled; Run always sends on startedCh (nil, start error, or
+	// shutdown error), so this select is guaranteed to unblock.
 	select {
 	case startErr := <-s.startedCh:
 		if startErr != nil {
@@ -231,9 +217,6 @@ func (s *Server) Configure(w http.ResponseWriter, r *http.Request) {
 		}
 	case <-r.Context().Done():
 		http.Error(w, "request cancelled before proxy started listening", http.StatusServiceUnavailable)
-		return
-	case <-s.currentRunCtx().Done():
-		http.Error(w, "proxy shutting down before listener was ready", http.StatusServiceUnavailable)
 		return
 	}
 
