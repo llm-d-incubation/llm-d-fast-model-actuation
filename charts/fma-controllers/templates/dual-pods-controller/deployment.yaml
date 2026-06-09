@@ -20,6 +20,7 @@ spec:
         app.kubernetes.io/name: fma-controllers
         app.kubernetes.io/component: dual-pods-controller
         app.kubernetes.io/instance: {{ .Release.Name }}
+        scrape: "true"
     spec:
       containers:
       - name: controller
@@ -31,5 +32,9 @@ spec:
         - "--namespace={{ .Release.Namespace }}"
         - "--sleeper-limit={{ .Values.dualPodsController.sleeperLimit }}"
         - "--debug-accelerator-memory={{ .Values.dualPodsController.debugAcceleratorMemory }}"
+        ports:
+        - containerPort: 8002
+          name: metrics
+          protocol: TCP
       serviceAccountName: {{ .Release.Name }}-fma-controllers
 {{- end }}

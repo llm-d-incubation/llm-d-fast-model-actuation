@@ -47,14 +47,19 @@ cheer() {
 intro_case() {
     echo
     echo "====== Test case: $* ======"
+    date "+%F %T"
     echo
+}
+
+note() {
+    echo "$(date "+%F %T")| $*"
 }
 
 expect() {
     local elapsed=0
     local start=$(date)
     local limit=${POLL_LIMIT_SECS}
-    echo "Expecting $1" >&2
+    note "Expecting $1"
     while true; do
         if (( elapsed < 7 || elapsed+7 > POLL_LIMIT_SECS )); then
             kubectl get pods -n "$NS" -L dual-pods.llm-d.ai/dual,dual-pods.llm-d.ai/sleeping
@@ -208,8 +213,9 @@ launcher2=${launcher2:-}
 launcher3=${launcher3:-}
 launcher4=${launcher4:-}
 testnode=${testnode:-}
-if [ -n "${pfpid:-}" ]; then kill $pfpid; fi
-"' EXIT
+"
+if [ -n "${pfpid:-}" ]; then kill $pfpid || true; fi
+' EXIT
 
 # Expect requester pod to be created
 expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$inst | wc -l | grep -w 1"
@@ -235,8 +241,7 @@ expect '[ "$(kubectl get pod -n '"$NS"' $req1 -o jsonpath={.metadata.labels.dual
 [ "$(kubectl get pod -n "$NS" $launcher1 -o jsonpath='{.metadata.labels.e2e-test\.fma\.llm-d\.ai/template-label}')" == "from-launcher-config" ] || { echo "ERROR: LauncherConfig podTemplate label is not correctly set on launcher pod $launcher1"; false; }
 [ "$(kubectl get pod -n "$NS" $launcher1 -o jsonpath='{.metadata.annotations.e2e-test\.fma\.llm-d\.ai/template-annotation}')" == "from-launcher-config" ] || { echo "ERROR: LauncherConfig podTemplate annotation is not correctly set on launcher pod $launcher1"; false; }
 
-# Wait for both pods to be ready (includes vllm startup time)
-date
+note "Wait for both pods to be ready (includes vllm startup time)"
 kubectl wait --for condition=Ready pod/$req1 -n "$NS" --timeout=300s
 kubectl wait --for condition=Ready pod/$launcher1 -n "$NS" --timeout=0s
 
@@ -362,8 +367,9 @@ else
 
     expect '[ "$(kubectl get pod -n '"$NS"' '"$collision_req"' -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "'"$collision_launcher"'" ]'
 
-    date
+    note Wait for $collision_req to be ready
     kubectl wait --for condition=Ready pod/$collision_req -n "$NS" --timeout=300s
+    note Wait for $collision_launcher to be ready
     kubectl wait --for condition=Ready pod/$collision_launcher -n "$NS" --timeout=0s
 
     req_gpus=$(kubectl get pod "$req1" -n "$NS" -o jsonpath='{.metadata.annotations.dual-pods\.llm-d\.ai/accelerators}')
@@ -432,8 +438,7 @@ expect '[ "$(kubectl get pod -n '"$NS"' $req2 -o jsonpath={.metadata.labels.dual
 [ "$(kubectl get pod -n "$NS" $launcher1 -o jsonpath='{.metadata.labels.e2e-test\.fma\.llm-d\.ai/isc-label}')" == "test-value" ] || { echo "ERROR: ISC label not re-propagated to launcher pod $launcher1 after re-bind"; exit 1; }
 [ "$(kubectl get pod -n "$NS" $launcher1 -o jsonpath='{.metadata.annotations.e2e-test\.fma\.llm-d\.ai/isc-annotation}')" == "test-value" ] || { echo "ERROR: ISC annotation not re-propagated to launcher pod $launcher1 after re-bind"; exit 1; }
 
-# Wait for requester to be ready (launcher should already be ready)
-date
+note "Wait for requester to be ready (launcher should already be ready)"
 kubectl wait --for condition=Ready pod/$req2 -n "$NS" --timeout=300s
 kubectl wait --for condition=Ready pod/$launcher1 -n "$NS" --timeout=0s
 
@@ -478,8 +483,7 @@ launcher3=$(kubectl get pods -n "$NS" -o name -l dual-pods.llm-d.ai/dual=$req3 |
 # Verify requester is bound to launcher (bidirectional check)
 expect '[ "$(kubectl get pod -n '"$NS"' $req3 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcher1" ]'
 
-# Wait for requester to be ready (launcher should already be ready)
-date
+note "Wait for requester to be ready (launcher should already be ready)"
 kubectl wait --for condition=Ready pod/$req3 -n "$NS" --timeout=300s
 kubectl wait --for condition=Ready pod/$launcher1 -n "$NS" --timeout=0s
 
@@ -523,8 +527,7 @@ launcher4=$(kubectl get pods -n "$NS" -o name -l dual-pods.llm-d.ai/dual=$req4 |
 # Verify requester is bound to launcher (bidirectional check)
 expect '[ "$(kubectl get pod -n '"$NS"' $req4 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcher1" ]'
 
-# Wait for requester to be ready (launcher should already be ready)
-date
+note "Wait for requester to be ready (launcher should already be ready)"
 kubectl wait --for condition=Ready pod/$req4 -n "$NS" --timeout=300s
 kubectl wait --for condition=Ready pod/$launcher1 -n "$NS" --timeout=0s
 
@@ -588,7 +591,7 @@ kubectl get pods -n "$NS" -l dual-pods.llm-d.ai/launcher-config-name=$lc -o wide
 [ "$(kubectl get pod -n "$NS" "$req_reclaim" -o jsonpath='{.metadata.labels.dual-pods\.llm-d\.ai/dual}')" == "$launcher1" ]
 [ "$(kubectl get pod -n "$NS" "$launcher1" -o jsonpath='{.metadata.labels.dual-pods\.llm-d\.ai/dual}')" == "$req_reclaim" ]
 
-date
+note Wait for $req_reclaim and $launcher1 to be ready
 kubectl wait --for condition=Ready pod/$req_reclaim -n "$NS" --timeout=300s
 kubectl wait --for condition=Ready pod/$launcher1 -n "$NS" --timeout=0s
 
@@ -672,8 +675,7 @@ req_post_restart=$(kubectl get pods -n "$NS" -o name -l app=dp-example,instance=
 expect '[ "$(kubectl get pod -n '"$NS"' $req_post_restart -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcher1" ]'
 expect '[ "$(kubectl get pod -n '"$NS"' $launcher1 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$req_post_restart" ]'
 
-# Verify requester becomes ready (fast wake-up path should work)
-date
+note "Verify requester becomes ready (fast wake-up path should work)"
 kubectl wait --for condition=Ready pod/$req_post_restart -n "$NS" --timeout=30s
 kubectl wait --for condition=Ready pod/$launcher1 -n "$NS" --timeout=0s
 
@@ -772,9 +774,8 @@ echo "Launcher after delete = $launcher_after_delete"
 [ "$launcher_after_delete" != "$launcher1" ]
 expect '[ "$(kubectl get pod -n '"$NS"' $req_after_delete -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcher_after_delete" ]'
 
-# Wait for the new requester to be "ready";
+note 'Wait for the new requester to be "ready";'
 # That should imply that the new launcher is ready.
-date
 kubectl wait --for condition=Ready pod/$req_after_delete -n "$NS" --timeout=300s
 kubectl wait --for condition=Ready pod/$launcher_after_delete -n "$NS" --timeout=0s
 
@@ -841,8 +842,7 @@ echo "Recovered launcher: $launcher_recovered"
 # Verify bidirectional binding
 expect '[ "$(kubectl get pod -n '"$NS"' $req_recovered -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcher_after_delete" ]'
 
-# Wait for both to be ready
-date
+note Wait for both to be ready
 kubectl wait --for condition=Ready pod/$req_recovered -n "$NS" --timeout=300s
 kubectl wait --for condition=Ready pod/$launcher_after_delete -n "$NS" --timeout=0s
 

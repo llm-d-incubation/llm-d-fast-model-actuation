@@ -4,7 +4,20 @@
 # Current working directory must be the root of the Git repository.
 # This script tests launcher-based server-providing pods independently.
 #
-# Required tools: kubectl, helm, jq, yq (https://github.com/mikefarah/yq).
+# Required tools: kubectl, helm, curl, jq, yq (https://github.com/mikefarah/yq).
+#
+# Optional: prometheus (to view Prometheus snapshot)
+
+# This script installs the Prometheus Operator in the `kind` cluster.
+
+# The last thing this script does is take a Prometheus TSDB snapshot.
+# The snapshot is stored at "snaps/snap".
+# The directory "snaps" is created if it does not already exist.
+
+# To view that snapshot with your own Prometheus server, execute the following
+# two commands and then browse http://localhost:9090/
+# touch prom-config.yaml
+# prometheus --config.file=prom-config.yaml --storage.tsdb.retention.time=1y --storage.tsdb.path=snaps/snap
 
 set -euo pipefail
 
@@ -18,6 +31,20 @@ function clear_img_repo() (
 	docker rmi $name:$tag
     done
 )
+
+: Ensure directory snaps exists, snaps/snap does not
+
+if [ -d snaps ]; then
+    : snaps/ is an existing directory
+    if [ -a snaps/snap ]
+    then rm -rf snaps/snap
+    fi
+elif [ -a snaps ]; then
+    echo "snaps exists but it is not a directory" >&2
+    exit 1
+else
+    mkdir snaps
+fi
 
 : Build the container images, no push
 
@@ -59,6 +86,79 @@ kubectl wait --for condition=Ready node fmatest-worker
 
 # Display health, prove we don't have https://kind.sigs.k8s.io/docs/user/known-issues/#pod-errors-due-to-too-many-open-files
 kubectl get pods -A -o wide
+
+# Install and basic config for Prometheus Operator
+
+kubectl create -f https://github.com/prometheus-operator/prometheus-operator/releases/download/v0.91.0/bundle.yaml
+
+kubectl wait --for=condition=Established crd/prometheuses.monitoring.coreos.com --timeout=60s
+kubectl wait --for=condition=Established crd/podmonitors.monitoring.coreos.com --timeout=30s
+
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: prometheus
+rules:
+- apiGroups: [""]
+  resources: ["services", "endpoints", "pods"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: prometheus
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: prometheus
+subjects:
+- kind: ServiceAccount
+  name: prometheus
+---
+apiVersion: monitoring.coreos.com/v1
+kind: Prometheus
+metadata:
+  name: it
+spec:
+  serviceAccountName: prometheus
+  serviceMonitorSelector: {}
+  podMonitorSelector: {}
+  probeSelector: {}
+  scrapeConfigSelector: {}
+  scrapeInterval: "10s"
+  enableAdminAPI: true
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: prom
+spec:
+  podMetricsEndpoints:
+  - port: web
+  selector:
+    matchLabels: {"app.kubernetes.io/name": "prometheus"}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: scrape-me
+spec:
+  podMetricsEndpoints:
+  - port: metrics
+  selector:
+    matchLabels: {"scrape": "true"}
+EOF
+
+# back to non-Prometheus stuff
 
 kubectl create clusterrole node-viewer --verb=get,list,watch --resource=nodes
 
@@ -178,3 +278,7 @@ MKOBJS_SCRIPT=./test/e2e/mkobjs.sh \
 FMA_CHART_INSTANCE_NAME=fma \
 READY_TARGET=1 \
 ./test/e2e/test-cases.sh
+
+echo "Taking a Prometheus snapshot"
+
+scripts/take-prom-snapshot.sh default prometheus-it-0 9090 snaps/snap

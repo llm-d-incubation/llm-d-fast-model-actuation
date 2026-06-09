@@ -8,7 +8,8 @@
 
 - [Local dev/test in a `kind` cluster](local-test.md)
 - [Manual end-to-end testing using a real cluster](e2e-recipe.md)
-- [End-to-end testing in a `kind` cluster](../test/e2e/run.sh)
+- [End-to-end testing without launcher in a `kind` cluster](../test/e2e/run.sh)
+- [End-to-end testing with launcher in a `kind` cluster](../test/e2e/run-launcher-based.sh)
 
 # CI
 
