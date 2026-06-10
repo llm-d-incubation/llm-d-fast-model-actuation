@@ -94,9 +94,13 @@ func (ni nodeItem) process(ctx context.Context, ctl *controller) (error, bool) {
 	items := nodeDat.yankItems()
 	var retries int
 	logger.V(4).Info("Processing items for node", "count", len(items))
-	for localItem := range items {
-		logger.V(4).Info("Processing node-local item", "item", localItem)
+	for localItem, addTime := range items {
+		logger.V(4).Info("Processing node-local item", "item", localItem, "enqueuedAt", addTime)
+		processStart := time.Now()
+		queueDurationHists.WithLabelValues(ni.NodeName).Observe(processStart.Sub(addTime).Seconds())
 		err, retry := localItem.process(ctx, ctl, nodeDat)
+		processFin := time.Now()
+		workDurationHists.WithLabelValues(ni.NodeName).Observe(processFin.Sub(processStart).Seconds())
 		if err != nil {
 			if retry {
 				logger.Info("Processing node local item suffered transient error, will retry", "item", localItem, "err", err)
@@ -108,6 +112,7 @@ func (ni nodeItem) process(ctx context.Context, ctl *controller) (error, bool) {
 		}
 		if retry {
 			nodeDat.add(localItem)
+			retriesCounters.WithLabelValues(ni.NodeName).Inc()
 			retries++
 		}
 	}

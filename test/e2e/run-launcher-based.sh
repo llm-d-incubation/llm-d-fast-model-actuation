@@ -4,7 +4,8 @@
 # Current working directory must be the root of the Git repository.
 # This script tests launcher-based server-providing pods independently.
 #
-# Required tools: kubectl, helm, curl, jq, yq (https://github.com/mikefarah/yq).
+# Required tools: kubectl, helm, curl, jq, yq (https://github.com/mikefarah/yq),
+# kind (defaulting to Kubernetes 1.30 or higher).
 #
 # Optional: prometheus (to view Prometheus snapshot)
 
@@ -269,6 +270,7 @@ CONTAINER_IMG_REG=$(make echo-var VAR=CONTAINER_IMG_REG) \
 IMAGE_TAG=$(make echo-var VAR=IMAGE_TAG) \
 NODE_VIEW_CLUSTER_ROLE=node-viewer \
 HELM_EXTRA_ARGS="--set global.local=true" \
+POLICIES_ENABLED=true \
 ./test/e2e/deploy_fma.sh
 
 : Run launcher-based E2E tests
@@ -277,6 +279,7 @@ FMA_NAMESPACE=default \
 MKOBJS_SCRIPT=./test/e2e/mkobjs.sh \
 FMA_CHART_INSTANCE_NAME=fma \
 READY_TARGET=1 \
+POLICIES_ENABLED=true \
 ./test/e2e/test-cases.sh
 
 echo "Taking a Prometheus snapshot"

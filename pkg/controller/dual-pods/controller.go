@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"reflect"
 	"slices"
@@ -39,6 +40,8 @@ import (
 	coreclient "k8s.io/client-go/kubernetes/typed/core/v1"
 	corev1listers "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
+	kubemetrics "k8s.io/component-base/metrics"
+	"k8s.io/component-base/metrics/legacyregistry"
 	"k8s.io/klog/v2"
 
 	fmav1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
@@ -158,6 +161,17 @@ type Controller interface {
 
 const sentinelNS = "Senti Nel"
 
+const nodeNameLabel = "node"
+
+var (
+	onceler            sync.Once
+	addsCounters       *kubemetrics.CounterVec
+	queueDepthGauges   *kubemetrics.GaugeVec
+	queueDurationHists *kubemetrics.HistogramVec
+	retriesCounters    *kubemetrics.CounterVec
+	workDurationHists  *kubemetrics.HistogramVec
+)
+
 // NewController makes a new dual pods controller.
 // The given namespace is the one to focus on.
 func (config ControllerConfig) NewController(
@@ -211,6 +225,48 @@ func (config ControllerConfig) NewController(
 			logger := klog.FromContext(ctx)
 			logger.V(1).Info("All initial items processed")
 		})
+	onceler.Do(func() {
+		addsCounters = kubemetrics.NewCounterVec(&kubemetrics.CounterOpts{
+			Namespace:      "fma",
+			Subsystem:      "dpc_innerqueue",
+			Name:           "adds_total",
+			Help:           "Number of unique adds to the queue",
+			StabilityLevel: kubemetrics.ALPHA,
+		}, []string{nodeNameLabel})
+		queueDepthGauges = kubemetrics.NewGaugeVec(&kubemetrics.GaugeOpts{
+			Namespace:      "fma",
+			Subsystem:      "dpc_innerqueue",
+			Name:           "depth",
+			Help:           "Number of items in the queue",
+			StabilityLevel: kubemetrics.ALPHA,
+		}, []string{nodeNameLabel})
+		queueDurationHists = kubemetrics.NewHistogramVec(&kubemetrics.HistogramOpts{
+			Namespace:      "fma",
+			Subsystem:      "dpc_innerqueue",
+			Name:           "queue_duration_seconds",
+			Help:           "Time from unique enqueue to the dequeue",
+			Buckets:        kubemetrics.ExponentialBuckets(1.0/64, 4, 7),
+			StabilityLevel: kubemetrics.ALPHA,
+		}, []string{nodeNameLabel})
+		retriesCounters = kubemetrics.NewCounterVec(&kubemetrics.CounterOpts{
+			Namespace:      "fma",
+			Subsystem:      "dpc_innerqueue",
+			Name:           "retries_total",
+			Help:           "Total number of retries handled by queue",
+			StabilityLevel: kubemetrics.ALPHA,
+		}, []string{nodeNameLabel})
+		workDurationHists = kubemetrics.NewHistogramVec(&kubemetrics.HistogramOpts{
+			Namespace:      "fma",
+			Subsystem:      "dpc_innerqueue",
+			Name:           "work_duration_seconds",
+			Help:           "Time spent syncing",
+			Buckets:        kubemetrics.ExponentialBuckets(1.0/64, 4, 7),
+			StabilityLevel: kubemetrics.ALPHA,
+		}, []string{nodeNameLabel})
+		legacyregistry.MustRegister(addsCounters, queueDepthGauges, queueDurationHists,
+			retriesCounters, workDurationHists,
+		)
+	})
 
 	_, err = ctl.podInformer.AddEventHandler(ctl)
 	if err != nil {
@@ -267,6 +323,8 @@ type GpuLocation struct {
 }
 
 type nodeData struct {
+	NodeName string
+
 	// InferenceServers maps UID of serve-requesting Pod to data.
 	// Access only while holding controller mutex.
 	InferenceServers map[apitypes.UID]*serverData
@@ -278,10 +336,13 @@ type nodeData struct {
 	// ItemsMutex may be acquired while holding controller mutex, not vice-versa.
 	ItemsMutex sync.Mutex
 
-	// Items is the object references of this node that need to be synced.
+	// LocalQueue holds the set of object references of this node that need to be synced,
+	// and for each the time at which it was first injected into this set.
 	// Hold ItemsMutex while accessing this.
-	Items sets.Set[itemOnNode]
+	LocalQueue localQueue
 }
+
+type localQueue map[itemOnNode]time.Time
 
 type itemOnNode interface {
 	// process returns (err error, retry bool).
@@ -809,7 +870,8 @@ func (ctl *controller) getNodeData(nodeName string) *nodeData {
 	ans := ctl.nodeNameToData[nodeName]
 	if ans == nil {
 		ans = &nodeData{
-			Items:            sets.New[itemOnNode](),
+			NodeName:         nodeName,
+			LocalQueue:       make(localQueue),
 			InferenceServers: make(map[apitypes.UID]*serverData),
 			Launchers:        make(map[string]*launcherData),
 		}
@@ -821,16 +883,21 @@ func (ctl *controller) getNodeData(nodeName string) *nodeData {
 func (nodeDat *nodeData) add(item itemOnNode) {
 	nodeDat.ItemsMutex.Lock()
 	defer nodeDat.ItemsMutex.Unlock()
-	nodeDat.Items.Insert(item)
+	if _, found := nodeDat.LocalQueue[item]; !found {
+		nodeDat.LocalQueue[item] = time.Now()
+		addsCounters.WithLabelValues(nodeDat.NodeName).Inc()
+		queueDepthGauges.WithLabelValues(nodeDat.NodeName).Set(float64(len(nodeDat.LocalQueue)))
+	}
 }
 
 // yankItems returns the currently queued items and empties the queue.
 // Caller can access the returned value without synchronization.
-func (nodeDat *nodeData) yankItems() sets.Set[itemOnNode] {
+func (nodeDat *nodeData) yankItems() localQueue {
 	nodeDat.ItemsMutex.Lock()
 	defer nodeDat.ItemsMutex.Unlock()
-	ans := nodeDat.Items
-	nodeDat.Items = sets.New[itemOnNode]()
+	ans := maps.Clone(nodeDat.LocalQueue)
+	nodeDat.LocalQueue = make(localQueue)
+	queueDepthGauges.WithLabelValues(nodeDat.NodeName).Set(0)
 	return ans
 }
 
