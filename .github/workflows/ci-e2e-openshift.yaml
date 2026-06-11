@@ -663,6 +663,14 @@ jobs:
           sleep 10
           echo "Test objects cleaned up"
 
+      - name: dump scrape of first dual-pods controller
+        if: always()
+        run: cat scrape1.metrics || true
+
+      - name: dump scrape of final dual-pods controller
+        if: always()
+        run: cat scrape2.metrics || true
+
       - name: Cleanup infrastructure
         # Cleanup unless told not to
         if: always() && env.SKIP_CLEANUP != 'true'
