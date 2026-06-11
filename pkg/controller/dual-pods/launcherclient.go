@@ -47,11 +47,18 @@ func (e *launcherError) Error() string {
 const (
 	VllmConfigISCNameAnnotationKey       = "isc-name"
 	VllmConfigInferencePortAnnotationKey = "inference-port"
+	launcherHTTPIdleConnTimeout          = 4 * time.Second
 
 	// InstanceStatusStopped is the status value reported by the launcher
 	// when a vLLM instance's process has terminated.
 	InstanceStatusStopped = "stopped"
 )
+
+var launcherHTTPTransport = func() *http.Transport {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.IdleConnTimeout = launcherHTTPIdleConnTimeout
+	return transport
+}()
 
 func NewLauncherClient(baseURL string) (*LauncherClient, error) {
 	parsedURL, err := url.Parse(baseURL)
@@ -62,7 +69,8 @@ func NewLauncherClient(baseURL string) (*LauncherClient, error) {
 	c := &LauncherClient{
 		baseURL: parsedURL,
 		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout:   30 * time.Second,
+			Transport: launcherHTTPTransport,
 		},
 	}
 
