@@ -31,7 +31,7 @@ import (
 )
 
 // updateDigestForLC is the SOLE place that:
-//   - validates the LC PodTemplate (utils.ValidateLauncherPodTemplate);
+//   - validates the LC PodTemplate;
 //   - computes the node-independent template hash;
 //   - writes LauncherConfig.Status (via setLCStatusErrors);
 //   - records the per-LC derived data into ctl.policy.lcs[name].
@@ -42,12 +42,18 @@ import (
 // re-apply to the digest.
 func (ctl *controller) updateDigestForLC(ctx context.Context, name string) error {
 	logger := klog.FromContext(ctx)
+	var templateErr, templateHash, prevTemplateHash string
+	var nodeIndep *corev1.Pod
+	var good bool
 
-	prev := ctl.policy.lcs[name]
-	prevExists := prev != nil && prev.object != nil
+	prevDigest := ctl.policy.lcs[name]
+	prevExists := prevDigest != nil && prevDigest.object != nil
+	if prevDigest != nil {
+		prevTemplateHash = prevDigest.templateHash
+	}
+	prevGood := prevExists && prevDigest.templateErr == ""
 
-	lc, err := ctl.lcLister.LauncherConfigs(ctl.namespace).Get(name)
-	if err != nil {
+	if lc, err := ctl.lcLister.LauncherConfigs(ctl.namespace).Get(name); err != nil {
 		if !apierrors.IsNotFound(err) {
 			return fmt.Errorf("failed to get LC %s: %w", name, err)
 		}
@@ -56,47 +62,26 @@ func (ctl *controller) updateDigestForLC(ctx context.Context, name string) error
 		}
 		logger.Info("LC deleted, requeuing referencing LPPs", "config", name)
 		delete(ctl.policy.lcs, name)
-		for _, lppName := range ctl.policy.lppNamesRefByLC(name) {
-			ctl.digestQueue.Queue.Add(funcItem{kind: kindLPP, name: lppName})
-		}
-		return nil
-	}
-
-	// LC exists: validate and produce the lcDigest.
-	var templateErr string
-	if vErr := utils.ValidateLauncherPodTemplate(lc.Spec.PodTemplate); vErr != nil {
-		templateErr = vErr.Error()
-		logger.Error(vErr, "Invalid PodTemplate in LC, reporting in Status", "config", name)
-	}
-	var templateHash string
-	if templateErr == "" {
-		h, hashErr := utils.ComputeLauncherTemplateHash(lc.Spec.PodTemplate)
-		if hashErr != nil {
-			templateErr = hashErr.Error()
-			logger.Error(hashErr, "Failed to hash PodTemplate, reporting in Status", "config", name)
+	} else { // LC exists: digest it
+		nodeIndep, templateHash, err = utils.BuildNodeIndependentLauncherTemplate(lc)
+		if err != nil {
+			templateErr = err.Error()
+			logger.Info("Invalid PodTemplate in LC, reporting in Status", "config", name, "err", templateErr)
 		} else {
-			templateHash = h
+			good = true
+		}
+		if statusErr := ctl.setLCStatusErrors(ctx, lc, nonNilSlice(templateErr)); statusErr != nil {
+			return fmt.Errorf("failed to set Status for LC %s: %w", name, statusErr)
+		}
+		ctl.policy.lcs[name] = &lcDigest{
+			object:          lc,
+			templateErr:     templateErr,
+			templateHash:    templateHash,
+			nodeIndependent: nodeIndep,
 		}
 	}
-	if statusErr := ctl.setLCStatusErrors(ctx, lc, nonNilSlice(templateErr)); statusErr != nil {
-		return fmt.Errorf("failed to set Status for LC %s: %w", name, statusErr)
-	}
 
-	prevTemplateErr := ""
-	prevTemplateHash := ""
-	if prev != nil {
-		prevTemplateErr = prev.templateErr
-		prevTemplateHash = prev.templateHash
-	}
-
-	ctl.policy.lcs[name] = &lcDigest{
-		object:       lc,
-		templateErr:  templateErr,
-		templateHash: templateHash,
-		ownerRef:     makeLCOwnerRef(lc),
-	}
-
-	if !prevExists || prevTemplateErr != templateErr || prevTemplateHash != templateHash {
+	if prevGood != good || good && (prevTemplateHash != templateHash) {
 		for _, lppName := range ctl.policy.lppNamesRefByLC(name) {
 			ctl.digestQueue.Queue.Add(funcItem{kind: kindLPP, name: lppName})
 		}
@@ -304,7 +289,6 @@ func (ctl *controller) removeLPPFromEntry(entry *digestEntry, lppName string) {
 	delete(entry.lpps, lppName)
 	if len(entry.lpps) == 0 {
 		entry.count = 0
-		entry.spec = nil
 		entry.handsOff = false
 	}
 }
@@ -334,7 +318,6 @@ func (ctl *controller) detachLPPFromEntry(nodeMap map[string]*digestEntry, lppNa
 func (ctl *controller) recomputeEntryFromLPPs(entry *digestEntry, lcName string) {
 	if len(entry.lpps) == 0 {
 		entry.count = 0
-		entry.spec = nil
 		entry.handsOff = false
 		return
 	}
@@ -353,15 +336,11 @@ func (ctl *controller) recomputeEntryFromLPPs(entry *digestEntry, lcName string)
 	case lcd == nil || lcd.object == nil:
 		entry.handsOff = true
 		entry.count = maxCount
-		entry.spec = nil
 	case lcd.templateErr != "":
 		entry.handsOff = true
 		entry.count = maxCount
-		entry.spec = nil
 	default:
 		entry.handsOff = false
 		entry.count = maxCount
-		entry.spec = &lcd.object.Spec
-		entry.ownerRef = lcd.ownerRef
 	}
 }

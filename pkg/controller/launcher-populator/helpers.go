@@ -22,27 +22,13 @@ import (
 	"strings"
 
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/common"
-	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/utils"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/klog/v2"
-	"k8s.io/utils/ptr"
 
 	fmav1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
 )
-
-// makeLCOwnerRef builds a non-controlling OwnerReference for a LauncherConfig.
-func makeLCOwnerRef(lc *fmav1alpha1.LauncherConfig) metav1.OwnerReference {
-	return metav1.OwnerReference{
-		APIVersion:         fmav1alpha1.SchemeGroupVersion.String(),
-		Kind:               "LauncherConfig",
-		Name:               lc.Name,
-		UID:                lc.UID,
-		Controller:         ptr.To(false),
-		BlockOwnerDeletion: ptr.To(false),
-	}
-}
 
 // nonNilSlice returns a single-element slice if s is non-empty, or nil otherwise.
 func nonNilSlice(s string) []string {
@@ -135,20 +121,14 @@ func (ctl *controller) listPodsFromApiserver(ctx context.Context, key NodeLaunch
 }
 
 // createLaunchers creates the specified number of launcher pods on a node
-// using the given LauncherConfig spec, owner reference, and the precomputed
-// node-independent template hash (snapshotted by processKey under RLock).
-func (ctl *controller) createLaunchers(ctx context.Context, node corev1.Node, key NodeLauncherKey, count int, lcSpec *fmav1alpha1.LauncherConfigSpec, lcOwnerRef metav1.OwnerReference, templateHash string) error {
+// using the given node-specific template Pod template.
+func (ctl *controller) createLaunchers(ctx context.Context, node *corev1.Node, key NodeLauncherKey, count int, launcherPodTemplate *corev1.Pod) error {
 	logger := klog.FromContext(ctx)
 
 	// Create the specified number of launcher pods
 	for i := 0; i < count; i++ {
-		pod, err := utils.BuildLauncherPodFromTemplate(lcSpec.PodTemplate, ctl.namespace, key.NodeName, key.LauncherConfigName, templateHash)
-		if err != nil {
-			return fmt.Errorf("failed to build launcher pod: %w", err)
-		}
-		pod.OwnerReferences = []metav1.OwnerReference{lcOwnerRef}
 
-		createdPod, err := ctl.coreclient.Pods(pod.Namespace).Create(ctx, pod, metav1.CreateOptions{})
+		createdPod, err := ctl.coreclient.Pods(ctl.namespace).Create(ctx, launcherPodTemplate.DeepCopy(), metav1.CreateOptions{})
 		if err != nil {
 			return fmt.Errorf("failed to create launcher pod: %w", err)
 		}

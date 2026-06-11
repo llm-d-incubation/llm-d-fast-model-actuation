@@ -19,7 +19,7 @@ package launcherpopulator
 import (
 	"sync"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	corev1 "k8s.io/api/core/v1"
 
 	fmav1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
 )
@@ -28,20 +28,18 @@ import (
 // It holds the digested desired count and supporting details needed for
 // creating launcher Pods.
 type digestEntry struct {
-	handsOff bool   // true when user error (LC missing or invalid template) precludes action
-	count    int32  // max over relevant (existing, well-formed) CountForLauncher
-	spec     *fmav1alpha1.LauncherConfigSpec
-	ownerRef metav1.OwnerReference
+	handsOff bool                                             // true when user error (LC missing or invalid template) precludes action
+	count    int32                                            // max over relevant (existing, well-formed) CountForLauncher
 	lpps     map[string]*fmav1alpha1.LauncherPopulationPolicy // LPPs contributing to this entry
 }
 
 // lcDigest holds all node-independent derived data for a LauncherConfig.
 // Written exclusively by updateDigestForLC; read by all other paths.
 type lcDigest struct {
-	object       *fmav1alpha1.LauncherConfig // nil iff the LC API object does not exist
-	templateErr  string                      // empty when ValidateLauncherPodTemplate passes
-	templateHash string                      // populated only when templateErr == ""
-	ownerRef     metav1.OwnerReference       // populated only when object != nil
+	object          *fmav1alpha1.LauncherConfig // nil iff the LC API object does not exist
+	templateErr     string                      // empty when no error
+	nodeIndependent *corev1.Pod
+	templateHash    string // populated only when templateErr == ""
 }
 
 // lppDigest holds all derived data for a LauncherPopulationPolicy.
@@ -73,16 +71,14 @@ type digestedPolicy struct {
 }
 
 // keySnapshot is a value-typed view of one digestEntry plus the LC's template
-// hash, captured under digestedPolicy.mu.RLock(). Once returned, the snapshot
-// is safe to read outside the lock; underlying *fmav1alpha1.LauncherConfigSpec
-// points into the informer cache, which Kubernetes does not mutate in place.
+// hash and node-independent Pod template, captured under digestedPolicy.mu.RLock().
+// Nothing modifies any part of the Pod template.
 type keySnapshot struct {
-	exists       bool
-	handsOff     bool
-	count        int32
-	spec         *fmav1alpha1.LauncherConfigSpec
-	ownerRef     metav1.OwnerReference
-	templateHash string
+	exists                          bool
+	handsOff                        bool
+	count                           int32
+	templateHash                    string
+	nodeIndependentLauncherTemplate *corev1.Pod
 }
 
 // newDigestedPolicy creates an empty digestedPolicy.
@@ -149,11 +145,10 @@ func (dp *digestedPolicy) snapshotForKey(key NodeLauncherKey) keySnapshot {
 		snap.exists = true
 		snap.handsOff = entry.handsOff
 		snap.count = entry.count
-		snap.spec = entry.spec
-		snap.ownerRef = entry.ownerRef
 	}
 	if lcd := dp.lcs[key.LauncherConfigName]; lcd != nil {
 		snap.templateHash = lcd.templateHash
+		snap.nodeIndependentLauncherTemplate = lcd.nodeIndependent
 	}
 	return snap
 }

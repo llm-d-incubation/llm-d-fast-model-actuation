@@ -31,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/utils/ptr"
 
 	v1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/api"
@@ -134,20 +135,6 @@ func GetInferenceServerContainerIndex(pod *corev1.Pod) (int, error) {
 	return cIdx, nil
 }
 
-// ValidateLauncherPodTemplate checks whether the given EmbeddedPodTemplateSpec is valid
-// for use as a launcher pod template. It returns an error if the template is missing the
-// required inference server container. This check does not depend on any node-specific
-// information and is safe to call once per LauncherConfig rather than once per node.
-func ValidateLauncherPodTemplate(template v1alpha1.EmbeddedPodTemplateSpec) error {
-	cIdx := slices.IndexFunc(template.Spec.Containers, func(c corev1.Container) bool {
-		return c.Name == api.InferenceServerContainerName
-	})
-	if cIdx == -1 {
-		return fmt.Errorf("container %q not found", api.InferenceServerContainerName)
-	}
-	return nil
-}
-
 func IsPodReady(pod *corev1.Pod) bool {
 	for _, cond := range pod.Status.Conditions {
 		if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
@@ -155,17 +142,6 @@ func IsPodReady(pod *corev1.Pod) bool {
 		}
 	}
 	return false
-}
-
-// ComputeLauncherTemplateHash returns a deterministic, node-independent hash of the launcher Pod template.
-func ComputeLauncherTemplateHash(template v1alpha1.EmbeddedPodTemplateSpec) (string, error) {
-	canonical := canonicalizeTemplateForHash(template)
-	bytes, err := json.Marshal(canonical)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal template for hashing: %w", err)
-	}
-	sum := sha256.Sum256(bytes)
-	return base64.RawStdEncoding.EncodeToString(sum[:]), nil
 }
 
 // canonicalizeTemplateForHash returns a deep-copied template with order-independent slices sorted, suitable for stable serialization.
@@ -228,44 +204,58 @@ func canonicalizeContainer(c *corev1.Container) {
 	})
 }
 
-// BuildLauncherPodFromTemplate builds a launcher Pod for nodeName from the given template; templateHash (typically cached per LC.ResourceVersion) is recorded under LauncherTemplateHashAnnotationKey for spec-drift detection, alongside the legacy node-aware LauncherConfigHashAnnotationKey used by the dual-pods indexer.
-func BuildLauncherPodFromTemplate(template v1alpha1.EmbeddedPodTemplateSpec, ns, nodeName, launcherConfigName, templateHash string) (*corev1.Pod, error) {
+// BuildNodeIndependentLauncherTemplate does most of the work of building a Pod
+// template for a launcher from a LauncherConfig.
+// The omitted work is specializing it to a particular Node. Pass the result
+// and the Node's name to SpecializeLauncherTemplateToNode to accomplish that.
+// A hash of this template is recorded under LauncherTemplateHashAnnotationKey
+// for spec-drift detection, and also returned.
+func BuildNodeIndependentLauncherTemplate(lc *v1alpha1.LauncherConfig) (*corev1.Pod, string, error) {
+	template := canonicalizeTemplateForHash(lc.Spec.PodTemplate)
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Labels:      maps.Clone(template.Metadata.Labels),
-			Annotations: maps.Clone(template.Metadata.Annotations),
+			Labels:       maps.Clone(template.Metadata.Labels),
+			Annotations:  maps.Clone(template.Metadata.Annotations),
+			Namespace:    lc.Namespace,
+			GenerateName: fmt.Sprintf("launcher-%s-", lc.Name),
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion:         v1alpha1.SchemeGroupVersion.String(),
+				Kind:               "LauncherConfig",
+				Name:               lc.Name,
+				UID:                lc.UID,
+				Controller:         ptr.To(false),
+				BlockOwnerDeletion: ptr.To(false),
+			}},
 		},
-		Spec: *DeIndividualize(template.Spec.DeepCopy()),
+		Spec: template.Spec,
 	}
-	pod.Namespace = ns
-	pod.GenerateName = fmt.Sprintf("launcher-%s-", launcherConfigName)
 	// Ensure labels are set
 	if pod.Labels == nil {
 		pod.Labels = make(map[string]string)
 	}
 	pod.Labels[common.ComponentLabelKey] = common.LauncherComponentLabelValue
-	pod.Labels[common.LauncherConfigNameLabelKey] = launcherConfigName
-	pod.Labels[common.NodeNameLabelKey] = nodeName
+	pod.Labels[common.LauncherConfigNameLabelKey] = lc.Name
 	pod.Labels[api.SleepingLabelName] = "false"
 
 	hasher := sha256.New()
-	modifiedJSON, _ := json.Marshal(pod)
+	modifiedJSON, err := json.Marshal(pod)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to marshal template for hashing: %w", err)
+	}
 	hasher.Write(modifiedJSON)
 	var modifiedHash [sha256.Size]byte
 	modifiedHashSl := hasher.Sum(modifiedHash[:0])
-	nominalHash := base64.RawStdEncoding.EncodeToString(modifiedHashSl)
+	templateHash := base64.RawStdEncoding.EncodeToString(modifiedHashSl)
 
 	if pod.Annotations == nil {
 		pod.Annotations = make(map[string]string)
 	}
-	// Legacy Pod hash for the dual-pods indexer (SHA256 of the Pod JSON above).
-	pod.Annotations[string(common.LauncherConfigHashAnnotationKey)] = nominalHash
 	// Node-independent template fingerprint for spec-drift detection; empty value is recorded as-is.
 	pod.Annotations[string(common.LauncherTemplateHashAnnotationKey)] = templateHash
 
 	cIdx, err := GetInferenceServerContainerIndex(pod)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	container := &pod.Spec.Containers[cIdx]
 
@@ -313,13 +303,30 @@ func BuildLauncherPodFromTemplate(template v1alpha1.EmbeddedPodTemplateSpec, ns,
 	if pod.Spec.Overhead != nil {
 		delete(pod.Spec.Overhead, corev1.ResourceName("nvidia.com/gpu"))
 	}
-
-	if pod.Spec.NodeSelector == nil {
-		pod.Spec.NodeSelector = make(map[string]string)
-	}
-	pod.Spec.NodeSelector["kubernetes.io/hostname"] = nodeName
 	addLauncherNotifierSidecar(pod, container.Image, container.ImagePullPolicy)
-	return pod, nil
+	return pod, templateHash, nil
+}
+
+// alongside the legacy node-aware LauncherConfigHashAnnotationKey used by the dual-pods indexer.
+func SpecializeLauncherTemplateToNode(nodeIndependent *corev1.Pod, nodeName string) *corev1.Pod {
+	nodeDependent := nodeIndependent.DeepCopy()
+	nodeDependent.Labels[common.NodeNameLabelKey] = nodeName
+	if nodeDependent.Spec.NodeSelector == nil {
+		nodeDependent.Spec.NodeSelector = make(map[string]string)
+	}
+	nodeDependent.Spec.NodeSelector["kubernetes.io/hostname"] = nodeName
+
+	hasher := sha256.New()
+	hasher.Write([]byte(nodeDependent.Annotations[string(common.LauncherTemplateHashAnnotationKey)]))
+	hasher.Write([]byte(";node="))
+	hasher.Write([]byte(nodeName))
+	var modifiedHash [sha256.Size]byte
+	modifiedHashSl := hasher.Sum(modifiedHash[:0])
+	nominalHash := base64.RawStdEncoding.EncodeToString(modifiedHashSl)
+
+	// Legacy Pod hash for the dual-pods indexer (takes Node name into account).
+	nodeDependent.Annotations[string(common.LauncherConfigHashAnnotationKey)] = nominalHash
+	return nodeDependent
 }
 
 // configureRequiredEnvVars adds or updates required environment variables
