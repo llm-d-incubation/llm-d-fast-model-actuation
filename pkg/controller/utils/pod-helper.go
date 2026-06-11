@@ -178,9 +178,6 @@ func canonicalizeTemplateForHash(template v1alpha1.EmbeddedPodTemplateSpec) v1al
 }
 
 func canonicalizeContainer(c *corev1.Container) {
-	slices.SortStableFunc(c.Env, func(a, b corev1.EnvVar) int {
-		return strings.Compare(a.Name, b.Name)
-	})
 	slices.SortStableFunc(c.VolumeMounts, func(a, b corev1.VolumeMount) int {
 		if cmp := strings.Compare(a.Name, b.Name); cmp != 0 {
 			return cmp
