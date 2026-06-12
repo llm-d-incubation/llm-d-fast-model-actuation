@@ -44,6 +44,14 @@ MAX_LOG_RESPONSE_BYTES = 1 * 1024 * 1024  # 1 MB default for API response
 _MAX_BROADCASTER_EVENTS = 1000
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
+# Use 'spawn' so child vLLM processes do not inherit open file descriptors
+# from the launcher — including the listening socket on port 8001 and any
+# in-flight TCP connections served by uvicorn. With the default 'fork' on
+# Linux a forked child holds duplicate fds for those sockets, which keeps
+# the kernel socket alive after uvicorn closes its end and produces wedged
+# connections (see issue #550).
+multiprocessing.set_start_method("spawn", force=True)
+
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, force=True)
 
 
