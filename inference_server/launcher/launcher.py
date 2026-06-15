@@ -24,6 +24,7 @@ import multiprocessing
 import os
 import re
 import signal
+import stat
 import sys
 import uuid
 from contextlib import asynccontextmanager
@@ -804,6 +805,33 @@ async def get_vllm_instance_logs(
 ######################################################################
 
 
+def _close_inherited_sockets():
+    """Close every socket fd inherited from the parent across fork().
+
+    Iterates /proc/self/fd and uses fstat to identify sockets, leaving
+    pipes, regular files, character devices, and anything else
+    untouched. fd 0/1/2 are skipped on principle even if they happened
+    to be sockets.
+    """
+    try:
+        fd_names = os.listdir("/proc/self/fd")
+    except OSError:
+        return
+    for name in fd_names:
+        try:
+            fd = int(name)
+        except ValueError:
+            continue
+        if fd <= 2:
+            continue
+        try:
+            if stat.S_ISSOCK(os.fstat(fd).st_mode):
+                os.close(fd)
+        except OSError:
+            # fd was already closed or unstatable; ignore.
+            pass
+
+
 # Function to be executed by the child process
 def vllm_kickoff(vllm_config: VllmConfig, log_file_path: str):
     """
@@ -816,6 +844,17 @@ def vllm_kickoff(vllm_config: VllmConfig, log_file_path: str):
     # signals (SIGINT/SIGTERM) sent to the launcher's group do not
     # propagate to the vLLM server or its EngineCore child process.
     os.setpgrp()
+
+    # Close socket fds inherited from the launcher across fork(). The
+    # child must not hold duplicate references to uvicorn's listening
+    # socket on :8001 nor to any in-flight TCP connections — the kernel
+    # keeps a socket open as long as any process has an fd to it, so a
+    # leaked client fd in this child wedges the connection long after
+    # uvicorn has closed its own end (see issue #550). Pipes (including
+    # multiprocessing's parent-child sentinel pipe used by
+    # start_sentinel_watcher) and regular files are deliberately left
+    # alone.
+    _close_inherited_sockets()
 
     # Redirect stdout and stderr at the OS level using dup2 so that
     # all output (including from vLLM/uvicorn internal logging and any
