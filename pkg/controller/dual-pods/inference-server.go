@@ -1439,9 +1439,6 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 			serverDat.Sleeping = ptr.To(true)
 		} else {
 			serverPort := serverDat.ServerPort
-			// TODO(waltforme): Is serverPort always set correctly for launcher-based server-providing Pods upon unbinding?
-			// E.g. What if requestingPod is deleted during a crash and restart of the dual-pods controller?
-			// In order to find the port in this case, I think the best effort is to recompute hash for all InferenceServerConfig objects and try to match.
 			if !launcherBased {
 				if serverDat.NominalProvidingPod == nil {
 					var err error
