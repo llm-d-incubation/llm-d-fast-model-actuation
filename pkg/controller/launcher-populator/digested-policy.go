@@ -73,8 +73,16 @@ type lppDigest struct {
 // Concurrency: mu serializes write transactions performed by the (single)
 // digest worker against snapshot reads performed by the keyQueue workers. The
 // digest worker holds Lock() for the duration of one updateDigestForX call;
-// readers hold RLock() while taking a small value-typed snapshot, then drop
-// the lock before issuing K8s API calls.
+// readers hold RLock() while taking a small value-typed snapshot.
+//
+// In short, changes to this data structure are serialized.
+// Changes to LauncherPopulationPolicy objects enter through only one method, updateDigestForLPP.
+// Changes to LauncherConfig objects enter through only one method, updateDigestForLC.
+// Changes to Node objects enter through either of two methods,
+// updateDigestForLPP and updateDigestForNode.
+// There is some internal redundancy in this data structure;
+// each of those three methods consistently updates the whole
+// data structure for the change(s) it ingests.
 type digestedPolicy struct {
 	mu     sync.RWMutex
 	digest map[string]map[string]*digestEntry // node name → LC name → entry
