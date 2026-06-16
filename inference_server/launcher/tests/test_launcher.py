@@ -59,6 +59,7 @@ def vllm_config():
     """Create a sample VllmConfig for testing"""
     return VllmConfig(
         options="--model test-model --port 8000",
+        gpu_uuids=["gpu-1", "gpu-a"],
         env_vars={"TEST_VAR": "test_value"},
         annotations={"Foo": "bar"},
     )
