@@ -115,10 +115,7 @@ func (ctl *controller) updateDigestForLPP(ctx context.Context, lppName string) e
 
 	prevDigest := ctl.policy.lpps[lppName]
 	var currentMatchedNodeNames sets.Set[string]
-	var prevDigested, digested map[string]int // lcName to count, for this LPP
-	if prevDigest != nil {
-		prevDigested = prevDigest.digested
-	}
+	var digested map[string]int // lcName to count, for this LPP
 	if lpp, err := ctl.lppLister.LauncherPopulationPolicies(ctl.namespace).Get(lppName); err != nil {
 		if !apierrors.IsNotFound(err) {
 			return fmt.Errorf("failed to get LPP %s: %w", lppName, err)
@@ -175,12 +172,12 @@ func (ctl *controller) updateDigestForLPP(ctx context.Context, lppName string) e
 		if currentMatchedNodeNames.Has(nodeName) {
 			continue
 		}
-		ctl.applyLPPToDigestForNode(lppName, prevDigested, nil, nodeName)
+		ctl.applyLPPToDigestForNode(lppName, nil, nodeName)
 	}
 
 	// Apply LPP to each matched node and enqueue affected keys.
 	for nodeName := range currentMatchedNodeNames {
-		ctl.applyLPPToDigestForNode(lppName, prevDigested, digested, nodeName)
+		ctl.applyLPPToDigestForNode(lppName, digested, nodeName)
 	}
 
 	return nil
@@ -209,14 +206,13 @@ func (ctl *controller) updateDigestForNode(ctx context.Context, nodeName string)
 // recomputeDigestForNode rebuilds digest entries for a single node by replaying
 // every cached LPP. Pure read of ctl.policy.lpps + ctl.policy.lcs.
 func (ctl *controller) recomputeDigestForNode(node *corev1.Node) {
-	ctl.policy.digest[node.Name] = make(map[string]*digestEntry)
 	for lppName, lppd := range ctl.policy.lpps {
 		newDigested := lppd.digested
 		matches := lppd.selectorErr == nil && lppd.labelSelector.Matches(labels.Set(node.Labels)) && matchesResourceConditions(node.Status.Allocatable, lppd.object.Spec.EnhancedNodeSelector.AllocatableResources)
 		if !matches {
 			newDigested = nil
 		}
-		ctl.applyLPPToDigestForNode(lppName, lppd.digested, newDigested, node.Name)
+		ctl.applyLPPToDigestForNode(lppName, newDigested, node.Name)
 	}
 
 	if len(ctl.policy.digest[node.Name]) == 0 {
@@ -225,11 +221,11 @@ func (ctl *controller) recomputeDigestForNode(node *corev1.Node) {
 }
 
 // applyLPPToDigestForNode updates the digested policy map regarding
-// a particular node and LPP, given the previous and new result of digesting
+// a particular node and LPP, given the new result of digesting
 // that LPP.
 // It never validates templates, writes Status, or fetches from listers.
 // Enqueues keys for which this made a difference.
-func (ctl *controller) applyLPPToDigestForNode(lppName string, prevLCToCount, lcToCount map[string]int, nodeName string) {
+func (ctl *controller) applyLPPToDigestForNode(lppName string, lcToCount map[string]int, nodeName string) {
 	for lcName := range lcToCount {
 		entry := ctl.policy.getEntry(nodeName, lcName, true)
 		entry.lpps[lppName] = lcToCount
@@ -238,12 +234,12 @@ func (ctl *controller) applyLPPToDigestForNode(lppName string, prevLCToCount, lc
 			ctl.keyQueue.Queue.Add(keyItem{NodeLauncherKey{NodeName: nodeName, LauncherConfigName: lcName}})
 		}
 	}
-	for lcName := range prevLCToCount {
-		if _, has := lcToCount[lcName]; has {
+	nodeMap := ctl.policy.digest[nodeName]
+	for lcName, entry := range nodeMap {
+		if _, lcIsWanted := lcToCount[lcName]; lcIsWanted {
 			continue
 		}
-		entry := ctl.policy.getEntry(nodeName, lcName, false)
-		if entry == nil {
+		if _, lppWasWanted := entry.lpps[lppName]; !lppWasWanted {
 			continue
 		}
 		delete(entry.lpps, lppName)
