@@ -205,9 +205,15 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	podOps := ctl.coreclient.Pods(ctl.namespace)
 
 	// Delete the in-memory data after both Pods are gone.
+	// Also un-assert the binding metric.
 	if requestingPod == nil && providingPod == nil {
 		ctl.clearServerData(nodeDat, item.UID)
 		logger.V(2).Info("End of life of inference server")
+		if serverDat.InstanceID != "" {
+			ctl.ensureDualityMetric(ctx, serverDat, nodeDat.NodeName, false)
+		} else {
+			logger.V(2).Info("Not setting duality=0, because InstanceID is unknown")
+		}
 		return nil, false
 	}
 
@@ -401,6 +407,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				return ctl.ensureReqStatus(ctx, requestingPod, serverDat, err.Error())
 			}
 			serverPort = serverDat.ServerPort
+			ctl.ensureDualityMetric(ctx, serverDat, nodeDat.NodeName, true)
 		} else {
 			_, serverPort, err = utils.GetInferenceServerContainerIndexAndPort(providingPod)
 			if err != nil { // Impossible, because such a providingPod would never be created by this controller
@@ -686,9 +693,28 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	serverDat.Sleeping = nil
 	commitInstanceState(serverDat, desiredInstanceState)
 	serverDat.ProvidingPodName = echo.Name
+	ctl.ensureDualityMetric(ctx, serverDat, nodeDat.NodeName, true)
 	logger.V(2).Info("Created launcher-based server-providing pod", "name", echo.Name, "gpus", serverDat.GPUIDsStr, "annotations", echo.Annotations, "labels", echo.Labels, "resourceVersion", echo.ResourceVersion, "k8sCallStartTime", createStartStr)
 
 	return ctl.ensureReqStatus(ctx, requestingPod, serverDat)
+}
+
+func (ctl *controller) ensureDualityMetric(ctx context.Context, serverDat *serverData, nodeName string, on bool) {
+	if serverDat.DualityMetricAsserted == on {
+		return
+	}
+	var val float64
+	if on {
+		val = 1
+	}
+	klog.FromContext(ctx).V(2).Info("Setting duality metric", "value", val, "gpuUUIDs", serverDat.GPUIDs)
+	for _, gpuUUID := range serverDat.GPUIDs {
+		dualityGauges.WithLabelValues(ctl.namespace, serverDat.RequestingPodName, serverDat.ProvidingPodName,
+			api.InferenceServerContainerName, serverDat.InstanceID,
+			gpuUUID, nodeName).
+			Set(val)
+	}
+	serverDat.DualityMetricAsserted = on
 }
 
 type launcherReclaimPlan struct {
@@ -1208,6 +1234,7 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 	serverDat.ProvidingPodName = providingPod.Name
 	if launcherBased {
 		commitInstanceState(serverDat, launcherState)
+		ctl.ensureDualityMetric(ctx, serverDat, requestingPod.Spec.NodeName, true)
 	}
 	logger.V(2).Info("Bound server-providing Pod", "name", providingPod.Name, "node", requestingPod.Spec.NodeName, "gpus", serverDat.GPUIDsStr, "newResourceVersion", echo.ResourceVersion, "instanceID", serverDat.InstanceID, "k8sCallStartTime", updStartStr)
 	var serverPort int32
@@ -1433,6 +1460,7 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 		if err := recoverInstanceStateFromLauncherPod(serverDat, providingPod); err != nil {
 			return err
 		}
+		ctl.ensureDualityMetric(ctx, serverDat, nodeDat.NodeName, true)
 	}
 	// A providingPod with no IP is not scheduled, so we know that it is not awake.
 	// If providingPod is stale then the update will fail.
