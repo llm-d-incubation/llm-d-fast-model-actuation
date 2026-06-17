@@ -354,16 +354,16 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		gpuIDsStr := strings.Join(gpuUUIDs, ",")
 		serverDat.GPUIDs = gpuUUIDs
 		serverDat.GPUIDsStr = &gpuIDsStr
+	}
 
-		if !launcherBased && serverDat.GPUIndicesStr == nil {
-			gpuIndices, err := ctl.mapToGPUIndices(requestingPod.Spec.NodeName, gpuUUIDs)
-			if err != nil {
-				return ctl.ensureReqStatus(ctx, requestingPod, serverDat, err.Error())
-			}
-			gpuIndicesStr := strings.Join(gpuIndices, ",")
-			serverDat.GPUIndices = gpuIndices
-			serverDat.GPUIndicesStr = &gpuIndicesStr
+	if !launcherBased && serverDat.GPUIndicesStr == nil {
+		gpuIndices, err := ctl.mapToGPUIndices(requestingPod.Spec.NodeName, serverDat.GPUIDs)
+		if err != nil {
+			return ctl.ensureReqStatus(ctx, requestingPod, serverDat, err.Error())
 		}
+		gpuIndicesStr := strings.Join(gpuIndices, ",")
+		serverDat.GPUIndices = gpuIndices
+		serverDat.GPUIndicesStr = &gpuIndicesStr
 	}
 
 	var desiredInstanceState *vllmInstanceState
