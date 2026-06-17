@@ -2020,9 +2020,12 @@ func getGPUUUIDs(ctx context.Context, url string) ([]string, error) {
 // findGPUIndices maps GPU UUIDs to GPU indices.
 // This func will be moved into the launcher in milestone 3
 func (ctl *controller) mapToGPUIndices(nodeName string, gpuUUIDs []string) ([]string, error) {
-	gpuMap := *ctl.gpuMap.Load()
+	gpuMapPtr := ctl.gpuMap.Load()
+	if gpuMapPtr == nil {
+		return nil, fmt.Errorf("GPU map ConfigMap %s is not available", GPUMapName)
+	}
 	indices, errs := utils.SliceMap(gpuUUIDs, func(uuid string) (string, error) {
-		loc, have := gpuMap[uuid]
+		loc, have := (*gpuMapPtr)[uuid]
 		if !have {
 			return "", fmt.Errorf("UUID %s is not known", uuid)
 		} else if loc.Node != nodeName {
