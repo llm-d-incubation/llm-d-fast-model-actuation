@@ -136,7 +136,7 @@ func (item unboundLauncherPodItem) process(ctx context.Context, ctl *controller,
 	}
 
 	// Sync launcher instances to keep internal state fresh and clean up stopped instances.
-	_, syncErr, syncRetry := ctl.syncLauncherInstances(ctx, nodeDat, launcherPod)
+	_, syncErr, syncRetry := ctl.syncLauncherInstances(ctx, nodeDat, nil, launcherPod)
 
 	ctl.enqueueUnboundInfSvrItemsOnNode(ctx, item.NodeName, fmt.Sprintf("launcher pod %s changed", item.LauncherPodName))
 
@@ -420,7 +420,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				return nil, false
 			}
 
-			syncResult, err, retry := ctl.syncLauncherInstances(ctx, nodeDat, providingPod)
+			syncResult, err, retry := ctl.syncLauncherInstances(ctx, nodeDat, serverDat.InstancesDeleted, providingPod)
 			if err != nil || retry {
 				if err != nil {
 					return fmt.Errorf("failed to sync launcher instances for bound launcher Pod: %w", err), retry
@@ -467,6 +467,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				// InstanceKnownToExist is false and instance is absent (not stopped) —
 				// not yet created (bind-first path) or controller restarted and lost tracking.
 				// We just synced, so we know the instance is not on the launcher — create directly.
+				serverDat.NeededNewInstance = true
 				launcherBaseURL := fmt.Sprintf("http://%s:%d", providingPod.Status.PodIP, ctlrcommon.LauncherServicePort)
 				lClient, err := NewLauncherClient(launcherBaseURL)
 				if err != nil {
@@ -474,6 +475,11 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				}
 				createStart := time.Now()
 				result, err := lClient.CreateNamedInstance(ctx, serverDat.InstanceID, *serverDat.InstanceConfig)
+				createEnd := time.Now()
+				instanceCreateSecsHistograms.WithLabelValues(ctl.namespace,
+					requestingPod.Annotations[api.InferenceServerConfigAnnotationName],
+					ite(err == nil, "true", "false")).
+					Observe(createEnd.Sub(createStart).Seconds())
 				createStartStr := createStart.Format(time.RFC3339Nano)
 				if err != nil {
 					return fmt.Errorf("failed to create vLLM instance %q (started %s): %w", serverDat.InstanceID, createStartStr, err), true
@@ -532,6 +538,21 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				return err, true
 			}
 			serverDat.ReadinessRelayed = &ready
+			if ready && !serverDat.FirstReadyRelayed {
+				path := "hot"
+				if serverDat.NeededNewLauncher {
+					path = "cold"
+				} else if serverDat.NeededNewInstance {
+					path = "warm"
+				}
+				serverDat.FirstReadyRelayed = true
+				now := time.Now()
+				actuationSecs := now.Sub(requestingPod.CreationTimestamp.Time).Seconds()
+				actuationSecsHistograms.WithLabelValues(ctl.namespace, path,
+					strconv.FormatInt(int64(len(serverDat.InstancesDeleted)), 10),
+					requestingPod.Annotations[api.InferenceServerConfigAnnotationName],
+				).Observe(actuationSecs)
+			}
 			logger.V(2).Info("Successfully relayed the readiness", "name", providingPod.Name, "readiness", readiness, "url", url, "httpCallStartTime", postStartStr)
 		}
 		// TODO: sync desired and actual providingPod wrt labels (spec is mostly immutable, possible mutations are allowed)
@@ -642,7 +663,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		// then those with capacity for new instances.
 		// Note that multiple vLLM instances could exist in one launcher Pod, but at most one instance could be awake at a time.
 
-		launcherPod, hasSleepingInstance, retry, err := ctl.selectOrReclaimLauncherPod(ctx, launcherPodAnys, desiredInstanceState.instanceID, desiredPort, int(lc.Spec.MaxInstances)-1, nodeDat)
+		launcherPod, hasSleepingInstance, retry, err := ctl.selectOrReclaimLauncherPod(ctx, launcherPodAnys, desiredInstanceState.instanceID, desiredPort, int(lc.Spec.MaxInstances)-1, nodeDat, serverDat.InstancesDeleted)
 		if err != nil {
 			return err, true
 		}
@@ -661,6 +682,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	}
 	// Remains: Zero matching launcher Pods, or the matching launcher Pod cannot host more instances to fulfill the request.
 	// Make a new launcher Pod.
+	serverDat.NeededNewLauncher = true
 
 	// Bind at creation time so the launcher-populator cannot delete this pod
 	// while the vLLM instance is being set up.
@@ -676,6 +698,11 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 
 	createStart := time.Now()
 	echo, err := podOps.Create(ctx, desiredLauncherPod, metav1.CreateOptions{})
+	createEnd := time.Now()
+	launcherCreateSecsHistograms.WithLabelValues(ctl.namespace,
+		lcName,
+		ite(err == nil, "true", "false")).
+		Observe(createEnd.Sub(createStart).Seconds())
 	createStartStr := createStart.Format(time.RFC3339Nano)
 	if err != nil {
 		errMsg := err.Error()
@@ -742,6 +769,7 @@ func (ctl *controller) selectOrReclaimLauncherPod(
 	desiredPort int32,
 	maxOthers int,
 	nodeDat *nodeData,
+	instancesDeleted sets.Set[string],
 ) (*corev1.Pod, bool, bool, error) {
 	logger := klog.FromContext(ctx)
 
@@ -769,7 +797,7 @@ launcherPodLoop:
 			continue
 		}
 
-		syncResult, err, retry := ctl.syncLauncherInstances(ctx, nodeDat, launcherPod)
+		syncResult, err, retry := ctl.syncLauncherInstances(ctx, nodeDat, instancesDeleted, launcherPod)
 		if err != nil || retry {
 			somePodsNotReady = true
 			continue
@@ -856,6 +884,7 @@ launcherPodLoop:
 			return nil, false, true, err
 		}
 		for _, victim := range bestReclaimPlan.victims {
+			instancesDeleted.Insert(victim)
 			delStart := time.Now()
 			_, err := lClient.DeleteInstance(ctx, victim)
 			delStartStr := delStart.Format(time.RFC3339Nano)
@@ -1269,11 +1298,16 @@ func (ctl *controller) wakeSleeper(ctx context.Context, serverDat *serverData, r
 	logger := klog.FromContext(ctx)
 	wakeStart := time.Now()
 	err := doPost(ctx, wakeURL)
+	wakeEnd := time.Now()
 	wakeStartStr := wakeStart.Format(time.RFC3339Nano)
 	if err != nil {
 		return fmt.Errorf("failed to wake inference server at %s (started %s): %w", endpoint, wakeStartStr, err)
 	}
 	logger.V(2).Info("Woke inference server", "endpoint", endpoint, "description", description, "httpCallStartTime", wakeStartStr)
+	wakeSecsHistograms.WithLabelValues(ctl.namespace,
+		requestingPod.Annotations[api.InferenceServerConfigAnnotationName],
+		ite(err == nil, "true", "false")).
+		Observe(wakeEnd.Sub(wakeStart).Seconds())
 	if err := ctl.ensureSleepingLabel(ctx, providingPod, false); err != nil {
 		return err
 	}
@@ -1590,6 +1624,7 @@ func (ctl *controller) maybeDeleteObsoleteInstance(ctx context.Context, serverDa
 		return false // not obsolete
 	}
 	// Instance is obsolete — delete from launcher instead of sleeping.
+	serverDat.InstancesDeleted.Insert(serverDat.InstanceID)
 	delStart := time.Now()
 	_, delErr := lClient.DeleteInstance(ctx, serverDat.InstanceID)
 	delStartStr := delStart.Format(time.RFC3339Nano)
@@ -1906,7 +1941,8 @@ func findInstanceState(insts []InstanceState, instanceID string) (*InstanceState
 // syncLauncherInstances queries the launcher pod for its current instances,
 // updates the controller's internal launcherData state, and returns the fresh
 // launcher response used for the update.
-func (ctl *controller) syncLauncherInstances(ctx context.Context, nodeDat *nodeData, launcherPod *corev1.Pod) (*launcherSyncResult, error, bool) {
+// instancesDeleted may be nil, in which case the deleted instance IDs are not reported.
+func (ctl *controller) syncLauncherInstances(ctx context.Context, nodeDat *nodeData, instancesDeleted sets.Set[string], launcherPod *corev1.Pod) (*launcherSyncResult, error, bool) {
 	logger := klog.FromContext(ctx)
 
 	if launcherPod.Status.PodIP == "" || !utils.IsPodReady(launcherPod) {
@@ -1951,6 +1987,9 @@ func (ctl *controller) syncLauncherInstances(ctx context.Context, nodeDat *nodeD
 				logger.V(2).Info("Found stopped bound instance, deferring cleanup",
 					"instanceID", inst.InstanceID)
 			} else {
+				if instancesDeleted != nil {
+					instancesDeleted.Insert(inst.InstanceID)
+				}
 				delStart := time.Now()
 				_, delErr := lClient.DeleteInstance(ctx, inst.InstanceID)
 				delStartStr := delStart.Format(time.RFC3339Nano)
@@ -2076,4 +2115,11 @@ func TimePtrToStringPtr(tp *metav1.Time) *string {
 	}
 	str := tp.String()
 	return &str
+}
+
+func ite[T any](cond bool, valTrue, valFalse T) T {
+	if cond {
+		return valTrue
+	}
+	return valFalse
 }
