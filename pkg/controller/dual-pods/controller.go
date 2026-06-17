@@ -186,7 +186,6 @@ func (config ControllerConfig) NewController(
 		accelMemoryLimitMiB: config.AcceleratorSleepingMemoryLimitMiB,
 		nodeNameToData:      map[string]*nodeData{},
 	}
-	ctl.gpuMap.Store(&map[string]GpuLocation{})
 	err := ctl.podInformer.AddIndexers(cache.Indexers{
 		inferenceServerConfigIndexName: inferenceServerConfigIndexFunc,
 		launcherConfigHashIndexName:    launcherConfigHashIndexFunc,
