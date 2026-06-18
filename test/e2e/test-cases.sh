@@ -536,6 +536,71 @@ check_gpu_pin $req4
 cheer Successful switching instances in one launcher
 
 # ---------------------------------------------------------------------------
+# Reverse Proxy Initialization and Forwarding
+# ---------------------------------------------------------------------------
+
+intro_case Reverse Proxy Initialization and Forwarding
+
+# This test verifies that the dual-pods controller initializes the TCP proxy
+# on the requester pod after binding, and that the proxy configuration points
+# to the correct launcher pod IP.
+#
+# Starting state: $req4 is bound to $launcher1, both Ready.
+
+echo "Checking proxy configuration on requester pod $req4"
+
+# Port-forward to the requester's SPI port to query proxy config
+kubectl port-forward pod/"$req4" 28091:8081 -n "$NS" &
+PF_SPI_PID=$!
+sleep 2
+
+http_code=$(curl -s -o /tmp/proxy_resp.json -w '%{http_code}' "http://localhost:28091/v1/proxy/config" 2>/dev/null)
+kill "$PF_SPI_PID" 2>/dev/null || true
+wait "$PF_SPI_PID" 2>/dev/null || true
+
+proxy_resp=$(cat /tmp/proxy_resp.json)
+rm -f /tmp/proxy_resp.json
+
+# GET /v1/proxy/config returns JSON {"address":"...","port":...} or 404 if not configured
+if [ "$http_code" != "200" ]; then
+    echo "ERROR: expected proxy config to return 200, got $http_code, body: '$proxy_resp'" >&2
+    exit 1
+fi
+
+echo "Proxy is configured: $proxy_resp"
+
+# Verify proxy config matches expected JSON using jq
+launcher1_ip=$(kubectl get pod "$launcher1" -n "$NS" -o jsonpath='{.status.podIP}')
+launcher1_port=$(kubectl get inferenceserverconfig "$isc" -n "$NS" -o jsonpath='{.spec.modelServerConfig.port}')
+
+expected=$(printf '{"address":"%s","port":%d}' "$launcher1_ip" "$launcher1_port")
+if ! echo "$proxy_resp" | jq -e --argjson expected "$expected" '. == $expected' >/dev/null 2>&1; then
+    echo "ERROR: proxy config does not match expected: expected=$expected, got='$proxy_resp'" >&2
+    exit 1
+fi
+echo "Proxy config matches expected: $expected"
+
+# Verify traffic forwarding through the TCP proxy port (8082)
+# The proxy forwards to the vLLM inference port configured in the InferenceServerConfig
+echo "Verifying traffic forwarding through TCP proxy port"
+kubectl port-forward pod/"$req4" 28092:8082 -n "$NS" &
+PF_PROXY_PID=$!
+sleep 2
+
+health_status=$(curl -s -o /dev/null -w "%{http_code}" \
+    "http://localhost:28092/health" 2>/dev/null || echo "000")
+kill "$PF_PROXY_PID" 2>/dev/null || true
+wait "$PF_PROXY_PID" 2>/dev/null || true
+
+if [ "$health_status" != "200" ]; then
+    echo "ERROR: vLLM /health via proxy port returned $health_status (expected 200)" >&2
+    exit 1
+fi
+echo "Proxy forwarding verified: /health via proxy port returned 200"
+
+cheer Successful reverse proxy initialization and forwarding
+
+# ---------------------------------------------------------------------------
 # Per-launcher Instance Cap Enforcement
 # ---------------------------------------------------------------------------
 

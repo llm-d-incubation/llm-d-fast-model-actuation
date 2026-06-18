@@ -382,6 +382,8 @@ type serverData struct {
 
 	InstanceKnownToExist bool // meaningful only for launcher-based providers
 
+	ProxyConfigured bool // true once ensureProxyConfigured has succeeded
+
 	ReadinessRelayed *bool
 
 	Sleeping *bool

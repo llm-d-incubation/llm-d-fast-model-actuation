@@ -30,12 +30,14 @@ import (
 	apitypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/klog/v2"
 
-	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/coordination"
-	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/probes"
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 
-	"k8s.io/klog/v2"
+	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/config"
+	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/coordination"
+	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/probes"
+	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/proxy"
 )
 
 // This variant requester emulates the GPU allocation behavior of
@@ -58,8 +60,7 @@ func main() {
 	overrides := &clientcmd.ConfigOverrides{}
 	var nodeName, podUID string
 	numGPUs := uint(1)
-	probesPort := int16(8080)
-	spiPort := int16(8081)
+	cfg := config.NewDefault()
 
 	klog.InitFlags(nil)
 	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
@@ -67,8 +68,7 @@ func main() {
 	pflag.CommandLine.StringVar(&nodeName, "node", nodeName, "name of this Pod's Node")
 	pflag.CommandLine.StringVar(&podUID, "pod-uid", podUID, "UID of this Pod")
 	pflag.CommandLine.UintVar(&numGPUs, "num-gpus", numGPUs, "number of GPUs to allocate")
-	pflag.CommandLine.Int16Var(&probesPort, "probes-port", probesPort, "port number for /ready")
-	pflag.CommandLine.Int16Var(&spiPort, "spi-port", spiPort, "port for dual-pods requests")
+	cfg.AddFlags(pflag.CommandLine)
 
 	pflag.Parse()
 
@@ -108,26 +108,38 @@ func main() {
 	gpuUUIDs := allocateGPUs(ctx, kubeClient.CoreV1(), nodeName, overrides.Context.Namespace, apitypes.UID(podUID), numGPUs)
 
 	var ready atomic.Bool
+	proxySrv := proxy.New(cfg.Proxy)
 
 	var wg sync.WaitGroup
-	wg.Add(2)
-
+	wg.Add(1)
 	go func() {
 		defer wg.Done()
 
-		err := coordination.RunWithGPUUUIDs(ctx, strconv.FormatInt(int64(spiPort), 10), &ready, os.Stdout, gpuUUIDs)
+		err := coordination.RunWithGPUUUIDs(ctx, strconv.FormatUint(uint64(cfg.SPIPort), 10), &ready, os.Stdout, gpuUUIDs, proxySrv.Configure)
 		if err != nil {
-			logger.Error(err, "failed to start requester SPI server")
+			logger.Error(err, "failed to run requester SPI server")
 		}
 	}()
 
 	// Start the readiness probe server
+	wg.Add(1)
 	go func() {
 		defer wg.Done()
 
-		err := probes.Run(ctx, strconv.FormatInt(int64(probesPort), 10), &ready)
+		err := probes.Run(ctx, strconv.FormatUint(uint64(cfg.ProbesPort), 10), &ready)
 		if err != nil {
-			logger.Error(err, "failed to start requester probes server")
+			logger.Error(err, "failed to run requester probes server")
+		}
+	}()
+
+	// Start the reverse proxy server
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		err := proxySrv.Run(ctx)
+		if err != nil {
+			logger.Error(err, "failed to run requester proxy server")
 		}
 	}()
 
