@@ -70,6 +70,38 @@ Labels are as follows.
 
 - `launcher_config_name`: Name of the relevant LauncherConfig
 
+## FMA requester-provider binding
+
+### fma_duality
+
+Vector of gauges. Value is 1.0 while a server-requesting Pod is bound
+to a vllm instance in a launcher, set to 0.0 when those two get
+unbound.
+
+Labels are as follows.
+
+- `exported_namespace`: Kube API namespace involved
+- `requester_name`: name of the server-requesting Pod
+- `exported_pod`: name of the launcher Pod
+- `exported_container`: name of the container in the launcher Pod
+- `instance_id`: the launcher-local identifier of the vllm-instance
+- `UUID`: of the GPU. Multiple timeseries when multiple GPUs are involved.
+- `node`: name of the Node involved
+
+This metric can be used to effectively do "joins" in PromQL. PromQL
+does not really have joins, and this hack is nowhere near as flexible
+as an SQL join. Following is an example of how this metric can be used
+to associate a DCGM metric about GPUs to the server-requesting Pod.
+
+```
+fma_duality * on(UUID) group_left(exported_namspace,exported_pod) DCGM_FI_DEV_FB_USED{exported_namespace!=""}
+```
+
+The `{exported_namespace!=""}` qualifier filters out the time series
+that DCGM produces when a GPU is not bound to any Pod.
+
+The `group_left` gets more labels into the result.
+
 ## FMA actuation latencies
 
 ### fma_actuation_seconds
