@@ -7,3 +7,6 @@ COPY inference_server/launcher/launcher.py inference_server/launcher/gputranslat
 
 # Install uvicorn for serving the launcher API, nvidia-ml-py for gputranslator and kubernetes
 RUN pip install --root-user-action=ignore --no-cache-dir uvicorn nvidia-ml-py kubernetes==34.1.0
+
+# This image is only intended to be run from a Pod that sets `command`.
+ENTRYPOINT []
