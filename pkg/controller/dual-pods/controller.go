@@ -170,6 +170,8 @@ var (
 	queueDurationHists *kubemetrics.HistogramVec
 	retriesCounters    *kubemetrics.CounterVec
 	workDurationHists  *kubemetrics.HistogramVec
+
+	dualityGauges *kubemetrics.GaugeVec
 )
 
 // NewController makes a new dual pods controller.
@@ -262,8 +264,17 @@ func (config ControllerConfig) NewController(
 			Buckets:        kubemetrics.ExponentialBuckets(1.0/64, 4, 7),
 			StabilityLevel: kubemetrics.ALPHA,
 		}, []string{nodeNameLabel})
+		dualityGauges = kubemetrics.NewGaugeVec(&kubemetrics.GaugeOpts{
+			Namespace:      "fma",
+			Name:           "duality",
+			Help:           "Indicator of requester-provider binding, 1.0 while it exists",
+			StabilityLevel: kubemetrics.ALPHA,
+		}, []string{"exported_namespace", "requester_name", "exported_pod", "exported_container",
+			"instance_id", "UUID", nodeNameLabel})
+
 		legacyregistry.MustRegister(addsCounters, queueDepthGauges, queueDurationHists,
 			retriesCounters, workDurationHists,
+			dualityGauges,
 		)
 	})
 
@@ -375,12 +386,14 @@ type serverData struct {
 
 	// The next two fields form a snapshot of the bound launcher-based
 	// vLLM instance's ISC-derived state. Each field may be reassigned
-	// over time (e.g. on rebind), but whichever value (pointer) is
+	// over time, but whichever value (pointer) is
 	// currently stored is deeply immutable for as long as it is stored.
 	InstanceID     string
 	InstanceConfig *VllmConfig
 
 	InstanceKnownToExist bool // meaningful only for launcher-based providers
+
+	DualityMetricAsserted bool
 
 	ReadinessRelayed *bool
 
