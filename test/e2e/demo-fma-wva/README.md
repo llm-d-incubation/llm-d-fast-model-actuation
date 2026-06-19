@@ -156,9 +156,9 @@ Pin all components (FMA + WVA + GIE + llm-d) to specific versions:
 
 ## Troubleshooting
 
-### HPA targets column shows `<unknown>` for `wva_desired_replicas`
+### HPA `TARGETS` column shows `<unknown>` for `wva_desired_replicas`
 `kubectl get hpa fma-requester-hpa` shows the metric as `<unknown>/1 (avg)`
-in the TARGETS column when the external-metrics API has no value for the
+in the `TARGETS` column when the external-metrics API has no value for the
 HPA's selector. The first 1–2 reconcile cycles after deploy usually look
 like this and resolve on their own (~30–60s).
 
