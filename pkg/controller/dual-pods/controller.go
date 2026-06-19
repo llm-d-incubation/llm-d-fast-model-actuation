@@ -292,34 +292,35 @@ func (config ControllerConfig) NewController(
 			Help:           "Number of InferenceServerConfig objects",
 			StabilityLevel: kubemetrics.ALPHA,
 		}, []string{"launcher_config_name"})
+
 		actuationSecsHistograms = kubemetrics.NewHistogramVec(&kubemetrics.HistogramOpts{
 			Namespace:      "fma",
 			Name:           "actuation_seconds",
 			Help:           "Time from requester CreationTimestamp to completion of readiness relay",
-			Buckets:        []float64{0, 1, 3, 5, 7.5, 10, 15, 30, 60, 120, 240, 480, 960},
+			Buckets:        []float64{0, 1, 3, 5, 7.5, 10, 15, 30, 60, 120, 240, 480, 960, 1920},
 			StabilityLevel: kubemetrics.ALPHA,
-		}, []string{"namespace", "path", "instancesDeleted", "isc_name"})
+		}, []string{"exported_namespace", "path", "instancesDeleted", "isc_name"})
 		wakeSecsHistograms = kubemetrics.NewHistogramVec(&kubemetrics.HistogramOpts{
 			Namespace:      "fma",
 			Name:           "wake_seconds",
 			Help:           "Latency of /wake_up call from DPC to vllm",
 			Buckets:        []float64{0.001, 0.01, 0.1, 1, 2, 3, 5, 7.5, 10, 15, 30},
 			StabilityLevel: kubemetrics.ALPHA,
-		}, []string{"namespace", "isc_name", "success"})
+		}, []string{"exported_namespace", "isc_name", "success"})
 		launcherCreateSecsHistograms = kubemetrics.NewHistogramVec(&kubemetrics.HistogramOpts{
 			Namespace:      "fma",
 			Name:           "launcher_create_seconds",
 			Help:           "Latency of kube API call to create launcher",
 			Buckets:        []float64{0.001, 0.01, 0.1, 1, 2, 3, 4, 5},
 			StabilityLevel: kubemetrics.ALPHA,
-		}, []string{"namespace", "lcfg_name", "success"})
+		}, []string{"exported_namespace", "lcfg_name", "success"})
 		instanceCreateSecsHistograms = kubemetrics.NewHistogramVec(&kubemetrics.HistogramOpts{
 			Namespace:      "fma",
 			Name:           "instance_create_seconds",
 			Help:           "Latency of DPC call to launcher to create vllm instance",
 			Buckets:        []float64{0.001, 0.01, 0.1, 1, 2, 3, 5, 10, 30, 90, 270, 810},
 			StabilityLevel: kubemetrics.ALPHA,
-		}, []string{"namespace", "isc_name", "success"})
+		}, []string{"exported_namespace", "isc_name", "success"})
 
 		legacyregistry.MustRegister(addsCounters, queueDepthGauges, queueDurationHists,
 			retriesCounters, workDurationHists,

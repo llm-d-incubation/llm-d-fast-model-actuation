@@ -28,9 +28,14 @@ Labels are as follows.
 ### fma_dpc_innerqueue_queue_duration_seconds
 
 Vector of classic histograms: Time from unique enqueue to the dequeue.
-Recall that a workqueue item may be enqueued multiple times before
-it is worked on. That first enqueue action is the one referenced here;
-the others are no-ops.
+Recall that a workqueue item may be enqueued multiple times before it
+is worked on. That first of _those_ enqueue actions is the one
+referenced here; the others are no-ops. Note well: the purpose of the
+qualifier here is to distinguish among the possibly-many times that an
+item is enqueued _before it is worked on_. For an item that is worked
+on multiple times, _each_ work is preceded by a "unique" enqueue of
+that item. This is **NOT** about the first time _ever_ that an item is
+enqueued.
 
 Labels are as follows.
 
@@ -113,7 +118,7 @@ become ready. Counted when the controller receives that reply.
 
 Labels are as follows.
 
-- `namespace`
+- `exported_namespace`: Kube namespace of requester and provider
 - `path`: one of "cold", "warm", or "hot"
 - `instancesDeleted`: decimal representation of number of vllm instances
   deleted for any reason in the course of this actuation.
@@ -125,19 +130,26 @@ Vector of histograms: Latency of `/wake_up` call from DPC to vllm.
 
 Labels are as follows.
 
-- `namespace`
+- `exported_namespace`: Kube namespace of requester and provider
 - `isc_name`: name of the relevant InferenceServerConfig object
-- `success`: "true" if no error, "false" otherwise
+- `success`: "true" if no error, "false" otherwise. Here "error" means
+  a failure to construct the HTTP request message, send it, or receive
+  the response message. The HTTP "status" code is not germane.
 
 ### fma_launcher_create_seconds
 
 Vector of histograms: Latency of kube API call to create launcher.
+This is only the time to get the Kube apiserver to create the Pod _API
+object_; the actual construction by of a running Pod, as well as the
+scheduling by the Kube Pod scheduler, are not included here.
 
 Labels are as follows.
 
-- `namespace`
+- `exported_namespace`: Kube namespace of requester and provider
 - `lcfg_name`: name of the relevant LauncherConfig object
-- `success`: "true" if no error, "false" otherwise
+- `success`: "true" if no error, "false" otherwise. Here "error" means
+  a failure to construct the HTTP request message, send it, or receive
+  the response message. The HTTP "status" code is not germane.
 
 ### fma_instance_create_seconds
 
@@ -145,6 +157,8 @@ Vector of histograms: Latency of DPC call to launcher to create vllm instance.
 
 Labels are as follows.
 
-- `namespace`
+- `exported_namespace`: Kube namespace of requester and provider
 - `isc_name`: name of the relevant InferenceServerConfig object
-- `success`: "true" if no error, "false" otherwise
+- `success`: "true" if no error, "false" otherwise. Here "error" means
+  a failure to construct the HTTP request message, send it, or receive
+  the response message. The HTTP "status" code is not germane.
