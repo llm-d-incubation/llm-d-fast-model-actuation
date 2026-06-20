@@ -172,6 +172,13 @@ var (
 	workDurationHists  *kubemetrics.HistogramVec
 
 	dualityGauges *kubemetrics.GaugeVec
+
+	requestersPerISCGauges       *kubemetrics.GaugeVec
+	iscCountGauges               *kubemetrics.GaugeVec
+	actuationSecsHistograms      *kubemetrics.HistogramVec
+	wakeSecsHistograms           *kubemetrics.HistogramVec
+	launcherCreateSecsHistograms *kubemetrics.HistogramVec
+	instanceCreateSecsHistograms *kubemetrics.HistogramVec
 )
 
 // NewController makes a new dual pods controller.
@@ -264,6 +271,7 @@ func (config ControllerConfig) NewController(
 			Buckets:        kubemetrics.ExponentialBuckets(1.0/64, 4, 7),
 			StabilityLevel: kubemetrics.ALPHA,
 		}, []string{nodeNameLabel})
+
 		dualityGauges = kubemetrics.NewGaugeVec(&kubemetrics.GaugeOpts{
 			Namespace:      "fma",
 			Name:           "duality",
@@ -272,9 +280,53 @@ func (config ControllerConfig) NewController(
 		}, []string{"exported_namespace", "requester_name", "exported_pod", "exported_container",
 			"instance_id", "UUID", nodeNameLabel})
 
+		requestersPerISCGauges = kubemetrics.NewGaugeVec(&kubemetrics.GaugeOpts{
+			Namespace:      "fma",
+			Name:           "requester_count",
+			Help:           "Number of server-requesting Pods",
+			StabilityLevel: kubemetrics.ALPHA,
+		}, []string{"isc_name"})
+		iscCountGauges = kubemetrics.NewGaugeVec(&kubemetrics.GaugeOpts{
+			Namespace:      "fma",
+			Name:           "isc_count",
+			Help:           "Number of InferenceServerConfig objects",
+			StabilityLevel: kubemetrics.ALPHA,
+		}, []string{"launcher_config_name"})
+
+		actuationSecsHistograms = kubemetrics.NewHistogramVec(&kubemetrics.HistogramOpts{
+			Namespace:      "fma",
+			Name:           "actuation_seconds",
+			Help:           "Time from requester CreationTimestamp to completion of readiness relay",
+			Buckets:        []float64{0, 1, 3, 5, 7.5, 10, 15, 30, 60, 120, 240, 480, 960, 1920},
+			StabilityLevel: kubemetrics.ALPHA,
+		}, []string{"exported_namespace", "path", "instancesDeleted", "isc_name"})
+		wakeSecsHistograms = kubemetrics.NewHistogramVec(&kubemetrics.HistogramOpts{
+			Namespace:      "fma",
+			Name:           "wake_seconds",
+			Help:           "Latency of /wake_up call from DPC to vllm",
+			Buckets:        []float64{0.001, 0.01, 0.1, 1, 2, 3, 5, 7.5, 10, 15, 30},
+			StabilityLevel: kubemetrics.ALPHA,
+		}, []string{"exported_namespace", "isc_name", "success"})
+		launcherCreateSecsHistograms = kubemetrics.NewHistogramVec(&kubemetrics.HistogramOpts{
+			Namespace:      "fma",
+			Name:           "launcher_create_seconds",
+			Help:           "Latency of kube API call to create launcher",
+			Buckets:        []float64{0.001, 0.01, 0.1, 1, 2, 3, 4, 5},
+			StabilityLevel: kubemetrics.ALPHA,
+		}, []string{"exported_namespace", "lcfg_name", "success"})
+		instanceCreateSecsHistograms = kubemetrics.NewHistogramVec(&kubemetrics.HistogramOpts{
+			Namespace:      "fma",
+			Name:           "instance_create_seconds",
+			Help:           "Latency of DPC call to launcher to create vllm instance",
+			Buckets:        []float64{0.001, 0.01, 0.1, 1, 2, 3, 5, 10, 30, 90, 270, 810},
+			StabilityLevel: kubemetrics.ALPHA,
+		}, []string{"exported_namespace", "isc_name", "success"})
+
 		legacyregistry.MustRegister(addsCounters, queueDepthGauges, queueDurationHists,
 			retriesCounters, workDurationHists,
 			dualityGauges,
+			requestersPerISCGauges, iscCountGauges, actuationSecsHistograms,
+			wakeSecsHistograms, launcherCreateSecsHistograms, instanceCreateSecsHistograms,
 		)
 	})
 
@@ -382,6 +434,12 @@ type serverData struct {
 	GPUIndices    []string
 	GPUIndicesStr *string
 
+	// True if at any time a launcher was sought but not found
+	NeededNewLauncher bool
+
+	// True if at any time a vllm instance was sought but not found
+	NeededNewInstance bool
+
 	ProvidingPodName string
 
 	// The next two fields form a snapshot of the bound launcher-based
@@ -395,9 +453,16 @@ type serverData struct {
 
 	DualityMetricAsserted bool
 
+	// Set of InstanceID deleted to make room for this instance
+	InstancesDeleted sets.Set[string]
+
 	ReadinessRelayed *bool
 
 	Sleeping *bool
+
+	// FirstReadyRelayed becomes true the first time that
+	// positive readiness is relayed to the requester.
+	FirstReadyRelayed bool
 
 	// RequesterDeleteRequested carries this bit forward without waiting for notification
 	// from apiserver. Remember there is no sync between the notification streams for
@@ -543,16 +608,23 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 			ctl.Queue.Add(nodeItem{nodeName})
 		} else {
 			nodeName := typed.Spec.NodeName
-			if it == infSvrItemBoundProvider {
+			switch it {
+			case infSvrItemBoundProvider:
 				var err error
 				nodeName, err = getProviderNodeName(typed)
 				if err != nil {
 					ctl.enqueueLogger.Error(err, "Failed to determine node of provider")
 					return
 				}
-			} else if it == infSvrItemRequester && nodeName == "" {
-				ctl.enqueueLogger.V(5).Info("Ignoring add of non-scheduled server-requesting Pod", "name", typed.Name)
-				return
+			case infSvrItemRequester:
+				iscName := typed.Annotations[api.InferenceServerConfigAnnotationName]
+				if iscName != "" {
+					requestersPerISCGauges.WithLabelValues(iscName).Inc()
+				}
+				if nodeName == "" {
+					ctl.enqueueLogger.V(5).Info("Ignoring add of non-scheduled server-requesting Pod", "name", typed.Name)
+					return
+				}
 			}
 			nd := ctl.getNodeData(nodeName)
 			ctl.enqueueLogger.V(5).Info("Enqueuing inference server reference due to notification of add", "nodeName", nodeName, "item", item, "infSvrItemType", it, "isInInitialList", isInInitialList, "resourceVersion", typed.ResourceVersion)
@@ -560,6 +632,10 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 			ctl.Queue.Add(nodeItem{nodeName})
 		}
 	case *fmav1alpha1.InferenceServerConfig:
+		lcfgName := typed.Spec.LauncherConfigName
+		if lcfgName != "" {
+			iscCountGauges.WithLabelValues(lcfgName).Inc()
+		}
 		ctl.enqueueInfSvrItemsByISC(typed, isInInitialList)
 	case *corev1.ConfigMap:
 		if typed.Name != GPUMapName {
@@ -617,6 +693,11 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 		}
 	case *fmav1alpha1.InferenceServerConfig:
 		prevTyped, ok := prev.(*fmav1alpha1.InferenceServerConfig)
+		lcfgName := typed.Spec.LauncherConfigName
+		if lcfgName != "" && ok && prevTyped.Spec.LauncherConfigName != lcfgName {
+			iscCountGauges.WithLabelValues(prevTyped.Spec.LauncherConfigName).Dec()
+			iscCountGauges.WithLabelValues(lcfgName).Inc()
+		}
 		if ok && !reflect.DeepEqual(prevTyped.Spec, typed.Spec) {
 			ctl.enqueueInstanceGCItemsForISC(typed.Name)
 		}
@@ -689,16 +770,23 @@ func (ctl *controller) OnDelete(obj any) {
 			ctl.Queue.Add(nodeItem{nodeName})
 		} else {
 			nodeName := typed.Spec.NodeName
-			if it == infSvrItemBoundProvider {
+			switch it {
+			case infSvrItemBoundProvider:
 				var err error
 				nodeName, err = getProviderNodeName(typed)
 				if err != nil {
 					ctl.enqueueLogger.Error(err, "Failed to determine node of provider")
 					return
 				}
-			} else if it == infSvrItemRequester && nodeName == "" {
-				ctl.enqueueLogger.V(5).Info("Ignoring delete of non-scheduled server-requesting Pod", "name", typed.Name)
-				return
+			case infSvrItemRequester:
+				iscName := typed.Annotations[api.InferenceServerConfigAnnotationName]
+				if iscName != "" {
+					requestersPerISCGauges.WithLabelValues(iscName).Dec()
+				}
+				if nodeName == "" {
+					ctl.enqueueLogger.V(5).Info("Ignoring delete of non-scheduled server-requesting Pod", "name", typed.Name)
+					return
+				}
 			}
 			nd := ctl.getNodeData(nodeName)
 			ctl.enqueueLogger.V(5).Info("Enqueuing inference server reference due to notification of delete", "nodeName", nodeName, "item", item, "infSvrItemType", it, "resourceVersion", typed.ResourceVersion)
@@ -706,6 +794,10 @@ func (ctl *controller) OnDelete(obj any) {
 			ctl.Queue.Add(nodeItem{nodeName})
 		}
 	case *fmav1alpha1.InferenceServerConfig:
+		lcfgName := typed.Spec.LauncherConfigName
+		if lcfgName != "" {
+			iscCountGauges.WithLabelValues(lcfgName).Dec()
+		}
 		ctl.enqueueInfSvrItemsByISC(typed, false)
 	case *corev1.ConfigMap:
 		if typed.Name != GPUMapName {
@@ -918,7 +1010,7 @@ func (ctl *controller) getServerData(nodeDat *nodeData, reqName string, reqUID a
 	defer ctl.mutex.Unlock()
 	ans := nodeDat.InferenceServers[reqUID]
 	if ans == nil {
-		ans = &serverData{RequestingPodName: reqName}
+		ans = &serverData{RequestingPodName: reqName, InstancesDeleted: sets.New[string]()}
 		nodeDat.InferenceServers[reqUID] = ans
 	}
 	return ans
