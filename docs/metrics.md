@@ -139,6 +139,23 @@ Labels are as follows.
   otherwise the decimal representation of the returned HTTP status
   code.
 
+The possible values of the `purpose` label are as follows.
+
+- `create_instance`
+- `delete_all_instances`
+- `delete_instance`
+- `get_accel_memory_usage`
+- `get_gpu_uuids`
+- `get_health`
+- `get_instance_state`
+- `list_instances`
+- `list_instance_ids`
+- `query_sleeping`
+- `relay_ready`
+- `relay_unready`
+- `sleep`
+- `wake`
+
 ### fma_launcher_create_seconds
 
 Vector of histograms: Latency of kube API call to create launcher.

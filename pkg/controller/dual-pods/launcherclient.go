@@ -65,7 +65,8 @@ func NewLauncherClient(baseURL string, latencyHistograms prometheus.ObserverVec)
 // isclessLatencyHistograms  needs values for labels purpose, method, isc_name, and status_code.
 // latencyHistograms needs values for labels purpose, method, status_code.
 // latencyHistograms may be nil if isclessLatencyHistograms is not;
-// in this case the first method call will set latencyHistograms by currying isclessLatencyHistograms
+// in this case the first method call to this LauncherClient will set latencyHistograms
+// by currying isclessLatencyHistograms
 // with a value for the `isc_name` label, using the returned value in `GetInstanceState`
 // if that is the first method called and it succeeds and otherwise using the empty string.
 func newLauncherClient(baseURL string, isclessLatencyHistograms, latencyHistograms prometheus.ObserverVec) (*LauncherClient, error) {
@@ -255,8 +256,8 @@ func (c *LauncherClient) fullDo(
 	case c.latencyHistograms != nil:
 		oc = c.latencyHistograms
 	case complete != nil:
-		oc = completeThenCurry{c, complete}
-	case true:
+		oc = completeThenSubscript{c, complete}
+	default:
 		c.latencyHistograms = c.isclessLatencyHistograms.MustCurryWith(prometheus.Labels{"isc_name": ""})
 		oc = c.latencyHistograms
 	}
@@ -269,12 +270,12 @@ func (c *LauncherClient) fullDo(
 	return nil
 }
 
-type completeThenCurry struct {
+type completeThenSubscript struct {
 	c        *LauncherClient
 	complete func()
 }
 
-func (w completeThenCurry) WithLabelValues(vals ...string) prometheus.Observer {
+func (w completeThenSubscript) WithLabelValues(vals ...string) prometheus.Observer {
 	w.complete()
 	return w.c.latencyHistograms.WithLabelValues(vals...)
 }

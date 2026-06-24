@@ -149,6 +149,7 @@ func (item unboundLauncherPodItem) process(ctx context.Context, ctl *controller,
 }
 
 func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *nodeData) (error, bool) {
+	// The `requesterName` value is relied upon by the log parser in benchmarking
 	logger := klog.FromContext(urCtx).WithValues("serverUID", item.UID, "requesterName", item.RequesterName)
 	serverDat := ctl.getServerData(nodeDat, item.RequesterName, item.UID)
 	if serverDat.InstanceID != "" {
@@ -159,6 +160,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	providerRV := "(non existent)"
 	var requesterDeletionTimestamp, providerDeletionTimestamp *string
 	var requesterRCS, providerRCS *reducedContainerState
+	var iscName string
 
 	requestingPod, err := ctl.podLister.Pods(ctl.namespace).Get(item.RequesterName)
 	if err != nil {
@@ -172,6 +174,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		requesterRV = requestingPod.ResourceVersion
 		requesterDeletionTimestamp = TimePtrToStringPtr(requestingPod.DeletionTimestamp)
 		requesterRCS = getReducedInferenceContainerState(requestingPod)
+		iscName = requestingPod.Annotations[api.InferenceServerConfigAnnotationName]
 	}
 
 	var providingPod *corev1.Pod
@@ -295,10 +298,6 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		if providingPod.Labels != nil {
 			_, providingPodLauncherBased = providingPod.Labels[ctlrcommon.LauncherConfigNameLabelKey]
 		}
-		var iscName string
-		if requestingPod != nil {
-			iscName = requestingPod.Annotations[api.InferenceServerConfigAnnotationName]
-		}
 		err := ctl.ensureUnbound(ctx, serverDat, iscName, nodeDat, providingPod, providingPodLauncherBased)
 		if err != nil {
 			return err, true
@@ -345,7 +344,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	}
 
 	var isc *fmav1alpha1.InferenceServerConfig
-	iscName, launcherBased := requestingPod.Annotations[api.InferenceServerConfigAnnotationName]
+	_, launcherBased := requestingPod.Annotations[api.InferenceServerConfigAnnotationName]
 	if launcherBased {
 		logger.V(5).Info("Server requesting Pod is asking for launcher-based server providing Pod")
 	}
@@ -475,7 +474,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				// We just synced, so we know the instance is not on the launcher — create directly.
 				serverDat.NeededNewInstance = true
 				launcherBaseURL := fmt.Sprintf("http://%s:%d", providingPod.Status.PodIP, ctlrcommon.LauncherServicePort)
-				lClient, err := NewLauncherClient(launcherBaseURL, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": requestingPod.Annotations[api.InferenceServerConfigAnnotationName]}))
+				lClient, err := NewLauncherClient(launcherBaseURL, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": iscName}))
 				if err != nil {
 					return err, true
 				}
@@ -491,7 +490,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 			serverDat.InstanceKnownToExist = true
 		}
 		if serverDat.Sleeping == nil {
-			sleeping, err := ctl.querySleeping(ctx, requestingPod.Annotations[api.InferenceServerConfigAnnotationName], providingPod, serverPort)
+			sleeping, err := ctl.querySleeping(ctx, iscName, providingPod, serverPort)
 			if err != nil {
 				return err, true
 			}
@@ -529,7 +528,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				url += stubapi.BecomeUnreadyPath
 				readiness = "unready"
 			}
-			_, err = doHTTP(ctx, "relay_readiness", "POST", url, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": requestingPod.Annotations[api.InferenceServerConfigAnnotationName]}), nil, nil)
+			_, err = doHTTP(ctx, "relay_"+readiness, "POST", url, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": iscName}), nil, nil)
 			if err != nil {
 				logger.Error(err, "Failed to relay the readiness", "name", providingPod.Name, "readiness", readiness, "url", url)
 				return err, true
@@ -547,7 +546,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				actuationSecs := now.Sub(requestingPod.CreationTimestamp.Time).Seconds()
 				actuationSecsHistograms.WithLabelValues(ctl.namespace, path,
 					strconv.FormatInt(int64(len(serverDat.InstancesDeleted)), 10),
-					requestingPod.Annotations[api.InferenceServerConfigAnnotationName],
+					iscName,
 				).Observe(actuationSecs)
 			}
 			logger.V(2).Info("Successfully relayed the readiness", "name", providingPod.Name, "readiness", readiness, "url", url)
