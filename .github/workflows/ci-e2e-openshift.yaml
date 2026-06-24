@@ -34,9 +34,23 @@ on:
   pull_request:
     branches:
       - main
+    paths-ignore:
+      - .agents/**
+      - .github/**
+      - '!.github/workflows/ci-e2e-openshift.yaml'
+      - _typos.toml
+      - AGENTS.md
+      - config/examples/**
+      - docs/**
+      - hack/**
+      - inference_server/benchmark/**
+      - test/e2e/*.md
+      - test/e2e/demo-fma-hpa/**
+
   # Allow maintainers to trigger tests on fork PRs via /ok-to-test comment
   issue_comment:
     types: [created]
+
   workflow_dispatch:
     inputs:
       skip_cleanup:
