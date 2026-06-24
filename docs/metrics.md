@@ -99,7 +99,7 @@ as an SQL join. Following is an example of how this metric can be used
 to associate a DCGM metric about GPUs to the server-requesting Pod.
 
 ```
-fma_duality * on(UUID) group_left(exported_namspace,exported_pod) DCGM_FI_DEV_FB_USED{exported_namespace!=""}
+fma_duality * on(UUID) group_left(exported_namespace,exported_pod) DCGM_FI_DEV_FB_USED{exported_namespace!=""}
 ```
 
 The `{exported_namespace!=""}` qualifier filters out the time series
