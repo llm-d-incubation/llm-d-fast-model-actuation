@@ -31,6 +31,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -176,9 +178,11 @@ var (
 	requestersPerISCGauges       *kubemetrics.GaugeVec
 	iscCountGauges               *kubemetrics.GaugeVec
 	actuationSecsHistograms      *kubemetrics.HistogramVec
-	wakeSecsHistograms           *kubemetrics.HistogramVec
 	launcherCreateSecsHistograms *kubemetrics.HistogramVec
-	instanceCreateSecsHistograms *kubemetrics.HistogramVec
+
+	// HistogramVec of HTTP call latencies.
+	// Labels are purpose, method, exported_namespace, isc_name, status_code
+	httpLatencySecsHistograms *kubemetrics.HistogramVec
 )
 
 // NewController makes a new dual pods controller.
@@ -190,49 +194,6 @@ func (config ControllerConfig) NewController(
 	corev1PreInformers corev1preinformers.Interface,
 	fmaInformerFactory fmainformers.SharedInformerFactory,
 ) (*controller, error) {
-	ctl := &controller{
-		enqueueLogger:       logger.WithName(ControllerName),
-		coreclient:          coreClient,
-		namespace:           namespace,
-		podInformer:         corev1PreInformers.Pods().Informer(),
-		podLister:           corev1PreInformers.Pods().Lister(),
-		cmInformer:          corev1PreInformers.ConfigMaps().Informer(),
-		cmLister:            corev1PreInformers.ConfigMaps().Lister(),
-		nodeInformer:        corev1PreInformers.Nodes().Informer(),
-		nodeLister:          corev1PreInformers.Nodes().Lister(),
-		iscInformer:         fmaInformerFactory.Fma().V1alpha1().InferenceServerConfigs().Informer(),
-		iscLister:           fmaInformerFactory.Fma().V1alpha1().InferenceServerConfigs().Lister(),
-		lcInformer:          fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Informer(),
-		lcLister:            fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Lister(),
-		sleeperLimit:        config.SleeperLimit,
-		debugAccelMemory:    config.AcceleratorSleepingMemoryLimitMiB < math.MaxInt32,
-		accelMemoryLimitMiB: config.AcceleratorSleepingMemoryLimitMiB,
-		nodeNameToData:      map[string]*nodeData{},
-	}
-	err := ctl.podInformer.AddIndexers(cache.Indexers{
-		inferenceServerConfigIndexName: inferenceServerConfigIndexFunc,
-		launcherConfigHashIndexName:    launcherConfigHashIndexFunc,
-		requesterIndexName:             requesterIndexFunc,
-		nodeNameIndexName:              nodeNameIndexFunc,
-		nominalHashIndexName:           nominalHashIndexFunc,
-		GPUIndexName:                   GPUIndexFunc})
-	if err != nil { //impossible
-		return nil, err
-	}
-	ctl.KnowsProcessedSync = genctlr.NewKnowsProcessedSync(ControllerName, config.NumWorkers, ctl.process,
-		func(distinguisher int) queueItem {
-			return cmItem{ObjectName: cache.ObjectName{Name: strconv.FormatInt(int64(distinguisher), 10), Namespace: sentinelNS}}
-		},
-		func(qi queueItem) bool {
-			if cm, ok := qi.(cmItem); ok {
-				return cm.Namespace == sentinelNS
-			}
-			return false
-		},
-		func(ctx context.Context) {
-			logger := klog.FromContext(ctx)
-			logger.V(1).Info("All initial items processed")
-		})
 	onceler.Do(func() {
 		addsCounters = kubemetrics.NewCounterVec(&kubemetrics.CounterOpts{
 			Namespace:      "fma",
@@ -300,13 +261,6 @@ func (config ControllerConfig) NewController(
 			Buckets:        []float64{0, 1, 3, 5, 7.5, 10, 15, 30, 60, 120, 240, 480, 960, 1920},
 			StabilityLevel: kubemetrics.ALPHA,
 		}, []string{"exported_namespace", "path", "instancesDeleted", "isc_name"})
-		wakeSecsHistograms = kubemetrics.NewHistogramVec(&kubemetrics.HistogramOpts{
-			Namespace:      "fma",
-			Name:           "wake_seconds",
-			Help:           "Latency of /wake_up call from DPC to vllm",
-			Buckets:        []float64{0.001, 0.01, 0.1, 1, 2, 3, 5, 7.5, 10, 15, 30},
-			StabilityLevel: kubemetrics.ALPHA,
-		}, []string{"exported_namespace", "isc_name", "success"})
 		launcherCreateSecsHistograms = kubemetrics.NewHistogramVec(&kubemetrics.HistogramOpts{
 			Namespace:      "fma",
 			Name:           "launcher_create_seconds",
@@ -314,21 +268,68 @@ func (config ControllerConfig) NewController(
 			Buckets:        []float64{0.001, 0.01, 0.1, 1, 2, 3, 4, 5},
 			StabilityLevel: kubemetrics.ALPHA,
 		}, []string{"exported_namespace", "lcfg_name", "success"})
-		instanceCreateSecsHistograms = kubemetrics.NewHistogramVec(&kubemetrics.HistogramOpts{
+
+		httpLatencySecsHistograms = kubemetrics.NewHistogramVec(&kubemetrics.HistogramOpts{
 			Namespace:      "fma",
-			Name:           "instance_create_seconds",
-			Help:           "Latency of DPC call to launcher to create vllm instance",
+			Subsystem:      "http",
+			Name:           "latency_seconds",
+			Help:           "Latency of HTTP call from DPC",
 			Buckets:        []float64{0.001, 0.01, 0.1, 1, 2, 3, 5, 10, 30, 90, 270, 810},
 			StabilityLevel: kubemetrics.ALPHA,
-		}, []string{"exported_namespace", "isc_name", "success"})
+		}, []string{"purpose", "method", "exported_namespace", "isc_name", "status_code"})
 
 		legacyregistry.MustRegister(addsCounters, queueDepthGauges, queueDurationHists,
 			retriesCounters, workDurationHists,
 			dualityGauges,
 			requestersPerISCGauges, iscCountGauges, actuationSecsHistograms,
-			wakeSecsHistograms, launcherCreateSecsHistograms, instanceCreateSecsHistograms,
+			launcherCreateSecsHistograms, httpLatencySecsHistograms,
 		)
 	})
+
+	ctl := &controller{
+		enqueueLogger:             logger.WithName(ControllerName),
+		coreclient:                coreClient,
+		namespace:                 namespace,
+		podInformer:               corev1PreInformers.Pods().Informer(),
+		podLister:                 corev1PreInformers.Pods().Lister(),
+		cmInformer:                corev1PreInformers.ConfigMaps().Informer(),
+		cmLister:                  corev1PreInformers.ConfigMaps().Lister(),
+		nodeInformer:              corev1PreInformers.Nodes().Informer(),
+		nodeLister:                corev1PreInformers.Nodes().Lister(),
+		iscInformer:               fmaInformerFactory.Fma().V1alpha1().InferenceServerConfigs().Informer(),
+		iscLister:                 fmaInformerFactory.Fma().V1alpha1().InferenceServerConfigs().Lister(),
+		lcInformer:                fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Informer(),
+		lcLister:                  fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Lister(),
+		httpLatencySecsHistograms: httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"exported_namespace": namespace}),
+		sleeperLimit:              config.SleeperLimit,
+		debugAccelMemory:          config.AcceleratorSleepingMemoryLimitMiB < math.MaxInt32,
+		accelMemoryLimitMiB:       config.AcceleratorSleepingMemoryLimitMiB,
+		nodeNameToData:            map[string]*nodeData{},
+	}
+	err := ctl.podInformer.AddIndexers(cache.Indexers{
+		inferenceServerConfigIndexName: inferenceServerConfigIndexFunc,
+		launcherConfigHashIndexName:    launcherConfigHashIndexFunc,
+		requesterIndexName:             requesterIndexFunc,
+		nodeNameIndexName:              nodeNameIndexFunc,
+		nominalHashIndexName:           nominalHashIndexFunc,
+		GPUIndexName:                   GPUIndexFunc})
+	if err != nil { //impossible
+		return nil, err
+	}
+	ctl.KnowsProcessedSync = genctlr.NewKnowsProcessedSync(ControllerName, config.NumWorkers, ctl.process,
+		func(distinguisher int) queueItem {
+			return cmItem{ObjectName: cache.ObjectName{Name: strconv.FormatInt(int64(distinguisher), 10), Namespace: sentinelNS}}
+		},
+		func(qi queueItem) bool {
+			if cm, ok := qi.(cmItem); ok {
+				return cm.Namespace == sentinelNS
+			}
+			return false
+		},
+		func(ctx context.Context) {
+			logger := klog.FromContext(ctx)
+			logger.V(1).Info("All initial items processed")
+		})
 
 	_, err = ctl.podInformer.AddEventHandler(ctl)
 	if err != nil {
@@ -364,6 +365,9 @@ type controller struct {
 	lcInformer    cache.SharedIndexInformer
 	lcLister      fmalisters.LauncherConfigLister
 	genctlr.KnowsProcessedSync[queueItem]
+
+	// Histogram vector, labels needing values are: purpose, method, isc_name, status_code
+	httpLatencySecsHistograms prometheus.ObserverVec
 
 	sleeperLimit        int
 	debugAccelMemory    bool

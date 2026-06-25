@@ -124,17 +124,37 @@ Labels are as follows.
   deleted for any reason in the course of this actuation.
 - `isc_name`: name of the relevant InferenceServerConfig object
 
-### fma_wake_seconds
+### fma_http_latency_seconds
 
-Vector of histograms: Latency of `/wake_up` call from DPC to vllm.
+Vector of histograms: Latency of HTTP calls. Currently, only calls
+from the dual-pods controller are instrumented.
 
 Labels are as follows.
 
+- `purpose`: short token identifying the purpose of the call
+- `method`: the HTTP method
 - `exported_namespace`: Kube namespace of requester and provider
 - `isc_name`: name of the relevant InferenceServerConfig object
-- `success`: "true" if no error, "false" otherwise. Here "error" means
-  a failure to construct the HTTP request message, send it, or receive
-  the response message. The HTTP "status" code is not germane.
+- `status_code`: if an HTTP response was not received then "0",
+  otherwise the decimal representation of the returned HTTP status
+  code.
+
+The possible values of the `purpose` label are as follows.
+
+- `create_instance`
+- `delete_all_instances`
+- `delete_instance`
+- `get_accel_memory_usage`
+- `get_gpu_uuids`
+- `get_health`
+- `get_instance_state`
+- `list_instances`
+- `list_instance_ids`
+- `query_sleeping`
+- `relay_ready`
+- `relay_unready`
+- `sleep`
+- `wake`
 
 ### fma_launcher_create_seconds
 
@@ -147,18 +167,6 @@ Labels are as follows.
 
 - `exported_namespace`: Kube namespace of requester and provider
 - `lcfg_name`: name of the relevant LauncherConfig object
-- `success`: "true" if no error, "false" otherwise. Here "error" means
-  a failure to construct the HTTP request message, send it, or receive
-  the response message. The HTTP "status" code is not germane.
-
-### fma_instance_create_seconds
-
-Vector of histograms: Latency of DPC call to launcher to create vllm instance.
-
-Labels are as follows.
-
-- `exported_namespace`: Kube namespace of requester and provider
-- `isc_name`: name of the relevant InferenceServerConfig object
 - `success`: "true" if no error, "false" otherwise. Here "error" means
   a failure to construct the HTTP request message, send it, or receive
   the response message. The HTTP "status" code is not germane.

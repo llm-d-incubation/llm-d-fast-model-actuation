@@ -34,7 +34,8 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/utils"
+	"github.com/prometheus/client_golang/prometheus"
+
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -51,6 +52,7 @@ import (
 	fmav1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/api"
 	ctlrcommon "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/common"
+	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/utils"
 	stubapi "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/spi"
 )
 
@@ -147,6 +149,7 @@ func (item unboundLauncherPodItem) process(ctx context.Context, ctl *controller,
 }
 
 func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *nodeData) (error, bool) {
+	// The `requesterName` value is relied upon by the log parser in benchmarking
 	logger := klog.FromContext(urCtx).WithValues("serverUID", item.UID, "requesterName", item.RequesterName)
 	serverDat := ctl.getServerData(nodeDat, item.RequesterName, item.UID)
 	if serverDat.InstanceID != "" {
@@ -157,6 +160,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	providerRV := "(non existent)"
 	var requesterDeletionTimestamp, providerDeletionTimestamp *string
 	var requesterRCS, providerRCS *reducedContainerState
+	var iscName string
 
 	requestingPod, err := ctl.podLister.Pods(ctl.namespace).Get(item.RequesterName)
 	if err != nil {
@@ -170,6 +174,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		requesterRV = requestingPod.ResourceVersion
 		requesterDeletionTimestamp = TimePtrToStringPtr(requestingPod.DeletionTimestamp)
 		requesterRCS = getReducedInferenceContainerState(requestingPod)
+		iscName = requestingPod.Annotations[api.InferenceServerConfigAnnotationName]
 	}
 
 	var providingPod *corev1.Pod
@@ -293,7 +298,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		if providingPod.Labels != nil {
 			_, providingPodLauncherBased = providingPod.Labels[ctlrcommon.LauncherConfigNameLabelKey]
 		}
-		err := ctl.ensureUnbound(ctx, serverDat, nodeDat, providingPod, providingPodLauncherBased)
+		err := ctl.ensureUnbound(ctx, serverDat, iscName, nodeDat, providingPod, providingPodLauncherBased)
 		if err != nil {
 			return err, true
 		}
@@ -339,7 +344,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	}
 
 	var isc *fmav1alpha1.InferenceServerConfig
-	iscName, launcherBased := requestingPod.Annotations[api.InferenceServerConfigAnnotationName]
+	_, launcherBased := requestingPod.Annotations[api.InferenceServerConfigAnnotationName]
 	if launcherBased {
 		logger.V(5).Info("Server requesting Pod is asking for launcher-based server providing Pod")
 	}
@@ -348,7 +353,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	if serverDat.GPUIDsStr == nil {
 		logger.V(5).Info("Querying accelerators", "ip", requesterIP, "port", adminPort)
 		url := fmt.Sprintf("http://%s:%s%s", requesterIP, adminPort, stubapi.AcceleratorQueryPath)
-		gpuUUIDs, err := getGPUUUIDs(ctx, url)
+		gpuUUIDs, err := getGPUUUIDs(ctx, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": iscName}), url)
 		if err != nil {
 			queryErr := fmt.Errorf("GET %q fails: %s", url, err.Error())
 			updateErr, _ := ctl.ensureReqStatus(ctx, requestingPod, serverDat, queryErr.Error())
@@ -469,30 +474,23 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				// We just synced, so we know the instance is not on the launcher — create directly.
 				serverDat.NeededNewInstance = true
 				launcherBaseURL := fmt.Sprintf("http://%s:%d", providingPod.Status.PodIP, ctlrcommon.LauncherServicePort)
-				lClient, err := NewLauncherClient(launcherBaseURL)
+				lClient, err := NewLauncherClient(launcherBaseURL, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": iscName}))
 				if err != nil {
 					return err, true
 				}
-				createStart := time.Now()
 				result, err := lClient.CreateNamedInstance(ctx, serverDat.InstanceID, *serverDat.InstanceConfig)
-				createEnd := time.Now()
-				instanceCreateSecsHistograms.WithLabelValues(ctl.namespace,
-					requestingPod.Annotations[api.InferenceServerConfigAnnotationName],
-					ite(err == nil, "true", "false")).
-					Observe(createEnd.Sub(createStart).Seconds())
-				createStartStr := createStart.Format(time.RFC3339Nano)
 				if err != nil {
-					return fmt.Errorf("failed to create vLLM instance %q (started %s): %w", serverDat.InstanceID, createStartStr, err), true
+					return fmt.Errorf("failed to create vLLM instance %q: %w", serverDat.InstanceID, err), true
 				}
 				serverDat.InstanceKnownToExist = true
 				launcherDat := ctl.getLauncherData(nodeDat, providingPod.Name)
 				launcherDat.Instances[serverDat.InstanceID] = time.Now()
-				logger.V(2).Info("Created vLLM instance", "instance_id", result.InstanceID, "status", result.Status, "httpCallStartTime", createStartStr)
+				logger.V(2).Info("Created vLLM instance", "instance_id", result.InstanceID, "status", result.Status)
 			}
 			serverDat.InstanceKnownToExist = true
 		}
 		if serverDat.Sleeping == nil {
-			sleeping, err := ctl.querySleeping(ctx, providingPod, serverPort)
+			sleeping, err := ctl.querySleeping(ctx, iscName, providingPod, serverPort)
 			if err != nil {
 				return err, true
 			}
@@ -530,11 +528,9 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				url += stubapi.BecomeUnreadyPath
 				readiness = "unready"
 			}
-			postStart := time.Now()
-			err = doPost(ctx, url)
-			postStartStr := postStart.Format(time.RFC3339Nano)
+			_, err = doHTTP(ctx, "relay_"+readiness, "POST", url, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": iscName}), nil, nil)
 			if err != nil {
-				logger.Error(err, "Failed to relay the readiness", "name", providingPod.Name, "readiness", readiness, "url", url, "httpCallStartTime", postStartStr)
+				logger.Error(err, "Failed to relay the readiness", "name", providingPod.Name, "readiness", readiness, "url", url)
 				return err, true
 			}
 			serverDat.ReadinessRelayed = &ready
@@ -550,10 +546,10 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				actuationSecs := now.Sub(requestingPod.CreationTimestamp.Time).Seconds()
 				actuationSecsHistograms.WithLabelValues(ctl.namespace, path,
 					strconv.FormatInt(int64(len(serverDat.InstancesDeleted)), 10),
-					requestingPod.Annotations[api.InferenceServerConfigAnnotationName],
+					iscName,
 				).Observe(actuationSecs)
 			}
-			logger.V(2).Info("Successfully relayed the readiness", "name", providingPod.Name, "readiness", readiness, "url", url, "httpCallStartTime", postStartStr)
+			logger.V(2).Info("Successfully relayed the readiness", "name", providingPod.Name, "readiness", readiness, "url", url)
 		}
 		// TODO: sync desired and actual providingPod wrt labels (spec is mostly immutable, possible mutations are allowed)
 		logger.V(5).Info("Nothing more to do")
@@ -879,21 +875,19 @@ launcherPodLoop:
 
 	if bestReclaimPlan != nil {
 		launcherBaseURL := fmt.Sprintf("http://%s:%d", bestReclaimPlan.launcherPod.Status.PodIP, ctlrcommon.LauncherServicePort)
-		lClient, err := NewLauncherClient(launcherBaseURL)
+		lClient, err := NewLauncherClient(launcherBaseURL, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": ""}))
 		if err != nil {
 			return nil, false, true, err
 		}
 		for _, victim := range bestReclaimPlan.victims {
 			instancesDeleted.Insert(victim)
-			delStart := time.Now()
 			_, err := lClient.DeleteInstance(ctx, victim)
-			delStartStr := delStart.Format(time.RFC3339Nano)
 			if err != nil && !IsInstanceNotFoundError(err) {
-				return nil, false, true, fmt.Errorf("failed to delete instance %q from launcher Pod %q (started %s): %w", victim, bestReclaimPlan.launcherPod.Name, delStartStr, err)
+				return nil, false, true, fmt.Errorf("failed to delete instance %q from launcher Pod %q: %w", victim, bestReclaimPlan.launcherPod.Name, err)
 			}
 			delete(bestReclaimPlan.launcherDat.Instances, victim)
 			logger.V(2).Info("Ensured vLLM instance absent to reclaim launcher capacity",
-				"launcherPod", bestReclaimPlan.launcherPod.Name, "instanceID", victim, "maxOthers", maxOthers, "httpCallStartTime", delStartStr)
+				"launcherPod", bestReclaimPlan.launcherPod.Name, "instanceID", victim, "maxOthers", maxOthers)
 		}
 		return bestReclaimPlan.launcherPod, false, false, nil
 	}
@@ -1296,18 +1290,11 @@ func (ctl *controller) wakeSleeper(ctx context.Context, serverDat *serverData, r
 	endpoint := fmt.Sprintf("%s:%d", providingPod.Status.PodIP, serverPort)
 	wakeURL := "http://" + endpoint + "/wake_up"
 	logger := klog.FromContext(ctx)
-	wakeStart := time.Now()
-	err := doPost(ctx, wakeURL)
-	wakeEnd := time.Now()
-	wakeSecsHistograms.WithLabelValues(ctl.namespace,
-		requestingPod.Annotations[api.InferenceServerConfigAnnotationName],
-		ite(err == nil, "true", "false")).
-		Observe(wakeEnd.Sub(wakeStart).Seconds())
-	wakeStartStr := wakeStart.Format(time.RFC3339Nano)
+	_, err := doHTTP(ctx, "wake", "POST", wakeURL, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": requestingPod.Annotations[api.InferenceServerConfigAnnotationName]}), nil, nil)
 	if err != nil {
-		return fmt.Errorf("failed to wake inference server at %s (started %s): %w", endpoint, wakeStartStr, err)
+		return fmt.Errorf("failed to wake inference server at %s: %w", endpoint, err)
 	}
-	logger.V(2).Info("Woke inference server", "endpoint", endpoint, "description", description, "httpCallStartTime", wakeStartStr)
+	logger.V(2).Info("Woke inference server", "endpoint", endpoint, "description", description)
 	if err := ctl.ensureSleepingLabel(ctx, providingPod, false); err != nil {
 		return err
 	}
@@ -1428,19 +1415,17 @@ func (item instanceGCItem) process(ctx context.Context, ctl *controller, nodeDat
 			continue
 		}
 		launcherBaseURL := fmt.Sprintf("http://%s:%d", launcherPod.Status.PodIP, ctlrcommon.LauncherServicePort)
-		lClient, err := NewLauncherClient(launcherBaseURL)
+		lClient, err := NewLauncherClient(launcherBaseURL, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": ""}))
 		if err != nil {
 			logger.Error(err, "Failed to create launcher client during instance GC", "launcherPod", launcherPodName)
 			continue
 		}
-		listStart := time.Now()
 		allInsts, err := lClient.ListInstances(ctx)
-		listStartStr := listStart.Format(time.RFC3339Nano)
 		if err != nil {
-			logger.Error(err, "Failed to list instances during instance GC", "launcherPod", launcherPodName, "httpCallStartTime", listStartStr)
+			logger.Error(err, "Failed to list instances during instance GC", "launcherPod", launcherPodName)
 			continue
 		}
-		logger.V(4).Info("Listed launcher instances during GC", "launcherPod", launcherPodName, "totalInstances", allInsts.TotalInstances, "httpCallStartTime", listStartStr)
+		logger.V(4).Info("Listed launcher instances during GC", "launcherPod", launcherPodName, "totalInstances", allInsts.TotalInstances)
 		for _, inst := range allInsts.Instances {
 			if inst.Annotations[VllmConfigISCNameAnnotationKey] != isc.Name {
 				continue
@@ -1462,7 +1447,7 @@ func (item instanceGCItem) process(ctx context.Context, ctl *controller, nodeDat
 				logger.Error(err, "Failed to determine instance port during GC", "launcherPod", launcherPodName, "instanceID", inst.InstanceID)
 				continue
 			}
-			sleeping, err := ctl.querySleeping(ctx, launcherPod, instPort)
+			sleeping, err := ctl.querySleeping(ctx, inst.Annotations[VllmConfigISCNameAnnotationKey], launcherPod, instPort)
 			if err != nil {
 				logger.Error(err, "Failed to query sleeping state during instance GC", "launcherPod", launcherPodName, "instanceID", inst.InstanceID)
 				continue
@@ -1471,24 +1456,22 @@ func (item instanceGCItem) process(ctx context.Context, ctl *controller, nodeDat
 				logger.V(4).Info("Skipping instance GC: instance not explicitly sleeping", "launcherPod", launcherPodName, "instanceID", inst.InstanceID)
 				continue
 			}
-			delStart := time.Now()
 			_, err = lClient.DeleteInstance(ctx, inst.InstanceID)
-			delStartStr := delStart.Format(time.RFC3339Nano)
 			if err != nil {
 				if !IsInstanceNotFoundError(err) {
-					logger.Error(err, "Failed to delete obsolete sleeping instance during GC", "launcherPod", launcherPodName, "instanceID", inst.InstanceID, "httpCallStartTime", delStartStr)
+					logger.Error(err, "Failed to delete obsolete sleeping instance during GC", "launcherPod", launcherPodName, "instanceID", inst.InstanceID)
 				}
 				continue
 			}
 			delete(launcherDat.Instances, inst.InstanceID)
-			logger.V(2).Info("Deleted obsolete sleeping instance", "launcherPod", launcherPodName, "instanceID", inst.InstanceID, "currentHash", currentHash, "httpCallStartTime", delStartStr)
+			logger.V(2).Info("Deleted obsolete sleeping instance", "launcherPod", launcherPodName, "instanceID", inst.InstanceID, "currentHash", currentHash)
 		}
 	}
 	return nil, false
 }
 
 // Unbinds the given server-providing Pod.
-func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData, nodeDat *nodeData, providingPod *corev1.Pod, launcherBased bool) error {
+func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData, iscName string, nodeDat *nodeData, providingPod *corev1.Pod, launcherBased bool) error {
 	logger := klog.FromContext(ctx)
 	if launcherBased {
 		if err := recoverInstanceStateFromLauncherPod(serverDat, providingPod); err != nil {
@@ -1502,7 +1485,15 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 		// For launcher-based instances, check if the instance is already obsolete
 		// (i.e. its InferenceServerConfig was updated since the instance was created).
 		// If so, delete it from the launcher rather than putting it to sleep.
-		if launcherBased && ctl.maybeDeleteObsoleteInstance(ctx, serverDat, nodeDat, providingPod) {
+		var iscNameRead string
+		var deletedFromLauncher bool
+		if launcherBased {
+			iscNameRead, deletedFromLauncher = ctl.maybeDeleteObsoleteInstance(ctx, serverDat, nodeDat, providingPod)
+			if iscName == "" && iscNameRead != "" {
+				iscName = iscNameRead
+			}
+		}
+		if deletedFromLauncher {
 			serverDat.Sleeping = ptr.To(true)
 		} else {
 			serverPort := serverDat.ServerPort
@@ -1517,14 +1508,12 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 			}
 			endpoint := fmt.Sprintf("%s:%d", providingPod.Status.PodIP, serverPort)
 			sleepURL := "http://" + endpoint + "/sleep"
-			sleepStart := time.Now()
-			err := doPost(ctx, sleepURL)
-			sleepStartStr := sleepStart.Format(time.RFC3339Nano)
+			_, err := doHTTP(ctx, "sleep", "POST", sleepURL, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": iscName}), nil, nil)
 			if err != nil {
-				return fmt.Errorf("failed to put provider %q to sleep, POST %s (started %s): %w", serverDat.ProvidingPodName, sleepURL, sleepStartStr, err)
+				return fmt.Errorf("failed to put provider %q to sleep, POST %s: %w", serverDat.ProvidingPodName, sleepURL, err)
 			}
 			serverDat.Sleeping = ptr.To(true)
-			logger.V(2).Info("Put inference server to sleep", "endpoint", endpoint, "httpCallStartTime", sleepStartStr)
+			logger.V(2).Info("Put inference server to sleep", "endpoint", endpoint)
 		}
 	}
 	providingPod = providingPod.DeepCopy()
@@ -1580,67 +1569,64 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 
 // maybeDeleteObsoleteInstance checks whether the launcher-based instance is obsolete
 // (its InferenceServerConfig was updated since the instance was created) and if so,
-// deletes it from the launcher. Returns true if the instance was deleted.
-// On any error, returns false so the caller falls through to the normal sleep path.
-func (ctl *controller) maybeDeleteObsoleteInstance(ctx context.Context, serverDat *serverData, nodeDat *nodeData, providingPod *corev1.Pod) bool {
+// deletes it from the launcher. Returns:
+// `iscName string` if discovered,
+// `success bool` indicating whether the instance was deleted.
+func (ctl *controller) maybeDeleteObsoleteInstance(ctx context.Context, serverDat *serverData, nodeDat *nodeData, providingPod *corev1.Pod) (string, bool) {
 	logger := klog.FromContext(ctx)
 	if serverDat.InstanceID == "" {
-		return false
+		return "", false
 	}
 	launcherBaseURL := fmt.Sprintf("http://%s:%d", providingPod.Status.PodIP, ctlrcommon.LauncherServicePort)
-	lClient, err := NewLauncherClient(launcherBaseURL)
+	lClient, err := newLauncherClient(launcherBaseURL, ctl.httpLatencySecsHistograms, nil)
 	if err != nil {
 		logger.V(4).Info("Cannot check instance obsolescence: failed to create launcher client", "err", err)
-		return false
+		return "", false
 	}
-	getStart := time.Now()
 	instState, err := lClient.GetInstanceState(ctx, serverDat.InstanceID)
-	getStartStr := getStart.Format(time.RFC3339Nano)
 	if err != nil {
-		logger.V(4).Info("Cannot check instance obsolescence: failed to get instance state", "instanceID", serverDat.InstanceID, "httpCallStartTime", getStartStr, "err", err)
-		return false
+		logger.V(4).Info("Cannot check instance obsolescence: failed to get instance state", "instanceID", serverDat.InstanceID, "err", err)
+		return "", false
 	}
-	logger.V(4).Info("Got vLLM instance state", "instanceID", serverDat.InstanceID, "httpCallStartTime", getStartStr)
 	iscName := instState.Annotations[VllmConfigISCNameAnnotationKey]
 	if iscName == "" {
 		logger.V(4).Info("Cannot check instance obsolescence: no ISC name annotation on instance", "instanceID", serverDat.InstanceID)
-		return false
+		return iscName, false
 	}
+	logger.V(4).Info("Got vLLM instance state", "instanceID", serverDat.InstanceID)
 	currentISC, err := ctl.iscLister.InferenceServerConfigs(ctl.namespace).Get(iscName)
 	if err != nil {
 		logger.V(4).Info("Cannot check instance obsolescence: ISC not found", "iscName", iscName, "err", err)
-		return false
+		return iscName, false
 	}
 	if len(instState.GpuUUIDs) == 0 {
 		logger.V(4).Info("Cannot check instance obsolescence: no GPU UUIDs on instance", "instanceID", serverDat.InstanceID)
-		return false
+		return iscName, false
 	}
 	_, currentHash, err := ctl.configInferenceServer(currentISC, instState.GpuUUIDs)
 	if err != nil {
 		logger.V(4).Info("Cannot check instance obsolescence: failed to compute current hash", "iscName", iscName, "err", err)
-		return false
+		return iscName, false
 	}
 	if currentHash == serverDat.InstanceID {
-		return false // not obsolete
+		return iscName, false // not obsolete
 	}
 	// Instance is obsolete — delete from launcher instead of sleeping.
 	serverDat.InstancesDeleted.Insert(serverDat.InstanceID)
-	delStart := time.Now()
 	_, delErr := lClient.DeleteInstance(ctx, serverDat.InstanceID)
-	delStartStr := delStart.Format(time.RFC3339Nano)
 	if delErr != nil {
 		if !IsInstanceNotFoundError(delErr) {
 			logger.Error(delErr, "Failed to delete obsolete instance during unbinding",
-				"instanceID", serverDat.InstanceID, "httpCallStartTime", delStartStr)
-			return false
+				"instanceID", serverDat.InstanceID)
+			return iscName, false
 		}
 	}
 	if launcherDat := nodeDat.Launchers[providingPod.Name]; launcherDat != nil {
 		delete(launcherDat.Instances, serverDat.InstanceID)
 	}
 	logger.V(2).Info("Deleted obsolete instance during unbinding",
-		"instanceID", serverDat.InstanceID, "currentHash", currentHash, "iscName", iscName, "httpCallStartTime", delStartStr)
-	return true
+		"instanceID", serverDat.InstanceID, "currentHash", currentHash, "iscName", iscName)
+	return iscName, true
 }
 
 // getNominalServerProvidingPod returns the nominal server-providing Pod,
@@ -1789,21 +1775,11 @@ func getReducedInferenceContainerState(from *corev1.Pod) *reducedContainerState 
 	return &ans
 }
 
-func (ctl *controller) querySleeping(ctx context.Context, providingPod *corev1.Pod, serverPort int32) (bool, error) {
+func (ctl *controller) querySleeping(ctx context.Context, iscName string, providingPod *corev1.Pod, serverPort int32) (bool, error) {
 	queryURL := fmt.Sprintf("http://%s:%d/is_sleeping", providingPod.Status.PodIP, serverPort)
-	logger := klog.FromContext(ctx)
-	getStart := time.Now()
-	body, err := doGet(ctx, queryURL)
-	getStartStr := getStart.Format(time.RFC3339Nano)
-	if err != nil {
-		return false, fmt.Errorf("is_sleeping query to %s failed (started %s): %w", queryURL, getStartStr, err)
-	}
-	sleepState := api.SleepState{}
-	if err := json.Unmarshal(body, &sleepState); err != nil {
-		return false, fmt.Errorf("failed to parse response body to is_sleeping query (HTTP call started %s): %w", getStartStr, err)
-	}
-	logger.V(4).Info("Queried sleeping state", "url", queryURL, "isSleeping", sleepState.IsSleeping, "httpCallStartTime", getStartStr)
-	return sleepState.IsSleeping, nil
+	var sleepState api.SleepState
+	_, err := doHTTP(ctx, "query_sleeping", "GET", queryURL, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": iscName}), nil, &sleepState)
+	return sleepState.IsSleeping, err
 }
 
 func (ctl *controller) accelMemoryIsLowEnough(ctx context.Context, requestingPod *corev1.Pod, serverDat *serverData) error {
@@ -1812,19 +1788,12 @@ func (ctl *controller) accelMemoryIsLowEnough(ctx context.Context, requestingPod
 		adminPort = api.AdminPortDefaultValue
 	}
 	url := fmt.Sprintf("http://%s:%s%s", requestingPod.Status.PodIP, adminPort, stubapi.AcceleratorMemoryQueryPath)
-	logger := klog.FromContext(ctx)
-	getStart := time.Now()
-	body, err := doGet(ctx, url)
-	getStartStr := getStart.Format(time.RFC3339Nano)
-	if err != nil {
-		return fmt.Errorf("accelerator memory query to %s failed (started %s): %w", url, getStartStr, err)
-	}
-	logger.V(4).Info("Queried accelerator memory usage", "url", url, "httpCallStartTime", getStartStr)
 	usageMap := map[string]int64{}
-	err = json.Unmarshal(body, &usageMap)
+	_, err := doHTTP(ctx, "get_accel_memory_usage", "GET", url, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": requestingPod.Annotations[api.InferenceServerConfigAnnotationName]}), nil, &usageMap)
 	if err != nil {
-		return fmt.Errorf("failed to parse memory usage map: %w", err)
+		return err
 	}
+	logger := klog.FromContext(ctx)
 	for _, gpuID := range serverDat.GPUIDs {
 		if used, have := usageMap[gpuID]; !have {
 			return fmt.Errorf("no GPU usage information for GPU %s", gpuID)
@@ -1900,31 +1869,6 @@ func (ctl *controller) ensureReqState(ctx context.Context, requestingPod *corev1
 	return err, err != nil
 }
 
-// doPost does the HTTP POST request/response to the given URL.
-func doPost(ctx context.Context, url string) error {
-	client := &http.Client{
-		Timeout: 5 * time.Second,
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
-	if err != nil {
-		return fmt.Errorf("http post %q: %w", url, err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("http post %q: %w", url, err)
-	}
-	defer resp.Body.Close() //nolint:errcheck
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("http POST %q returned unexpected status %d; response body=%s", url, resp.StatusCode, string(body))
-	}
-
-	return nil
-}
-
 var coreScheme *k8sruntime.Scheme
 var codecFactory k8sserializer.CodecFactory
 var podDecoder k8sruntime.Decoder
@@ -1951,17 +1895,15 @@ func (ctl *controller) syncLauncherInstances(ctx context.Context, nodeDat *nodeD
 	}
 
 	launcherBaseURL := fmt.Sprintf("http://%s:%d", launcherPod.Status.PodIP, ctlrcommon.LauncherServicePort)
-	lClient, err := NewLauncherClient(launcherBaseURL)
+	lClient, err := NewLauncherClient(launcherBaseURL, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": ""}))
 	if err != nil {
 		logger.Error(err, "Failed to create launcher client")
 		return nil, err, true
 	}
 
-	listStart := time.Now()
 	insts, err := lClient.ListInstances(ctx)
-	listStartStr := listStart.Format(time.RFC3339Nano)
 	if err != nil {
-		logger.Error(err, "Failed to list instances from launcher", "httpCallStartTime", listStartStr)
+		logger.Error(err, "Failed to list instances from launcher")
 		return nil, err, true
 	}
 
@@ -1990,15 +1932,13 @@ func (ctl *controller) syncLauncherInstances(ctx context.Context, nodeDat *nodeD
 				if instancesDeleted != nil {
 					instancesDeleted.Insert(inst.InstanceID)
 				}
-				delStart := time.Now()
 				_, delErr := lClient.DeleteInstance(ctx, inst.InstanceID)
-				delStartStr := delStart.Format(time.RFC3339Nano)
 				if delErr != nil && !IsInstanceNotFoundError(delErr) {
 					logger.V(2).Info("Failed to delete stopped instance from launcher during sync",
-						"instanceID", inst.InstanceID, "httpCallStartTime", delStartStr, "err", delErr)
+						"instanceID", inst.InstanceID, "err", delErr)
 				} else {
 					logger.V(2).Info("Deleted stopped instance from launcher during sync",
-						"instanceID", inst.InstanceID, "httpCallStartTime", delStartStr)
+						"instanceID", inst.InstanceID)
 				}
 			}
 			continue
@@ -2028,7 +1968,7 @@ func (ctl *controller) syncLauncherInstances(ctx context.Context, nodeDat *nodeD
 		"totalInstances", insts.TotalInstances,
 		"runningInstances", insts.RunningInstances,
 		"instanceCount", len(newInstances),
-		"httpCallStartTime", listStartStr)
+	)
 
 	return &launcherSyncResult{
 		instances:          insts,
@@ -2046,47 +1986,72 @@ func init() {
 	podDecoder = codecFactory.UniversalDecoder(corev1.SchemeGroupVersion)
 }
 
-func doGet(ctx context.Context, url string) ([]byte, error) {
-	client := &http.Client{
-		Timeout: 5 * time.Second,
-	}
+var myHTTPClient = &http.Client{
+	Timeout: 30 * time.Second,
+}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+// ObserverCube is the needed fragment of prometheus.ObserverVec,
+// semantically (but not in the type system) specialized to
+// needing values for three labels: purpose, method, status_code.
+type ObserverCube interface {
+	// WithLabelValues takes purpose, method, and status_code
+	WithLabelValues(values ...string) prometheus.Observer
+}
+
+// Do an HTTP call.
+// latencyHistogramVec needs values for labels purpose, method, status_code
+func doHTTP(ctx context.Context, purpose, method, url string, latencyHistogramVec ObserverCube, requestData, resultData any) (int, error) {
+	var reqBody io.Reader
+	if requestData != nil {
+		b, err := json.Marshal(requestData)
+		if err != nil {
+			return 0, fmt.Errorf("failed to marshal request body for %s %q (requestData=%#v): %w", method, url, requestData, err)
+		}
+		reqBody = bytes.NewReader(b)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
 	if err != nil {
-		return nil, fmt.Errorf("http get %q: %w", url, err)
+		return 0, fmt.Errorf("failed to construct HTTP request to %s %q: %w", method, url, err)
 	}
-	resp, err := client.Do(req)
+	if requestData != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if resultData != nil {
+		req.Header.Set("Accept", "application/json")
+	}
+	httpCallStartTime := time.Now()
+	resp, err := myHTTPClient.Do(req)
+	latencySecs := time.Since(httpCallStartTime).Seconds()
+	var statusCode int
+	if resp != nil {
+		statusCode = resp.StatusCode
+	}
 	if err != nil {
-		return nil, fmt.Errorf("http get %q: %w", url, err)
+		err = fmt.Errorf("failed to do HTTP %s %q: %w", method, url, err)
+	} else {
+		defer resp.Body.Close() //nolint:errcheck
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			body, bodyReadErr := io.ReadAll(resp.Body)
+			err = fmt.Errorf("HTTP %s %q returned unexpected status %d; bodyReadErr=%v; responseBody=%s", method, url, resp.StatusCode, bodyReadErr, string(body))
+		} else if resultData != nil {
+			decoder := json.NewDecoder(resp.Body)
+			bodyErr := decoder.Decode(resultData)
+			if bodyErr != nil {
+				err = fmt.Errorf("failed to decode response to %s %q: %w", method, url, bodyErr)
+			}
+		}
 	}
-	defer resp.Body.Close() //nolint:errcheck
-
-	body, bodyReadErr := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("http GET %q returned unexpected status %d; bodyReadErr=%v; responseBody=%s", url, resp.StatusCode, bodyReadErr, string(body))
-	}
-
-	if bodyReadErr != nil {
-		return nil, fmt.Errorf("failed to read body: %w", bodyReadErr)
-	}
-	return body, nil
+	logger := klog.FromContext(ctx)
+	logger.V(3).Info("HTTP call done", "purpose", purpose, "method", method, "url", url, "httpCallStartTime", httpCallStartTime.Format(time.RFC3339Nano), "latencySecs", latencySecs, "statusCode", statusCode, "err", err)
+	latencyHistogramVec.WithLabelValues(purpose, method, strconv.FormatInt(int64(statusCode), 10)).Observe(latencySecs)
+	return statusCode, err
 }
 
 // getGPUUUIDs does the HTTP GET on the given URL to fetch the assigned GPU UUIDs.
-func getGPUUUIDs(ctx context.Context, url string) ([]string, error) {
-	logger := klog.FromContext(ctx)
-	getStart := time.Now()
-	body, err := doGet(ctx, url)
-	getStartStr := getStart.Format(time.RFC3339Nano)
-	if err != nil {
-		return nil, fmt.Errorf("GPU UUIDs query to %s failed (started %s): %w", url, getStartStr, err)
-	}
+func getGPUUUIDs(ctx context.Context, httpLatencySecsHistograms ObserverCube, url string) ([]string, error) {
 	var uuids []string
-	if err := json.Unmarshal(body, &uuids); err != nil {
-		return nil, fmt.Errorf("unmarshal uuids (HTTP call started %s): %w", getStartStr, err)
-	}
-	logger.V(4).Info("Got GPU UUIDs", "url", url, "httpCallStartTime", getStartStr)
-	return uuids, nil
+	_, err := doHTTP(ctx, "get_gpu_uuids", "GET", url, httpLatencySecsHistograms, nil, &uuids)
+	return uuids, err
 }
 
 // findGPUIndices maps GPU UUIDs to GPU indices.
