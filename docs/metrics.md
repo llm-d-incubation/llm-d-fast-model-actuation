@@ -156,6 +156,12 @@ The possible values of the `purpose` label are as follows.
 - `sleep`
 - `wake`
 
+**NOTE**: For every observation entered into this HistogramVec there is an associated log statement. It is at `V(5)`. At the time of this writing it appears in the `doHTTP` function in https://github.com/llm-d-incubation/llm-d-fast-model-actuation/blob/main/pkg/controller/dual-pods/inference-server.go and reads as follows.
+
+```go
+logger.V(5).Info("HTTP call done", "purpose", purpose, "method", method, "url", url, "httpCallStartTime", httpCallStartTime.Format(time.RFC3339Nano), "latencySecs", latencySecs, "statusCode", statusCode, "err", err)
+```
+
 ### fma_launcher_create_seconds
 
 Vector of histograms: Latency of kube API call to create launcher.
