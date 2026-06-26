@@ -115,7 +115,6 @@ spec:
     options: "--model HuggingFaceTB/SmolLM2-360M-Instruct --enable-sleep-mode"
     env_vars:
       VLLM_SERVER_DEV_MODE: "1"
-      VLLM_USE_V1: "1"
       VLLM_LOGGING_LEVEL: "DEBUG"
     labels:
       e2e-test.fma.llm-d.ai/isc-label: test-value
@@ -135,7 +134,6 @@ spec:
     options: "--model Qwen/Qwen2.5-0.5B-Instruct --enable-sleep-mode"
     env_vars:
       VLLM_SERVER_DEV_MODE: "1"
-      VLLM_USE_V1: "1"
       VLLM_LOGGING_LEVEL: "DEBUG"
     labels:
       e2e-test.fma.llm-d.ai/isc-label: test-value
@@ -155,7 +153,6 @@ spec:
     options: "--model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --enable-sleep-mode"
     env_vars:
       VLLM_SERVER_DEV_MODE: "1"
-      VLLM_USE_V1: "1"
       VLLM_LOGGING_LEVEL: "DEBUG"
     labels:
       e2e-test.fma.llm-d.ai/isc-label: test-value

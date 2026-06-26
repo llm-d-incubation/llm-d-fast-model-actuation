@@ -529,7 +529,6 @@ spec:
     options: "--model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --enable-sleep-mode"
     env_vars:
       VLLM_SERVER_DEV_MODE: "1"
-      VLLM_USE_V1: "1"
       VLLM_LOGGING_LEVEL: "DEBUG"
     labels:
       example.fma.llm-d.ai/isc-label: example-value

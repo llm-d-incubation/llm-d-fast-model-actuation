@@ -726,7 +726,7 @@ Ex:
   "options": "--model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --port 8005",
   "gpu_uuids": ["GPU-33", "GPU-86"],
   "env_vars": {
-    "VLLM_USE_V1": "1",
+    "VLLM_SERVER_DEV_MODE": "1",
     "VLLM_LOGGING_LEVEL": "DEBUG"
   }
 }
