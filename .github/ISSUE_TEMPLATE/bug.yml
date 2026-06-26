@@ -35,12 +35,9 @@ body:
       options:
         - main (please specify commit below)
         - non-main branch (please specify below)
-        - v0.5.1-alpha.6
-        - v0.5.1-alpha.5
-        - v0.5.1-alpha.4
-        - v0.5.1-alpha.3
-        - v0.5.1-alpha.2
-        - v0.5.1-alpha
+        - v0.6.0
+        - v0.6.0-alpha.14
+        - v0.6.0-alpha.13
         - v0.2.5
         - v0.2.0
         - v0.0.1
