@@ -821,16 +821,14 @@ func (ctl *controller) selectOrReclaimLauncherPod(
 				if clientErr != nil {
 					return nil, false, true, fmt.Errorf("failed to create launcher client for deleting instance %q from launcher Pod %q: %w", inst.InstanceID, launcherPod.Name, clientErr)
 				}
-				delStart := time.Now()
 				_, delErr := lClient.DeleteInstance(ctx, inst.InstanceID)
-				delStartStr := delStart.Format(time.RFC3339Nano)
 				if delErr != nil && !IsInstanceNotFoundError(delErr) {
-					return nil, false, true, fmt.Errorf("failed to delete instance %q with no usable inference port from launcher Pod %q (started %s): %w", inst.InstanceID, launcherPod.Name, delStartStr, delErr)
+					return nil, false, true, fmt.Errorf("failed to delete instance %q with no usable inference port from launcher Pod %q: %w", inst.InstanceID, launcherPod.Name, delErr)
 				}
 				instancesDeleted.Insert(inst.InstanceID)
 				delete(launcherDat.Instances, inst.InstanceID)
 				logger.V(2).Info("Ensured vLLM instance absent because it reports no usable port",
-					"launcherPod", launcherPod.Name, "instanceID", inst.InstanceID, "httpCallStartTime", delStartStr)
+					"launcherPod", launcherPod.Name, "instanceID", inst.InstanceID)
 				return nil, false, true, nil
 			}
 			if inst.InstanceID == targetInstanceID {
