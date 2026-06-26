@@ -126,9 +126,9 @@ func GetInferenceServerContainerIndexAndPort(pod *corev1.Pod) (int, int32, error
 // in the given Pod's container list.
 // This function is for both direct (non-launcher-based) and launcher-based server-providing Pods.
 func GetInferenceServerContainerIndex(pod *corev1.Pod) (int, error) {
-	cIdx := slices.IndexFunc(pod.Spec.Containers, func(c corev1.Container) bool {
-		return c.Name == api.InferenceServerContainerName
-	})
+	cIdx := SliceIndexFeature(pod.Spec.Containers,
+		func(ctr corev1.Container) string { return ctr.Name },
+		api.InferenceServerContainerName)
 	if cIdx == -1 {
 		return 0, fmt.Errorf("container %q not found", api.InferenceServerContainerName)
 	}
