@@ -1571,7 +1571,7 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 // (its InferenceServerConfig was updated since the instance was created) and if so,
 // deletes it from the launcher. Returns:
 // `iscName string` if discovered,
-// `success bool` indicating whether the instance was deleted.
+// `deleted bool` indicating whether the instance was deleted (by this method or something else).
 func (ctl *controller) maybeDeleteObsoleteInstance(ctx context.Context, serverDat *serverData, nodeDat *nodeData, providingPod *corev1.Pod) (string, bool) {
 	logger := klog.FromContext(ctx)
 	if serverDat.InstanceID == "" {
@@ -1585,6 +1585,10 @@ func (ctl *controller) maybeDeleteObsoleteInstance(ctx context.Context, serverDa
 	}
 	instState, err := lClient.GetInstanceState(ctx, serverDat.InstanceID)
 	if err != nil {
+		if IsInstanceNotFoundError(err) {
+			logger.V(2).Info("Now vLLM instance does not exist", "instanceID", serverDat.InstanceID)
+			return "", true
+		}
 		logger.V(4).Info("Cannot check instance obsolescence: failed to get instance state", "instanceID", serverDat.InstanceID, "err", err)
 		return "", false
 	}
