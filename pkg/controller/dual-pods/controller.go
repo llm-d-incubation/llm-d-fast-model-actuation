@@ -257,7 +257,7 @@ func (config ControllerConfig) NewController(
 		actuationSecsHistograms = kubemetrics.NewHistogramVec(&kubemetrics.HistogramOpts{
 			Namespace:      "fma",
 			Name:           "actuation_seconds",
-			Help:           "Time from requester CreationTimestamp to completion of readiness relay",
+			Help:           "Time from requester container start to completion of readiness relay",
 			Buckets:        []float64{0, 1, 3, 5, 7.5, 10, 15, 30, 60, 120, 240, 480, 960, 1920},
 			StabilityLevel: kubemetrics.ALPHA,
 		}, []string{"exported_namespace", "path", "instancesDeleted", "isc_name"})

@@ -545,8 +545,8 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				}
 				serverDat.ReadinessRelayed = &ready
 				if ready && !serverDat.FirstReadyRelayed {
-					scheduled := utils.GetPodCondition(requestingPod, corev1.PodScheduled)
-					if scheduled != nil {
+					reqCS := getContainerStatus(requestingPod, api.InferenceServerContainerName)
+					if reqCS != nil && reqCS.State.Running != nil {
 						path := "hot"
 						if serverDat.NeededNewLauncher {
 							path = "cold"
@@ -555,14 +555,14 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 						}
 						serverDat.FirstReadyRelayed = true
 						now := time.Now()
-						actuationSecs := now.Sub(scheduled.LastTransitionTime.Time).Seconds()
+						actuationSecs := now.Sub(reqCS.State.Running.StartedAt.Time).Seconds()
 						actuationSecsHistograms.WithLabelValues(ctl.namespace, path,
 							strconv.FormatInt(int64(len(serverDat.InstancesDeleted)), 10),
 							iscName,
 						).Observe(actuationSecs)
 						logger.V(5).Info("Observed actuation latency", "path", path, "actuationSecs", actuationSecs)
 					} else {
-						logger.V(5).Info("Unable to observe actuation latency due to lack of PodScheduled Condition")
+						logger.V(5).Info("Unable to observe actuation latency due to requester container being either missing or not running")
 					}
 				}
 				logger.V(2).Info("Successfully relayed the readiness", "readiness", readiness, "url", url, "requesterCreateTime", requestingPod.CreationTimestamp.Format(time.RFC3339Nano))
