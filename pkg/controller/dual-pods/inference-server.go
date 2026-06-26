@@ -545,20 +545,25 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				}
 				serverDat.ReadinessRelayed = &ready
 				if ready && !serverDat.FirstReadyRelayed {
-					path := "hot"
-					if serverDat.NeededNewLauncher {
-						path = "cold"
-					} else if serverDat.NeededNewInstance {
-						path = "warm"
+					scheduled := utils.GetPodCondition(requestingPod, corev1.PodScheduled)
+					if scheduled != nil {
+						path := "hot"
+						if serverDat.NeededNewLauncher {
+							path = "cold"
+						} else if serverDat.NeededNewInstance {
+							path = "warm"
+						}
+						serverDat.FirstReadyRelayed = true
+						now := time.Now()
+						actuationSecs := now.Sub(scheduled.LastTransitionTime.Time).Seconds()
+						actuationSecsHistograms.WithLabelValues(ctl.namespace, path,
+							strconv.FormatInt(int64(len(serverDat.InstancesDeleted)), 10),
+							iscName,
+						).Observe(actuationSecs)
+						logger.V(5).Info("Observed actuation latency", "path", path, "actuationSecs", actuationSecs)
+					} else {
+						logger.V(5).Info("Unable to observe actuation latency due to lack of PodScheduled Condition")
 					}
-					serverDat.FirstReadyRelayed = true
-					now := time.Now()
-					actuationSecs := now.Sub(requestingPod.CreationTimestamp.Time).Seconds()
-					actuationSecsHistograms.WithLabelValues(ctl.namespace, path,
-						strconv.FormatInt(int64(len(serverDat.InstancesDeleted)), 10),
-						iscName,
-					).Observe(actuationSecs)
-					logger.V(5).Info("Observed actuation latency", "path", path, "actuationSecs", actuationSecs)
 				}
 				logger.V(2).Info("Successfully relayed the readiness", "readiness", readiness, "url", url, "requesterCreateTime", requestingPod.CreationTimestamp.Format(time.RFC3339Nano))
 			}
