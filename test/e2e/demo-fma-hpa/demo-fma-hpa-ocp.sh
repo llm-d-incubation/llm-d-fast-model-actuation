@@ -303,7 +303,6 @@ spec:
     port: 8000
     options: "--model ${MODEL} --enable-sleep-mode"
     env_vars:
-      VLLM_USE_V1: "1"
       VLLM_SERVER_DEV_MODE: "1"
       VLLM_LOGGING_LEVEL: "DEBUG"
     labels:
