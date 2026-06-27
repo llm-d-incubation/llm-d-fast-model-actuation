@@ -122,6 +122,8 @@ const InstanceLabelName string = "dual-pods.llm-d.ai/instance"
 // maintains on server-providing Pods.
 // This value of this label is "true" or "false",
 // according to what the controller knows.
+// In the case of a launcher: the value is "false" when the controller knows
+// that the launcher has a vLLM instance that is awake, "true" otherwise.
 // This label is purely FYI emitted by the dual-pods controller
 // (it does not rely on this label for anything).
 const SleepingLabelName string = "dual-pods.llm-d.ai/sleeping"

@@ -232,7 +232,7 @@ func BuildNodeIndependentLauncherTemplate(lc *v1alpha1.LauncherConfig) (*corev1.
 	}
 	pod.Labels[common.ComponentLabelKey] = common.LauncherComponentLabelValue
 	pod.Labels[common.LauncherConfigNameLabelKey] = lc.Name
-	pod.Labels[api.SleepingLabelName] = "false"
+	pod.Labels[api.SleepingLabelName] = "true"
 
 	hasher := sha256.New()
 	modifiedJSON, err := json.Marshal(pod)
