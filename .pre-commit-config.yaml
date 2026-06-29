@@ -1,7 +1,7 @@
 repos:
   # Basic file checks
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.6.0
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c  # frozen: v6.0.0
     hooks:
       - id: trailing-whitespace
         exclude: \.lock\.yml$
@@ -17,27 +17,27 @@ repos:
 
   # Python code formatting
   - repo: https://github.com/psf/black
-    rev: 24.4.2
+    rev: 87928e6d6761a4a6d22250e1fee5601b3998086e  # frozen: 26.5.1
     hooks:
       - id: black
         language_version: python3
 
   # Import sorting
   - repo: https://github.com/pycqa/isort
-    rev: 5.13.2
+    rev: a333737ed43df02b18e6c95477ea1b285b3de15a  # frozen: 8.0.1
     hooks:
       - id: isort
         args: ["--profile", "black"]
 
   # Linting
   - repo: https://github.com/pycqa/flake8
-    rev: 7.0.0
+    rev: c48217e1fc006c2dddd14df54e83b67da15de5cd  # frozen: 7.3.0
     hooks:
       - id: flake8
         args: ["--max-line-length=88", "--extend-ignore=E203,W503"]
 
-# Typo checking
+  # Typo checking
   - repo: https://github.com/crate-ci/typos
-    rev: v1.47.2
+    rev: 37bb98842b0d8c4ffebdb75301a13db0267cef89  # frozen: v1.47.2
     hooks:
       - id: typos
