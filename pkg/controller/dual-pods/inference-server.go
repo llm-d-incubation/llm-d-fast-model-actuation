@@ -1736,16 +1736,13 @@ func (serverDat *serverData) getNominalServerProvidingPod(ctx context.Context, r
 		isCtr := &pod.Spec.Containers[cIdx]
 
 		// ensure the value of CUDA_VISIBLE_DEVICES envar for the inference server container
-		eIdx := slices.IndexFunc(isCtr.Env, func(e corev1.EnvVar) bool {
-			return e.Name == "CUDA_VISIBLE_DEVICES"
-		})
-		if eIdx == -1 {
+		if ev := utils.SliceGetByFeature(isCtr.Env, EnvVarName, "CUDA_VISIBLE_DEVICES"); ev == nil {
 			isCtr.Env = append(isCtr.Env, corev1.EnvVar{
 				Name:  "CUDA_VISIBLE_DEVICES",
 				Value: *serverDat.GPUIndicesStr,
 			})
 		} else {
-			isCtr.Env[eIdx].Value = *serverDat.GPUIndicesStr
+			ev.Value = *serverDat.GPUIndicesStr
 		}
 
 		// set the inference server container's gpu limits and requests to zero to bypass the nvidia device plugin
@@ -1792,13 +1789,9 @@ func (rcs *reducedContainerState) set(from corev1.ContainerStatus) *reducedConta
 }
 
 func getContainerStatus(from *corev1.Pod, containerName string) *corev1.ContainerStatus {
-	idx := utils.SliceIndexFeature(from.Status.ContainerStatuses,
-		func(cs corev1.ContainerStatus) string { return cs.Name },
+	return utils.SliceGetByFeature(from.Status.ContainerStatuses,
+		func(cs *corev1.ContainerStatus) string { return cs.Name },
 		containerName)
-	if idx >= 0 {
-		return &from.Status.ContainerStatuses[idx]
-	}
-	return nil
 }
 
 func getReducedInferenceContainerState(from *corev1.Pod) *reducedContainerState {
