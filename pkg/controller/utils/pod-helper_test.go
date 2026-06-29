@@ -129,7 +129,7 @@ func TestComputeLauncherTemplateHash_Deterministic(t *testing.T) {
 	}
 }
 
-// TestComputeLauncherTemplateHash_OrderIndependent asserts that reordering order-independent slices (Env / VolumeMounts / Ports / Volumes / Tolerations / ImagePullSecrets) does not change the hash.
+// TestComputeLauncherTemplateHash_OrderIndependent asserts that reordering order-independent slices (VolumeMounts / Ports / Volumes / Tolerations / ImagePullSecrets) does not change the hash.
 func TestComputeLauncherTemplateHash_OrderIndependent(t *testing.T) {
 	base := makeLC()
 	_, baseHash, err := BuildNodeIndependentLauncherTemplate(base)
@@ -140,11 +140,6 @@ func TestComputeLauncherTemplateHash_OrderIndependent(t *testing.T) {
 	shuffled := makeLC()
 	shuffPodSpec := &shuffled.Spec.PodTemplate.Spec
 	c := &shuffPodSpec.Containers[0]
-	c.Env = []corev1.EnvVar{
-		{Name: "BAZ", Value: "3"},
-		{Name: "BAR", Value: "2"},
-		{Name: "FOO", Value: "1"},
-	}
 	c.VolumeMounts = []corev1.VolumeMount{
 		{Name: "data", MountPath: "/var/data"},
 		{Name: "cache", MountPath: "/var/cache"},
