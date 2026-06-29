@@ -20,6 +20,7 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"k8s.io/klog/v2"
 )
@@ -49,7 +50,7 @@ type KnowsProcessedSync[Item comparable] struct {
 func NewKnowsProcessedSync[Item comparable](
 	controllerName string,
 	numWorkers int,
-	process func(ctx context.Context, item Item) (err error, retry bool),
+	process func(ctx context.Context, item Item) (err error, retry bool, retryAfter time.Duration),
 	makeSentinel func(distinguisher int) Item,
 	isSentinel func(Item) bool,
 	onceProcessedSync func(context.Context),
