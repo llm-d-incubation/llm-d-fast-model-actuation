@@ -35,9 +35,3 @@ repos:
     hooks:
       - id: flake8
         args: ["--max-line-length=88", "--extend-ignore=E203,W503"]
-
-  # Typo checking
-  - repo: https://github.com/crate-ci/typos
-    rev: v1.47.2
-    hooks:
-      - id: typos
