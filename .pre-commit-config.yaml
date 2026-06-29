@@ -24,7 +24,7 @@ repos:
 
   # Import sorting
   - repo: https://github.com/pycqa/isort
-    rev: dac090ce4d9ee313d086e2e89ab1acb8c2664fa1  # frozen: 9.0.0a3
+    rev: a333737ed43df02b18e6c95477ea1b285b3de15a  # frozen: 8.0.1
     hooks:
       - id: isort
         args: ["--profile", "black"]
@@ -36,8 +36,8 @@ repos:
       - id: flake8
         args: ["--max-line-length=88", "--extend-ignore=E203,W503"]
 
-# Typo checking
+  # Typo checking
   - repo: https://github.com/crate-ci/typos
-    rev: d80b8e26878e372a041833cd67163dbdb6a4336e  # frozen: v1
+    rev: 3e8e1dbf18c56a9ed625484ca941497c73e7da2c  # frozen: v1.47.2
     hooks:
       - id: typos
