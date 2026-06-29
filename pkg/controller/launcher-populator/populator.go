@@ -329,10 +329,10 @@ func (ctl *controller) onDigestSyncProcessed(ctx context.Context) {
 // Acquires the policy write lock for the duration of the dispatch so all
 // mutations within one updateDigestForX call appear atomic to keyQueue
 // workers reading via snapshotForKey.
-func (ctl *controller) processDigestItem(ctx context.Context, item queueItem) (error, bool) {
+func (ctl *controller) processDigestItem(ctx context.Context, item queueItem) (error, bool, time.Duration) {
 	f, ok := item.(funcItem)
 	if !ok {
-		return fmt.Errorf("unknown digest queue item type: %T", item), false
+		return fmt.Errorf("unknown digest queue item type: %T", item), false, 0
 	}
 	ctl.policy.mu.Lock()
 	defer ctl.policy.mu.Unlock()
@@ -345,17 +345,18 @@ func (ctl *controller) processDigestItem(ctx context.Context, item queueItem) (e
 	case kindNode:
 		err = ctl.updateDigestForNode(ctx, f.name)
 	default:
-		return fmt.Errorf("unknown funcItem kind: %d", f.kind), false
+		return fmt.Errorf("unknown funcItem kind: %d", f.kind), false, 0
 	}
 	if err != nil {
-		return err, true
+		return err, true, 0
 	}
-	return nil, false
+	return nil, false, 0
 }
 
 // processKeyItem is the work function for the key queue.
-func (ctl *controller) processKeyItem(ctx context.Context, item keyItem) (error, bool) {
-	return ctl.processKey(ctx, item.NodeLauncherKey)
+func (ctl *controller) processKeyItem(ctx context.Context, item keyItem) (error, bool, time.Duration) {
+	err, retry := ctl.processKey(ctx, item.NodeLauncherKey)
+	return err, retry, 0
 }
 
 // processKey reconciles launchers for a single NodeLauncherKey.

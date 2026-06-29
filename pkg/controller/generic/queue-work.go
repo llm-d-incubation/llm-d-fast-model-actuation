@@ -36,18 +36,18 @@ type QueueAndWorkers[Item comparable] struct {
 	ControllerName string
 	Queue          workqueue.TypedRateLimitingInterface[Item]
 	NumWorkers     int
-	Process        func(ctx context.Context, item Item) (err error, retry bool)
+	Process        func(ctx context.Context, item Item) (err error, retry bool, retryAfter time.Duration)
 
 	earlySync func(context.Context, Item) *bool
 }
 
 // NewQueueAndWorkers makes a new QueueAndWorkers.
-// Iff `process` returns `retry==true` then the item will be
-// requeued for retry.
+// Iff `process` returns `retry==true` then the item will be requeued for retry.
+// If retryAfter > 0, the retry uses a fixed delay instead of exponential backoff.
 func NewQueueAndWorkers[Item comparable](
 	controllerName string,
 	numWorkers int,
-	process func(ctx context.Context, item Item) (err error, retry bool),
+	process func(ctx context.Context, item Item) (err error, retry bool, retryAfter time.Duration),
 ) QueueAndWorkers[Item] {
 	return newQueueAndWorkers(controllerName, numWorkers, process, noEarlySync[Item])
 }
@@ -60,7 +60,7 @@ func noEarlySync[Item comparable](context.Context, Item) *bool {
 func newQueueAndWorkers[Item comparable](
 	controllerName string,
 	numWorkers int,
-	process func(ctx context.Context, item Item) (err error, retry bool),
+	process func(ctx context.Context, item Item) (err error, retry bool, retryAfter time.Duration),
 	earlySync func(context.Context, Item) *bool,
 ) QueueAndWorkers[Item] {
 	ans := QueueAndWorkers[Item]{
@@ -116,12 +116,17 @@ func (ctl *QueueAndWorkers[Item]) processNextWorkItem(ctx context.Context) bool 
 	}
 	var err error
 	var retry bool
+	var retryAfter time.Duration
 	defer func() {
 		if err == nil {
 			if retry {
-				// Nothing went wrong but this item needs to be requeued for reprocessing.
-				ctl.Queue.AddRateLimited(objRef)
-				logger.V(4).Info("Processed workqueue item successfully, requeued for follow-up.", "item", objRef)
+				if retryAfter > 0 {
+					ctl.Queue.AddAfter(objRef, retryAfter)
+					logger.V(4).Info("Processed workqueue item successfully, requeued after fixed delay.", "item", objRef, "retryAfter", retryAfter)
+				} else {
+					ctl.Queue.AddRateLimited(objRef)
+					logger.V(4).Info("Processed workqueue item successfully, requeued for follow-up.", "item", objRef)
+				}
 			} else {
 				// If no error occurs we Forget this item so it does not
 				// get queued again until another change happens.
@@ -129,13 +134,18 @@ func (ctl *QueueAndWorkers[Item]) processNextWorkItem(ctx context.Context) bool 
 				logger.V(4).Info("Processed workqueue item successfully.", "item", objRef)
 			}
 		} else if retry {
-			ctl.Queue.AddRateLimited(objRef)
-			logger.V(4).Info("Encountered transient error while processing workqueue item; do not be alarmed, this will be retried later", "item", objRef, "err", err)
+			if retryAfter > 0 {
+				ctl.Queue.AddAfter(objRef, retryAfter)
+				logger.V(4).Info("Encountered transient error, retrying after fixed delay", "item", objRef, "err", err, "retryAfter", retryAfter)
+			} else {
+				ctl.Queue.AddRateLimited(objRef)
+				logger.V(4).Info("Encountered transient error while processing workqueue item; do not be alarmed, this will be retried later", "item", objRef, "err", err)
+			}
 		} else {
 			ctl.Queue.Forget(objRef)
 			logger.Error(err, "Failed to process workqueue item", "item", objRef)
 		}
 	}()
-	err, retry = ctl.Process(ctx, objRef)
+	err, retry, retryAfter = ctl.Process(ctx, objRef)
 	return true
 }

@@ -89,18 +89,19 @@ type vllmInstanceState struct {
 	iscAnnotations map[string]string
 }
 
-func (ni nodeItem) process(ctx context.Context, ctl *controller) (error, bool) {
+func (ni nodeItem) process(ctx context.Context, ctl *controller) (error, bool, time.Duration) {
 	logger := klog.FromContext(ctx).WithValues("node", ni.NodeName)
 	ctx = klog.NewContext(ctx, logger)
 	nodeDat := ctl.getNodeData(ni.NodeName)
 	items := nodeDat.yankItems()
 	var retries int
+	var maxRetryAfter time.Duration
 	logger.V(4).Info("Processing items for node", "count", len(items))
 	for localItem, addTime := range items {
 		logger.V(4).Info("Processing node-local item", "item", localItem, "enqueuedAt", addTime)
 		processStart := time.Now()
 		queueDurationHists.WithLabelValues(ni.NodeName).Observe(processStart.Sub(addTime).Seconds())
-		err, retry := localItem.process(ctx, ctl, nodeDat)
+		err, retry, retryAfter := localItem.process(ctx, ctl, nodeDat)
 		processFin := time.Now()
 		workDurationHists.WithLabelValues(ni.NodeName).Observe(processFin.Sub(processStart).Seconds())
 		if err != nil {
@@ -116,13 +117,16 @@ func (ni nodeItem) process(ctx context.Context, ctl *controller) (error, bool) {
 			nodeDat.add(localItem)
 			retriesCounters.WithLabelValues(ni.NodeName).Inc()
 			retries++
+			if retryAfter > maxRetryAfter {
+				maxRetryAfter = retryAfter
+			}
 		}
 	}
 	logger.V(4).Info("Done processing items for node", "numToRetry", retries)
-	return nil, retries > 0
+	return nil, retries > 0, maxRetryAfter
 }
 
-func (item unboundLauncherPodItem) process(ctx context.Context, ctl *controller, nodeDat *nodeData) (error, bool) {
+func (item unboundLauncherPodItem) process(ctx context.Context, ctl *controller, nodeDat *nodeData) (error, bool, time.Duration) {
 	logger := klog.FromContext(ctx).WithValues("launcherPod", item.LauncherPodName, "node", item.NodeName)
 	ctx = klog.NewContext(ctx, logger)
 
@@ -132,9 +136,9 @@ func (item unboundLauncherPodItem) process(ctx context.Context, ctl *controller,
 			logger.V(2).Info("Launcher pod deleted, cleaning up launcher data")
 			ctl.clearLauncherData(nodeDat, item.LauncherPodName)
 			ctl.enqueueUnboundInfSvrItemsOnNode(ctx, item.NodeName, fmt.Sprintf("launcher pod %s deleted", item.LauncherPodName))
-			return nil, false
+			return nil, false, 0
 		}
-		return err, true
+		return err, true, 0
 	}
 
 	// Sync launcher instances to keep internal state fresh and clean up stopped instances.
@@ -143,12 +147,12 @@ func (item unboundLauncherPodItem) process(ctx context.Context, ctl *controller,
 	ctl.enqueueUnboundInfSvrItemsOnNode(ctx, item.NodeName, fmt.Sprintf("launcher pod %s changed", item.LauncherPodName))
 
 	if syncErr != nil {
-		return fmt.Errorf("failed to sync launcher instances: %w", syncErr), syncRetry
+		return fmt.Errorf("failed to sync launcher instances: %w", syncErr), syncRetry, 0
 	}
-	return nil, syncRetry
+	return nil, syncRetry, 0
 }
 
-func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *nodeData) (error, bool) {
+func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *nodeData) (error, bool, time.Duration) {
 	// The `requesterName` value is relied upon by the log parser in benchmarking
 	logger := klog.FromContext(urCtx).WithValues("serverUID", item.UID, "requesterName", item.RequesterName)
 	serverDat := ctl.getServerData(nodeDat, item.RequesterName, item.UID)
@@ -168,7 +172,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 			requestingPod = nil
 		} else { // BTW, impossible
 			logger.Error(err, "Failed to get Pod")
-			return err, true
+			return err, true, 0
 		}
 	} else {
 		requesterRV = requestingPod.ResourceVersion
@@ -180,7 +184,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	var providingPod *corev1.Pod
 	providingPodAnys, err := ctl.podInformer.GetIndexer().ByIndex(requesterIndexName, string(item.UID))
 	if err != nil { //impossible
-		return err, false
+		return err, false, 0
 	}
 	switch len(providingPodAnys) {
 	case 0:
@@ -197,7 +201,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 			pod := podAny.(*corev1.Pod)
 			return pod.Name, nil
 		})
-		return fmt.Errorf("found multiple bound server-running Pods: %v", providerNames), false
+		return fmt.Errorf("found multiple bound server-running Pods: %v", providerNames), false, 0
 	}
 
 	logger.V(5).Info("Processing inference server",
@@ -219,7 +223,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		} else {
 			logger.V(2).Info("Not setting duality=0, because InstanceID is unknown")
 		}
-		return nil, false
+		return nil, false, 0
 	}
 
 	// Decide what to do about the finalizer on the server-requesting Pod,
@@ -228,7 +232,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	if requestingPod != nil {
 		removed, shouldAdd, err, retry := ctl.maybeRemoveRequesterFinalizer(ctx, requestingPod, providingPod)
 		if removed || err != nil {
-			return err, retry
+			return err, retry, 0
 		}
 		shouldAddRequesterFinalizer = shouldAdd
 	}
@@ -241,7 +245,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 			if shouldAddRequesterFinalizer { // don't let delete complete too quickly
 				gonerRV, err = ctl.addRequesterFinalizer(ctx, requestingPod, providingPod.Name, serverDat.InstanceID)
 				if err != nil {
-					return err, true
+					return err, true, 0
 				}
 			}
 			delStart := time.Now()
@@ -254,19 +258,19 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 			} else if apierrors.IsGone(err) || apierrors.IsNotFound(err) {
 				logger.V(2).Info("The server-requesting Pod is already gone", "k8sCallStartTime", delStartStr)
 			} else {
-				return fmt.Errorf("failed to delete server-requesting Pod (started %s): %w", delStartStr, err), true
+				return fmt.Errorf("failed to delete server-requesting Pod (started %s): %w", delStartStr, err), true, 0
 			}
 			serverDat.RequesterDeleteRequested = true
 		}
 		// Ensure finalizer is absent from server-providing Pod so that its deletion can complete
 		changed, err := ctl.removeProviderFinalizer(ctx, providingPod)
 		if err != nil {
-			return err, true
+			return err, true, 0
 		}
 		if !changed {
 			logger.V(5).Info("Finalizer is absent from server-providing Pod, waiting for deletions to finish")
 		}
-		return nil, false
+		return nil, false, 0
 	}
 	// Assert: providingPod == nil || providingPod.DeletionTimestamp == nil
 
@@ -285,7 +289,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 			if err == nil {
 				stJSON, marshalErr := json.Marshal(providingPod.Status)
 				logger.V(2).Info("Deleted server-providing Pod because it is in trouble", "providerName", providingPod.Name, "status", string(stJSON), "marshalErr", marshalErr, "k8sCallStartTime", delStartStr)
-				return nil, false
+				return nil, false, 0
 			} else if apierrors.IsNotFound(err) || apierrors.IsGone(err) {
 				logger.V(2).Info("Troubled server-providing Pod was concurrently deleted", "providerName", providingPod.Name, "k8sCallStartTime", delStartStr)
 			} else {
@@ -300,22 +304,24 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		}
 		err := ctl.ensureUnbound(ctx, serverDat, iscName, nodeDat, providingPod, providingPodLauncherBased)
 		if err != nil {
-			return err, true
+			return err, true, 0
 		}
 		if requestingPod != nil {
-			return ctl.ensureReqState(ctx, requestingPod, serverDat, false, true)
+			err, retry := ctl.ensureReqState(ctx, requestingPod, serverDat, false, true)
+			return err, retry, 0
 		}
-		return nil, false
+		return nil, false, 0
 	}
 	// Assert: requestingPod != nil
 
 	if requestingPod.Spec.NodeName == "" { // impossible now
-		return ctl.ensureReqStatus(ctx, requestingPod, serverDat, "not scheduled yet")
+		err, retry := ctl.ensureReqStatus(ctx, requestingPod, serverDat, "not scheduled yet")
+		return err, retry, 0
 	}
 
 	if requestingPod.DeletionTimestamp != nil || serverDat.RequesterDeleteRequested {
 		logger.V(5).Info("Waiting for deletion of server-requesting Pod to finish")
-		return nil, false
+		return nil, false, 0
 	}
 
 	node, err := ctl.nodeLister.Get(requestingPod.Spec.NodeName)
@@ -323,19 +329,20 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		if apierrors.IsNotFound(err) {
 			node = nil
 		} else { // BTW, impossible
-			return err, true
+			return err, true, 0
 		}
 	}
 
 	if node == nil || node.DeletionTimestamp != nil {
 		// Node is gone or going away, do nothing to maintain server-providing Pod.
 		logger.V(3).Info("Ignoring inference server on absent or departing Node")
-		return nil, false
+		return nil, false, 0
 	}
 
 	requesterIP := requestingPod.Status.PodIP
 	if requesterIP == "" {
-		return ctl.ensureReqState(ctx, requestingPod, serverDat, shouldAddRequesterFinalizer, false, "no IP assigned yet")
+		err, retry := ctl.ensureReqState(ctx, requestingPod, serverDat, shouldAddRequesterFinalizer, false, "no IP assigned yet")
+		return err, retry, 0
 	}
 
 	adminPort := requestingPod.Annotations[api.AdminPortAnnotationName]
@@ -358,12 +365,13 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 			queryErr := fmt.Errorf("GET %q fails: %s", url, err.Error())
 			updateErr, _ := ctl.ensureReqStatus(ctx, requestingPod, serverDat, queryErr.Error())
 			if updateErr == nil {
-				return queryErr, true
+				return queryErr, true, 0
 			}
-			return errors.Join(queryErr, updateErr), true
+			return errors.Join(queryErr, updateErr), true, 0
 		}
 		if len(gpuUUIDs) == 0 {
-			return ctl.ensureReqStatus(ctx, requestingPod, serverDat, "the assigned set of GPUs is empty")
+			err, retry := ctl.ensureReqStatus(ctx, requestingPod, serverDat, "the assigned set of GPUs is empty")
+			return err, retry, 0
 		}
 		logger.V(5).Info("Found GPUs", "gpuUUIDs", gpuUUIDs)
 
@@ -375,7 +383,8 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	if !launcherBased && serverDat.GPUIndicesStr == nil {
 		gpuIndices, err := ctl.mapToGPUIndices(requestingPod.Spec.NodeName, serverDat.GPUIDs)
 		if err != nil {
-			return ctl.ensureReqStatus(ctx, requestingPod, serverDat, err.Error())
+			err, retry := ctl.ensureReqStatus(ctx, requestingPod, serverDat, err.Error())
+			return err, retry, 0
 		}
 		gpuIndicesStr := strings.Join(gpuIndices, ",")
 		serverDat.GPUIndices = gpuIndices
@@ -386,20 +395,23 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	if launcherBased && providingPod == nil {
 		// from the requestingPod's annotations, get the InferenceServerConfig object
 		if iscName == "" {
-			return ctl.ensureReqStatus(ctx, requestingPod, serverDat,
+			err, retry := ctl.ensureReqStatus(ctx, requestingPod, serverDat,
 				fmt.Sprintf("empty value for annotation %q", api.InferenceServerConfigAnnotationName),
 			)
+			return err, retry, 0
 		}
 		isc, err = ctl.iscLister.InferenceServerConfigs(ctl.namespace).Get(iscName)
 		if err != nil {
-			return ctl.ensureReqStatus(ctx, requestingPod, serverDat,
+			err, retry := ctl.ensureReqStatus(ctx, requestingPod, serverDat,
 				fmt.Sprintf("failed to get InferenceServerConfig %q: %v", iscName, err),
 			)
+			return err, retry, 0
 		}
 		desiredInstanceState, err = ctl.computeDesiredInstanceState(isc, serverDat.GPUIDs)
 		if err != nil {
-			return ctl.ensureReqStatus(ctx, requestingPod, serverDat,
+			err, retry := ctl.ensureReqStatus(ctx, requestingPod, serverDat,
 				fmt.Sprintf("failed to configure inference server: %v", err))
+			return err, retry, 0
 		}
 	}
 
@@ -409,29 +421,30 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		var serverPort int32
 		if launcherBased {
 			if err := recoverInstanceStateFromLauncherPod(serverDat, providingPod); err != nil {
-				return ctl.ensureReqStatus(ctx, requestingPod, serverDat, err.Error())
+				err, retry := ctl.ensureReqStatus(ctx, requestingPod, serverDat, err.Error())
+				return err, retry, 0
 			}
 			serverPort = serverDat.ServerPort
 			ctl.ensureDualityMetric(ctx, serverDat, nodeDat.NodeName, true)
 		} else {
 			_, serverPort, err = utils.GetInferenceServerContainerIndexAndPort(providingPod)
 			if err != nil { // Impossible, because such a providingPod would never be created by this controller
-				return fmt.Errorf("unable to wake up server because port not known: %w", err), true
+				return fmt.Errorf("unable to wake up server because port not known: %w", err), true, 0
 			}
 		}
 		if launcherBased {
 			if providingPod.Status.PodIP == "" || !utils.IsPodReady(providingPod) {
 				logger.V(5).Info("Bound launcher pod not yet reachable, waiting", "podIP", providingPod.Status.PodIP, "ready", utils.IsPodReady(providingPod))
-				return nil, false
+				return nil, false, 0
 			}
 
 			syncResult, err, retry := ctl.syncLauncherInstances(ctx, nodeDat, serverDat.InstancesDeleted, providingPod)
 			if err != nil || retry {
 				if err != nil {
-					return fmt.Errorf("failed to sync launcher instances for bound launcher Pod: %w", err), retry
+					return fmt.Errorf("failed to sync launcher instances for bound launcher Pod: %w", err), retry, 0
 				}
 				logger.V(5).Info("Launcher instance sync requested retry")
-				return nil, true
+				return nil, true, 0
 			}
 
 			_, instancePresent := findInstanceState(syncResult.instances.Instances, serverDat.InstanceID)
@@ -464,10 +477,10 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 					} else if apierrors.IsGone(err) || apierrors.IsNotFound(err) {
 						logger.V(2).Info("The server-requesting Pod is already gone", "k8sCallStartTime", delStartStr)
 					} else {
-						return fmt.Errorf("failed to delete server-requesting Pod for stopped instance (started %s): %w", delStartStr, err), true
+						return fmt.Errorf("failed to delete server-requesting Pod for stopped instance (started %s): %w", delStartStr, err), true, 0
 					}
 					serverDat.RequesterDeleteRequested = true
-					return nil, false
+					return nil, false, 0
 				}
 				// InstanceKnownToExist is false and instance is absent (not stopped) —
 				// not yet created (bind-first path) or controller restarted and lost tracking.
@@ -476,11 +489,11 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				launcherBaseURL := fmt.Sprintf("http://%s:%d", providingPod.Status.PodIP, ctlrcommon.LauncherServicePort)
 				lClient, err := NewLauncherClient(launcherBaseURL, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": iscName}))
 				if err != nil {
-					return err, true
+					return err, true, 0
 				}
 				result, err := lClient.CreateNamedInstance(ctx, serverDat.InstanceID, *serverDat.InstanceConfig)
 				if err != nil {
-					return fmt.Errorf("failed to create vLLM instance %q: %w", serverDat.InstanceID, err), true
+					return fmt.Errorf("failed to create vLLM instance %q: %w", serverDat.InstanceID, err), true, 0
 				}
 				serverDat.InstanceKnownToExist = true
 				launcherDat := ctl.getLauncherData(nodeDat, providingPod.Name)
@@ -492,7 +505,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		if serverDat.Sleeping == nil {
 			sleeping, err := ctl.querySleeping(ctx, iscName, providingPod, serverPort)
 			if err != nil {
-				return err, true
+				return err, true, 5 * time.Second
 			}
 			logger.V(2).Info("Determined whether provider is sleeping", "isSleeping", sleeping)
 			serverDat.Sleeping = &sleeping
@@ -500,15 +513,15 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		if *(serverDat.Sleeping) {
 			err = ctl.wakeSleeper(ctx, serverDat, requestingPod, providingPod, serverPort, "discovered-bound")
 			if err != nil {
-				return err, true
+				return err, true, 0
 			}
 		}
 		if err := ctl.ensureSleepingLabel(ctx, providingPod, *(serverDat.Sleeping)); err != nil {
-			return err, true
+			return err, true, 0
 		}
 		err, _ = ctl.ensureReqState(ctx, requestingPod, serverDat, shouldAddRequesterFinalizer, false)
 		if err != nil {
-			return err, true
+			return err, true, 0
 		}
 		// Relay readiness if not already done.
 		// For launcher-based providers, readiness follows the bound instance's
@@ -531,7 +544,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 			_, err = doHTTP(ctx, "relay_"+readiness, "POST", url, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": iscName}), nil, nil)
 			if err != nil {
 				logger.Error(err, "Failed to relay the readiness", "name", providingPod.Name, "readiness", readiness, "url", url)
-				return err, true
+				return err, true, 0
 			}
 			serverDat.ReadinessRelayed = &ready
 			if ready && !serverDat.FirstReadyRelayed {
@@ -553,7 +566,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		}
 		// TODO: sync desired and actual providingPod wrt labels (spec is mostly immutable, possible mutations are allowed)
 		logger.V(5).Info("Nothing more to do")
-		return nil, false
+		return nil, false, 0
 	}
 	// Assert: providingPod == nil && !shouldAddRequesterFinalizer
 
@@ -564,29 +577,31 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		err := podOps.Delete(ctx, requestingPod.Name, metav1.DeleteOptions{PropagationPolicy: ptr.To(metav1.DeletePropagationBackground)})
 		delStartStr := delStart.Format(time.RFC3339Nano)
 		if err != nil {
-			return fmt.Errorf("failed to delete server-requesting Pod on unschedulable Node (started %s): %w", delStartStr, err), false
+			return fmt.Errorf("failed to delete server-requesting Pod on unschedulable Node (started %s): %w", delStartStr, err), false, 0
 		}
 		logger.V(2).Info("Deleted server-requesting Pod on unschedulable Node", "k8sCallStartTime", delStartStr)
-		return nil, false
+		return nil, false, 0
 	}
 	// What remains to be done is to wake or create a server-providing Pod
 
 	if !launcherBased {
 		serverPatch := requestingPod.Annotations[api.ServerPatchAnnotationName]
 		if serverPatch == "" { // this is bad, somebody has hacked important data
-			return ctl.ensureReqStatus(ctx, requestingPod, serverDat, "the "+api.ServerPatchAnnotationName+" annotation is missing")
+			err, retry := ctl.ensureReqStatus(ctx, requestingPod, serverDat, "the "+api.ServerPatchAnnotationName+" annotation is missing")
+			return err, retry, 0
 		}
 		// use the server patch to build the server-providing pod, if not already done.
 		desiredProvidingPod, nominalHash, err := serverDat.getNominalServerProvidingPod(ctx, requestingPod, serverPatch, api.ProviderData{
 			NodeName: requestingPod.Spec.NodeName,
 		})
 		if err != nil {
-			return ctl.ensureReqStatus(ctx, requestingPod, serverDat, fmt.Sprintf("failed to construct the nominal server-providing Pod: %s", err.Error()))
+			err, retry := ctl.ensureReqStatus(ctx, requestingPod, serverDat, fmt.Sprintf("failed to construct the nominal server-providing Pod: %s", err.Error()))
+			return err, retry, 0
 		}
 
 		sleepingAnys, err := ctl.podInformer.GetIndexer().ByIndex(nominalHashIndexName, nominalHash)
 		if err != nil { // impossible
-			return err, false
+			return err, false, 0
 		}
 		if len(sleepingAnys) > 0 {
 			// They have to be sleeping, the Kube scheduler and kubelet would not have assigned the same
@@ -595,13 +610,14 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				logger.V(2).Info("Unexpected: multiple sleeping Pods match; using the first", "requesterName", requestingPod.Name)
 			}
 			providingPod = sleepingAnys[0].(*corev1.Pod)
-			return ctl.bind(ctx, serverDat, requestingPod, providingPod, nil, false)
+			err, retry := ctl.bind(ctx, serverDat, requestingPod, providingPod, nil, false)
+			return err, retry, 0
 		}
 		// What remains is to make a new server-providing Pod --- if the sleeper budget allows.
 
 		err, retry := ctl.enforceSleeperBudget(ctx, serverDat, requestingPod, ctl.sleeperLimit)
 		if err != nil || retry {
-			return err, retry
+			return err, retry, 0
 		}
 		// Sleeper budget is met. Make the new Pod.
 
@@ -613,19 +629,21 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 			errMsg := err.Error()
 			if invalidPodRE.MatchString(errMsg) {
 				logger.V(2).Info("Failed to create server-providing Pod", "node", requestingPod.Spec.NodeName, "gpus", serverDat.GPUIndicesStr, "k8sCallStartTime", createStartStr, "err", errMsg)
-				return ctl.ensureReqStatus(ctx, requestingPod, serverDat, "the nominal server-providing "+errMsg)
+				err, retry := ctl.ensureReqStatus(ctx, requestingPod, serverDat, "the nominal server-providing "+errMsg)
+				return err, retry, 0
 			}
 			wrappedErr := fmt.Errorf("failed to create server-providing Pod (started %s): %w", createStartStr, err)
 			innerErr, _ := ctl.ensureReqStatus(ctx, requestingPod, serverDat, fmt.Sprintf("failed to create server-providing Pod: %s", errMsg))
 			if innerErr != nil {
-				return errors.Join(wrappedErr, innerErr), true
+				return errors.Join(wrappedErr, innerErr), true, 0
 			}
-			return wrappedErr, true
+			return wrappedErr, true, 0
 		}
 		serverDat.Sleeping = ptr.To(false)
 		logger.V(2).Info("Created server-providing pod", "name", echo.Name, "gpus", serverDat.GPUIndicesStr, "annotations", echo.Annotations, "labels", echo.Labels, "resourceVersion", echo.ResourceVersion, "k8sCallStartTime", createStartStr)
 
-		return ctl.ensureReqStatus(ctx, requestingPod, serverDat)
+		err, retry = ctl.ensureReqStatus(ctx, requestingPod, serverDat)
+		return err, retry, 0
 	}
 	// What remains to be done is to wake or create a launcher-based server-providing Pod
 
@@ -633,21 +651,23 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	lcName := isc.Spec.LauncherConfigName
 	lc, err := ctl.lcLister.LauncherConfigs(ctl.namespace).Get(lcName)
 	if err != nil {
-		return ctl.ensureReqStatus(ctx, requestingPod, serverDat,
+
+		err, retry := ctl.ensureReqStatus(ctx, requestingPod, serverDat,
 			fmt.Sprintf("failed to get LauncherConfig %q: %v", lcName, err),
 		)
+		return err, retry, 0
 	}
 
 	nodeIndependentLauncherTemplate, _, err := utils.BuildNodeIndependentLauncherTemplate(lc)
 	if err != nil {
-		return fmt.Errorf("failed to build launcher Pod from LauncherConfig %q: %w", lcName, err), true
+		return fmt.Errorf("failed to build launcher Pod from LauncherConfig %q: %w", lcName, err), true, 0
 	}
 	desiredLauncherPod := utils.SpecializeLauncherTemplateToNode(nodeIndependentLauncherTemplate, requestingPod.Spec.NodeName)
 	lcHash := desiredLauncherPod.Annotations[ctlrcommon.LauncherConfigHashAnnotationKey]
 	logger.V(5).Info("LauncherConfig's hash", "hash", lcHash)
 	launcherPodAnys, err := ctl.podInformer.GetIndexer().ByIndex(launcherConfigHashIndexName, lcHash)
 	if err != nil {
-		return err, false
+		return err, false, 0
 	}
 
 	desiredPort := desiredInstanceState.serverPort
@@ -661,18 +681,19 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 
 		launcherPod, hasSleepingInstance, retry, err := ctl.selectOrReclaimLauncherPod(ctx, launcherPodAnys, desiredInstanceState.instanceID, desiredPort, int(lc.Spec.MaxInstances)-1, nodeDat, serverDat.InstancesDeleted)
 		if err != nil {
-			return err, true
+			return err, true, 0
 		}
 		if retry {
 			logger.V(4).Info("Launcher Pod selection or reclaim requested retry")
-			return nil, true
+			return nil, true, 0
 		}
 		if launcherPod != nil {
 			// Bind first, then rely on informer notification to trigger re-reconciliation.
 			// The "bound provider" path will handle instance creation/waking.
 			// This ensures the invariant: vllm awake implies provider Pod is bound.
 			logger.V(5).Info("Selected launcher Pod, binding first", "name", launcherPod.Name, "hasSleepingInstance", hasSleepingInstance)
-			return ctl.bind(ctx, serverDat, requestingPod, launcherPod, desiredInstanceState, true)
+			err, retry := ctl.bind(ctx, serverDat, requestingPod, launcherPod, desiredInstanceState, true)
+			return err, retry, 0
 		}
 		// Fall through to create new launcher Pod.
 	}
@@ -686,7 +707,8 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	desiredLauncherPod.Labels = utils.MapSet(desiredLauncherPod.Labels, api.DualLabelName, requestingPod.Name)
 	problems := applyInstanceStateToLauncherPod(desiredLauncherPod, desiredInstanceState)
 	if len(problems) > 0 {
-		return ctl.ensureReqStatus(ctx, requestingPod, serverDat, problems...)
+		err, retry := ctl.ensureReqStatus(ctx, requestingPod, serverDat, problems...)
+		return err, retry, 0
 	}
 	if !slices.Contains(desiredLauncherPod.Finalizers, providerFinalizer) {
 		desiredLauncherPod.Finalizers = append(desiredLauncherPod.Finalizers, providerFinalizer)
@@ -704,22 +726,23 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		errMsg := err.Error()
 		if invalidPodRE.MatchString(errMsg) {
 			logger.V(2).Info("Failed to create launcher-based server-providing Pod", "node", requestingPod.Spec.NodeName, "k8sCallStartTime", createStartStr, "err", errMsg)
-			return ctl.ensureReqStatus(ctx, requestingPod, serverDat, "the desired launcher-based server-providing "+errMsg)
+			err, retry := ctl.ensureReqStatus(ctx, requestingPod, serverDat, "the desired launcher-based server-providing "+errMsg)
+			return err, retry, 0
 		}
 		wrappedErr := fmt.Errorf("failed to create launcher-based server-providing Pod (started %s): %w", createStartStr, err)
 		innerErr, _ := ctl.ensureReqStatus(ctx, requestingPod, serverDat, fmt.Sprintf("failed to create launcher-based server-providing Pod: %s", errMsg))
 		if innerErr != nil {
-			return errors.Join(wrappedErr, innerErr), true
+			return errors.Join(wrappedErr, innerErr), true, 0
 		}
-		return wrappedErr, true
+		return wrappedErr, true, 0
 	}
 	serverDat.Sleeping = nil
 	commitInstanceState(serverDat, desiredInstanceState)
 	serverDat.ProvidingPodName = echo.Name
 	ctl.ensureDualityMetric(ctx, serverDat, nodeDat.NodeName, true)
 	logger.V(2).Info("Created launcher-based server-providing pod", "name", echo.Name, "gpus", serverDat.GPUIDsStr, "annotations", echo.Annotations, "labels", echo.Labels, "resourceVersion", echo.ResourceVersion, "k8sCallStartTime", createStartStr)
-
-	return ctl.ensureReqStatus(ctx, requestingPod, serverDat)
+	err, retry := ctl.ensureReqStatus(ctx, requestingPod, serverDat)
+	return err, retry, 0
 }
 
 func (ctl *controller) ensureDualityMetric(ctx context.Context, serverDat *serverData, nodeName string, on bool) {
@@ -1407,15 +1430,15 @@ func (ctl *controller) removeProviderFinalizer(ctx context.Context, providingPod
 	return false, nil // no change
 }
 
-func (item instanceGCItem) process(ctx context.Context, ctl *controller, nodeDat *nodeData) (error, bool) {
+func (item instanceGCItem) process(ctx context.Context, ctl *controller, nodeDat *nodeData) (error, bool, time.Duration) {
 	logger := klog.FromContext(ctx).WithValues("iscName", item.ISCName)
 
 	isc, err := ctl.iscLister.InferenceServerConfigs(ctl.namespace).Get(item.ISCName)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil, false
+			return nil, false, 0
 		}
-		return err, true
+		return err, true, 0
 	}
 
 	for launcherPodName, launcherDat := range nodeDat.Launchers {
@@ -1483,7 +1506,7 @@ func (item instanceGCItem) process(ctx context.Context, ctl *controller, nodeDat
 			logger.V(2).Info("Deleted obsolete sleeping instance", "launcherPod", launcherPodName, "instanceID", inst.InstanceID, "currentHash", currentHash)
 		}
 	}
-	return nil, false
+	return nil, false, 0
 }
 
 // Unbinds the given server-providing Pod.

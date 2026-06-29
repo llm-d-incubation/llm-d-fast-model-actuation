@@ -411,9 +411,10 @@ type nodeData struct {
 type localQueue map[itemOnNode]time.Time
 
 type itemOnNode interface {
-	// process returns (err error, retry bool).
+	// process returns (err error, retry bool, retryAfter time.Duration).
 	// There will be a retry iff `retry`.
-	process(ctx context.Context, ctl *controller, nodeDat *nodeData) (error, bool)
+	// If retryAfter > 0, the retry uses a fixed delay instead of exponential backoff.
+	process(ctx context.Context, ctl *controller, nodeDat *nodeData) (error, bool, time.Duration)
 }
 
 // Internal state about an inference server
@@ -484,9 +485,10 @@ type launcherData struct {
 	Accurate bool
 }
 type queueItem interface {
-	// process returns (err error, retry bool).
+	// process returns (err error, retry bool, retryAfter time.Duration).
 	// There will be a retry iff `retry`, error logged if `err != nil`.
-	process(ctx context.Context, ctl *controller) (error, bool)
+	// If retryAfter > 0, the retry uses a fixed delay instead of exponential backoff.
+	process(ctx context.Context, ctl *controller) (error, bool, time.Duration)
 }
 
 type cmItem struct {
@@ -837,21 +839,22 @@ func (ctl *controller) Start(ctx context.Context) error {
 	return nil
 }
 
-// process returns (err error, retry bool).
+// process returns (err error, retry bool, retryAfter time.Duration).
 // There will be a retry iff `retry`, error logged if `err != nil`.
-func (ctl *controller) process(ctx context.Context, item queueItem) (error, bool) {
+// If retryAfter > 0, the retry uses a fixed delay instead of exponential backoff.
+func (ctl *controller) process(ctx context.Context, item queueItem) (error, bool, time.Duration) {
 	return item.process(ctx, ctl)
 }
 
-func (item cmItem) process(ctx context.Context, ctl *controller) (error, bool) {
+func (item cmItem) process(ctx context.Context, ctl *controller) (error, bool, time.Duration) {
 	logger := klog.FromContext(ctx)
 	cm, err := ctl.coreclient.ConfigMaps(item.Namespace).Get(ctx, item.Name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			ctl.gpuMap.Store(nil)
-			return err, false
+			return err, false, 0
 		}
-		return err, true
+		return err, true, 0
 	}
 	oldMap := ctl.gpuMap.Load()
 	newMap := map[string]GpuLocation{}
@@ -878,7 +881,7 @@ func (item cmItem) process(ctx context.Context, ctl *controller) (error, bool) {
 	if additions > 0 {
 		ctl.enqueueRequesters(ctx)
 	}
-	return nil, false
+	return nil, false, 0
 }
 
 func (ctl *controller) enqueueInstanceGCItemsForISC(iscName string) {
