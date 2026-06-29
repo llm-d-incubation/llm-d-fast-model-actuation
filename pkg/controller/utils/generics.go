@@ -23,7 +23,12 @@ import "slices"
 // Nothing modifies the given element while `extract` is working on it.
 // Returns -1 if there is no such element.
 func SliceIndexFeature[Elt any, Feature comparable](slice []Elt, extract func(*Elt) Feature, seek Feature) int {
-	return slices.IndexFunc(slice, func(elt Elt) bool { return extract(&elt) == seek })
+	for idx := range slice {
+		if extract(&slice[idx]) == seek {
+			return idx
+		}
+	}
+	return -1
 }
 
 // SliceGetByFeature returns a pointer to the first slice element that has
