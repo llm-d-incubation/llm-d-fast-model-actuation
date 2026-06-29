@@ -173,3 +173,6 @@ Desktop.ini
 /bin/
 /hack/tools/
 /vendor/
+
+# Auto-cloned WVA checkout from test/e2e/demo-fma-wva/* scripts
+.wva-checkout/
