@@ -1,6 +1,6 @@
 module github.com/llm-d-incubation/llm-d-fast-model-actuation
 
-go 1.24.2
+go 1.25
 
 require (
 	github.com/prometheus/client_golang v1.23.2

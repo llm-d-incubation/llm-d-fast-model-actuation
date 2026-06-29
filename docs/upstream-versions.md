@@ -7,7 +7,7 @@
 
 | Dependency | Current Pin | Pin Type | File Location | Upstream Repo |
 |-----------|-------------|----------|---------------|---------------|
-| **Go** | `1.24.2` | version | `go.mod` line 3 | [golang/go](https://github.com/golang/go) |
+| **Go** | `1.25` | version | `go.mod` line 3 | [golang/go](https://github.com/golang/go) |
 | **k8s.io/api** | `v0.34.9` | tag | `go.mod` line 8 | [kubernetes/api](https://github.com/kubernetes/api) |
 | **k8s.io/apimachinery** | `v0.34.9` | tag | `go.mod` line 9 | [kubernetes/apimachinery](https://github.com/kubernetes/apimachinery) |
 | **k8s.io/client-go** | `v0.34.9` | tag | `go.mod` line 10 | [kubernetes/client-go](https://github.com/kubernetes/client-go) |
