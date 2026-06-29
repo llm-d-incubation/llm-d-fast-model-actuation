@@ -517,39 +517,56 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		if launcherBased {
 			ready = !*serverDat.Sleeping
 		}
+		var alreadyReady bool
+		if reqCS := getContainerStatus(requestingPod, api.InferenceServerContainerName); reqCS != nil {
+			alreadyReady = reqCS.Ready
+		}
 		if serverDat.ReadinessRelayed == nil || ready != *serverDat.ReadinessRelayed {
-			url, readiness := fmt.Sprintf("http://%s:%s", requestingPod.Status.PodIP, adminPort), ""
-			if ready {
-				logger.V(5).Info("Server-providing pod is ready", "name", providingPod.Name)
-				url += stubapi.BecomeReadyPath
-				readiness = "ready"
-			} else {
-				logger.V(5).Info("Server-providing pod is not ready", "name", providingPod.Name)
-				url += stubapi.BecomeUnreadyPath
-				readiness = "unready"
-			}
-			_, err = doHTTP(ctx, "relay_"+readiness, "POST", url, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": iscName}), nil, nil)
-			if err != nil {
-				logger.Error(err, "Failed to relay the readiness", "name", providingPod.Name, "readiness", readiness, "url", url)
-				return err, true
-			}
-			serverDat.ReadinessRelayed = &ready
-			if ready && !serverDat.FirstReadyRelayed {
-				path := "hot"
-				if serverDat.NeededNewLauncher {
-					path = "cold"
-				} else if serverDat.NeededNewInstance {
-					path = "warm"
+			if ready == alreadyReady {
+				serverDat.ReadinessRelayed = &ready
+				if ready {
+					serverDat.FirstReadyRelayed = true
 				}
-				serverDat.FirstReadyRelayed = true
-				now := time.Now()
-				actuationSecs := now.Sub(requestingPod.CreationTimestamp.Time).Seconds()
-				actuationSecsHistograms.WithLabelValues(ctl.namespace, path,
-					strconv.FormatInt(int64(len(serverDat.InstancesDeleted)), 10),
-					iscName,
-				).Observe(actuationSecs)
+			} else {
+				url, readiness := fmt.Sprintf("http://%s:%s", requestingPod.Status.PodIP, adminPort), ""
+				if ready {
+					logger.V(5).Info("Server-providing pod is ready", "name", providingPod.Name)
+					url += stubapi.BecomeReadyPath
+					readiness = "ready"
+				} else {
+					logger.V(5).Info("Server-providing pod is not ready", "name", providingPod.Name)
+					url += stubapi.BecomeUnreadyPath
+					readiness = "unready"
+				}
+				_, err = doHTTP(ctx, "relay_"+readiness, "POST", url, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": iscName}), nil, nil)
+				if err != nil {
+					logger.Error(err, "Failed to relay the readiness", "name", providingPod.Name, "readiness", readiness, "url", url)
+					return err, true
+				}
+				serverDat.ReadinessRelayed = &ready
+				if ready && !serverDat.FirstReadyRelayed {
+					reqCS := getContainerStatus(requestingPod, api.InferenceServerContainerName)
+					if reqCS != nil && reqCS.State.Running != nil {
+						path := "hot"
+						if serverDat.NeededNewLauncher {
+							path = "cold"
+						} else if serverDat.NeededNewInstance {
+							path = "warm"
+						}
+						serverDat.FirstReadyRelayed = true
+						now := time.Now()
+						actuationSecs := now.Sub(reqCS.State.Running.StartedAt.Time).Seconds()
+						actuationSecsHistograms.WithLabelValues(ctl.namespace, path,
+							strconv.FormatInt(int64(len(serverDat.InstancesDeleted)), 10),
+							iscName,
+						).Observe(actuationSecs)
+						logger.V(5).Info("Observed actuation latency", "path", path, "actuationSecs", actuationSecs)
+					} else {
+						logger.V(5).Info("Unable to observe actuation latency due to requester container being either missing or not running")
+					}
+				}
+				logger.V(2).Info("Successfully relayed the readiness", "readiness", readiness, "url", url, "requesterCreateTime", requestingPod.CreationTimestamp.Format(time.RFC3339Nano))
 			}
-			logger.V(2).Info("Successfully relayed the readiness", "name", providingPod.Name, "readiness", readiness, "url", url)
 		}
 		// TODO: sync desired and actual providingPod wrt labels (spec is mostly immutable, possible mutations are allowed)
 		logger.V(5).Info("Nothing more to do")
@@ -1326,17 +1343,8 @@ func (ctl *controller) maybeRemoveRequesterFinalizer(ctx context.Context, reques
 	// First, determine whether finalizer should be present
 	var wantFinalizer bool
 	if providingPod != nil {
-		isIdx, err := utils.GetInferenceServerContainerIndex(providingPod)
-		if err == nil {
-			isCtr := &providingPod.Spec.Containers[isIdx]
-			statIdx := slices.IndexFunc(providingPod.Status.ContainerStatuses,
-				func(status corev1.ContainerStatus) bool {
-					return status.Name == isCtr.Name
-				})
-			if statIdx >= 0 {
-				isStatus := &providingPod.Status.ContainerStatuses[statIdx]
-				wantFinalizer = isStatus.State.Running != nil
-			}
+		if cs := getContainerStatus(providingPod, api.InferenceServerContainerName); cs != nil {
+			wantFinalizer = cs.State.Running != nil
 		}
 	}
 	// Next, determine whether finalizer is present
@@ -1783,16 +1791,23 @@ func (rcs *reducedContainerState) set(from corev1.ContainerStatus) *reducedConta
 	return rcs
 }
 
-func getReducedInferenceContainerState(from *corev1.Pod) *reducedContainerState {
-	idx := slices.IndexFunc(from.Status.ContainerStatuses, func(elt corev1.ContainerStatus) bool {
-		return elt.Name == api.InferenceServerContainerName
-	})
-	if idx < 0 {
-		return nil
+func getContainerStatus(from *corev1.Pod, containerName string) *corev1.ContainerStatus {
+	idx := utils.SliceIndexFeature(from.Status.ContainerStatuses,
+		func(cs corev1.ContainerStatus) string { return cs.Name },
+		containerName)
+	if idx >= 0 {
+		return &from.Status.ContainerStatuses[idx]
 	}
-	var ans reducedContainerState
-	ans.set(from.Status.ContainerStatuses[idx])
-	return &ans
+	return nil
+}
+
+func getReducedInferenceContainerState(from *corev1.Pod) *reducedContainerState {
+	if cs := getContainerStatus(from, api.InferenceServerContainerName); cs != nil {
+		var ans reducedContainerState
+		ans.set(*cs)
+		return &ans
+	}
+	return nil
 }
 
 func (ctl *controller) querySleeping(ctx context.Context, iscName string, providingPod *corev1.Pod, serverPort int32) (bool, error) {

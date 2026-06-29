@@ -111,7 +111,7 @@ The `group_left` gets more labels into the result.
 
 ### fma_actuation_seconds
 
-Vector of histograms: Time from requester CreationTimestamp to
+Vector of histograms: Time from start of the requester container to
 completion of readiness relay. Here "completion" means the dual-pods
 controller received the reply to its request to the requester to
 become ready. Counted when the controller receives that reply.

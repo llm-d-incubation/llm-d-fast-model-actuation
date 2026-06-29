@@ -18,6 +18,13 @@ package utils
 
 import "slices"
 
+// SliceIndexFeature returns the index of the first slice element for which
+// the feature extracted by `extract` equals `seek`.
+// Returns -1 if there is no such element.
+func SliceIndexFeature[Elt any, Feature comparable](slice []Elt, extract func(Elt) Feature, seek Feature) int {
+	return slices.IndexFunc(slice, func(elt Elt) bool { return extract(elt) == seek })
+}
+
 // SliceMap applies a given function (that can return an error) to a slice,
 // returning two slices: the successful results and the errors.
 func SliceMap[Domain, Range any](slice []Domain, mapFn func(Domain) (Range, error)) ([]Range, []error) {

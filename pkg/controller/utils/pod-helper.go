@@ -49,15 +49,7 @@ func PodIsInTrouble(pod *corev1.Pod) bool {
 	if sumRestarts == 0 {
 		return false
 	}
-	condIdx := slices.IndexFunc(pod.Status.Conditions, func(cond corev1.PodCondition) bool {
-		return cond.Type == "Ready"
-	})
-	if condIdx >= 0 {
-		if pod.Status.Conditions[condIdx].Status == corev1.ConditionTrue {
-			return false
-		}
-	}
-	return true
+	return !IsPodReady(pod)
 }
 
 // DeIndividualize removes the parts of a PodSpec that are specific to an individual.
@@ -126,20 +118,28 @@ func GetInferenceServerContainerIndexAndPort(pod *corev1.Pod) (int, int32, error
 // in the given Pod's container list.
 // This function is for both direct (non-launcher-based) and launcher-based server-providing Pods.
 func GetInferenceServerContainerIndex(pod *corev1.Pod) (int, error) {
-	cIdx := slices.IndexFunc(pod.Spec.Containers, func(c corev1.Container) bool {
-		return c.Name == api.InferenceServerContainerName
-	})
+	cIdx := SliceIndexFeature(pod.Spec.Containers,
+		func(ctr corev1.Container) string { return ctr.Name },
+		api.InferenceServerContainerName)
 	if cIdx == -1 {
 		return 0, fmt.Errorf("container %q not found", api.InferenceServerContainerName)
 	}
 	return cIdx, nil
 }
 
+func GetPodCondition(pod *corev1.Pod, condType corev1.PodConditionType) *corev1.PodCondition {
+	idx := SliceIndexFeature(pod.Status.Conditions,
+		func(pc corev1.PodCondition) corev1.PodConditionType { return pc.Type },
+		condType)
+	if idx >= 0 {
+		return &pod.Status.Conditions[idx]
+	}
+	return nil
+}
+
 func IsPodReady(pod *corev1.Pod) bool {
-	for _, cond := range pod.Status.Conditions {
-		if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
-			return true
-		}
+	if cond := GetPodCondition(pod, corev1.PodReady); cond != nil {
+		return cond.Status == corev1.ConditionTrue
 	}
 	return false
 }
