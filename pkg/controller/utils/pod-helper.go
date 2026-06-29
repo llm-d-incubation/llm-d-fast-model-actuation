@@ -73,11 +73,10 @@ func DeIndividualize(podSpec *corev1.PodSpec) *corev1.PodSpec {
 	return podSpec
 }
 
+func VolumeMountName(vmnt *corev1.VolumeMount) string { return vmnt.Name }
+
 func removeVolumeMount(ctr *corev1.Container, volumeName string) {
-	mntIdx := slices.IndexFunc(ctr.VolumeMounts, func(mnt corev1.VolumeMount) bool {
-		return mnt.Name == volumeName
-	})
-	if mntIdx >= 0 {
+	if mntIdx := SliceIndexFeature(ctr.VolumeMounts, VolumeMountName, volumeName); mntIdx >= 0 {
 		ctr.VolumeMounts = slices.Delete(ctr.VolumeMounts, mntIdx, mntIdx+1)
 	}
 }
@@ -119,7 +118,7 @@ func GetInferenceServerContainerIndexAndPort(pod *corev1.Pod) (int, int32, error
 // This function is for both direct (non-launcher-based) and launcher-based server-providing Pods.
 func GetInferenceServerContainerIndex(pod *corev1.Pod) (int, error) {
 	cIdx := SliceIndexFeature(pod.Spec.Containers,
-		func(ctr corev1.Container) string { return ctr.Name },
+		func(ctr *corev1.Container) string { return ctr.Name },
 		api.InferenceServerContainerName)
 	if cIdx == -1 {
 		return 0, fmt.Errorf("container %q not found", api.InferenceServerContainerName)
@@ -128,13 +127,9 @@ func GetInferenceServerContainerIndex(pod *corev1.Pod) (int, error) {
 }
 
 func GetPodCondition(pod *corev1.Pod, condType corev1.PodConditionType) *corev1.PodCondition {
-	idx := SliceIndexFeature(pod.Status.Conditions,
-		func(pc corev1.PodCondition) corev1.PodConditionType { return pc.Type },
+	return SliceGetByFeature(pod.Status.Conditions,
+		func(pc *corev1.PodCondition) corev1.PodConditionType { return pc.Type },
 		condType)
-	if idx >= 0 {
-		return &pod.Status.Conditions[idx]
-	}
-	return nil
 }
 
 func IsPodReady(pod *corev1.Pod) bool {
@@ -367,11 +362,11 @@ func removeGPUResourceLimits(container *corev1.Container) {
 	}
 }
 
+func ContainerName(ctr *corev1.Container) string { return ctr.Name }
+
 func addLauncherNotifierSidecar(pod *corev1.Pod, launcherImage string, pullPolicy corev1.PullPolicy) {
 	const sidecarName = "state-change-reflector"
-	idx := slices.IndexFunc(pod.Spec.Containers, func(c corev1.Container) bool {
-		return c.Name == sidecarName
-	})
+	ctrP := SliceGetByFeature(pod.Spec.Containers, ContainerName, sidecarName)
 
 	notifier := corev1.Container{
 		Name:            sidecarName,
@@ -408,8 +403,8 @@ func addLauncherNotifierSidecar(pod *corev1.Pod, launcherImage string, pullPolic
 		},
 	}
 
-	if idx >= 0 {
-		pod.Spec.Containers[idx] = notifier
+	if ctrP != nil {
+		*ctrP = notifier
 		return
 	}
 	pod.Spec.Containers = append(pod.Spec.Containers, notifier)

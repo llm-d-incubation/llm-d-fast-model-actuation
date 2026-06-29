@@ -24,7 +24,6 @@ import (
 	"maps"
 	"math"
 	"reflect"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -127,18 +126,18 @@ func GPUIndexFunc(obj any) ([]string, error) {
 		return []string{}, nil
 	}
 	isCtr := &pod.Spec.Containers[isIdx]
-	eIdx := slices.IndexFunc(isCtr.Env, func(e corev1.EnvVar) bool {
-		return e.Name == "CUDA_VISIBLE_DEVICES"
-	})
-	if eIdx < 0 || len(isCtr.Env[eIdx].Value) == 0 {
+	ev := utils.SliceGetByFeature(isCtr.Env, EnvVarName, "CUDA_VISIBLE_DEVICES")
+	if ev == nil || len(ev.Value) == 0 {
 		return []string{}, nil
 	}
-	visibleParts := strings.Split(isCtr.Env[eIdx].Value, ",")
+	visibleParts := strings.Split(ev.Value, ",")
 	keys, _ := utils.SliceMap(visibleParts, func(gpu string) (string, error) {
 		return pod.Spec.NodeName + " " + strings.Trim(gpu, " "), nil
 	})
 	return keys, nil
 }
+
+func EnvVarName(ev *corev1.EnvVar) string { return ev.Name }
 
 const nominalHashIndexName = "nominal"
 

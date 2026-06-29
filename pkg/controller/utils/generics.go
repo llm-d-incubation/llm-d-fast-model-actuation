@@ -20,9 +20,20 @@ import "slices"
 
 // SliceIndexFeature returns the index of the first slice element for which
 // the feature extracted by `extract` equals `seek`.
+// Nothing modifies the given element while `extract` is working on it.
 // Returns -1 if there is no such element.
-func SliceIndexFeature[Elt any, Feature comparable](slice []Elt, extract func(Elt) Feature, seek Feature) int {
-	return slices.IndexFunc(slice, func(elt Elt) bool { return extract(elt) == seek })
+func SliceIndexFeature[Elt any, Feature comparable](slice []Elt, extract func(*Elt) Feature, seek Feature) int {
+	return slices.IndexFunc(slice, func(elt Elt) bool { return extract(&elt) == seek })
+}
+
+// SliceGetByFeature returns a pointer to the first slice element that has
+// the given feature, `nil` if no element has that feature.
+// Nothing modifies the given element while `extract` is working on it.
+func SliceGetByFeature[Elt any, Feature comparable](slice []Elt, extract func(*Elt) Feature, seek Feature) *Elt {
+	if idx := SliceIndexFeature(slice, extract, seek); idx >= 0 {
+		return &slice[idx]
+	}
+	return nil
 }
 
 // SliceMap applies a given function (that can return an error) to a slice,
