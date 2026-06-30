@@ -112,7 +112,10 @@ metadata:
 spec:
   modelServerConfig:
     port: 8005
-    options: "--model HuggingFaceTB/SmolLM2-360M-Instruct --enable-sleep-mode"
+    options: >-
+      --model HuggingFaceTB/SmolLM2-360M-Instruct
+      --enable-sleep-mode
+      --gpu-memory-utilization 0.85
     env_vars:
       VLLM_SERVER_DEV_MODE: "1"
       VLLM_LOGGING_LEVEL: "DEBUG"
@@ -131,7 +134,10 @@ metadata:
 spec:
   modelServerConfig:
     port: 8006
-    options: "--model Qwen/Qwen2.5-0.5B-Instruct --enable-sleep-mode"
+    options: >-
+      --model Qwen/Qwen2.5-0.5B-Instruct
+      --enable-sleep-mode
+      --gpu-memory-utilization 0.85
     env_vars:
       VLLM_SERVER_DEV_MODE: "1"
       VLLM_LOGGING_LEVEL: "DEBUG"
@@ -150,7 +156,10 @@ metadata:
 spec:
   modelServerConfig:
     port: 8007
-    options: "--model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --enable-sleep-mode"
+    options: >-
+      --model TinyLlama/TinyLlama-1.1B-Chat-v1.0
+      --enable-sleep-mode
+      --gpu-memory-utilization 0.85
     env_vars:
       VLLM_SERVER_DEV_MODE: "1"
       VLLM_LOGGING_LEVEL: "DEBUG"
@@ -199,6 +208,9 @@ spec:
             value: "/tmp"
           - name: XDG_CONFIG_HOME
             value: "/tmp"
+          resources:
+            limits:
+              ephemeral-storage: "2Gi"
 ---
 apiVersion: fma.llm-d.ai/v1alpha1
 kind: LauncherPopulationPolicy

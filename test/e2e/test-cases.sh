@@ -158,6 +158,7 @@ spec:
     resources:
       limits:
         nvidia.com/gpu: "2"
+        ephemeral-storage: "4Gi"
   terminationGracePeriodSeconds: 0
 PROBE
 
