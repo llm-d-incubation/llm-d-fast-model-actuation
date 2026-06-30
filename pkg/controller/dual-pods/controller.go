@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"math"
 	"reflect"
 	"strconv"
@@ -41,6 +40,7 @@ import (
 	coreclient "k8s.io/client-go/kubernetes/typed/core/v1"
 	corev1listers "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/util/workqueue"
 	kubemetrics "k8s.io/component-base/metrics"
 	"k8s.io/component-base/metrics/legacyregistry"
 	"k8s.io/klog/v2"
@@ -115,6 +115,7 @@ const ControllerName = "dual-pods-controller"
 const GPUMapName = "gpu-map"
 
 const GPUIndexName = "gpu"
+const controllerQueuePerItemRetryMaxDelay = 20 * time.Second
 
 func GPUIndexFunc(obj any) ([]string, error) {
 	pod := obj.(*corev1.Pod)
@@ -405,14 +406,28 @@ type nodeData struct {
 	// and for each the time at which it was first injected into this set.
 	// Hold ItemsMutex while accessing this.
 	LocalQueue localQueue
+
+	rateLimiter workqueue.TypedRateLimiter[itemOnNode]
 }
 
-type localQueue map[itemOnNode]time.Time
+type localQueue []scheduledItem
 
 type itemOnNode interface {
 	// process returns (err error, retry bool).
 	// There will be a retry iff `retry`.
-	process(ctx context.Context, ctl *controller, nodeDat *nodeData) (error, bool)
+	process(ctx context.Context, ctl *controller, nodeDat *nodeData) processOutput
+}
+
+type scheduledItem struct {
+	item         itemOnNode
+	addTime      time.Time // when first enqueued (for queue duration metrics)
+	processAfter time.Time // earliest time to process this item
+}
+
+type processOutput struct {
+	err        error
+	retry      bool
+	retryAfter time.Duration
 }
 
 // Internal state about an inference server
@@ -978,9 +993,13 @@ func (ctl *controller) getNodeData(nodeName string) *nodeData {
 	if ans == nil {
 		ans = &nodeData{
 			NodeName:         nodeName,
-			LocalQueue:       make(localQueue),
+			LocalQueue:       localQueue{},
 			InferenceServers: make(map[apitypes.UID]*serverData),
 			Launchers:        make(map[string]*launcherData),
+			rateLimiter: workqueue.NewTypedWithMaxWaitRateLimiter(
+				workqueue.DefaultTypedControllerRateLimiter[itemOnNode](),
+				controllerQueuePerItemRetryMaxDelay, // 20s, from queue-work.go
+			),
 		}
 		ctl.nodeNameToData[nodeName] = ans
 	}
@@ -990,22 +1009,68 @@ func (ctl *controller) getNodeData(nodeName string) *nodeData {
 func (nodeDat *nodeData) add(item itemOnNode) {
 	nodeDat.ItemsMutex.Lock()
 	defer nodeDat.ItemsMutex.Unlock()
-	if _, found := nodeDat.LocalQueue[item]; !found {
-		nodeDat.LocalQueue[item] = time.Now()
-		addsCounters.WithLabelValues(nodeDat.NodeName).Inc()
-		queueDepthGauges.WithLabelValues(nodeDat.NodeName).Set(float64(len(nodeDat.LocalQueue)))
+	for _, si := range nodeDat.LocalQueue {
+		if si.item == item {
+			return // already queued
+		}
 	}
+	now := time.Now()
+	nodeDat.LocalQueue = append(nodeDat.LocalQueue, scheduledItem{
+		item: item, addTime: now, processAfter: now,
+	})
+	addsCounters.WithLabelValues(nodeDat.NodeName).Inc()
+	queueDepthGauges.WithLabelValues(nodeDat.NodeName).Set(float64(len(nodeDat.LocalQueue)))
 }
 
-// yankItems returns the currently queued items and empties the queue.
-// Caller can access the returned value without synchronization.
-func (nodeDat *nodeData) yankItems() localQueue {
+func (nodeDat *nodeData) addAfter(item itemOnNode, after time.Time) {
 	nodeDat.ItemsMutex.Lock()
 	defer nodeDat.ItemsMutex.Unlock()
-	ans := maps.Clone(nodeDat.LocalQueue)
-	nodeDat.LocalQueue = make(localQueue)
-	queueDepthGauges.WithLabelValues(nodeDat.NodeName).Set(0)
-	return ans
+	for i, si := range nodeDat.LocalQueue {
+		if si.item == item {
+			if after.Before(si.processAfter) {
+				nodeDat.LocalQueue[i].processAfter = after
+			}
+			return
+		}
+	}
+	nodeDat.LocalQueue = append(nodeDat.LocalQueue, scheduledItem{
+		item: item, addTime: time.Now(), processAfter: after,
+	})
+	addsCounters.WithLabelValues(nodeDat.NodeName).Inc()
+	queueDepthGauges.WithLabelValues(nodeDat.NodeName).Set(float64(len(nodeDat.LocalQueue)))
+}
+
+// takeReadyItems removes and returns items whose processAfter <= now.
+// Items not yet ready remain in the queue.
+func (nodeDat *nodeData) takeReadyItems(now time.Time) []scheduledItem {
+	nodeDat.ItemsMutex.Lock()
+	defer nodeDat.ItemsMutex.Unlock()
+	var ready []scheduledItem
+	var remaining []scheduledItem
+	for _, si := range nodeDat.LocalQueue {
+		if !si.processAfter.After(now) {
+			ready = append(ready, si)
+		} else {
+			remaining = append(remaining, si)
+		}
+	}
+	nodeDat.LocalQueue = remaining
+	queueDepthGauges.WithLabelValues(nodeDat.NodeName).Set(float64(len(remaining)))
+	return ready
+}
+
+// earliestPending returns the earliest processAfter among remaining items,
+// or zero time if the queue is empty.
+func (nodeDat *nodeData) earliestPending() time.Time {
+	nodeDat.ItemsMutex.Lock()
+	defer nodeDat.ItemsMutex.Unlock()
+	var earliest time.Time
+	for _, si := range nodeDat.LocalQueue {
+		if earliest.IsZero() || si.processAfter.Before(earliest) {
+			earliest = si.processAfter
+		}
+	}
+	return earliest
 }
 
 func (ctl *controller) getServerData(nodeDat *nodeData, reqName string, reqUID apitypes.UID) *serverData {
