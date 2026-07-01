@@ -25,11 +25,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      # NOTE: this runs hack/verify-idl-consumption.sh directly (not via
-      # pre-commit) and intentionally does not pin Go with actions/setup-go.
-      # The generated client code is sensitive to the Go toolchain, and the
-      # committed code matches the runner's default Go. This is the same script
-      # the pre-commit `verify-idl-consumption` hook runs locally, so the source
-      # of truth is shared even though CI invokes it directly.
+      # Pin Go to the version declared in go.mod so code generation is
+      # deterministic. The generated code is sensitive to the Go toolchain's
+      # formatter, so without pinning this check passes or fails depending on
+      # which runner-image Go version the job lands on. setup-go sets
+      # GOTOOLCHAIN=local, so the code generators are built with exactly this
+      # version; the committed code is regenerated with the same go.mod version.
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+
+      # Runs the same script the pre-commit `verify-idl-consumption` hook wraps,
+      # so the source of truth is shared even though CI invokes it directly.
       - name: Verify
         run: hack/verify-idl-consumption.sh
