@@ -12,6 +12,7 @@ repos:
       - id: check-json
       - id: check-merge-conflict
       - id: check-added-large-files
+        args: ["--maxkb=600"]
       - id: check-docstring-first
       - id: debug-statements
 
@@ -41,3 +42,34 @@ repos:
     rev: 37bb98842b0d8c4ffebdb75301a13db0267cef89  # frozen: v1.47.2
     hooks:
       - id: typos
+
+  # Go / codegen checks (system hooks: require Go toolchain, and
+  # golangci-lint v2.12.2 on PATH, to match CI). These are the single
+  # source of truth invoked by the corresponding CI workflows.
+  - repo: local
+    hooks:
+      - id: go-mod-tidy
+        name: go mod tidy
+        entry: bash -c 'go mod tidy && git diff --exit-code go.mod go.sum'
+        language: system
+        pass_filenames: false
+        files: '(^go\.mod$|^go\.sum$|\.go$)'
+
+      - id: golangci-lint
+        name: golangci-lint
+        entry: golangci-lint run
+        language: system
+        types: [go]
+        pass_filenames: false
+        # Linting the whole module is slow; run on push, not every commit.
+        stages: [pre-push]
+
+      - id: verify-idl-consumption
+        name: verify IDL consumption
+        entry: hack/verify-idl-consumption.sh
+        language: system
+        pass_filenames: false
+        # The script deletes and regenerates files and requires a clean
+        # tree; run on demand / from CI, never on every commit.
+        stages: [manual]
+        files: '(^api/|^config/crd/|^Makefile$)'
