@@ -82,7 +82,7 @@ func (ctl *controller) updateDigestForLC(ctx context.Context, name string) error
 
 	if prevGood != good || good && (prevTemplateHash != templateHash) {
 		for _, lppName := range ctl.policy.lppNamesRefByLC(name) {
-			ctl.digestQueue.Queue.Add(funcItem{kind: kindLPP, name: lppName})
+			ctl.digestQueue.Queue.Add(funcItem{Kind: kindLPP, Name: lppName})
 		}
 	}
 	return nil

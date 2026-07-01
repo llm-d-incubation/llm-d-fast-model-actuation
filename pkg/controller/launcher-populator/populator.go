@@ -177,8 +177,8 @@ const (
 // funcItem is a digest-level update request, identified by (kind, name).
 // Dispatch happens in processDigestItem.
 type funcItem struct {
-	kind resourceKind
-	name string
+	Kind resourceKind
+	Name string
 }
 
 // keyItem identifies a (node, LC) pair for per-key reconciliation.
@@ -190,14 +190,14 @@ type keyItem struct {
 // distinguisher in the name keeps sentinels mutually distinct so they are not
 // deduplicated by the workqueue.
 func makeDigestSentinel(distinguisher int) queueItem {
-	return funcItem{kind: kindSentinel, name: fmt.Sprintf("sentinel-%d", distinguisher)}
+	return funcItem{Kind: kindSentinel, Name: fmt.Sprintf("sentinel-%d", distinguisher)}
 }
 
 // isDigestSentinel reports whether item is a sentinel emitted by
 // KnowsProcessedSync.
 func isDigestSentinel(item queueItem) bool {
 	f, ok := item.(funcItem)
-	return ok && f.kind == kindSentinel
+	return ok && f.Kind == kindSentinel
 }
 
 // isLauncherPod returns true if the Pod is a launcher pod managed by this controller.
@@ -224,13 +224,13 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 		ctl.keyQueue.Queue.Add(keyItem{NodeLauncherKey{NodeName: nodeName, LauncherConfigName: lcName}})
 	case *corev1.Node:
 		ctl.enqueueLogger.V(5).Info("Enqueuing Node reference due to Node add", "name", typed.Name)
-		ctl.digestQueue.Queue.Add(funcItem{kind: kindNode, name: typed.Name})
+		ctl.digestQueue.Queue.Add(funcItem{Kind: kindNode, Name: typed.Name})
 	case *fmav1alpha1.LauncherPopulationPolicy:
 		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherPopulationPolicy reference due to LPP add", "name", typed.Name)
-		ctl.digestQueue.Queue.Add(funcItem{kind: kindLPP, name: typed.Name})
+		ctl.digestQueue.Queue.Add(funcItem{Kind: kindLPP, Name: typed.Name})
 	case *fmav1alpha1.LauncherConfig:
 		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherConfig reference due to LC add", "name", typed.Name)
-		ctl.digestQueue.Queue.Add(funcItem{kind: kindLC, name: typed.Name})
+		ctl.digestQueue.Queue.Add(funcItem{Kind: kindLC, Name: typed.Name})
 	default:
 		ctl.enqueueLogger.V(5).Info("Notified of add of object of ignored type", "type", fmt.Sprintf("%T", obj))
 		return
@@ -257,13 +257,13 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 		ctl.keyQueue.Queue.Add(keyItem{NodeLauncherKey{NodeName: nodeName, LauncherConfigName: lcName}})
 	case *corev1.Node:
 		ctl.enqueueLogger.V(5).Info("Enqueuing Node reference due to Node update", "name", typed.Name)
-		ctl.digestQueue.Queue.Add(funcItem{kind: kindNode, name: typed.Name})
+		ctl.digestQueue.Queue.Add(funcItem{Kind: kindNode, Name: typed.Name})
 	case *fmav1alpha1.LauncherPopulationPolicy:
 		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherPopulationPolicy reference due to LPP update", "name", typed.Name)
-		ctl.digestQueue.Queue.Add(funcItem{kind: kindLPP, name: typed.Name})
+		ctl.digestQueue.Queue.Add(funcItem{Kind: kindLPP, Name: typed.Name})
 	case *fmav1alpha1.LauncherConfig:
 		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherConfig reference due to LC update", "name", typed.Name)
-		ctl.digestQueue.Queue.Add(funcItem{kind: kindLC, name: typed.Name})
+		ctl.digestQueue.Queue.Add(funcItem{Kind: kindLC, Name: typed.Name})
 	default:
 		ctl.enqueueLogger.V(5).Info("Notified of update of object of ignored type", "type", fmt.Sprintf("%T", obj))
 		return
@@ -288,13 +288,13 @@ func (ctl *controller) OnDelete(obj any) {
 		ctl.keyQueue.Queue.Add(keyItem{NodeLauncherKey{NodeName: nodeName, LauncherConfigName: lcName}})
 	case *corev1.Node:
 		ctl.enqueueLogger.V(5).Info("Enqueuing Node reference due to Node delete", "name", typed.Name)
-		ctl.digestQueue.Queue.Add(funcItem{kind: kindNode, name: typed.Name})
+		ctl.digestQueue.Queue.Add(funcItem{Kind: kindNode, Name: typed.Name})
 	case *fmav1alpha1.LauncherPopulationPolicy:
 		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherPopulationPolicy reference due to LPP delete", "name", typed.Name)
-		ctl.digestQueue.Queue.Add(funcItem{kind: kindLPP, name: typed.Name})
+		ctl.digestQueue.Queue.Add(funcItem{Kind: kindLPP, Name: typed.Name})
 	case *fmav1alpha1.LauncherConfig:
 		ctl.enqueueLogger.V(5).Info("Enqueuing LauncherConfig reference due to LC delete", "name", typed.Name)
-		ctl.digestQueue.Queue.Add(funcItem{kind: kindLC, name: typed.Name})
+		ctl.digestQueue.Queue.Add(funcItem{Kind: kindLC, Name: typed.Name})
 	default:
 		ctl.enqueueLogger.V(5).Info("Notified of delete of object of ignored type", "type", fmt.Sprintf("%T", obj))
 		return
@@ -337,15 +337,15 @@ func (ctl *controller) processDigestItem(ctx context.Context, item queueItem) (e
 	ctl.policy.mu.Lock()
 	defer ctl.policy.mu.Unlock()
 	var err error
-	switch f.kind {
+	switch f.Kind {
 	case kindLPP:
-		err = ctl.updateDigestForLPP(ctx, f.name)
+		err = ctl.updateDigestForLPP(ctx, f.Name)
 	case kindLC:
-		err = ctl.updateDigestForLC(ctx, f.name)
+		err = ctl.updateDigestForLC(ctx, f.Name)
 	case kindNode:
-		err = ctl.updateDigestForNode(ctx, f.name)
+		err = ctl.updateDigestForNode(ctx, f.Name)
 	default:
-		return fmt.Errorf("unknown funcItem kind: %d", f.kind), false
+		return fmt.Errorf("unknown funcItem kind: %d", f.Kind), false
 	}
 	if err != nil {
 		return err, true
