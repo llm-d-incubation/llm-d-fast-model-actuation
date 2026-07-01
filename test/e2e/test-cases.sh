@@ -158,6 +158,7 @@ spec:
     resources:
       limits:
         nvidia.com/gpu: "2"
+        ephemeral-storage: "9Gi"
   terminationGracePeriodSeconds: 0
 PROBE
 
@@ -251,6 +252,9 @@ assigned_gpu_uuids=$(kubectl get pod "$req1" -n "$NS" -o jsonpath='{.metadata.an
 echo "Assigned GPU UUID(s): $assigned_gpu_uuids"
 
 cheer Successful launcher-based pod creation
+
+# vllm inventory:
+# SmolLM2-360M-Instruct awake on $launcher1
 
 # ---------------------------------------------------------------------------
 # Test enforcement of LPP.Spec.CountForLauncher key uniqueness
@@ -387,6 +391,9 @@ else
 
 fi # available_gpus check
 
+# vllm inventory:
+# SmolLM2-360M-Instruct awake on $launcher1
+
 # ---------------------------------------------------------------------------
 # Instance Wake-up Fast Path
 # ---------------------------------------------------------------------------
@@ -447,6 +454,9 @@ check_gpu_pin $req2
 
 cheer Successful instance wake-up fast path
 
+# vllm inventory:
+# SmolLM2-360M-Instruct awake on $launcher1 (AKA $launcher2)
+
 # ---------------------------------------------------------------------------
 # Multiple Instances Share One Launcher
 # ---------------------------------------------------------------------------
@@ -491,6 +501,10 @@ check_gpu_pin $req3
 
 cheer Successful multiple instances sharing one launcher
 
+# vllm inventory:
+# SmolLM2-360M-Instruct sleeping on $launcher1 (AKA $launcher2, $launcher3)
+# Qwen2.5-0.5B-Instruct awake on $launcher1 (AKA $launcher2, $launcher3)
+
 # ---------------------------------------------------------------------------
 # Switch Instances In One Launcher
 # ---------------------------------------------------------------------------
@@ -534,6 +548,10 @@ kubectl wait --for condition=Ready pod/$launcher1 -n "$NS" --timeout=0s
 check_gpu_pin $req4
 
 cheer Successful switching instances in one launcher
+
+# vllm inventory:
+# SmolLM2-360M-Instruct awake on $launcher1 (AKA $launcher2 ... $launcher4)
+# Qwen2.5-0.5B-Instruct sleeping on $launcher1 (AKA $launcher2 ... $launcher4)
 
 # ---------------------------------------------------------------------------
 # Per-launcher Instance Cap Enforcement
@@ -604,6 +622,11 @@ echo "Launcher $launcher1 has $launcher_instances_after_reclaim instances after 
 
 cheer Successful per-launcher instance cap enforcement
 
+# vllm inventory:
+# SmolLM2-360M-Instruct in HF cache only, on $launcher1
+# Qwen2.5-0.5B-Instruct sleeping on $launcher1 (AKA $launcher2 ... $launcher4)
+# TinyLlama-1.1B-Chat-v1.0 awake on $launcher1 (AKA $launcher2 ... $launcher4)
+
 # ---------------------------------------------------------------------------
 # Controller Restart State Recovery
 # ---------------------------------------------------------------------------
@@ -663,9 +686,10 @@ launcher_instances_after=$(kubectl exec -n "$NS" $launcher1 -- python3 -c 'impor
 echo "Launcher has $launcher_instances_after instances after controller restart"
 [ "$launcher_instances_after" == "$launcher_instances_before" ]
 
-# Now scale up requester - controller should correctly select the launcher with sleeping instance
-# Use isc2 which should have a sleeping instance from before
+# Set requester RS to use isc2, which should have a sleeping instance from before
 kubectl patch rs $rs -n "$NS" --type=json -p='[{"op": "replace", "path": "/spec/template/metadata/annotations/dual-pods.llm-d.ai~1inference-server-config", "value": "'$isc2'"}]'
+
+note Now scale up requester RS - controller should correctly select the launcher with sleeping instance
 kubectl scale rs $rs -n "$NS" --replicas=1
 
 expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$inst | wc -l | grep -w 1"
@@ -682,6 +706,11 @@ kubectl wait --for condition=Ready pod/$launcher1 -n "$NS" --timeout=0s
 check_gpu_pin $req_post_restart
 
 cheer Successful controller restart state recovery
+
+# vllm inventory:
+# SmolLM2-360M-Instruct in HF cache only, on $launcher1
+# Qwen2.5-0.5B-Instruct awake on $launcher1 (AKA $launcher2 ... $launcher4)
+# TinyLlama-1.1B-Chat-v1.0 sleeping on $launcher1 (AKA $launcher2 ... $launcher4)
 
 # ---------------------------------------------------------------------------
 # Delete Obsolete Sleeping Instances After ISC Update
@@ -702,6 +731,11 @@ kubectl patch inferenceserverconfig "$isc3" -n "$NS" --type=merge -p='{"spec":{"
 expect '[ "$(get_launcher_total_instances "$launcher1")" == "$((old_total_instances - 1))" ]'
 
 cheer Successful deletion of obsolete sleeping instance
+
+# vllm inventory:
+# SmolLM2-360M-Instruct in HF cache only, on $launcher1
+# TinyLlama-1.1B-Chat-v1.0 in HF cache only, on $launcher1
+# Qwen2.5-0.5B-Instruct awake on $launcher1 (AKA $launcher2 ... $launcher4)
 
 # ---------------------------------------------------------------------------
 # Delete Obsolete Awake Instance on Unbinding
@@ -736,6 +770,11 @@ expect '[ "$(get_launcher_total_instances "$launcher1")" == "$((old_total_instan
 kubectl patch inferenceserverconfig "$isc2" -n "$NS" --type=merge -p='{"spec":{"modelServerConfig":{"options":"'"$original_isc2_options"'"}}}'
 
 cheer Successful deletion of obsolete awake instance on unbinding
+
+# vllm inventory:
+# SmolLM2-360M-Instruct in HF cache only, on $launcher1
+# TinyLlama-1.1B-Chat-v1.0 in HF cache only, on $launcher1
+# Qwen2.5-0.5B-Instruct in HF cache only, on $launcher1 (AKA $launcher2 ... $launcher4)
 
 # ---------------------------------------------------------------------------
 # Unbound Launcher Deletion Cleanup
@@ -783,6 +822,9 @@ kubectl wait --for condition=Ready pod/$launcher_after_delete -n "$NS" --timeout
 check_gpu_pin $req_after_delete
 
 cheer Successful unbound launcher deletion cleanup
+
+# vllm inventory:
+# Qwen2.5-0.5B-Instruct awake on $launcher_after_delete
 
 # ---------------------------------------------------------------------------
 # Stopped Instance Recovery
@@ -850,9 +892,12 @@ check_gpu_pin $req_recovered
 
 cheer Successful stopped instance recovery
 
+# vllm inventory:
+# Qwen2.5-0.5B-Instruct awake on $launcher_after_delete
+
 cheer All launcher-based tests passed
 
-echo "Saving a final scrape of the dual-pods controller; expect port-forward and curl noise"
+note "Saving a final scrape of the dual-pods controller; expect port-forward and curl noise"
 kubectl port-forward -n "$NS" deployment/"${FMA_CHART_INSTANCE_NAME}-dual-pods-controller" 28002:8002 &
 pfpid=$!
 sleep 5
