@@ -16,16 +16,16 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: '1.25'
-
-      - name: check go mod tidy
-        run: |
-             go mod tidy
-             if [ -n "$(git status --porcelain=v2)" ]; then
-                 echo 'You need to run `go mod tidy`' >&2
-                 exit 1
-             fi
-
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9.2.1
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
-          version: v2.12.2
+          python-version: "3.12.11"
+
+      - name: Install pre-commit and golangci-lint v2.12.2
+        run: |
+          python -m pip install --upgrade pip pre-commit
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh \
+            | sh -s -- -b "$(go env GOPATH)/bin" v2.12.2
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: go mod tidy + golangci-lint (via pre-commit)
+        run: pre-commit run go-mod-tidy golangci-lint --all-files --hook-stage pre-push
