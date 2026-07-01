@@ -25,18 +25,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      # NOTE: intentionally no actions/setup-go here. The generated client code
-      # is sensitive to the Go toolchain version (blank-line formatting differs),
-      # and the committed code was generated with the runner's default Go. Pinning
-      # a newer Go (e.g. 1.26) makes the regeneration diverge and this check fail.
-      # Rely on the runner's preinstalled Go, matching the rest of CI.
-
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: "3.12.11"
-
-      - name: Install pre-commit
-        run: python -m pip install --upgrade pip pre-commit
-
-      - name: Verify (via pre-commit)
-        run: pre-commit run verify-idl-consumption --hook-stage manual --all-files
+      # NOTE: this runs hack/verify-idl-consumption.sh directly (not via
+      # pre-commit) and intentionally does not pin Go with actions/setup-go.
+      # The generated client code is sensitive to the Go toolchain, and the
+      # committed code matches the runner's default Go. This is the same script
+      # the pre-commit `verify-idl-consumption` hook runs locally, so the source
+      # of truth is shared even though CI invokes it directly.
+      - name: Verify
+        run: hack/verify-idl-consumption.sh
