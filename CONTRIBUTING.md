@@ -63,6 +63,52 @@ For changes that fix broken code or add small changes within a component:
 
 The current testing documentation can be found within the respective components of the [docs folder](docs/).
 
+## Local Checks Before Opening a PR
+
+We use [`pre-commit`](https://pre-commit.com) to run our lint, formatting, and
+code-generation checks. **CI runs the exact same `.pre-commit-config.yaml`**, so if
+the hooks pass locally they will pass in GitHub Actions — please run them before
+opening a PR.
+
+### One-time setup
+
+```bash
+# Install pre-commit (pick whichever fits your setup)
+pip install pre-commit        # or: uv tool install pre-commit / brew install pre-commit
+
+# Install the git hooks (both the commit-time and pre-push stages)
+pre-commit install
+pre-commit install --hook-type pre-push
+```
+
+The Go hooks are system hooks, so you also need the matching toolchain on your `PATH`:
+
+* A Go toolchain (see `go.mod`)
+* [`golangci-lint`](https://golangci-lint.run/welcome/install/) **v2.12.2** (the
+  version CI pins)
+
+### Running the checks
+
+```bash
+# Run every hook against the whole tree (what CI's python job runs)
+pre-commit run --all-files
+
+# golangci-lint + go mod tidy run automatically on `git push`; to run them on demand:
+pre-commit run golangci-lint go-mod-tidy --all-files --hook-stage pre-push
+
+# When you change api/, config/crd/, or the Makefile, verify generated code is in sync
+# (equivalent to hack/verify-idl-consumption.sh):
+pre-commit run verify-idl-consumption --hook-stage manual --all-files
+```
+
+Once the hooks are installed, the commit-stage checks (formatting, `flake8`, typos,
+`go mod tidy`, file hygiene) run automatically on every `git commit`, and
+`golangci-lint` runs on every `git push`.
+
+Tests are **not** part of pre-commit and should be run separately — see
+[Testing Requirements](#testing-requirements) (`go test ./...` and the launcher
+`pytest` suite).
+
 ## Code Review Requirements
 
 * **All code changes** must be submitted as pull requests (no direct pushes)
