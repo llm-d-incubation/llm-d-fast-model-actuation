@@ -210,7 +210,7 @@ spec:
             value: "/tmp"
           resources:
             limits:
-              ephemeral-storage: "2Gi"
+              ephemeral-storage: "4.5Gi"
 ---
 apiVersion: fma.llm-d.ai/v1alpha1
 kind: LauncherPopulationPolicy
