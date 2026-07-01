@@ -118,7 +118,7 @@ fi
 if [ "${FMA_NAMESPACE}" != default ]; then
     echo "Tests 7 and 8 need work before they can run on OpenShift"
 else
-    
+
 requester_img=$(make echo-var VAR=TEST_REQUESTER_IMG)
 
 cat <<EOF | kubectl apply -n "$FMA_NAMESPACE" -f -
