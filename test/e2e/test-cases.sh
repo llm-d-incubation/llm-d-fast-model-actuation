@@ -371,9 +371,9 @@ else
 
     expect '[ "$(kubectl get pod -n '"$NS"' '"$collision_req"' -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "'"$collision_launcher"'" ]'
 
-    note Wait for $collision_req to be ready
+    note "Wait for $collision_req to be ready"
     kubectl wait --for condition=Ready pod/$collision_req -n "$NS" --timeout=300s
-    note Wait for $collision_launcher to be ready
+    note "Wait for $collision_launcher to be ready"
     kubectl wait --for condition=Ready pod/$collision_launcher -n "$NS" --timeout=0s
 
     req_gpus=$(kubectl get pod "$req1" -n "$NS" -o jsonpath='{.metadata.annotations.dual-pods\.llm-d\.ai/accelerators}')
@@ -609,7 +609,7 @@ kubectl get pods -n "$NS" -l dual-pods.llm-d.ai/launcher-config-name=$lc -o wide
 [ "$(kubectl get pod -n "$NS" "$req_reclaim" -o jsonpath='{.metadata.labels.dual-pods\.llm-d\.ai/dual}')" == "$launcher1" ]
 [ "$(kubectl get pod -n "$NS" "$launcher1" -o jsonpath='{.metadata.labels.dual-pods\.llm-d\.ai/dual}')" == "$req_reclaim" ]
 
-note Wait for $req_reclaim and $launcher1 to be ready
+note "Wait for $req_reclaim and $launcher1 to be ready"
 kubectl wait --for condition=Ready pod/$req_reclaim -n "$NS" --timeout=300s
 kubectl wait --for condition=Ready pod/$launcher1 -n "$NS" --timeout=0s
 
