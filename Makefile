@@ -94,6 +94,15 @@ load-populator-local:
 build-populator:
 	KO_DOCKER_REPO=$(CONTAINER_IMG_REG) ko build -B ./cmd/launcher-populator -t ${IMAGE_TAG} --platform all
 
+.PHONY: test
+test: manifests generate ## Run unit tests.
+	@echo "Running unit tests..."
+	go test $$(go list ./... | grep -Ev '/(e2e|api|cmd|pkg/generated|pkg/spi|pkg/api)') -coverprofile=cover.out
+
+.PHONY: test-code-coverage
+test-code-coverage: test go-test-coverage ## Run unit tests and check coverage thresholds.
+	$(GO_TEST_COVERAGE_VERSIONED) --config=./.github/.testcoverage.yml
+
 .PHONY: echo-var
 echo-var:
 	@echo "$($(VAR))"
@@ -106,6 +115,10 @@ $(TOOLBIN):
 	mkdir -p $(TOOLBIN)
 
 ## Tools
+GO_TEST_COVERAGE ?= $(TOOLBIN)/go-test-coverage
+GO_TEST_COVERAGE_VERSION ?= v2.14.2
+GO_TEST_COVERAGE_VERSIONED ?= $(GO_TEST_COVERAGE)-$(GO_TEST_COVERAGE_VERSION)
+
 CONTROLLER_GEN ?= $(TOOLBIN)/controller-gen
 CONTROLLER_TOOLS_VERSION ?= v0.19.0
 CONTROLLER_GEN_VERSION ?= $(CONTROLLER_GEN)-$(CONTROLLER_TOOLS_VERSION)
@@ -117,6 +130,11 @@ export CODE_GEN_DIR KUBE_CODEGEN_TAG
 
 $(CONTROLLER_GEN_VERSION): $(TOOLBIN)
 	$(call go-install-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen,$(CONTROLLER_TOOLS_VERSION))
+
+.PHONY: go-test-coverage
+go-test-coverage: $(GO_TEST_COVERAGE_VERSIONED) ## Download go-test-coverage locally if necessary.
+$(GO_TEST_COVERAGE_VERSIONED): $(TOOLBIN)
+	$(call go-install-tool,$(GO_TEST_COVERAGE),github.com/vladopajic/go-test-coverage/v2,$(GO_TEST_COVERAGE_VERSION))
 
 $(CODE_GEN_DIR):
 	mkdir -p $(TOOLDIR)

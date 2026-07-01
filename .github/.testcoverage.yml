@@ -1,0 +1,37 @@
+profile: cover.out
+
+# Holds coverage thresholds percentages, values should be in range [0-100].
+threshold:
+  # (optional; default 0)
+  # Minimum coverage percentage required for individual files.
+  file: 0
+
+  # (optional; default 0)
+  # Minimum coverage percentage required for each package.
+  package: 0
+
+  # (optional; default 0)
+  # Minimum overall project coverage percentage required.
+  total: 5
+
+# Holds regexp rules which will exclude matched files or packages
+# from coverage statistics.
+exclude:
+  # Exclude files or packages matching their paths
+  paths:
+    - \.pb\.go$           # excludes all protobuf generated files
+    - ^pkg/api            # exclude package `pkg/api/`
+    - ^pkg/generated      # exclude all `pkg/generated`
+    - ^pkg/spi            # exclude all `pkg/spi`
+    - ^cmd/               # exclude package `cmd/`
+    - ^test               # exclude package `test/`
+    - ^api/               # exclude package `api/`
+
+# File name of go-test-coverage breakdown file, which can be used to
+# analyze coverage difference.
+breakdown-file-name: ''
+
+diff:
+  # File name of go-test-coverage breakdown file which will be used to
+  # report coverage difference.
+  base-breakdown-file-name: ''
