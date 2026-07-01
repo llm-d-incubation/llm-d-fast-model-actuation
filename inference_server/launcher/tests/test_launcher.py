@@ -34,7 +34,7 @@ sys.modules["vllm.utils"] = MagicMock()
 sys.modules["vllm.utils.argparse_utils"] = MagicMock()
 sys.modules["vllm.entrypoints.openai.api_server"] = MagicMock()
 sys.modules["vllm.entrypoints.openai.cli_args"] = MagicMock()
-sys.modules["vllm.entrypoints.utils"] = MagicMock()
+sys.modules["vllm.entrypoints.serve.utils.api_utils"] = MagicMock()
 
 # Import the application and classes
 from launcher import (  # noqa: E402
