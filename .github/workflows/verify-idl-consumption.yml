@@ -25,9 +25,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
-        with:
-          go-version: "1.26"
+      # NOTE: intentionally no actions/setup-go here. The generated client code
+      # is sensitive to the Go toolchain version (blank-line formatting differs),
+      # and the committed code was generated with the runner's default Go. Pinning
+      # a newer Go (e.g. 1.26) makes the regeneration diverge and this check fail.
+      # Rely on the runner's preinstalled Go, matching the rest of CI.
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
