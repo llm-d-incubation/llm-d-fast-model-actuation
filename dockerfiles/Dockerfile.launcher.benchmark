@@ -1,7 +1,17 @@
-ARG BASE_IMAGE=vllm/vllm-openai:v0.20.2
+ARG BASE_IMAGE=docker.io/vllm/vllm-openai:v0.23.0
 FROM ${BASE_IMAGE}
 
 WORKDIR /app
+
+# vLLM 0.22+ (torch 2.x) computes a per-user inductor cache dir at import via
+# torch's default_cache_dir() -> getpass.getuser() -> pwd.getpwuid(). Under
+# OpenShift's restricted-v2 SCC the arbitrary UID has no /etc/passwd entry, so
+# this raises KeyError. No cache-dir env var avoids it: codecache.py calls
+# default_cache_dir() directly for a deliberately-global header cache (bypassing
+# TORCHINDUCTOR_CACHE_DIR), and default_cache_dir() has no env override. Seeding
+# USER makes getpass.getuser() read the env instead of /etc/passwd.
+# See https://github.com/vllm-project/vllm/issues/44548
+ENV USER=vllm
 
 COPY inference_server/launcher/launcher.py inference_server/launcher/gputranslator.py inference_server/launcher/launcher_pod_notifier.py /app/
 

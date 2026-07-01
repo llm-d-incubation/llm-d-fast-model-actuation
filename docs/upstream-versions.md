@@ -12,6 +12,6 @@
 | **k8s.io/apimachinery** | `v0.34.9` | tag | `go.mod` line 9 | [kubernetes/apimachinery](https://github.com/kubernetes/apimachinery) |
 | **k8s.io/client-go** | `v0.34.9` | tag | `go.mod` line 10 | [kubernetes/client-go](https://github.com/kubernetes/client-go) |
 | **sigs.k8s.io/controller-runtime** | `v0.22.5` | tag | `go.mod` line 14 | [kubernetes-sigs/controller-runtime](https://github.com/kubernetes-sigs/controller-runtime) |
-| **vllm/vllm-openai** | `v0.20.2` | tag | `cmd/requester/README.md` | [vllm-project/vllm](https://github.com/vllm-project/vllm) |
-| **vllm (CPU build)** | `v0.20.2` | tag | `dockerfiles/Dockerfile.launcher.cpu` | [vllm-project/vllm](https://github.com/vllm-project/vllm) |
+| **vllm/vllm-openai** | `v0.23.0` | tag | `cmd/requester/README.md` | [vllm-project/vllm](https://github.com/vllm-project/vllm) |
+| **vllm (CPU build)** | `v0.23.0` | tag | `dockerfiles/Dockerfile.launcher.cpu` | [vllm-project/vllm](https://github.com/vllm-project/vllm) |
 | **nvidia/cuda** | `12.8.0-base-ubuntu22.04` | tag | `dockerfiles/Dockerfile.requester` | [NVIDIA CUDA](https://hub.docker.com/r/nvidia/cuda) |
