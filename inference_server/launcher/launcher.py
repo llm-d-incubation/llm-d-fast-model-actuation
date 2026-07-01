@@ -185,10 +185,8 @@ class VllmInstance:
             if config.env_vars is None:
                 config.env_vars = {}
             config.env_vars["CUDA_VISIBLE_DEVICES"] = ",".join(cuda_indices)
-            logger.info(
-                f"Set CUDA_VISIBLE_DEVICES to \
-                    {config.env_vars['CUDA_VISIBLE_DEVICES']} based on UUIDs."
-            )
+            logger.info(f"Set CUDA_VISIBLE_DEVICES to \
+                    {config.env_vars['CUDA_VISIBLE_DEVICES']} based on UUIDs.")
 
         # Initialize instance variables
         self.instance_id = instance_id
