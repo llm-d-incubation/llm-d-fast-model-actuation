@@ -28,4 +28,7 @@ jobs:
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: go mod tidy + golangci-lint (via pre-commit)
-        run: pre-commit run go-mod-tidy golangci-lint --all-files --hook-stage pre-push
+        # pre-commit run accepts a single hook id per invocation.
+        run: |
+          pre-commit run go-mod-tidy --all-files --hook-stage pre-push
+          pre-commit run golangci-lint --all-files --hook-stage pre-push
