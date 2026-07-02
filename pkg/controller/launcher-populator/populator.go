@@ -58,21 +58,26 @@ func NewController(
 	corev1PreInformers corev1preinformers.Interface,
 	fmaInformerFactory fmainformers.SharedInformerFactory,
 	expectationTimeout time.Duration,
+	stuckThreshold time.Duration,
+	metricsResyncPeriod time.Duration,
 ) (*controller, error) {
+	registerMetrics()
 	ctl := &controller{
-		enqueueLogger: logger.WithName(ControllerName),
-		coreclient:    coreClient,
-		fmaclient:     fmaClient,
-		namespace:     namespace,
-		podInformer:   corev1PreInformers.Pods().Informer(),
-		podLister:     corev1PreInformers.Pods().Lister(),
-		nodeInformer:  corev1PreInformers.Nodes().Informer(),
-		nodeLister:    corev1PreInformers.Nodes().Lister(),
-		lppInformer:   fmaInformerFactory.Fma().V1alpha1().LauncherPopulationPolicies().Informer(),
-		lppLister:     fmaInformerFactory.Fma().V1alpha1().LauncherPopulationPolicies().Lister(),
-		lcInformer:    fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Informer(),
-		lcLister:      fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Lister(),
-		expectations:  newPendingExpectations(expectationTimeout),
+		enqueueLogger:       logger.WithName(ControllerName),
+		coreclient:          coreClient,
+		fmaclient:           fmaClient,
+		namespace:           namespace,
+		podInformer:         corev1PreInformers.Pods().Informer(),
+		podLister:           corev1PreInformers.Pods().Lister(),
+		nodeInformer:        corev1PreInformers.Nodes().Informer(),
+		nodeLister:          corev1PreInformers.Nodes().Lister(),
+		lppInformer:         fmaInformerFactory.Fma().V1alpha1().LauncherPopulationPolicies().Informer(),
+		lppLister:           fmaInformerFactory.Fma().V1alpha1().LauncherPopulationPolicies().Lister(),
+		lcInformer:          fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Informer(),
+		lcLister:            fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Lister(),
+		expectations:        newPendingExpectations(expectationTimeout),
+		stuckThreshold:      stuckThreshold,
+		metricsResyncPeriod: metricsResyncPeriod,
 	}
 	ctl.policy = newDigestedPolicy()
 
@@ -151,6 +156,15 @@ type controller struct {
 	// It is the single source of truth for per-key reconciliation.
 	// Written only by the digestQueue worker; read by keyQueue workers.
 	policy *digestedPolicy
+
+	// stuckThreshold is the minimum age (from scheduling) after which a
+	// not-yet-Ready launcher is reported in the "stuck" phase of the
+	// fma_launcher_count metric. It does not change reconcile behavior.
+	stuckThreshold time.Duration
+
+	// metricsResyncPeriod is how often runMetricsLoop recomputes the
+	// launcher-count gauge from the informer cache.
+	metricsResyncPeriod time.Duration
 }
 
 var _ Controller = &controller{}
@@ -305,6 +319,10 @@ func (ctl *controller) Start(ctx context.Context) error {
 	if !cache.WaitForNamedCacheSync(ControllerName, ctx.Done(), ctl.lppInformer.HasSynced, ctl.lcInformer.HasSynced, ctl.podInformer.HasSynced, ctl.nodeInformer.HasSynced) {
 		return fmt.Errorf("caches not synced before end of Start context")
 	}
+
+	// Publish the launcher-count metric periodically. Runs independently of the
+	// work queues; the informer caches are synced by this point.
+	go ctl.runMetricsLoop(ctx)
 
 	// Start digest workers. KnowsProcessedSync appends sentinels behind the
 	// initial batch and invokes onDigestSyncProcessed when those sentinels are
