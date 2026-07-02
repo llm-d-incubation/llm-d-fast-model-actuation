@@ -66,6 +66,12 @@ USES_RE = re.compile(r"^\s*(?:-\s*)?uses:\s*(?P<ref>\S+)\s*(?:#\s*(?P<comment>.*
 # Commit SHAs are case-insensitive hex; compare them via .lower() elsewhere.
 FULL_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
+# A reference in DR-10's scope: an external repo ``owner/repo`` (each a GitHub
+# name segment), optionally with a ``/subpath`` (reusable workflows), then
+# ``@<ref>``. This deliberately excludes local ``./…`` references and other
+# ``uses:`` forms that can contain ``@`` (e.g. ``docker://image@sha256:…``).
+REMOTE_REF_RE = re.compile(r"^[\w.-]+/[\w.-]+(?:/[\w./-]+)?@[^\s]+$")
+
 # The version tag is the leading run of the comment, optionally followed by a
 # single punctuation char, then certainly whitespace or end-of-line. So
 # "v7.0.0", "v7.0.0 latest", and "v7.0.0, latest" all yield "v7.0.0".
@@ -173,8 +179,9 @@ def parse_uses(wf_paths: list[str]) -> Iterator[UsesRef]:
                 if not m:
                     continue
                 ref = m.group("ref")
-                if "@" not in ref:
-                    # Local action (./path) or malformed; DR-10 doesn't cover it.
+                if not REMOTE_REF_RE.match(ref):
+                    # Out of DR-10's scope: local ``./…`` actions, ``docker://…``
+                    # forms, and malformed refs. Only ``owner/repo…@<ref>`` counts.
                     continue
                 ref_path, _, ref_version = ref.partition("@")
                 yield UsesRef(
@@ -307,10 +314,11 @@ def check(online: bool) -> tuple[list[Violation], Optional[TagResolver]]:
             continue
 
         # Clause (a): every reference to this action must use the same SHA and tag.
+        # SHAs are case-insensitive; tags are not.
         pin = pins.get(repo)
         if pin is None:
             pins[repo] = Pin(u.ref_version, tag, u.wf_path, u.lineno)
-        elif (u.ref_version, tag) != (pin.sha, pin.tag):
+        elif (u.ref_version.lower(), tag) != (pin.sha.lower(), pin.tag):
             violations.append(
                 Violation(
                     u.wf_path,
