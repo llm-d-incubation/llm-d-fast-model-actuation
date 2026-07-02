@@ -4,6 +4,7 @@
 - [Fast Model Actuation with Process Flexibility and Dual Pods](dual-pods.md)
 - [Cluster Sharing](cluster-sharing.md)
 - [Prometheus Metrics](metrics.md)
+- [Design Rules](../DESIGN_RULES.md)
 
 # Dev/test
 
@@ -17,6 +18,7 @@
 - [Markdown and Python code quality check](../.github/workflows/python-code-quality.yml)
 - [Go code quality check](../.github/workflows/golangci-lint.yml)
 - [Verify IDL consumption](../.github/workflows/verify-idl-consumption.yml)
+- [Check GitHub Actions references (DR-10)](../.github/workflows/check-action-refs.yml)
 - [Test build of dual-pods controller image](../.github/workflows/build-controller-image.yml)
 - [Test build of launcher image](../.github/workflows/build-launcher-image.yml)
 - [Test build of requester image](../.github/workflows/build-requester-image.yml)
