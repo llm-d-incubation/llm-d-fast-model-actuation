@@ -81,11 +81,10 @@ pre-commit install
 pre-commit install --hook-type pre-push
 ```
 
-The Go hooks are system hooks, so you also need the matching toolchain on your `PATH`:
-
-* A Go toolchain (see `go.mod`)
-* [`golangci-lint`](https://golangci-lint.run/welcome/install/) **v2.12.2** (the
-  version CI pins)
+The Go hooks (`go mod tidy`, IDL verification) use your Go toolchain (see
+`go.mod`), so you need Go installed. `golangci-lint` is managed by pre-commit
+itself — it is built in an isolated, version-pinned environment on first run, so
+you do **not** need to install a specific golangci-lint globally.
 
 ### Running the checks
 
@@ -93,8 +92,10 @@ The Go hooks are system hooks, so you also need the matching toolchain on your `
 # Run every hook against the whole tree (what CI's python job runs)
 pre-commit run --all-files
 
-# golangci-lint + go mod tidy run automatically on `git push`; to run them on demand:
-pre-commit run golangci-lint go-mod-tidy --all-files --hook-stage pre-push
+# golangci-lint + go mod tidy run automatically on `git push`; to run them on
+# demand (one hook id per invocation):
+pre-commit run go-mod-tidy --all-files --hook-stage pre-push
+pre-commit run golangci-lint-full --all-files --hook-stage pre-push
 
 # When you change api/, config/crd/, or the Makefile, verify generated code is in sync
 # (equivalent to hack/verify-idl-consumption.sh):

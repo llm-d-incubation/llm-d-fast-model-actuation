@@ -43,9 +43,18 @@ repos:
     hooks:
       - id: typos
 
-  # Go / codegen checks (system hooks: require Go toolchain, and
-  # golangci-lint v2.12.2 on PATH, to match CI). These are the single
-  # source of truth invoked by the corresponding CI workflows.
+  # Go linting. Managed by pre-commit in an isolated, version-pinned
+  # environment, so it does not require a specific golangci-lint on the
+  # contributor's global PATH. Runs on push, not every commit, because
+  # linting the whole module is slow.
+  - repo: https://github.com/golangci/golangci-lint
+    rev: c0d3ddc9cf3faa61a4e378e879ece580256d76e5  # frozen: v2.12.2
+    hooks:
+      - id: golangci-lint-full
+        stages: [pre-push]
+
+  # Go mod tidy and codegen verification. These use the project's own Go
+  # toolchain (governed by go.mod), not an extra pinned global tool.
   - repo: local
     hooks:
       - id: go-mod-tidy
@@ -54,15 +63,6 @@ repos:
         language: system
         pass_filenames: false
         files: '(^go\.mod$|^go\.sum$|\.go$)'
-
-      - id: golangci-lint
-        name: golangci-lint
-        entry: golangci-lint run
-        language: system
-        types: [go]
-        pass_filenames: false
-        # Linting the whole module is slow; run on push, not every commit.
-        stages: [pre-push]
 
       - id: verify-idl-consumption
         name: verify IDL consumption

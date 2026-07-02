@@ -20,15 +20,13 @@ jobs:
         with:
           python-version: "3.12.11"
 
-      - name: Install pre-commit and golangci-lint v2.12.2
-        run: |
-          python -m pip install --upgrade pip pre-commit
-          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh \
-            | sh -s -- -b "$(go env GOPATH)/bin" v2.12.2
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Install pre-commit
+        run: python -m pip install --upgrade pip pre-commit
 
       - name: go mod tidy + golangci-lint (via pre-commit)
-        # pre-commit run accepts a single hook id per invocation.
+        # pre-commit run accepts a single hook id per invocation. pre-commit
+        # builds golangci-lint (pinned in .pre-commit-config.yaml) itself, so
+        # there is no separate install step.
         run: |
           pre-commit run go-mod-tidy --all-files --hook-stage pre-push
-          pre-commit run golangci-lint --all-files --hook-stage pre-push
+          pre-commit run golangci-lint-full --all-files --hook-stage pre-push
