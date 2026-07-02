@@ -242,10 +242,11 @@ class TagResolver:
     def _gh_api(self, api_path: str) -> Optional[object]:
         """Run ``gh api <path>``.
 
-        Returns the parsed JSON (dict or list) on success, or None when gh exits
-        non-zero (e.g. a 404 for a missing tag). Exits hard if gh succeeds but
-        its output is not valid JSON, since that means the tooling is
-        misbehaving and must not be mistaken for a clean or failing check.
+        Returns the parsed JSON (dict or list) on success, or None only when gh
+        reports HTTP 404 (a genuinely missing ref). Any other failure — rate
+        limit, auth, network, or non-JSON output — is a tooling problem, so we
+        exit hard with gh's own error rather than mistake it for an unresolvable
+        tag (which would be reported as a DR-10 violation).
         """
         try:
             out = subprocess.run(
@@ -257,7 +258,13 @@ class TagResolver:
         except FileNotFoundError:
             sys.exit("error: 'gh' not found; --online requires the GitHub CLI")
         if out.returncode != 0:
-            return None
+            # gh writes e.g. "gh: Not Found (HTTP 404)" to stderr.
+            if "HTTP 404" in out.stderr:
+                return None
+            sys.exit(
+                f"error: 'gh api {api_path}' failed "
+                f"(exit {out.returncode}): {out.stderr.strip()}"
+            )
         try:
             return json.loads(out.stdout)
         except json.JSONDecodeError as err:
@@ -357,7 +364,9 @@ def check(online: bool) -> tuple[list[Violation], Optional[TagResolver]]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    # __doc__ is Optional[str] (absent under python -OO), so guard the access.
+    description = __doc__.splitlines()[0] if __doc__ else None
+    parser = argparse.ArgumentParser(description=description)
     parser.add_argument(
         "--online",
         action="store_true",

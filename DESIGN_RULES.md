@@ -87,7 +87,7 @@ a given action keeps its version consistent and makes a bump a single, reviewabl
 change. The 7-day soak lets newly published releases accumulate scrutiny before we
 adopt them; we do not otherwise require the newest release. First-party reusable
 workflows track `main` by design. Established in
-[#633](https://github.com/llm-d-incubation/llm-d-fast-model-actuation/issues/633).
+[#633](https://github.com/llm-d-incubation/llm-d-fast-model-actuation/pull/633).
 
 ### DR-10: Enforcement
 

@@ -86,5 +86,6 @@ repos:
         name: Check GitHub Actions references (DR-10)
         entry: hack/check-action-refs.py
         language: system
-        files: ^\.github/workflows/
+        # Run when a workflow changes or when the checker itself changes.
+        files: ^(\.github/workflows/|hack/check-action-refs\.py$)
         pass_filenames: false
