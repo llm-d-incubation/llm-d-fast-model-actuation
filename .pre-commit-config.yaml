@@ -41,3 +41,15 @@ repos:
     rev: 37bb98842b0d8c4ffebdb75301a13db0267cef89  # frozen: v1.47.2
     hooks:
       - id: typos
+
+  # Design rule DR-10: GitHub Actions references (see DESIGN_RULES.md). Offline
+  # here (pin format + tag-comment presence); CI additionally verifies each tag
+  # resolves to its SHA.
+  - repo: local
+    hooks:
+      - id: check-action-refs
+        name: Check GitHub Actions references (DR-10)
+        entry: hack/check-action-refs.py
+        language: system
+        files: ^\.github/workflows/
+        pass_filenames: false
