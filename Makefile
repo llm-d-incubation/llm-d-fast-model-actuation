@@ -94,6 +94,11 @@ load-populator-local:
 build-populator:
 	KO_DOCKER_REPO=$(CONTAINER_IMG_REG) ko build -B ./cmd/launcher-populator -t ${IMAGE_TAG} --platform all
 
+.PHONY: test
+test: ## Run unit tests.
+	@echo "Running unit tests..."
+	go test $$(go list ./pkg/... | grep -Ev '/pkg/(api|generated|spi)(/|$$)') -coverprofile=cover.out
+
 .PHONY: echo-var
 echo-var:
 	@echo "$($(VAR))"
