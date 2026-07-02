@@ -120,13 +120,12 @@ Tests are **not** part of pre-commit and should be run separately — see
 * **All changes** must be reviewed and approved by a maintainer other than the author
 * **All repositories** must gate merges on compilation and passing tests
 
-### Reviewing dependency and GitHub Actions bump PRs
+### Reviewing dependency bumps
 
-When reviewing PRs that bump a dependency or a GitHub Actions version (e.g.,
-Dependabot PRs):
+When reviewing PRs that bump a dependency (e.g., Dependabot PRs) — a GitHub Action
+is one kind of dependency, whose desired state is design rule DR-10 in
+[DESIGN_RULES.md](DESIGN_RULES.md):
 
-* **Verify the pinned SHA matches the upstream tag** (for actions pinned
-  by SHA).
 * **Search [github.com/advisories](https://github.com/advisories)** for the
   dependency.
 * **Search the web for CVEs/vulnerabilities** in the specific new version
@@ -138,8 +137,7 @@ Dependabot PRs):
   creation date), flag this in the review and recommend waiting until the
   7-day soak period has elapsed before merging. Newly published versions
   have had little time for vulnerabilities or supply-chain compromises to
-  be discovered and reported. This applies to all dependency and GitHub
-  Actions bumps.
+  be discovered and reported.
 
 ## Commit and Pull Request Style
 

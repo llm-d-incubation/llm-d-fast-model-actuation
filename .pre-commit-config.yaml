@@ -76,3 +76,15 @@ repos:
         # tree; run on demand / from CI, never on every commit.
         stages: [manual]
         files: '(^api/|^config/crd/|^Makefile$)'
+
+  # Design rule DR-10: GitHub Actions references (see DESIGN_RULES.md). Offline
+  # here (pin format + tag-comment presence); CI additionally verifies each tag
+  # resolves to its SHA.
+  - repo: local
+    hooks:
+      - id: check-action-refs
+        name: Check GitHub Actions references (DR-10)
+        entry: hack/check-action-refs.py
+        language: system
+        files: ^\.github/workflows/
+        pass_filenames: false
