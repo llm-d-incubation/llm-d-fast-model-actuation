@@ -60,7 +60,9 @@ genuinely needs judgement.
 ### DR-10: Rule
 
 In GitHub Actions workflow files (`.github/workflows/*.y*ml`), every
-`uses:` reference obeys the following, by clause:
+`uses:` reference that names an external repository (`owner/repo…@<ref>`) obeys
+the following, by clause. Local references (`uses: ./…`, which have no `@<ref>`)
+are out of scope.
 
 - **(first-party)** References to first-party actions and reusable workflows —
   those in the [`llm-d/llm-d-infra`](https://github.com/llm-d/llm-d-infra) repo or

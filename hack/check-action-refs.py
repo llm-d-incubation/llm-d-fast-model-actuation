@@ -63,7 +63,8 @@ FIRST_PARTY_REPOS = {
 # is preserved because a YAML parser would discard it, and DR-10 lives there.
 USES_RE = re.compile(r"^\s*(?:-\s*)?uses:\s*(?P<ref>\S+)\s*(?:#\s*(?P<comment>.*))?$")
 
-FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+# Commit SHAs are case-insensitive hex; compare them via .lower() elsewhere.
+FULL_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
 # The version tag is the leading run of the comment, optionally followed by a
 # single punctuation char, then certainly whitespace or end-of-line. So
