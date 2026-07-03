@@ -59,25 +59,24 @@ func NewController(
 	fmaInformerFactory fmainformers.SharedInformerFactory,
 	expectationTimeout time.Duration,
 	stuckThreshold time.Duration,
-	metricsResyncPeriod time.Duration,
 ) (*controller, error) {
 	registerMetrics()
 	ctl := &controller{
-		enqueueLogger:       logger.WithName(ControllerName),
-		coreclient:          coreClient,
-		fmaclient:           fmaClient,
-		namespace:           namespace,
-		podInformer:         corev1PreInformers.Pods().Informer(),
-		podLister:           corev1PreInformers.Pods().Lister(),
-		nodeInformer:        corev1PreInformers.Nodes().Informer(),
-		nodeLister:          corev1PreInformers.Nodes().Lister(),
-		lppInformer:         fmaInformerFactory.Fma().V1alpha1().LauncherPopulationPolicies().Informer(),
-		lppLister:           fmaInformerFactory.Fma().V1alpha1().LauncherPopulationPolicies().Lister(),
-		lcInformer:          fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Informer(),
-		lcLister:            fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Lister(),
-		expectations:        newPendingExpectations(expectationTimeout),
-		stuckThreshold:      stuckThreshold,
-		metricsResyncPeriod: metricsResyncPeriod,
+		enqueueLogger:  logger.WithName(ControllerName),
+		coreclient:     coreClient,
+		fmaclient:      fmaClient,
+		namespace:      namespace,
+		podInformer:    corev1PreInformers.Pods().Informer(),
+		podLister:      corev1PreInformers.Pods().Lister(),
+		nodeInformer:   corev1PreInformers.Nodes().Informer(),
+		nodeLister:     corev1PreInformers.Nodes().Lister(),
+		lppInformer:    fmaInformerFactory.Fma().V1alpha1().LauncherPopulationPolicies().Informer(),
+		lppLister:      fmaInformerFactory.Fma().V1alpha1().LauncherPopulationPolicies().Lister(),
+		lcInformer:     fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Informer(),
+		lcLister:       fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Lister(),
+		expectations:   newPendingExpectations(expectationTimeout),
+		stuckThreshold: stuckThreshold,
+		metrics:        newMetricsState(),
 	}
 	ctl.policy = newDigestedPolicy()
 
@@ -157,14 +156,15 @@ type controller struct {
 	// Written only by the digestQueue worker; read by keyQueue workers.
 	policy *digestedPolicy
 
-	// stuckThreshold is the minimum age (from scheduling) after which a
-	// not-yet-Ready launcher is reported in the "stuck" phase of the
-	// fma_launcher_count metric. It does not change reconcile behavior.
+	// stuckThreshold is the minimum age (from scheduling, or from creation when
+	// not scheduled) after which a not-yet-Ready launcher is reported in the
+	// "stuck" phase of the fma_launcher_pod_count metric. It does not change
+	// reconcile behavior.
 	stuckThreshold time.Duration
 
-	// metricsResyncPeriod is how often runMetricsLoop recomputes the
-	// launcher-count gauge from the informer cache.
-	metricsResyncPeriod time.Duration
+	// metrics backs the fma_launcher_pod_count gauge; it is updated from
+	// reconcileKey as launcher Pods are observed.
+	metrics *metricsState
 }
 
 var _ Controller = &controller{}
@@ -320,10 +320,6 @@ func (ctl *controller) Start(ctx context.Context) error {
 		return fmt.Errorf("caches not synced before end of Start context")
 	}
 
-	// Publish the launcher-count metric periodically. Runs independently of the
-	// work queues; the informer caches are synced by this point.
-	go ctl.runMetricsLoop(ctx)
-
 	// Start digest workers. KnowsProcessedSync appends sentinels behind the
 	// initial batch and invokes onDigestSyncProcessed when those sentinels are
 	// drained, which is when keyQueue starts its workers.
@@ -383,6 +379,20 @@ func (ctl *controller) processKey(ctx context.Context, key NodeLauncherKey) (err
 	logger := klog.FromContext(ctx)
 
 	snap := ctl.policy.snapshotForKey(key)
+
+	// Update the fma_launcher_pod_count metric for this key from the observed
+	// launcher Pods (classifying all of them, including any being deleted). This
+	// runs for every key reconcile — before the desired-state and node-existence
+	// branches below — so a LauncherConfig's series never go stale when a Node is
+	// deleted or the key becomes handsOff, and are dropped once no launcher Pods
+	// remain.
+	if pods, err := ctl.listPodsFromCache(key); err != nil {
+		logger.Error(err, "Failed to list launcher Pods for metrics",
+			"node", key.NodeName, "config", key.LauncherConfigName)
+	} else {
+		ctl.recordLauncherPhases(key, pods, snap.templateHash)
+	}
+
 	if !snap.exists {
 		// Key not in digest: no policy wants this (node, LC) pair.
 		// Clean up any orphaned launchers.

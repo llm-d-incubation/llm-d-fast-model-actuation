@@ -51,9 +51,7 @@ func main() {
 	expectationTimeout := pflag.Duration("expectation-timeout", launcherpopulator.DefaultExpectationTimeout,
 		"How long to wait for the informer cache to reflect pending Pod mutations before falling back to a direct apiserver query")
 	stuckThreshold := pflag.Duration("stuck-threshold", launcherpopulator.DefaultStuckThreshold,
-		"Minimum age (since scheduling) after which a not-yet-Ready launcher is reported in the \"stuck\" phase of fma_launcher_count")
-	metricsResyncPeriod := pflag.Duration("metrics-resync-period", launcherpopulator.DefaultMetricsResyncPeriod,
-		"How often to recompute the fma_launcher_count gauge from the informer cache")
+		"Minimum age (since scheduling, or since creation when not scheduled) after which a not-yet-Ready launcher is reported in the \"stuck\" phase of fma_launcher_pod_count")
 	obsOpts.AddToFlagSet(pflag.CommandLine)
 	pflag.Parse()
 
@@ -105,7 +103,6 @@ func main() {
 		fmaPreInformers,
 		*expectationTimeout,
 		*stuckThreshold,
-		*metricsResyncPeriod,
 	)
 	if err != nil {
 		klog.Fatal(err)
