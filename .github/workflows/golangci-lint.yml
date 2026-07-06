@@ -16,17 +16,16 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: '1.25'
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: "3.12.11"
+      - name: Create Python virtualenv
+        run: python3 -m venv .venv
 
       - name: Install pre-commit
-        run: python -m pip install --upgrade pip pre-commit
+        run: .venv/bin/python -m pip install --upgrade pip pre-commit==4.3.0
 
       - name: go mod tidy + golangci-lint (via pre-commit)
         # pre-commit run accepts a single hook id per invocation. pre-commit
         # builds golangci-lint (pinned in .pre-commit-config.yaml) itself, so
         # there is no separate install step.
         run: |
-          pre-commit run go-mod-tidy --all-files --hook-stage pre-push
-          pre-commit run golangci-lint-full --all-files --hook-stage pre-push
+          .venv/bin/pre-commit run go-mod-tidy --all-files --hook-stage pre-push
+          .venv/bin/pre-commit run golangci-lint-full --all-files --hook-stage pre-push

@@ -1,3 +1,6 @@
+default_language_version:
+  golang: "1.26.4" # Go version
+
 repos:
   # Basic file checks
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -6,7 +9,7 @@ repos:
       - id: trailing-whitespace
         exclude: \.lock\.yml$
       - id: end-of-file-fixer
-        exclude: \.lock\.yml$
+        exclude: '(\.lock\.yml$|\.svg$)'
       - id: check-yaml
         exclude: ^charts/.*/templates/.*\.yaml$
       - id: check-json
@@ -53,8 +56,12 @@ repos:
       - id: golangci-lint-full
         stages: [pre-push]
 
-  # Go mod tidy and codegen verification. These use the project's own Go
-  # toolchain (governed by go.mod), not an extra pinned global tool.
+  # Go mod tidy and codegen verification. These use the system Go toolchain
+  # (whatever `go` is on PATH). go.mod's `go` directive sets the minimum
+  # language version, not the toolchain binary. go-mod-tidy is robust to
+  # toolchain variation; verify-idl-consumption is sensitive to it since
+  # codegen output can differ across versions — use the same toolchain as
+  # the CI workflow (currently 1.26.4).
   - repo: local
     hooks:
       - id: go-mod-tidy

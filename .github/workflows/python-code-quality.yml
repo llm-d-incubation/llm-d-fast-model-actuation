@@ -32,7 +32,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           # pre-commit is the single source of truth for lint/format/file checks
-          pip install pre-commit
+          pip install pre-commit==4.3.0
           # pytest and its dependencies (tests are run separately, not via pre-commit)
           pip install pytest==9.0.2 -r inference_server/launcher/requirements-sans-vllm.txt
 
@@ -53,6 +53,6 @@ jobs:
         run: |
           echo "Code quality checks completed!"
           echo "If any checks failed, run pre-commit locally to fix issues:"
-          echo "  pre-commit run --all-files"
+          echo "  SKIP=go-mod-tidy,golangci-lint,verify-idl-consumption pre-commit run --all-files"
           echo "  python -m pytest tests/test_launcher.py -v"
           echo "  python -m pytest tests/test_gputranslator.py -v"
