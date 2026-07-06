@@ -459,6 +459,8 @@ type serverData struct {
 	// Set of InstanceID deleted to make room for this instance
 	InstancesDeleted sets.Set[string]
 
+	ProxyConfigured bool // true once ensureProxyConfigured has succeeded
+
 	ReadinessRelayed *bool
 
 	Sleeping *bool

@@ -510,6 +510,14 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		if err != nil {
 			return err, true
 		}
+		// After a controller restart the binding may have been persisted
+		// but the proxy config never sent. Ensure it is configured now.
+		if !serverDat.ProxyConfigured {
+			if err := ensureProxyConfigured(ctx, requestingPod, providingPod, adminPort, serverPort); err != nil {
+				return err, true
+			}
+			serverDat.ProxyConfigured = true
+		}
 		// Relay readiness if not already done.
 		// For launcher-based providers, readiness follows the bound instance's
 		// sleeping state rather than the launcher's Pod readiness.
@@ -1305,6 +1313,24 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 			return fmt.Errorf("unable to wake up server because port not known: %w", err), true
 		}
 	}
+	// Initialize a reverse proxy between the launcher Pod and the requester Pod.
+	// Requests can be proxied to the launcher Pod from the requester Pod.
+	adminPort := requestingPod.Annotations[api.AdminPortAnnotationName]
+	if adminPort == "" {
+		adminPort = api.AdminPortDefaultValue
+	}
+	requesterAddr := fmt.Sprintf("%s:%s", requestingPod.Status.PodIP, adminPort)
+	launcherAddr := fmt.Sprintf("%s:%d", providingPod.Status.PodIP, serverPort)
+	url := fmt.Sprintf("http://%s%s", requesterAddr, stubapi.ProxyConfigPath)
+	proxyConfig, _ := json.Marshal(stubapi.ProxyTargetConfig{
+		Address: providingPod.Status.PodIP,
+		Port:    uint16(serverPort),
+	})
+
+	if err := doPut(ctx, url, bytes.NewReader(proxyConfig)); err != nil {
+		return fmt.Errorf("failed to initialize proxy (requester %s -> launcher %s): %w",
+			requesterAddr, launcherAddr, err), true
+	}
 	if !skipWake {
 		err = ctl.wakeSleeper(ctx, serverDat, requestingPod, providingPod, serverPort, "freshly-bound")
 		if err != nil {
@@ -1895,6 +1921,72 @@ func (ctl *controller) ensureReqState(ctx context.Context, requestingPod *corev1
 		logger.V(2).Info("Failed to set status/finalizers", "serverRequestingPod", requestingPod.Name, "status", status, "accelerators", desiredAccelerators, "boundName", serverDat.ProvidingPodName, "instanceID", desiredInstanceID, "finalizers", requestingPod.Finalizers, "resourceVersion", requestingPod.ResourceVersion, "k8sCallStartTime", updStartStr, "err", err.Error())
 	}
 	return err, err != nil
+}
+
+func doPut(ctx context.Context, url string, data io.Reader) error {
+	return doHTTPRequest(ctx, http.MethodPut, url, data)
+}
+
+func ensureProxyConfigured(ctx context.Context, requestingPod, providingPod *corev1.Pod, adminPort string, serverPort int32) error {
+	logger := klog.FromContext(ctx)
+	proxyURL := fmt.Sprintf("http://%s:%s%s", requestingPod.Status.PodIP, adminPort, stubapi.ProxyConfigPath)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, proxyURL, nil)
+	if err != nil {
+		return fmt.Errorf("ensureProxyConfigured: create GET request: %w", err)
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("ensureProxyConfigured: GET %s: %w", proxyURL, err)
+	}
+	defer resp.Body.Close() //nolint:errcheck
+
+	if resp.StatusCode == http.StatusOK {
+		return nil
+	}
+	if resp.StatusCode != http.StatusNotFound {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("ensureProxyConfigured: GET %s returned %d: %s", proxyURL, resp.StatusCode, string(body))
+	}
+
+	proxyConfig, _ := json.Marshal(stubapi.ProxyTargetConfig{
+		Address: providingPod.Status.PodIP,
+		Port:    uint16(serverPort),
+	})
+	if err := doPut(ctx, proxyURL, bytes.NewReader(proxyConfig)); err != nil {
+		return fmt.Errorf("ensureProxyConfigured: PUT %s: %w", proxyURL, err)
+	}
+	logger.V(2).Info("Configured proxy after controller restart",
+		"requester", requestingPod.Name, "provider", providingPod.Name,
+		"target", fmt.Sprintf("%s:%d", providingPod.Status.PodIP, serverPort))
+	return nil
+}
+
+func doHTTPRequest(ctx context.Context, method, url string, data io.Reader) error {
+	req, err := http.NewRequestWithContext(ctx, method, url, data)
+	if err != nil {
+		return fmt.Errorf("http %s %q: %w", method, url, err)
+	}
+	if data != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("http %s %q: %w", method, url, err)
+	}
+	defer resp.Body.Close() //nolint:errcheck
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("http %s %q returned unexpected status %d; response body=%s", method, url, resp.StatusCode, string(body))
+	}
+
+	return nil
 }
 
 var coreScheme *k8sruntime.Scheme
