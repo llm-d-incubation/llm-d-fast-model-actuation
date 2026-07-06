@@ -19,56 +19,72 @@ package main
 import (
 	"flag"
 	"os"
+	"strconv"
 	"sync"
 	"sync/atomic"
 
-	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/coordination"
-	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/probes"
-	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
+	"github.com/spf13/pflag"
 
 	"k8s.io/klog/v2"
+
+	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
+
+	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/config"
+	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/coordination"
+	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/probes"
+	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/server/requester/proxy"
 )
 
 func main() {
+	cfg := config.NewDefault()
+
 	klog.InitFlags(nil)
-	flag.Parse()
+	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
+	cfg.AddFlags(pflag.CommandLine)
+	pflag.Parse()
 
 	// set up signals so we handle the shutdown signal gracefully
 	ctx := signals.SetupSignalHandler()
 	logger := klog.FromContext(ctx)
 
-	// Read ports from environment variables, fallback to defaults
-	probesPort := os.Getenv("PROBES_PORT")
-	if probesPort == "" {
-		probesPort = "8080"
-	}
-
-	spiPort := os.Getenv("SPI_PORT")
-	if spiPort == "" {
-		spiPort = "8081"
-	}
+	pflag.CommandLine.VisitAll(func(f *pflag.Flag) {
+		logger.V(1).Info("Config", "flag", f.Name, "value", f.Value.String())
+	})
 
 	var ready atomic.Bool
+	proxySrv := proxy.New(cfg.Proxy)
 
 	var wg sync.WaitGroup
-	wg.Add(2)
 
+	wg.Add(1)
 	go func() {
 		defer wg.Done()
 
-		err := coordination.Run(ctx, spiPort, &ready, os.Stdout)
+		err := coordination.Run(ctx, strconv.FormatUint(uint64(cfg.SPIPort), 10), &ready, os.Stdout, proxySrv.Configure)
 		if err != nil {
-			logger.Error(err, "failed to start requester SPI server")
+			logger.Error(err, "failed to run requester SPI server")
 		}
 	}()
 
 	// Start the readiness probe server
+	wg.Add(1)
 	go func() {
 		defer wg.Done()
 
-		err := probes.Run(ctx, probesPort, &ready)
+		err := probes.Run(ctx, strconv.FormatUint(uint64(cfg.ProbesPort), 10), &ready)
 		if err != nil {
-			logger.Error(err, "failed to start requester probes server")
+			logger.Error(err, "failed to run requester probes server")
+		}
+	}()
+
+	// Start the reverse proxy server
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		err := proxySrv.Run(ctx)
+		if err != nil {
+			logger.Error(err, "failed to run requester proxy server")
 		}
 	}()
 

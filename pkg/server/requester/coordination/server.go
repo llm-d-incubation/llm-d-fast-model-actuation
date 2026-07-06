@@ -73,7 +73,7 @@ func getGpuUUIDs() ([]string, error) {
 
 // Run starts an HTTP server managing the endpoints
 // consumed by the dual-pods controller.
-func Run(ctx context.Context, port string, ready *atomic.Bool, logWriter io.Writer) error {
+func Run(ctx context.Context, port string, ready *atomic.Bool, logWriter io.Writer, proxyConfigHandler http.HandlerFunc) error {
 	logger := klog.FromContext(ctx).WithName("spi-server")
 
 	gpuUUIDs, err := getGpuUUIDs()
@@ -85,7 +85,7 @@ func Run(ctx context.Context, port string, ready *atomic.Bool, logWriter io.Writ
 	} else {
 		logger.Info("Got GPU UUIDs", "uuids", gpuUUIDs)
 	}
-	return RunWithGPUUUIDs(ctx, port, ready, logWriter, gpuUUIDs)
+	return RunWithGPUUUIDs(ctx, port, ready, logWriter, gpuUUIDs, proxyConfigHandler)
 }
 
 func gpuMemoryHandler(logger klog.Logger) func(w http.ResponseWriter, r *http.Request) {
@@ -204,7 +204,7 @@ func newSetLogHandler(logger klog.Logger, logWriter io.Writer) func(w http.Respo
 	}
 }
 
-func RunWithGPUUUIDs(ctx context.Context, port string, ready *atomic.Bool, logWriter io.Writer, gpuUUIDs []string) error {
+func RunWithGPUUUIDs(ctx context.Context, port string, ready *atomic.Bool, logWriter io.Writer, gpuUUIDs []string, proxyConfigHandler http.HandlerFunc) error {
 	logger := klog.FromContext(ctx).WithName("spi-server")
 	mux := http.NewServeMux()
 	mux.HandleFunc(strings.Join([]string{"GET", stubapi.AcceleratorQueryPath}, " "), gpuHandler(gpuUUIDs))
@@ -212,6 +212,7 @@ func RunWithGPUUUIDs(ctx context.Context, port string, ready *atomic.Bool, logWr
 	mux.HandleFunc("POST "+stubapi.BecomeReadyPath, newSetReadyHandler(logger, ready, true))
 	mux.HandleFunc("POST "+stubapi.BecomeUnreadyPath, newSetReadyHandler(logger, ready, false))
 	mux.HandleFunc("POST "+stubapi.SetLogPath, newSetLogHandler(logger, logWriter))
+	mux.HandleFunc(stubapi.ProxyConfigPath, proxyConfigHandler)
 
 	server := &http.Server{
 		Addr:    ":" + port,
