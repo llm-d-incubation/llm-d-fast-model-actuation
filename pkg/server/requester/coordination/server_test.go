@@ -22,14 +22,32 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	stubapi "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/spi"
 )
+
+// waitForServer blocks until the HTTP server started in a goroutine is
+// accepting connections on the given port, avoiding a startup race where the
+// first request fires before the listener is bound.
+func waitForServer(tb testing.TB, port string) {
+	tb.Helper()
+	for range 100 {
+		conn, err := net.DialTimeout("tcp", "localhost:"+port, 100*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	tb.Fatalf("server on port %s did not become ready", port)
+}
 
 func FuzzServer(f *testing.F) {
 	f.Add(true)
@@ -44,6 +62,7 @@ func FuzzServer(f *testing.F) {
 			f.Logf("Run failed: %s", err.Error())
 		}
 	}()
+	waitForServer(f, port)
 	paths := map[bool]string{false: stubapi.BecomeUnreadyPath, true: stubapi.BecomeReadyPath}
 	f.Fuzz(func(t *testing.T, beReady bool) {
 		path := paths[beReady]
@@ -94,6 +113,7 @@ func TestLogChunking(t *testing.T) {
 			t.Logf("Run failed: %s", err.Error())
 		}
 	}()
+	waitForServer(t, port)
 	for {
 		curLen := logBuilder.Len()
 		if curLen > fullLogSize-fullLogSize/60 {
