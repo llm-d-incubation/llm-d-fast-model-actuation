@@ -25,14 +25,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      # Pin the code-generation toolchain explicitly so this check is
-      # deterministic: the generated code is sensitive to the Go toolchain's
-      # formatter, so without pinning it passes or fails depending on which
-      # runner-image Go version the job lands on. This is the *tools* version
-      # used to generate code, chosen on purpose and specified separately from
-      # go.mod's language version; setup-go sets GOTOOLCHAIN=local, so the
-      # generators are built with exactly this version. If you bump it, also
-      # regenerate the committed code (hack/verify-idl-consumption.sh).
+      # Pin the Go toolchain explicitly: it is a build dependency for code
+      # generation, so pinning keeps CI reproducible (setup-go sets
+      # GOTOOLCHAIN=local, so the generators are built with exactly this
+      # version). This is the *toolchain* version, distinct from go.mod's
+      # language version. We have not observed the generated code differ across
+      # current toolchains (1.24–1.26); this is defensive pinning of a
+      # dependency, not a fix for an observed bug.
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: "1.26.4"

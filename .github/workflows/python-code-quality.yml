@@ -52,7 +52,8 @@ jobs:
         if: always()
         run: |
           echo "Code quality checks completed!"
-          echo "If any checks failed, run pre-commit locally to fix issues:"
+          echo "For lint/format/typo failures, run pre-commit locally:"
           echo "  SKIP=go-mod-tidy,golangci-lint,verify-idl-consumption pre-commit run --all-files"
+          echo "For test failures, run the launcher tests directly (pre-commit does not run these):"
           echo "  python -m pytest tests/test_launcher.py -v"
           echo "  python -m pytest tests/test_gputranslator.py -v"

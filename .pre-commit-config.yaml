@@ -1,6 +1,3 @@
-default_language_version:
-  golang: "1.26.4" # Go version
-
 repos:
   # Basic file checks
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -57,11 +54,10 @@ repos:
         stages: [pre-push]
 
   # Go mod tidy and codegen verification. These use the system Go toolchain
-  # (whatever `go` is on PATH). go.mod's `go` directive sets the minimum
-  # language version, not the toolchain binary. go-mod-tidy is robust to
-  # toolchain variation; verify-idl-consumption is sensitive to it since
-  # codegen output can differ across versions — use the same toolchain as
-  # the CI workflow (currently 1.26.4).
+  # (whatever `go` is on PATH); go.mod's `go` directive is the minimum
+  # language version, not the toolchain to use. We have not observed the
+  # generated code differ across current Go toolchains, so these hooks are
+  # not pinned to a specific one.
   - repo: local
     hooks:
       - id: go-mod-tidy
