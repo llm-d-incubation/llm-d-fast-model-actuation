@@ -61,6 +61,9 @@ func (ctl *controller) updateDigestForLC(ctx context.Context, name string) error
 		}
 		logger.Info("LC deleted, requeuing referencing LPPs", "config", name)
 		delete(ctl.policy.lcs, name)
+		// Drop this LC's fma_launcher_pod_count series once no launcher keeps it
+		// alive (see metricsState).
+		ctl.metrics.setLCExists(name, false)
 	} else { // LC exists: digest it
 		nodeIndep, templateHash, err = utils.BuildNodeIndependentLauncherTemplate(lc)
 		if err != nil {
@@ -78,6 +81,9 @@ func (ctl *controller) updateDigestForLC(ctx context.Context, name string) error
 			templateHash:    templateHash,
 			nodeIndependent: nodeIndep,
 		}
+		// The LauncherConfig object exists, so its fma_launcher_pod_count series
+		// must exist (as explicit zeros until launchers arrive).
+		ctl.metrics.setLCExists(name, true)
 	}
 
 	if prevGood != good || good && (prevTemplateHash != templateHash) {

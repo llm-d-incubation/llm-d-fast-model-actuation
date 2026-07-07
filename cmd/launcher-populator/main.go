@@ -50,8 +50,10 @@ func main() {
 	common.AddKubernetesClientFlags(*pflag.CommandLine, loadingRules, overrides)
 	expectationTimeout := pflag.Duration("expectation-timeout", launcherpopulator.DefaultExpectationTimeout,
 		"How long to wait for the informer cache to reflect pending Pod mutations before falling back to a direct apiserver query")
+	pendingThreshold := pflag.Duration("pending-threshold", launcherpopulator.DefaultPendingThreshold,
+		"Minimum age (since creation) after which an unscheduled, not-yet-Ready launcher is reported in the \"pending\" phase of fma_launcher_pod_count")
 	stuckThreshold := pflag.Duration("stuck-threshold", launcherpopulator.DefaultStuckThreshold,
-		"Minimum age (since scheduling, or since creation when not scheduled) after which a not-yet-Ready launcher is reported in the \"stuck\" phase of fma_launcher_pod_count")
+		"Minimum age (since scheduling) after which a scheduled, not-yet-Ready launcher is reported in the \"stuck\" phase of fma_launcher_pod_count")
 	obsOpts.AddToFlagSet(pflag.CommandLine)
 	pflag.Parse()
 
@@ -102,6 +104,7 @@ func main() {
 		kubePreInformers.Core().V1(),
 		fmaPreInformers,
 		*expectationTimeout,
+		*pendingThreshold,
 		*stuckThreshold,
 	)
 	if err != nil {

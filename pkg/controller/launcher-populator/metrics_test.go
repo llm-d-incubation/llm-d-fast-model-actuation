@@ -25,8 +25,10 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/component-base/metrics/legacyregistry"
+	testingclock "k8s.io/utils/clock/testing"
 
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/common"
 	genctlr "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/generic"
@@ -34,14 +36,15 @@ import (
 
 const testTemplateHash = "hash-current"
 
-// launcherPodBuilder builds a launcher Pod for classification tests. All
-// timestamps are supplied by tests so classification is deterministic.
-type launcherPodBuilder struct {
-	pod corev1.Pod
+// podBuilder wraps a launcher Pod for classification tests, configured via
+// fluent setters. All timestamps are supplied by tests so classification is
+// deterministic.
+type podBuilder struct {
+	p corev1.Pod
 }
 
-func newLauncherPod() *launcherPodBuilder {
-	return &launcherPodBuilder{pod: corev1.Pod{
+func newBuilder() *podBuilder {
+	return &podBuilder{p: corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        "launcher-test",
 			Annotations: map[string]string{common.LauncherTemplateHashAnnotationKey: testTemplateHash},
@@ -50,32 +53,32 @@ func newLauncherPod() *launcherPodBuilder {
 }
 
 // hash overrides the template-hash annotation (to model a superseded template).
-func (b *launcherPodBuilder) hash(h string) *launcherPodBuilder {
-	b.pod.Annotations[common.LauncherTemplateHashAnnotationKey] = h
+func (b *podBuilder) hash(h string) *podBuilder {
+	b.p.Annotations[common.LauncherTemplateHashAnnotationKey] = h
 	return b
 }
 
 // noHash removes the template-hash annotation entirely.
-func (b *launcherPodBuilder) noHash() *launcherPodBuilder {
-	delete(b.pod.Annotations, common.LauncherTemplateHashAnnotationKey)
+func (b *podBuilder) noHash() *podBuilder {
+	delete(b.p.Annotations, common.LauncherTemplateHashAnnotationKey)
 	return b
 }
 
-func (b *launcherPodBuilder) bound() *launcherPodBuilder {
-	b.pod.Annotations[common.RequesterAnnotationKey] = "some-uid requester-name"
+func (b *podBuilder) bound() *podBuilder {
+	b.p.Annotations[common.RequesterAnnotationKey] = "some-uid requester-name"
 	return b
 }
 
-func (b *launcherPodBuilder) ready() *launcherPodBuilder {
-	b.pod.Status.Conditions = append(b.pod.Status.Conditions, corev1.PodCondition{
+func (b *podBuilder) ready() *podBuilder {
+	b.p.Status.Conditions = append(b.p.Status.Conditions, corev1.PodCondition{
 		Type:   corev1.PodReady,
 		Status: corev1.ConditionTrue,
 	})
 	return b
 }
 
-func (b *launcherPodBuilder) scheduledAt(t time.Time) *launcherPodBuilder {
-	b.pod.Status.Conditions = append(b.pod.Status.Conditions, corev1.PodCondition{
+func (b *podBuilder) scheduledAt(t time.Time) *podBuilder {
+	b.p.Status.Conditions = append(b.p.Status.Conditions, corev1.PodCondition{
 		Type:               corev1.PodScheduled,
 		Status:             corev1.ConditionTrue,
 		LastTransitionTime: metav1.NewTime(t),
@@ -83,19 +86,20 @@ func (b *launcherPodBuilder) scheduledAt(t time.Time) *launcherPodBuilder {
 	return b
 }
 
-func (b *launcherPodBuilder) createdAt(t time.Time) *launcherPodBuilder {
-	b.pod.CreationTimestamp = metav1.NewTime(t)
+func (b *podBuilder) createdAt(t time.Time) *podBuilder {
+	b.p.CreationTimestamp = metav1.NewTime(t)
 	return b
 }
 
 // deleting marks the Pod as terminating (DeletionTimestamp set).
-func (b *launcherPodBuilder) deleting() *launcherPodBuilder {
+func (b *podBuilder) deleting() *podBuilder {
 	dt := metav1.NewTime(time.Date(2026, 6, 21, 11, 0, 0, 0, time.UTC))
-	b.pod.DeletionTimestamp = &dt
+	b.p.DeletionTimestamp = &dt
 	return b
 }
 
-func (b *launcherPodBuilder) build() *corev1.Pod { return &b.pod }
+// pod returns the wrapped Pod.
+func (b *podBuilder) pod() *corev1.Pod { return &b.p }
 
 // Classification input dimensions, enumerated exhaustively by
 // TestLauncherPhaseOf.
@@ -119,16 +123,17 @@ const (
 var (
 	hashKindNames = map[hashKind]string{hashMatches: "hashMatches", hashDiffers: "hashDiffers", hashAbsent: "hashAbsent"}
 	ageKindNames  = map[ageKind]string{ageYoung: "young", ageOldUnscheduled: "oldUnscheduled", ageOldScheduledLongAgo: "oldSchedLongAgo", ageOldScheduledRecently: "oldSchedRecently"}
-	allHashKinds  = []hashKind{hashMatches, hashDiffers, hashAbsent}
-	allAgeKinds   = []ageKind{ageYoung, ageOldUnscheduled, ageOldScheduledLongAgo, ageOldScheduledRecently}
+	// Derived from the name maps (sorted, i.e. iota order) to avoid restating them.
+	allHashKinds = sets.List(sets.KeySet(hashKindNames))
+	allAgeKinds  = sets.List(sets.KeySet(ageKindNames))
 )
 
 // buildClassifyPod constructs a launcher Pod for the given input dimensions.
 // It only wires inputs; it does not encode the expected classification.
 func buildClassifyPod(now time.Time, bound bool, hk hashKind, ready bool, age ageKind) *corev1.Pod {
-	old := now.Add(-10 * time.Minute)   // older than the 7.5m threshold
-	recent := now.Add(-1 * time.Minute) // younger than the threshold
-	b := newLauncherPod()               // defaults to the current template hash
+	old := now.Add(-10 * time.Minute)   // older than both thresholds
+	recent := now.Add(-1 * time.Minute) // younger than both thresholds
+	b := newBuilder()                   // defaults to the current template hash
 	switch hk {
 	case hashDiffers:
 		b.hash("superseded")
@@ -151,24 +156,25 @@ func buildClassifyPod(now time.Time, bound bool, hk hashKind, ready bool, age ag
 	case ageOldScheduledRecently:
 		b.createdAt(old).scheduledAt(recent)
 	}
-	return b.build()
+	return b.pod()
 }
 
 // TestLauncherPhaseOf exhaustively covers the cross product of the
 // classification inputs: bound/unbound x hash(matches/differs/absent) x
 // ready/not x four age buckets (2*3*2*4 = 48). Inputs are generated
 // programmatically; expected phases are hand-authored per block (constants for
-// the short-circuit blocks, an explicit map for the age-dependent block) so the
-// oracle never re-implements launcherPhaseOf.
+// the short-circuit blocks, one explicit case per age bucket for the
+// age-dependent block) so the oracle never re-implements launcherPhaseOf.
 func TestLauncherPhaseOf(t *testing.T) {
 	ctl := &controller{}
-	const threshold = 7*time.Minute + 30*time.Second
+	const pendingThreshold = 2 * time.Minute
+	const stuckThreshold = 7*time.Minute + 30*time.Second
 	now := time.Date(2026, 6, 21, 12, 0, 0, 0, time.UTC)
 
 	check := func(t *testing.T, bound bool, hk hashKind, ready bool, age ageKind, want launcherPhase) {
 		t.Helper()
 		pod := buildClassifyPod(now, bound, hk, ready, age)
-		if got := ctl.launcherPhaseOf(pod, testTemplateHash, threshold, now); got != want {
+		if got, _ := ctl.launcherPhaseOf(pod, testTemplateHash, pendingThreshold, stuckThreshold, now); got != want {
 			t.Errorf("bound=%v hash=%s ready=%v age=%s: got %q, want %q",
 				bound, hashKindNames[hk], ready, ageKindNames[age], got, want)
 		}
@@ -201,16 +207,13 @@ func TestLauncherPhaseOf(t *testing.T) {
 		run(t, false, hashMatches, true, age, phaseUnbound)
 	}
 
-	// Block 4 (4): unbound + matching hash + not Ready -> depends on age.
-	wantByAge := map[ageKind]launcherPhase{
-		ageYoung:                phaseUnbound,
-		ageOldUnscheduled:       phaseStuck,
-		ageOldScheduledLongAgo:  phaseStuck,
-		ageOldScheduledRecently: phaseUnbound,
-	}
-	for _, age := range allAgeKinds {
-		run(t, false, hashMatches, false, age, wantByAge[age])
-	}
+	// Block 4 (4): unbound + matching hash + not Ready -> depends on whether it
+	// has been scheduled and for how long. Unscheduled-and-old is pending;
+	// scheduled-and-old is stuck; recently scheduled (or young) is still unbound.
+	run(t, false, hashMatches, false, ageYoung, phaseUnbound)
+	run(t, false, hashMatches, false, ageOldUnscheduled, phasePending)
+	run(t, false, hashMatches, false, ageOldScheduledLongAgo, phaseStuck)
+	run(t, false, hashMatches, false, ageOldScheduledRecently, phaseUnbound)
 }
 
 // TestLauncherPhaseOfEmptyCurrentHash verifies that when the digest has no
@@ -218,18 +221,18 @@ func TestLauncherPhaseOf(t *testing.T) {
 // classifies as stale.
 func TestLauncherPhaseOfEmptyCurrentHash(t *testing.T) {
 	ctl := &controller{}
-	now := time.Now()
-	pod := newLauncherPod().scheduledAt(now).build()
-	if got := ctl.launcherPhaseOf(pod, "", DefaultStuckThreshold, now); got != phaseStale {
+	now := time.Date(2026, 6, 21, 12, 0, 0, 0, time.UTC)
+	pod := newBuilder().scheduledAt(now).pod()
+	if got, _ := ctl.launcherPhaseOf(pod, "", DefaultPendingThreshold, DefaultStuckThreshold, now); got != phaseStale {
 		t.Errorf("launcherPhaseOf() with empty current hash = %q, want %q", got, phaseStale)
 	}
 }
 
-// gatheredPhases returns the fma_launcher_pod_count series currently present
-// for one LauncherConfig, as phase->value. It reads the registry directly (not
-// WithLabelValues, which would lazily create a missing series at 0), so a
-// deleted series is observably absent and an explicit zero is observably
-// present.
+// gatheredPhases returns a map from phase to the value currently reported by the
+// fma_launcher_pod_count metric for the given LauncherConfig name. It reads the
+// registry directly (not WithLabelValues, which would lazily create a missing
+// series at 0), so a deleted series is observably absent and an explicit zero is
+// observably present.
 func gatheredPhases(t *testing.T, lcfg string) map[string]float64 {
 	t.Helper()
 	mfs, err := legacyregistry.DefaultGatherer.Gather()
@@ -259,21 +262,24 @@ func gatheredPhases(t *testing.T, lcfg string) map[string]float64 {
 	return out
 }
 
-// seriesCountForLcfg returns how many fma_launcher_pod_count series exist for
-// the given LauncherConfig.
-func seriesCountForLcfg(t *testing.T, lcfg string) int {
+// assertLcfgAbsent asserts that no fma_launcher_pod_count series exist for the
+// given LauncherConfig (as opposed to existing with zero values).
+func assertLcfgAbsent(t *testing.T, lcfg string) {
 	t.Helper()
-	return len(gatheredPhases(t, lcfg))
+	if got := gatheredPhases(t, lcfg); len(got) != 0 {
+		t.Errorf("lcfg %q: want no series, got %v", lcfg, got)
+	}
 }
 
-// assertLcfgPhases asserts the exact set of phase series (values and presence)
-// for one lcfg.
-func assertLcfgPhases(t *testing.T, lcfg string, bound, unbound, stuck, stale int) {
+// assertLcfgPhases asserts the exact value reported for every phase of one
+// LauncherConfig, and that all of those phases (and only them) are present.
+func assertLcfgPhases(t *testing.T, lcfg string, bound, unbound, pending, stuck, stale int) {
 	t.Helper()
 	got := gatheredPhases(t, lcfg)
 	want := map[string]float64{
 		string(phaseBound):   float64(bound),
 		string(phaseUnbound): float64(unbound),
+		string(phasePending): float64(pending),
 		string(phaseStuck):   float64(stuck),
 		string(phaseStale):   float64(stale),
 	}
@@ -283,7 +289,7 @@ func assertLcfgPhases(t *testing.T, lcfg string, bound, unbound, stuck, stale in
 }
 
 // TestMetricsStatePublish verifies cross-node aggregation, per-phase Set
-// (including explicit zeros — proven by the series count, not by a value read),
+// (including explicit zeros — assertLcfgPhases proves every phase is present),
 // overwrite/re-aggregation, and true deletion of a LauncherConfig's series once
 // it has no launcher Pods on any node.
 func TestMetricsStatePublish(t *testing.T) {
@@ -296,48 +302,36 @@ func TestMetricsStatePublish(t *testing.T) {
 
 	// The steps below share ms/gauge state and must run in order.
 	t.Run("aggregate across nodes", func(t *testing.T) {
-		// All four phases must be present (count == 4 proves bound/stale exist as
-		// explicit zeros, not just that a value read returns 0).
 		ms.publish(keyA, phaseCounts{phaseUnbound: 2})
 		ms.publish(keyB, phaseCounts{phaseUnbound: 1, phaseStuck: 1})
-		if n := seriesCountForLcfg(t, lcfg); n != 4 {
-			t.Errorf("series count = %d, want 4 (all phases present incl. explicit zeros)", n)
-		}
-		assertLcfgPhases(t, lcfg, 0, 3, 1, 0)
+		// assertLcfgPhases requires every phase present, so bound/pending/stale
+		// existing as explicit zeros is part of what this asserts.
+		assertLcfgPhases(t, lcfg, 0, 3, 0, 1, 0)
 	})
 
 	t.Run("overwrite key re-aggregates", func(t *testing.T) {
 		// Overwriting an existing, still-nonzero key must recompute (not
 		// accumulate) the aggregate from the replaced counts.
 		ms.publish(keyA, phaseCounts{phaseUnbound: 5, phaseBound: 1})
-		if n := seriesCountForLcfg(t, lcfg); n != 4 {
-			t.Errorf("series count = %d, want 4 after overwrite", n)
-		}
-		assertLcfgPhases(t, lcfg, 1, 6, 1, 0)
+		assertLcfgPhases(t, lcfg, 1, 6, 0, 1, 0)
 	})
 
 	t.Run("drop one node keeps lcfg", func(t *testing.T) {
 		ms.publish(keyA, phaseCounts{})
-		if _, ok := ms.perLcfg[lcfg][keyA]; ok {
-			t.Error("keyA should be removed from perLcfg after dropping to zero")
+		if _, ok := ms.perNode[lcfg][keyA.NodeName]; ok {
+			t.Error("nodeA should be removed from perNode after dropping to zero")
 		}
-		if n := seriesCountForLcfg(t, lcfg); n != 4 {
-			t.Errorf("series count = %d, want 4 while nodeB still has launchers", n)
-		}
-		assertLcfgPhases(t, lcfg, 0, 1, 1, 0)
+		assertLcfgPhases(t, lcfg, 0, 1, 0, 1, 0)
 	})
 
 	t.Run("delete last node removes series", func(t *testing.T) {
-		// The series must be truly gone from the registry (not left as stale
-		// zeros) — the whole point of metricsState — so assert absence via the
-		// count, not a value read.
+		// No LauncherConfig object exists here, so once the last node drops the
+		// series must be truly gone from the registry (not left as stale zeros).
 		ms.publish(keyB, phaseCounts{})
-		if _, ok := ms.perLcfg[lcfg]; ok {
-			t.Error("lcfg should be removed from perLcfg once no node has launchers")
+		if _, ok := ms.perNode[lcfg]; ok {
+			t.Error("lcfg should be removed from perNode once no node has launchers")
 		}
-		if n := seriesCountForLcfg(t, lcfg); n != 0 {
-			t.Errorf("series count = %d, want 0 (series must be deleted, not left as zeros)", n)
-		}
+		assertLcfgAbsent(t, lcfg)
 	})
 }
 
@@ -349,12 +343,10 @@ func TestMetricsStatePublishZeroForAbsentKey(t *testing.T) {
 	launcherPodCountGauge.Reset()
 	ms := newMetricsState()
 	ms.publish(NodeLauncherKey{NodeName: "n", LauncherConfigName: "never"}, phaseCounts{})
-	if len(ms.perLcfg) != 0 {
-		t.Errorf("perLcfg should stay empty, got %v", ms.perLcfg)
+	if len(ms.perNode) != 0 {
+		t.Errorf("perNode should stay empty, got %v", ms.perNode)
 	}
-	if n := seriesCountForLcfg(t, "never"); n != 0 {
-		t.Errorf("series count = %d, want 0", n)
-	}
+	assertLcfgAbsent(t, "never")
 }
 
 // TestMetricsStatePublishIndependentLcfgs verifies that two LauncherConfigs do
@@ -368,33 +360,22 @@ func TestMetricsStatePublishIndependentLcfgs(t *testing.T) {
 	t.Run("both present independently", func(t *testing.T) {
 		ms.publish(NodeLauncherKey{NodeName: "n1", LauncherConfigName: lcX}, phaseCounts{phaseUnbound: 2})
 		ms.publish(NodeLauncherKey{NodeName: "n1", LauncherConfigName: lcY}, phaseCounts{phaseStuck: 1})
-		if n := seriesCountForLcfg(t, lcX); n != 4 {
-			t.Errorf("lcX series count = %d, want 4", n)
-		}
-		if n := seriesCountForLcfg(t, lcY); n != 4 {
-			t.Errorf("lcY series count = %d, want 4", n)
-		}
-		assertLcfgPhases(t, lcX, 0, 2, 0, 0)
-		assertLcfgPhases(t, lcY, 0, 0, 1, 0)
+		assertLcfgPhases(t, lcX, 0, 2, 0, 0, 0)
+		assertLcfgPhases(t, lcY, 0, 0, 0, 1, 0)
 	})
 
 	t.Run("deleting one keeps the other", func(t *testing.T) {
 		ms.publish(NodeLauncherKey{NodeName: "n1", LauncherConfigName: lcX}, phaseCounts{})
-		if _, ok := ms.perLcfg[lcY]; !ok {
+		if _, ok := ms.perNode[lcY]; !ok {
 			t.Error("lcY must survive deletion of lcX")
 		}
-		if n := seriesCountForLcfg(t, lcX); n != 0 {
-			t.Errorf("lcX series count = %d, want 0 after deletion", n)
-		}
-		if n := seriesCountForLcfg(t, lcY); n != 4 {
-			t.Errorf("lcY series count = %d, want 4 (untouched)", n)
-		}
-		assertLcfgPhases(t, lcY, 0, 0, 1, 0)
+		assertLcfgAbsent(t, lcX)
+		assertLcfgPhases(t, lcY, 0, 0, 0, 1, 0)
 	})
 }
 
 // TestMetricsStatePublishConcurrent exercises the mutex in publish. Run with
-// -race to catch unsynchronized access to perLcfg / the gauge.
+// -race to catch unsynchronized access to perNode / agg / the gauge.
 func TestMetricsStatePublishConcurrent(t *testing.T) {
 	registerMetrics()
 	launcherPodCountGauge.Reset()
@@ -413,25 +394,77 @@ func TestMetricsStatePublishConcurrent(t *testing.T) {
 	}
 	wg.Wait()
 
-	if n := seriesCountForLcfg(t, lcfg); n != 4 {
-		t.Errorf("series count = %d, want 4", n)
-	}
-	assertLcfgPhases(t, lcfg, 0, nKeys, 0, 0) // every key contributed unbound:1
+	assertLcfgPhases(t, lcfg, 0, nKeys, 0, 0, 0) // every key contributed unbound:1
+}
+
+// TestMetricsStateSetLCExists verifies the "series exist while the
+// LauncherConfig object exists OR a launcher references it" semantics: the
+// series appear as soon as either does and disappear only once neither holds.
+func TestMetricsStateSetLCExists(t *testing.T) {
+	registerMetrics()
+	launcherPodCountGauge.Reset()
+	ms := newMetricsState()
+	const lcfg = "lc-exists"
+	key := NodeLauncherKey{NodeName: "n1", LauncherConfigName: lcfg}
+
+	// Steps share ms/gauge state and must run in order.
+	t.Run("LC object with no launchers reports explicit zeros", func(t *testing.T) {
+		ms.setLCExists(lcfg, true)
+		assertLcfgPhases(t, lcfg, 0, 0, 0, 0, 0)
+	})
+
+	t.Run("launchers add on top of the existing zeros", func(t *testing.T) {
+		ms.publish(key, phaseCounts{phaseUnbound: 2, phaseStuck: 1})
+		assertLcfgPhases(t, lcfg, 0, 2, 0, 1, 0)
+	})
+
+	t.Run("deleting the LC object keeps series while a launcher remains", func(t *testing.T) {
+		ms.setLCExists(lcfg, false)
+		assertLcfgPhases(t, lcfg, 0, 2, 0, 1, 0)
+	})
+
+	t.Run("removing the last launcher then drops the series", func(t *testing.T) {
+		ms.publish(key, phaseCounts{})
+		assertLcfgAbsent(t, lcfg)
+	})
+}
+
+// TestMetricsStateLCObjectOutlivesLaunchers covers the other order: a launcher's
+// series must survive the launcher's own removal as long as the LauncherConfig
+// object still exists (reported as explicit zeros), and vanish once it too goes.
+func TestMetricsStateLCObjectOutlivesLaunchers(t *testing.T) {
+	registerMetrics()
+	launcherPodCountGauge.Reset()
+	ms := newMetricsState()
+	const lcfg = "lc-outlive"
+	key := NodeLauncherKey{NodeName: "n1", LauncherConfigName: lcfg}
+
+	ms.setLCExists(lcfg, true)
+	ms.publish(key, phaseCounts{phaseUnbound: 1})
+	assertLcfgPhases(t, lcfg, 0, 1, 0, 0, 0)
+
+	// Launcher goes away but the LC object still exists -> zeros remain.
+	ms.publish(key, phaseCounts{})
+	assertLcfgPhases(t, lcfg, 0, 0, 0, 0, 0)
+
+	// LC object deleted too -> series gone.
+	ms.setLCExists(lcfg, false)
+	assertLcfgAbsent(t, lcfg)
 }
 
 // TestComputeKeyPhases covers the two behaviors the maintainer asked for that
 // live only in the tallying path: terminating Pods are still counted (#3), and
 // the earliest future "stuck" instant is computed for AddAfter scheduling (#1).
 func TestComputeKeyPhases(t *testing.T) {
-	ctl := &controller{stuckThreshold: 7*time.Minute + 30*time.Second}
+	ctl := &controller{pendingThreshold: 2 * time.Minute, stuckThreshold: 7*time.Minute + 30*time.Second}
 	now := time.Date(2026, 6, 21, 12, 0, 0, 0, time.UTC)
-	recent := now.Add(-1 * time.Minute)
-	older := now.Add(-2 * time.Minute)
+	recent := now.Add(-30 * time.Second)
+	earlier := now.Add(-1 * time.Minute)
 	old := now.Add(-10 * time.Minute)
 
 	t.Run("terminating pod is counted but never scheduled", func(t *testing.T) {
 		// Unbound, not-Ready, young — would schedule AddAfter if not terminating.
-		pods := []*corev1.Pod{newLauncherPod().deleting().scheduledAt(recent).build()}
+		pods := []*corev1.Pod{newBuilder().deleting().scheduledAt(recent).pod()}
 		counts, earliest := ctl.computeKeyPhases(pods, testTemplateHash, now)
 		if counts[phaseUnbound] != 1 {
 			t.Errorf("terminating pod not counted: unbound=%d want 1", counts[phaseUnbound])
@@ -443,22 +476,22 @@ func TestComputeKeyPhases(t *testing.T) {
 
 	t.Run("earliest future-stuck instant across pods", func(t *testing.T) {
 		pods := []*corev1.Pod{
-			newLauncherPod().scheduledAt(recent).build(),         // stuck at recent+threshold
-			newLauncherPod().scheduledAt(older).build(),          // stuck at older+threshold (earlier)
-			newLauncherPod().ready().scheduledAt(recent).build(), // Ready: never becomes stuck
+			newBuilder().scheduledAt(recent).pod(),         // stuck at recent+threshold
+			newBuilder().scheduledAt(earlier).pod(),        // stuck at earlier+threshold (the winner)
+			newBuilder().ready().scheduledAt(recent).pod(), // Ready: never becomes stuck
 		}
 		counts, earliest := ctl.computeKeyPhases(pods, testTemplateHash, now)
 		if counts[phaseUnbound] != 3 {
 			t.Errorf("unbound=%d want 3", counts[phaseUnbound])
 		}
-		want := older.Add(ctl.stuckThreshold)
+		want := earlier.Add(ctl.stuckThreshold)
 		if !earliest.Equal(want) {
 			t.Errorf("earliestStuck=%v want %v", earliest, want)
 		}
 	})
 
 	t.Run("already-stuck pod does not schedule", func(t *testing.T) {
-		pods := []*corev1.Pod{newLauncherPod().scheduledAt(old).build()}
+		pods := []*corev1.Pod{newBuilder().scheduledAt(old).pod()}
 		counts, earliest := ctl.computeKeyPhases(pods, testTemplateHash, now)
 		if counts[phaseStuck] != 1 {
 			t.Errorf("stuck=%d want 1", counts[phaseStuck])
@@ -479,17 +512,33 @@ func TestComputeKeyPhases(t *testing.T) {
 	})
 
 	t.Run("exact-threshold boundary is not yet stuck and not scheduled", func(t *testing.T) {
-		// age since scheduling == threshold exactly. launcherPhaseOf uses strict
-		// '>', so it is still unbound; becomesStuckAt == now, and the strict
-		// After(now) guard must not schedule (guards against an AddAfter(0) loop).
+		// age since scheduling == stuckThreshold exactly. launcherPhaseOf uses
+		// strict '>', so it is still unbound; the transition instant == now, and
+		// the strict After(now) guard must not schedule (guards against an
+		// AddAfter(0) loop).
 		atThreshold := now.Add(-ctl.stuckThreshold)
-		pods := []*corev1.Pod{newLauncherPod().scheduledAt(atThreshold).build()}
+		pods := []*corev1.Pod{newBuilder().scheduledAt(atThreshold).pod()}
 		counts, earliest := ctl.computeKeyPhases(pods, testTemplateHash, now)
 		if counts[phaseUnbound] != 1 {
 			t.Errorf("boundary pod unbound=%d want 1", counts[phaseUnbound])
 		}
 		if !earliest.IsZero() {
-			t.Errorf("boundary pod (becomesStuckAt==now) must not schedule, got %v", earliest)
+			t.Errorf("boundary pod (transition instant == now) must not schedule, got %v", earliest)
+		}
+	})
+
+	t.Run("exact-pending-threshold boundary is not yet pending and not scheduled", func(t *testing.T) {
+		// Symmetric with the stuck boundary, on the pending track: age since
+		// creation == pendingThreshold exactly (never scheduled). Strict '>' keeps
+		// it unbound, and the transition instant == now must not schedule.
+		atThreshold := now.Add(-ctl.pendingThreshold)
+		pods := []*corev1.Pod{newBuilder().createdAt(atThreshold).pod()}
+		counts, earliest := ctl.computeKeyPhases(pods, testTemplateHash, now)
+		if counts[phaseUnbound] != 1 {
+			t.Errorf("boundary pod unbound=%d want 1", counts[phaseUnbound])
+		}
+		if !earliest.IsZero() {
+			t.Errorf("boundary pod (transition instant == now) must not schedule, got %v", earliest)
 		}
 	})
 
@@ -500,8 +549,8 @@ func TestComputeKeyPhases(t *testing.T) {
 		earliestSched := now.Add(-3 * time.Minute)
 		laterSched := now.Add(-1 * time.Minute)
 		pods := []*corev1.Pod{
-			newLauncherPod().ready().scheduledAt(earliestSched).build(), // Ready: must be skipped
-			newLauncherPod().scheduledAt(laterSched).build(),            // not Ready: the real winner
+			newBuilder().ready().scheduledAt(earliestSched).pod(), // Ready: must be skipped
+			newBuilder().scheduledAt(laterSched).pod(),            // not Ready: the real winner
 		}
 		_, earliest := ctl.computeKeyPhases(pods, testTemplateHash, now)
 		want := laterSched.Add(ctl.stuckThreshold)
@@ -510,26 +559,39 @@ func TestComputeKeyPhases(t *testing.T) {
 		}
 	})
 
-	t.Run("earliestStuck from unscheduled pod uses creation time", func(t *testing.T) {
-		// No PodScheduled condition -> reference is creation time.
-		pods := []*corev1.Pod{newLauncherPod().createdAt(recent).build()}
+	t.Run("earliestStuck from unscheduled pod uses creation time and pending threshold", func(t *testing.T) {
+		// No PodScheduled condition -> pending track, measured from creation.
+		pods := []*corev1.Pod{newBuilder().createdAt(recent).pod()}
 		counts, earliest := ctl.computeKeyPhases(pods, testTemplateHash, now)
 		if counts[phaseUnbound] != 1 {
 			t.Errorf("unbound=%d want 1", counts[phaseUnbound])
 		}
-		want := recent.Add(ctl.stuckThreshold)
+		want := recent.Add(ctl.pendingThreshold)
 		if !earliest.Equal(want) {
-			t.Errorf("earliestStuck=%v want %v (from creation time)", earliest, want)
+			t.Errorf("earliestStuck=%v want %v (creation time + pending threshold)", earliest, want)
+		}
+	})
+
+	t.Run("unscheduled past pending threshold counts pending and does not schedule", func(t *testing.T) {
+		// Never scheduled and older than the pending threshold -> pending, and
+		// already past its transition so it schedules nothing.
+		pods := []*corev1.Pod{newBuilder().createdAt(old).pod()}
+		counts, earliest := ctl.computeKeyPhases(pods, testTemplateHash, now)
+		if counts[phasePending] != 1 {
+			t.Errorf("pending=%d want 1", counts[phasePending])
+		}
+		if !earliest.IsZero() {
+			t.Errorf("already-pending pod must not schedule, got %v", earliest)
 		}
 	})
 
 	t.Run("mixed phases: counts every pod, schedules only qualifying unbound", func(t *testing.T) {
 		pods := []*corev1.Pod{
-			newLauncherPod().bound().build(),                     // bound
-			newLauncherPod().hash("superseded").build(),          // stale
-			newLauncherPod().scheduledAt(old).build(),            // stuck (not ready, past threshold)
-			newLauncherPod().scheduledAt(recent).build(),         // unbound, counting down
-			newLauncherPod().ready().scheduledAt(recent).build(), // unbound, Ready
+			newBuilder().bound().pod(),                     // bound
+			newBuilder().hash("superseded").pod(),          // stale
+			newBuilder().scheduledAt(old).pod(),            // stuck (not ready, past threshold)
+			newBuilder().scheduledAt(recent).pod(),         // unbound, counting down
+			newBuilder().ready().scheduledAt(recent).pod(), // unbound, Ready
 		}
 		counts, earliest := ctl.computeKeyPhases(pods, testTemplateHash, now)
 		if counts.total() != len(pods) {
@@ -570,15 +632,20 @@ func (q *recordingQueue) AddAfter(item keyItem, d time.Duration) {
 // AddAfter.
 func TestRecordLauncherPhases(t *testing.T) {
 	registerMetrics()
-	const threshold = 7*time.Minute + 30*time.Second
+	const pendingThreshold = 2 * time.Minute
+	const stuckThreshold = 7*time.Minute + 30*time.Second
+	// A fixed fake clock lets us assert the AddAfter delay exactly.
+	base := time.Date(2026, 6, 21, 12, 0, 0, 0, time.UTC)
 
 	setup := func() (*controller, *recordingQueue) {
 		launcherPodCountGauge.Reset()
 		q := &recordingQueue{}
 		ctl := &controller{
-			stuckThreshold: threshold,
-			metrics:        newMetricsState(),
-			keyQueue:       &genctlr.QueueAndWorkers[keyItem]{Queue: q},
+			pendingThreshold: pendingThreshold,
+			stuckThreshold:   stuckThreshold,
+			clock:            testingclock.NewFakeClock(base),
+			metrics:          newMetricsState(),
+			keyQueue:         &genctlr.QueueAndWorkers[keyItem]{Queue: q},
 		}
 		return ctl, q
 	}
@@ -586,20 +653,21 @@ func TestRecordLauncherPhases(t *testing.T) {
 	t.Run("publishes counts and schedules the future stuck transition", func(t *testing.T) {
 		ctl, q := setup()
 		key := NodeLauncherKey{NodeName: "n1", LauncherConfigName: "lc-rec"}
-		// Unbound, not Ready, just scheduled -> counting down.
-		pods := []*corev1.Pod{newLauncherPod().scheduledAt(time.Now()).build()}
+		// Unbound, not Ready, scheduled exactly at (fake) now -> counts down and
+		// becomes stuck exactly stuckThreshold later.
+		pods := []*corev1.Pod{newBuilder().scheduledAt(base).pod()}
 
 		ctl.recordLauncherPhases(key, pods, testTemplateHash)
 
-		assertLcfgPhases(t, "lc-rec", 0, 1, 0, 0) // publish happened
+		assertLcfgPhases(t, "lc-rec", 0, 1, 0, 0, 0) // publish happened
 		if len(q.added) != 1 {
 			t.Fatalf("AddAfter calls = %d, want 1", len(q.added))
 		}
 		if q.added[0].item != (keyItem{NodeLauncherKey: key}) {
 			t.Errorf("scheduled item = %+v, want key %+v", q.added[0].item, key)
 		}
-		if d := q.added[0].delay; d <= 0 || d > threshold {
-			t.Errorf("scheduled delay = %v, want in (0, %v]", d, threshold)
+		if d := q.added[0].delay; d != stuckThreshold {
+			t.Errorf("scheduled delay = %v, want %v", d, stuckThreshold)
 		}
 	})
 
@@ -607,11 +675,11 @@ func TestRecordLauncherPhases(t *testing.T) {
 		ctl, q := setup()
 		key := NodeLauncherKey{NodeName: "n1", LauncherConfigName: "lc-rec2"}
 		// Ready -> unbound but never becomes stuck.
-		pods := []*corev1.Pod{newLauncherPod().ready().scheduledAt(time.Now()).build()}
+		pods := []*corev1.Pod{newBuilder().ready().scheduledAt(base).pod()}
 
 		ctl.recordLauncherPhases(key, pods, testTemplateHash)
 
-		assertLcfgPhases(t, "lc-rec2", 0, 1, 0, 0)
+		assertLcfgPhases(t, "lc-rec2", 0, 1, 0, 0, 0)
 		if len(q.added) != 0 {
 			t.Errorf("AddAfter calls = %d, want 0", len(q.added))
 		}

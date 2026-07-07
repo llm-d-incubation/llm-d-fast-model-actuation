@@ -34,6 +34,7 @@ import (
 	corev1listers "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
+	"k8s.io/utils/clock"
 
 	fmav1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
 	genctlr "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/generic"
@@ -58,25 +59,28 @@ func NewController(
 	corev1PreInformers corev1preinformers.Interface,
 	fmaInformerFactory fmainformers.SharedInformerFactory,
 	expectationTimeout time.Duration,
+	pendingThreshold time.Duration,
 	stuckThreshold time.Duration,
 ) (*controller, error) {
 	registerMetrics()
 	ctl := &controller{
-		enqueueLogger:  logger.WithName(ControllerName),
-		coreclient:     coreClient,
-		fmaclient:      fmaClient,
-		namespace:      namespace,
-		podInformer:    corev1PreInformers.Pods().Informer(),
-		podLister:      corev1PreInformers.Pods().Lister(),
-		nodeInformer:   corev1PreInformers.Nodes().Informer(),
-		nodeLister:     corev1PreInformers.Nodes().Lister(),
-		lppInformer:    fmaInformerFactory.Fma().V1alpha1().LauncherPopulationPolicies().Informer(),
-		lppLister:      fmaInformerFactory.Fma().V1alpha1().LauncherPopulationPolicies().Lister(),
-		lcInformer:     fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Informer(),
-		lcLister:       fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Lister(),
-		expectations:   newPendingExpectations(expectationTimeout),
-		stuckThreshold: stuckThreshold,
-		metrics:        newMetricsState(),
+		enqueueLogger:    logger.WithName(ControllerName),
+		coreclient:       coreClient,
+		fmaclient:        fmaClient,
+		namespace:        namespace,
+		podInformer:      corev1PreInformers.Pods().Informer(),
+		podLister:        corev1PreInformers.Pods().Lister(),
+		nodeInformer:     corev1PreInformers.Nodes().Informer(),
+		nodeLister:       corev1PreInformers.Nodes().Lister(),
+		lppInformer:      fmaInformerFactory.Fma().V1alpha1().LauncherPopulationPolicies().Informer(),
+		lppLister:        fmaInformerFactory.Fma().V1alpha1().LauncherPopulationPolicies().Lister(),
+		lcInformer:       fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Informer(),
+		lcLister:         fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Lister(),
+		expectations:     newPendingExpectations(expectationTimeout),
+		pendingThreshold: pendingThreshold,
+		stuckThreshold:   stuckThreshold,
+		clock:            clock.RealClock{},
+		metrics:          newMetricsState(),
 	}
 	ctl.policy = newDigestedPolicy()
 
@@ -156,14 +160,25 @@ type controller struct {
 	// Written only by the digestQueue worker; read by keyQueue workers.
 	policy *digestedPolicy
 
-	// stuckThreshold is the minimum age (from scheduling, or from creation when
-	// not scheduled) after which a not-yet-Ready launcher is reported in the
-	// "stuck" phase of the fma_launcher_pod_count metric. It does not change
-	// reconcile behavior.
+	// pendingThreshold is the greatest age (since creation) at which an
+	// unscheduled, not-yet-Ready launcher is still considered not "pending":
+	// once its age exceeds this, it is reported in the "pending" phase of the
+	// fma_launcher_pod_count metric. It does not change reconcile behavior.
+	pendingThreshold time.Duration
+
+	// stuckThreshold is the greatest age (since scheduling) at which a scheduled,
+	// not-yet-Ready launcher is still considered not "stuck": once its age
+	// exceeds this, it is reported in the "stuck" phase of the
+	// fma_launcher_pod_count metric. It does not change reconcile behavior.
 	stuckThreshold time.Duration
 
+	// clock is the time source for metric classification; real in production,
+	// a fake in tests so time-dependent classification can be controlled.
+	clock clock.Clock
+
 	// metrics backs the fma_launcher_pod_count gauge; it is updated from
-	// reconcileKey as launcher Pods are observed.
+	// processKey (per-key launcher tallies) and from updateDigestForLC (whether a
+	// LauncherConfig object exists).
 	metrics *metricsState
 }
 
@@ -380,25 +395,22 @@ func (ctl *controller) processKey(ctx context.Context, key NodeLauncherKey) (err
 
 	snap := ctl.policy.snapshotForKey(key)
 
-	// Update the fma_launcher_pod_count metric for this key from the observed
-	// launcher Pods (classifying all of them, including any being deleted). This
-	// runs for every key reconcile — before the desired-state and node-existence
-	// branches below — so a LauncherConfig's series never go stale when a Node is
-	// deleted or the key becomes handsOff, and are dropped once no launcher Pods
-	// remain.
-	if pods, err := ctl.listPodsFromCache(key); err != nil {
-		logger.Error(err, "Failed to list launcher Pods for metrics",
-			"node", key.NodeName, "config", key.LauncherConfigName)
-	} else {
-		ctl.recordLauncherPhases(key, pods, snap.templateHash)
+	// List the launcher Pods once and reuse the slice for both the metric and the
+	// reconcile below. Recording here, before the branches that may return early,
+	// keeps the metric up to date even when a Node is deleted or the key is handsOff.
+	pods, err := ctl.listPodsFromCache(key)
+	if err != nil {
+		return fmt.Errorf("listing launcher Pods for node %s config %s: %w",
+			key.NodeName, key.LauncherConfigName, err), true
 	}
+	ctl.recordLauncherPhases(key, pods, snap.templateHash)
 
 	if !snap.exists {
 		// Key not in digest: no policy wants this (node, LC) pair.
 		// Clean up any orphaned launchers.
 		logger.V(4).Info("Key not in digest, cleaning up orphaned launchers",
 			"node", key.NodeName, "config", key.LauncherConfigName)
-		return ctl.reconcileKey(ctx, key, 0, snap.templateHash, nil)
+		return ctl.reconcileKey(ctx, key, 0, snap.templateHash, nil, pods)
 	}
 
 	if snap.desiredCount < 0 {
@@ -408,11 +420,13 @@ func (ctl *controller) processKey(ctx context.Context, key NodeLauncherKey) (err
 		return nil, false
 	}
 
-	return ctl.reconcileKey(ctx, key, snap.desiredCount, snap.templateHash, snap.nodeIndependentLauncherTemplate)
+	return ctl.reconcileKey(ctx, key, snap.desiredCount, snap.templateHash, snap.nodeIndependentLauncherTemplate, pods)
 }
 
-// reconcileKey adjusts launcher pods for a single NodeLauncherKey to match the desired count.
-func (ctl *controller) reconcileKey(ctx context.Context, key NodeLauncherKey, desiredCount int, templateHash string, nodeIndependentLauncherTemplate *corev1.Pod) (error, bool) {
+// reconcileKey adjusts launcher pods for a single NodeLauncherKey to match the
+// desired count. cachePods is the caller's launcher-Pod cache snapshot for the
+// key, reused to avoid a second cache List.
+func (ctl *controller) reconcileKey(ctx context.Context, key NodeLauncherKey, desiredCount int, templateHash string, nodeIndependentLauncherTemplate *corev1.Pod, cachePods []*corev1.Pod) (error, bool) {
 	logger := klog.FromContext(ctx)
 
 	// Check node existence.
@@ -426,7 +440,7 @@ func (ctl *controller) reconcileKey(ctx context.Context, key NodeLauncherKey, de
 	}
 
 	// Get current launchers and check expectations.
-	currentLaunchers, expectStatus, err := ctl.getCurrentLaunchersOnNode(ctx, key)
+	currentLaunchers, expectStatus, err := ctl.getCurrentLaunchersOnNode(ctx, key, cachePods)
 	if err != nil {
 		logger.Error(err, "Failed to get current launchers", "node", key.NodeName, "config", key.LauncherConfigName)
 		return err, true
@@ -534,24 +548,20 @@ func (ctl *controller) reconcileKey(ctx context.Context, key NodeLauncherKey, de
 	return nil, false
 }
 
-// getCurrentLaunchersOnNode returns launcher pods for a specific config on a specific node.
-// It reads the informer cache and uses the resulting UID set to reconcile any
-// pending expectations, then returns one of:
+// getCurrentLaunchersOnNode reconciles pending expectations for a specific
+// config on a specific node against the caller's cache snapshot (cachePods), then
+// returns one of:
 //   - ExpectationsSatisfied with the cache snapshot, when no expectations are
 //     pending (or all have been satisfied by the current snapshot);
 //   - ExpectationsWaiting with a nil slice, indicating the caller should
 //     requeue without acting on this key;
 //   - ExpectationsTimedOut with the authoritative apiserver snapshot, after
 //     resetting the (now stale) expectations.
-func (ctl *controller) getCurrentLaunchersOnNode(ctx context.Context, key NodeLauncherKey) ([]*corev1.Pod, ExpectationStatus, error) {
+func (ctl *controller) getCurrentLaunchersOnNode(ctx context.Context, key NodeLauncherKey, cachePods []*corev1.Pod) ([]*corev1.Pod, ExpectationStatus, error) {
 	logger := klog.FromContext(ctx)
 
-	pods, err := ctl.listPodsFromCache(key)
-	if err != nil {
-		return nil, ExpectationsSatisfied, err
-	}
 	presentUIDs := sets.New[types.UID]()
-	for _, p := range pods {
+	for _, p := range cachePods {
 		presentUIDs.Insert(p.UID)
 	}
 
@@ -559,7 +569,7 @@ func (ctl *controller) getCurrentLaunchersOnNode(ctx context.Context, key NodeLa
 	switch status {
 	case ExpectationsSatisfied:
 		// Fast path: informer cache is considered up-to-date.
-		return pods, status, nil
+		return cachePods, status, nil
 
 	case ExpectationsWaiting:
 		// Pending mutations not yet reflected; caller should requeue.
