@@ -53,12 +53,16 @@ func main() {
 	var wg sync.WaitGroup
 	wg.Add(2)
 
+	serveSPI, err := coordination.Start(ctx, spiPort, &ready, os.Stdout)
+	if err != nil {
+		logger.Error(err, "Failed to start requester SPI server")
+		return
+	}
+
 	go func() {
 		defer wg.Done()
-
-		err := coordination.Run(ctx, spiPort, &ready, os.Stdout)
-		if err != nil {
-			logger.Error(err, "failed to start requester SPI server")
+		if err := serveSPI(); err != nil {
+			logger.Error(err, "Failed to run requester SPI server")
 		}
 	}()
 

@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os/exec"
 	"strconv"
@@ -71,9 +72,12 @@ func getGpuUUIDs() ([]string, error) {
 	return uuids, nil
 }
 
-// Run starts an HTTP server managing the endpoints
+// Start starts an HTTP server managing the endpoints
 // consumed by the dual-pods controller.
-func Run(ctx context.Context, port string, ready *atomic.Bool, logWriter io.Writer) error {
+// Returns two values.
+// The second is the error, if any, that arose from trying to start the network listener.
+// The first is the func that will do the serving and return any error that arose (nil for clean shutdown).
+func Start(ctx context.Context, port string, ready *atomic.Bool, logWriter io.Writer) (func() error, error) {
 	logger := klog.FromContext(ctx).WithName("spi-server")
 
 	gpuUUIDs, err := getGpuUUIDs()
@@ -85,7 +89,7 @@ func Run(ctx context.Context, port string, ready *atomic.Bool, logWriter io.Writ
 	} else {
 		logger.Info("Got GPU UUIDs", "uuids", gpuUUIDs)
 	}
-	return RunWithGPUUUIDs(ctx, port, ready, logWriter, gpuUUIDs)
+	return StartWithGPUUUIDs(ctx, port, ready, logWriter, gpuUUIDs)
 }
 
 func gpuMemoryHandler(logger klog.Logger) func(w http.ResponseWriter, r *http.Request) {
@@ -204,7 +208,10 @@ func newSetLogHandler(logger klog.Logger, logWriter io.Writer) func(w http.Respo
 	}
 }
 
-func RunWithGPUUUIDs(ctx context.Context, port string, ready *atomic.Bool, logWriter io.Writer, gpuUUIDs []string) error {
+// StartWithGPUUUIDs returns two values.
+// The second is the error, if any, that arose from trying to start the network listener.
+// The first is the func that will do the serving and return any error that arose (nil for clean shutdown).
+func StartWithGPUUUIDs(ctx context.Context, port string, ready *atomic.Bool, logWriter io.Writer, gpuUUIDs []string) (func() error, error) {
 	logger := klog.FromContext(ctx).WithName("spi-server")
 	mux := http.NewServeMux()
 	mux.HandleFunc(strings.Join([]string{"GET", stubapi.AcceleratorQueryPath}, " "), gpuHandler(gpuUUIDs))
@@ -214,27 +221,33 @@ func RunWithGPUUUIDs(ctx context.Context, port string, ready *atomic.Bool, logWr
 	mux.HandleFunc("POST "+stubapi.SetLogPath, newSetLogHandler(logger, logWriter))
 
 	server := &http.Server{
-		Addr:    ":" + port,
-		Handler: mux,
+		Addr:        ":" + port,
+		BaseContext: func(l net.Listener) context.Context { return ctx },
+		Handler:     mux,
 	}
 
-	// Setup graceful termination
+	listener, err := net.Listen("tcp", server.Addr)
+	if err != nil {
+		return nil, err
+	}
 	go func() {
 		<-ctx.Done()
-		logger.Info("shutting down")
+		logger.Info("Shutting down requester SPI server")
 
 		ctx, cancelFn := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancelFn()
 		if err := server.Shutdown(ctx); err != nil {
-			logger.Error(err, "failed to gracefully shutdown")
+			logger.Error(err, "failed to gracefully shutdown in 60 seconds")
 		}
+		_ = listener.Close()
 	}()
-
-	logger.Info("starting server", "port", port)
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		return fmt.Errorf("listen and serve error: %w", err)
-	}
-
-	logger.Info("server stopped")
-	return nil
+	return func() error {
+		logger.Info("Starting requester SPI server", "port", port)
+		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
+			return err
+		}
+		logger.Info("Stopped requester SPI server")
+		_ = listener.Close()
+		return nil
+	}, nil
 }
