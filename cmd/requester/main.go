@@ -56,6 +56,7 @@ func main() {
 	serveSPI, err := coordination.Start(ctx, spiPort, &ready, os.Stdout)
 	if err != nil {
 		logger.Error(err, "Failed to start requester SPI server")
+		os.Exit(10)
 		return
 	}
 
