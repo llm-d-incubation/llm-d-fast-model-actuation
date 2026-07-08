@@ -16,16 +16,16 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: '1.25'
+      - name: Create Python virtualenv
+        run: python3 -m venv .venv
 
-      - name: check go mod tidy
+      - name: Install pre-commit
+        run: .venv/bin/python -m pip install --upgrade pip pre-commit==4.3.0
+
+      - name: go mod tidy + golangci-lint (via pre-commit)
+        # pre-commit run accepts a single hook id per invocation. pre-commit
+        # builds golangci-lint (pinned in .pre-commit-config.yaml) itself, so
+        # there is no separate install step.
         run: |
-             go mod tidy
-             if [ -n "$(git status --porcelain=v2)" ]; then
-                 echo 'You need to run `go mod tidy`' >&2
-                 exit 1
-             fi
-
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9.2.1
-        with:
-          version: v2.12.2
+          .venv/bin/pre-commit run go-mod-tidy --all-files --hook-stage pre-push
+          .venv/bin/pre-commit run golangci-lint-full --all-files --hook-stage pre-push

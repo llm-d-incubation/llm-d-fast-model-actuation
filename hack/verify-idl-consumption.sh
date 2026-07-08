@@ -13,4 +13,3 @@ if ! git status --porcelain=v2 | wc -l | grep -qw 0; then
     git status
     exit 1
 fi
-

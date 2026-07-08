@@ -63,6 +63,53 @@ For changes that fix broken code or add small changes within a component:
 
 The current testing documentation can be found within the respective components of the [docs folder](docs/).
 
+## Local Checks Before Opening a PR
+
+We use [`pre-commit`](https://pre-commit.com) to run our lint, formatting, and
+code-generation checks. **CI runs the exact same `.pre-commit-config.yaml`**, so if
+the hooks pass locally they will pass in GitHub Actions — please run them before
+opening a PR.
+
+### One-time setup
+
+```bash
+# Install pre-commit (pick whichever fits your setup)
+pip install pre-commit        # or: uv tool install pre-commit / brew install pre-commit
+
+# Install the git hooks (both the commit-time and pre-push stages)
+pre-commit install
+pre-commit install --hook-type pre-push
+```
+
+The Go hooks (`go mod tidy`, IDL verification) use your Go toolchain (see
+`go.mod`), so you need Go installed. `golangci-lint` is managed by pre-commit
+itself — it is built in an isolated, version-pinned environment on first run, so
+you do **not** need to install a specific golangci-lint globally.
+
+### Running the checks
+
+```bash
+# Run every hook against the whole tree (what CI's python job runs)
+pre-commit run --all-files
+
+# golangci-lint + go mod tidy run automatically on `git push`; to run them on
+# demand (one hook id per invocation):
+pre-commit run go-mod-tidy --all-files --hook-stage pre-push
+pre-commit run golangci-lint-full --all-files --hook-stage pre-push
+
+# When you change api/, config/crd/, or the Makefile, verify generated code is in sync
+# (equivalent to hack/verify-idl-consumption.sh):
+pre-commit run verify-idl-consumption --hook-stage manual --all-files
+```
+
+Once the hooks are installed, the commit-stage checks (formatting, `flake8`, typos,
+`go mod tidy`, file hygiene) run automatically on every `git commit`, and
+`golangci-lint` runs on every `git push`.
+
+Tests are **not** part of pre-commit and should be run separately — see
+[Testing Requirements](#testing-requirements) (`go test ./...` and the launcher
+`pytest` suite).
+
 ## Code Review Requirements
 
 * **All code changes** must be submitted as pull requests (no direct pushes)

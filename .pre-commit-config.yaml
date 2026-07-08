@@ -6,12 +6,13 @@ repos:
       - id: trailing-whitespace
         exclude: \.lock\.yml$
       - id: end-of-file-fixer
-        exclude: \.lock\.yml$
+        exclude: '(\.lock\.yml$|\.svg$)'
       - id: check-yaml
         exclude: ^charts/.*/templates/.*\.yaml$
       - id: check-json
       - id: check-merge-conflict
       - id: check-added-large-files
+        args: ["--maxkb=600"]
       - id: check-docstring-first
       - id: debug-statements
 
@@ -41,3 +42,37 @@ repos:
     rev: 37bb98842b0d8c4ffebdb75301a13db0267cef89  # frozen: v1.47.2
     hooks:
       - id: typos
+
+  # Go linting. Managed by pre-commit in an isolated, version-pinned
+  # environment, so it does not require a specific golangci-lint on the
+  # contributor's global PATH. Runs on push, not every commit, because
+  # linting the whole module is slow.
+  - repo: https://github.com/golangci/golangci-lint
+    rev: c0d3ddc9cf3faa61a4e378e879ece580256d76e5  # frozen: v2.12.2
+    hooks:
+      - id: golangci-lint-full
+        stages: [pre-push]
+
+  # Go mod tidy and codegen verification. These use the system Go toolchain
+  # (whatever `go` is on PATH); go.mod's `go` directive is the minimum
+  # language version, not the toolchain to use. We have not observed the
+  # generated code differ across current Go toolchains, so these hooks are
+  # not pinned to a specific one.
+  - repo: local
+    hooks:
+      - id: go-mod-tidy
+        name: go mod tidy
+        entry: bash -c 'go mod tidy && git diff --exit-code go.mod go.sum'
+        language: system
+        pass_filenames: false
+        files: '(^go\.mod$|^go\.sum$|\.go$)'
+
+      - id: verify-idl-consumption
+        name: verify IDL consumption
+        entry: hack/verify-idl-consumption.sh
+        language: system
+        pass_filenames: false
+        # The script deletes and regenerates files and requires a clean
+        # tree; run on demand / from CI, never on every commit.
+        stages: [manual]
+        files: '(^api/|^config/crd/|^Makefile$)'
