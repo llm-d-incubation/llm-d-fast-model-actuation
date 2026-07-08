@@ -445,14 +445,24 @@ type serverData struct {
 
 	ProvidingPodName string
 
-	// The next two fields form a snapshot of the bound launcher-based
+	// The next four fields form a snapshot of the bound launcher-based
 	// vLLM instance's ISC-derived state. Each field may be reassigned
-	// over time, but whichever value (pointer) is
+	// over time, but whichever value (pointer/map) is
 	// currently stored is deeply immutable for as long as it is stored.
-	InstanceID     string
-	InstanceConfig *VllmConfig
+	// InstanceISCLabels and InstanceISCAnnotations are cached here so the
+	// controller can apply them to the launcher Pod only after the vLLM
+	// instance is confirmed serving; see LabelsApplied.
+	InstanceID             string
+	InstanceConfig         *VllmConfig
+	InstanceISCLabels      map[string]string
+	InstanceISCAnnotations map[string]string
 
 	InstanceKnownToExist bool // meaningful only for launcher-based providers
+
+	// LabelsApplied is true iff the ISC-provided labels and annotations
+	// have been written to the bound launcher Pod. Meaningful only for
+	// launcher-based providers.
+	LabelsApplied bool
 
 	DualityMetricAsserted bool
 

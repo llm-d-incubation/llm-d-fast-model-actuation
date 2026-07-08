@@ -234,9 +234,13 @@ echo "Launcher Pod is $launcher1"
 # Verify requester is bound to launcher (bidirectional check)
 expect '[ "$(kubectl get pod -n '"$NS"' $req1 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcher1" ]'
 
-# Verify ISC labels and annotations were propagated to launcher
-[ "$(kubectl get pod -n "$NS" $launcher1 -o jsonpath='{.metadata.labels.e2e-test\.fma\.llm-d\.ai/isc-label}')" == "test-value" ] || { echo "ERROR: ISC label not propagated to launcher pod $launcher1"; exit 1; }
-[ "$(kubectl get pod -n "$NS" $launcher1 -o jsonpath='{.metadata.annotations.e2e-test\.fma\.llm-d\.ai/isc-annotation}')" == "test-value" ] || { echo "ERROR: ISC annotation not propagated to launcher pod $launcher1"; exit 1; }
+# Verify ISC labels and annotations are eventually propagated to the launcher
+# pod. Since issue #629 the dual-pods controller waits for the vLLM instance
+# to reply positively to its readiness test before writing these, so the
+# labels appear some time after the requester ↔ launcher binding — poll for
+# them rather than checking once.
+expect '[ "$(kubectl get pod -n '"$NS"' $launcher1 -o jsonpath={.metadata.labels.e2e-test\\.fma\\.llm-d\\.ai/isc-label})" == "test-value" ]'
+expect '[ "$(kubectl get pod -n '"$NS"' $launcher1 -o jsonpath={.metadata.annotations.e2e-test\\.fma\\.llm-d\\.ai/isc-annotation})" == "test-value" ]'
 
 # Verify LauncherConfig podTemplate metadata labels/annotations were propagated to launcher pod (Issue #433)
 [ "$(kubectl get pod -n "$NS" $launcher1 -o jsonpath='{.metadata.labels.e2e-test\.fma\.llm-d\.ai/template-label}')" == "from-launcher-config" ] || { echo "ERROR: LauncherConfig podTemplate label is not correctly set on launcher pod $launcher1"; false; }
@@ -441,9 +445,12 @@ launcher2=$(kubectl get pods -n "$NS" -o name -l dual-pods.llm-d.ai/dual=$req2 |
 # Verify requester is bound to launcher (bidirectional check)
 expect '[ "$(kubectl get pod -n '"$NS"' $req2 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcher1" ]'
 
-# Verify ISC labels and annotations re-propagated after re-bind
-[ "$(kubectl get pod -n "$NS" $launcher1 -o jsonpath='{.metadata.labels.e2e-test\.fma\.llm-d\.ai/isc-label}')" == "test-value" ] || { echo "ERROR: ISC label not re-propagated to launcher pod $launcher1 after re-bind"; exit 1; }
-[ "$(kubectl get pod -n "$NS" $launcher1 -o jsonpath='{.metadata.annotations.e2e-test\.fma\.llm-d\.ai/isc-annotation}')" == "test-value" ] || { echo "ERROR: ISC annotation not re-propagated to launcher pod $launcher1 after re-bind"; exit 1; }
+# Verify ISC labels and annotations re-propagated after re-bind.
+# As at first bind, since issue #629 the dual-pods controller defers writing
+# these until after the sleeping vLLM instance has been woken and replies to
+# its readiness test, so poll instead of asserting once.
+expect '[ "$(kubectl get pod -n '"$NS"' $launcher1 -o jsonpath={.metadata.labels.e2e-test\\.fma\\.llm-d\\.ai/isc-label})" == "test-value" ]'
+expect '[ "$(kubectl get pod -n '"$NS"' $launcher1 -o jsonpath={.metadata.annotations.e2e-test\\.fma\\.llm-d\\.ai/isc-annotation})" == "test-value" ]'
 
 note "Wait for requester to be ready (launcher should already be ready)"
 kubectl wait --for condition=Ready pod/$req2 -n "$NS" --timeout=300s

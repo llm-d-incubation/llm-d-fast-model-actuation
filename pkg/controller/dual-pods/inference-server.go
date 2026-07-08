@@ -503,6 +503,16 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				return err, true
 			}
 		}
+		// Apply the ISC-provided routing labels/annotations only now, once the
+		// bound vLLM instance is confirmed serving (either querySleeping
+		// returned successfully or wakeSleeper completed). Before this point
+		// the launcher Pod has no InferencePool-matching labels, so EPP does
+		// not treat it as an endpoint. See issue #629.
+		if launcherBased && !*serverDat.Sleeping && !serverDat.LabelsApplied {
+			if err := ctl.applyDeferredISCRoutingMetadata(ctx, requestingPod, serverDat, providingPod, iscName); err != nil {
+				return err, true
+			}
+		}
 		if err := ctl.ensureSleepingLabel(ctx, providingPod, *(serverDat.Sleeping)); err != nil {
 			return err, true
 		}
@@ -701,7 +711,11 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	// while the vLLM instance is being set up.
 	desiredLauncherPod.Annotations = utils.MapSet(desiredLauncherPod.Annotations, requesterAnnotationKey, string(requestingPod.UID)+" "+requestingPod.Name)
 	desiredLauncherPod.Labels = utils.MapSet(desiredLauncherPod.Labels, api.DualLabelName, requestingPod.Name)
-	problems := applyInstanceStateToLauncherPod(desiredLauncherPod, desiredInstanceState)
+	// Write only controller-managed annotations here; the ISC-provided labels
+	// and annotations are applied later, after the vLLM instance is confirmed
+	// serving (issue #629). Validation runs now so misconfiguration surfaces
+	// before we create the launcher Pod.
+	problems := applyControllerMetadataToLauncherPod(desiredLauncherPod, desiredInstanceState)
 	if len(problems) > 0 {
 		return ctl.ensureReqStatus(ctx, requestingPod, serverDat, problems...)
 	}
@@ -732,6 +746,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	}
 	serverDat.Sleeping = nil
 	commitInstanceState(serverDat, desiredInstanceState)
+	serverDat.LabelsApplied = false
 	serverDat.ProvidingPodName = echo.Name
 	ctl.ensureDualityMetric(ctx, serverDat, nodeDat.NodeName, true)
 	logger.V(2).Info("Created launcher-based server-providing pod", "name", echo.Name, "gpus", serverDat.GPUIDsStr, "annotations", echo.Annotations, "labels", echo.Labels, "resourceVersion", echo.ResourceVersion, "k8sCallStartTime", createStartStr)
@@ -1034,7 +1049,14 @@ func (ctl *controller) computeDesiredInstanceState(isc *fmav1alpha1.InferenceSer
 	}, nil
 }
 
-func applyInstanceStateToLauncherPod(providingPod *corev1.Pod, state *vllmInstanceState) []string {
+// validateInstanceStateForLauncherPod checks the ISC-provided labels and
+// annotations in state against qualified-name rules, reserved prefixes, and
+// collisions with what is already on providingPod. It returns a non-empty
+// slice of problem strings iff validation failed.
+// Called both by applyControllerMetadataToLauncherPod (at bind/create time,
+// so misconfiguration surfaces immediately) and by
+// applyISCRoutingMetadataToLauncherPod (before actually writing the labels).
+func validateInstanceStateForLauncherPod(providingPod *corev1.Pod, state *vllmInstanceState) []string {
 	var problems []string
 	for k, v := range state.iscLabels {
 		if errs := k8svalidation.IsQualifiedName(k); len(errs) > 0 {
@@ -1057,10 +1079,41 @@ func applyInstanceStateToLauncherPod(providingPod *corev1.Pod, state *vllmInstan
 			problems = append(problems, fmt.Sprintf("ISC annotation key %q collides with existing pod annotation", k))
 		}
 	}
-	if len(problems) > 0 {
+	return problems
+}
+
+// applyControllerMetadataToLauncherPod writes only controller-managed
+// annotations (instance ID, server port, vLLM config) on the launcher Pod.
+// The ISC-provided labels and annotations are intentionally NOT written
+// here — they are deferred until the vLLM instance is confirmed serving,
+// so the Pod does not become an InferencePool-matching routing target
+// before its vLLM instance can accept traffic on the inference port
+// (see applyISCRoutingMetadataToLauncherPod and issue #629).
+// Validation of the ISC labels/annotations still runs here so
+// misconfiguration is surfaced immediately at bind/create time.
+func applyControllerMetadataToLauncherPod(providingPod *corev1.Pod, state *vllmInstanceState) []string {
+	if problems := validateInstanceStateForLauncherPod(providingPod, state); len(problems) > 0 {
 		return problems
 	}
+	cfgJSON, err := json.Marshal(state.cfg)
+	if err != nil {
+		return []string{fmt.Sprintf("failed to marshal launcher instance config: %s", err)}
+	}
+	providingPod.Annotations = utils.MapSet(providingPod.Annotations, launcherInstanceIDAnnotationKey, state.instanceID)
+	providingPod.Annotations[launcherServerPortAnnotationKey] = strconv.Itoa(int(state.serverPort))
+	providingPod.Annotations[launcherVllmConfigAnnotationKey] = string(cfgJSON)
+	return nil
+}
 
+// applyISCRoutingMetadataToLauncherPod writes the ISC-provided labels and
+// annotations (routing metadata, e.g. the InferencePool selector labels)
+// on the launcher Pod, along with the tracking annotations that let
+// ensureUnbound remove them later. Callers must invoke this only after
+// the vLLM instance is confirmed serving.
+func applyISCRoutingMetadataToLauncherPod(providingPod *corev1.Pod, state *vllmInstanceState) []string {
+	if problems := validateInstanceStateForLauncherPod(providingPod, state); len(problems) > 0 {
+		return problems
+	}
 	labelKeys := make([]string, 0, len(state.iscLabels))
 	for k, v := range state.iscLabels {
 		providingPod.Labels = utils.MapSet(providingPod.Labels, k, v)
@@ -1075,14 +1128,7 @@ func applyInstanceStateToLauncherPod(providingPod *corev1.Pod, state *vllmInstan
 	}
 	slices.Sort(annotationKeys)
 
-	cfgJSON, err := json.Marshal(state.cfg)
-	if err != nil {
-		return []string{fmt.Sprintf("failed to marshal launcher instance config: %s", err)}
-	}
-	providingPod.Annotations = utils.MapSet(providingPod.Annotations, launcherInstanceIDAnnotationKey, state.instanceID)
-	providingPod.Annotations[launcherServerPortAnnotationKey] = strconv.Itoa(int(state.serverPort))
-	providingPod.Annotations[launcherVllmConfigAnnotationKey] = string(cfgJSON)
-	providingPod.Annotations[iscLabelKeysAnnotationKey] = strings.Join(labelKeys, " ")
+	providingPod.Annotations = utils.MapSet(providingPod.Annotations, iscLabelKeysAnnotationKey, strings.Join(labelKeys, " "))
 	providingPod.Annotations[iscAnnotationKeysAnnotationKey] = strings.Join(annotationKeys, " ")
 	return nil
 }
@@ -1091,11 +1137,76 @@ func commitInstanceState(serverDat *serverData, state *vllmInstanceState) {
 	serverDat.InstanceID = state.instanceID
 	serverDat.InstanceConfig = state.cfg
 	serverDat.ServerPort = state.serverPort
+	serverDat.InstanceISCLabels = state.iscLabels
+	serverDat.InstanceISCAnnotations = state.iscAnnotations
+}
+
+// applyDeferredISCRoutingMetadata writes the ISC-provided labels and
+// annotations onto the bound launcher Pod. It is called from the
+// bound-provider reconcile path only after the vLLM instance is confirmed
+// serving, so the Pod does not become an InferencePool-matching routing
+// target while its data-plane port (:8000) is still unavailable
+// (issue #629).
+//
+// The labels/annotations to apply are derived from the current
+// InferenceServerConfig; if the ISC's current hash no longer matches the
+// bound instance, the instance is obsolete and label application is
+// skipped (the instance-GC path will delete the instance separately).
+// On success, serverDat.LabelsApplied is set to true.
+func (ctl *controller) applyDeferredISCRoutingMetadata(
+	ctx context.Context,
+	requestingPod *corev1.Pod,
+	serverDat *serverData,
+	providingPod *corev1.Pod,
+	iscName string,
+) error {
+	logger := klog.FromContext(ctx)
+	isc, err := ctl.iscLister.InferenceServerConfigs(ctl.namespace).Get(iscName)
+	if err != nil {
+		return fmt.Errorf("failed to load InferenceServerConfig %q for deferred label application: %w", iscName, err)
+	}
+	desired, err := ctl.computeDesiredInstanceState(isc, serverDat.GPUIDs)
+	if err != nil {
+		return fmt.Errorf("failed to compute instance state for deferred label application: %w", err)
+	}
+	if desired.instanceID != serverDat.InstanceID {
+		logger.V(2).Info(
+			"Skipping deferred ISC label application: current ISC hash no longer matches bound instance",
+			"instanceID", serverDat.InstanceID, "currentISCHash", desired.instanceID,
+		)
+		return nil
+	}
+	serverDat.InstanceISCLabels = desired.iscLabels
+	serverDat.InstanceISCAnnotations = desired.iscAnnotations
+
+	updated := providingPod.DeepCopy()
+	if problems := applyISCRoutingMetadataToLauncherPod(updated, desired); len(problems) > 0 {
+		// Same failure mode as at bind/create time — report to the requester
+		// and stop; the next ISC edit or reconcile will retry.
+		statusErr, _ := ctl.ensureReqStatus(ctx, requestingPod, serverDat, problems...)
+		if statusErr != nil {
+			return statusErr
+		}
+		return fmt.Errorf("ISC labels/annotations invalid for deferred application: %s", strings.Join(problems, "; "))
+	}
+	updStart := time.Now()
+	echo, err := ctl.coreclient.Pods(ctl.namespace).Update(ctx, updated, metav1.UpdateOptions{FieldManager: ControllerName})
+	updStartStr := updStart.Format(time.RFC3339Nano)
+	if err != nil {
+		return fmt.Errorf("failed to apply deferred ISC labels to launcher Pod %s (started %s): %w", updated.Name, updStartStr, err)
+	}
+	serverDat.LabelsApplied = true
+	logger.V(2).Info("Applied deferred ISC labels/annotations to bound launcher Pod",
+		"name", updated.Name, "instanceID", serverDat.InstanceID,
+		"newResourceVersion", echo.ResourceVersion, "k8sCallStartTime", updStartStr,
+	)
+	return nil
 }
 
 // clearInstanceStateFromLauncherPod removes the five controller-managed
 // launcher-instance annotations from the providing Pod. It is the inverse
-// of applyInstanceStateToLauncherPod's annotation writes.
+// of the annotation writes done by applyControllerMetadataToLauncherPod
+// and applyISCRoutingMetadataToLauncherPod combined.
 // Returns true iff any annotation was removed.
 func clearInstanceStateFromLauncherPod(providingPod *corev1.Pod) bool {
 	var changed bool
@@ -1116,9 +1227,13 @@ func clearInstanceStateFromLauncherPod(providingPod *corev1.Pod) bool {
 
 // recoverInstanceStateFromLauncherPod populates the serverData snapshot from
 // the controller-written annotations on a bound launcher Pod. The three snapshot
-// fields are written atomically by commitInstanceState and applyInstanceStateToLauncherPod,
+// fields are written atomically by commitInstanceState and applyControllerMetadataToLauncherPod,
 // so if any one is set in serverData the others are too and recovery is a no-op;
 // otherwise all three annotations must be present on the Pod.
+// It also derives serverDat.LabelsApplied from the presence of the
+// iscLabelKeysAnnotationKey tracking annotation, which is written by
+// applyISCRoutingMetadataToLauncherPod only after the ISC-provided labels
+// have actually been placed on the Pod.
 func recoverInstanceStateFromLauncherPod(serverDat *serverData, providingPod *corev1.Pod) error {
 	if serverDat.InstanceID != "" {
 		return nil
@@ -1147,6 +1262,13 @@ func recoverInstanceStateFromLauncherPod(serverDat *serverData, providingPod *co
 	serverDat.InstanceID = instanceID
 	serverDat.InstanceConfig = cfg
 	serverDat.ServerPort = int32(port)
+	// The tracking annotation is written only after the ISC-provided labels
+	// and annotations have been placed on the Pod. Its presence therefore
+	// tells a restarted controller that label application has already
+	// completed, so applyDeferredISCRoutingMetadata does not need to run.
+	if _, have := providingPod.Annotations[iscLabelKeysAnnotationKey]; have {
+		serverDat.LabelsApplied = true
+	}
 	return nil
 }
 
@@ -1275,7 +1397,11 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 	providingPod.Labels = utils.MapSet(providingPod.Labels, api.DualLabelName, requestingPod.Name)
 	launcherBased := launcherState != nil
 	if launcherBased {
-		problems := applyInstanceStateToLauncherPod(providingPod, launcherState)
+		// Write only controller-managed annotations here; the ISC-provided
+		// labels and annotations are applied later, after the vLLM instance
+		// is confirmed serving (issue #629). Validation runs now so
+		// misconfiguration surfaces before we mutate the launcher Pod.
+		problems := applyControllerMetadataToLauncherPod(providingPod, launcherState)
 		if len(problems) > 0 {
 			return ctl.ensureReqStatus(ctx, requestingPod, serverDat, problems...)
 		}
@@ -1290,6 +1416,7 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 	serverDat.ProvidingPodName = providingPod.Name
 	if launcherBased {
 		commitInstanceState(serverDat, launcherState)
+		serverDat.LabelsApplied = false
 		ctl.ensureDualityMetric(ctx, serverDat, requestingPod.Spec.NodeName, true)
 	}
 	logger.V(2).Info("Bound server-providing Pod", "name", providingPod.Name, "node", requestingPod.Spec.NodeName, "gpus", serverDat.GPUIDsStr, "newResourceVersion", echo.ResourceVersion, "instanceID", serverDat.InstanceID, "k8sCallStartTime", updStartStr)
