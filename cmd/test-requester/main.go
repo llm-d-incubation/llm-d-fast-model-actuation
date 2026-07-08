@@ -112,12 +112,16 @@ func main() {
 	var wg sync.WaitGroup
 	wg.Add(2)
 
+	serveSPI, err := coordination.StartWithGPUUUIDs(ctx, strconv.FormatInt(int64(spiPort), 10), &ready, os.Stdout, gpuUUIDs)
+	if err != nil {
+		logger.Error(err, "Failed to start requester SPI server")
+		os.Exit(10)
+	}
 	go func() {
 		defer wg.Done()
 
-		err := coordination.RunWithGPUUUIDs(ctx, strconv.FormatInt(int64(spiPort), 10), &ready, os.Stdout, gpuUUIDs)
-		if err != nil {
-			logger.Error(err, "failed to start requester SPI server")
+		if err := serveSPI(); err != nil {
+			logger.Error(err, "Failed to run requester SPI server")
 		}
 	}()
 

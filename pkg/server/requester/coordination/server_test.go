@@ -27,6 +27,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	stubapi "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/spi"
 )
@@ -38,10 +39,13 @@ func FuzzServer(f *testing.F) {
 	var ready atomic.Bool
 	ctx, cancel := context.WithCancel(f.Context())
 	port := "28083"
+	serveSPI, err := StartWithGPUUUIDs(ctx, port, &ready, nil, gpuIDs)
+	if err != nil {
+		f.Fatalf("Server start failed: %s", err.Error())
+	}
 	go func() {
-		err := RunWithGPUUUIDs(ctx, port, &ready, nil, gpuIDs)
-		if err != nil {
-			f.Logf("Run failed: %s", err.Error())
+		if err := serveSPI(); err != nil {
+			f.Logf("Server run failed: %s", err.Error())
 		}
 	}()
 	paths := map[bool]string{false: stubapi.BecomeUnreadyPath, true: stubapi.BecomeReadyPath}
@@ -88,10 +92,13 @@ func TestLogChunking(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	var ready atomic.Bool
 	port := "28084"
+	serveSPI, err := StartWithGPUUUIDs(ctx, port, &ready, &logBuilder, []string{"x"})
+	if err != nil {
+		t.Fatalf("Server start failed: %s", err.Error())
+	}
 	go func() {
-		err := RunWithGPUUUIDs(ctx, port, &ready, &logBuilder, []string{"x"})
-		if err != nil {
-			t.Logf("Run failed: %s", err.Error())
+		if err := serveSPI(); err != nil {
+			t.Logf("Server run failed: %s", err.Error())
 		}
 	}()
 	for {
@@ -143,4 +150,76 @@ func TestLogChunking(t *testing.T) {
 		}
 	}
 	cancel()
+}
+
+// TestRequestBeforeServe tests what happens if a request is sent between
+// listener creation and `http.Serve`.
+func TestRequestBeforeServe(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	var ready atomic.Bool
+	var logBuilder strings.Builder
+	port := "28085"
+	serveSPI, err := StartWithGPUUUIDs(ctx, port, &ready, &logBuilder, []string{"x"})
+	if err != nil {
+		t.Fatalf("Server start failed: %s", err.Error())
+	}
+	responseCh := make(chan *http.Response)
+	shutdownCh := make(chan struct{})
+	go func() {
+		resp, err := http.Get("http://localhost:" + port + stubapi.AcceleratorQueryPath)
+		if err != nil {
+			t.Errorf("Failed to GET: %s", err.Error())
+		} else {
+			body, bodyErr := io.ReadAll(resp.Body)
+			t.Logf("Succeeded to GET: body=%v, bodyErr=%v", string(body), bodyErr)
+			_ = resp.Body.Close()
+		}
+		responseCh <- resp
+	}()
+	time.Sleep(10 * time.Second)
+	go func() {
+		if err := serveSPI(); err != nil {
+			t.Logf("Server run failed: %s", err.Error())
+		} else {
+			t.Log("serveSPI returned clean")
+		}
+		close(shutdownCh)
+	}()
+	timer := time.NewTimer(20 * time.Second)
+	defer func() { timer.Stop() }()
+	select {
+	case <-responseCh:
+	case <-timer.C:
+		t.Fatalf("Response not received in time")
+	}
+	cancel()
+	<-shutdownCh
+}
+
+func TestShutdown(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	var ready atomic.Bool
+	var logBuilder strings.Builder
+	port := "28086"
+	shutdownCh := make(chan struct{})
+	serveSPI, err := StartWithGPUUUIDs(ctx, port, &ready, &logBuilder, []string{"x"})
+	if err != nil {
+		t.Fatalf("Server start failed: %s", err.Error())
+	}
+	go func() {
+		if err := serveSPI(); err != nil {
+			t.Logf("Server run failed: %s", err.Error())
+		} else {
+			t.Log("serveSPI returned clean")
+		}
+		close(shutdownCh)
+	}()
+	cancel()
+	timer := time.NewTimer(20 * time.Second)
+	defer func() { timer.Stop() }()
+	select {
+	case <-shutdownCh:
+	case <-timer.C:
+		t.Fatalf("Server shutdown did not happen in time")
+	}
 }
