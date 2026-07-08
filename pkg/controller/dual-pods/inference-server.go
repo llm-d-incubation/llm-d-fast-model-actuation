@@ -509,8 +509,9 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		// the launcher Pod has no InferencePool-matching labels, so EPP does
 		// not treat it as an endpoint. See issue #629.
 		if launcherBased && !*serverDat.Sleeping && !serverDat.LabelsApplied {
-			if err := ctl.applyDeferredISCRoutingMetadata(ctx, requestingPod, serverDat, providingPod, iscName); err != nil {
-				return err, true
+			stop, err := ctl.applyDeferredISCRoutingMetadata(ctx, requestingPod, serverDat, providingPod, iscName)
+			if stop {
+				return err, err != nil
 			}
 		}
 		if err := ctl.ensureSleepingLabel(ctx, providingPod, *(serverDat.Sleeping)); err != nil {
@@ -1137,47 +1138,69 @@ func commitInstanceState(serverDat *serverData, state *vllmInstanceState) {
 	serverDat.InstanceID = state.instanceID
 	serverDat.InstanceConfig = state.cfg
 	serverDat.ServerPort = state.serverPort
-	serverDat.InstanceISCLabels = state.iscLabels
-	serverDat.InstanceISCAnnotations = state.iscAnnotations
 }
 
-// applyDeferredISCRoutingMetadata writes the ISC-provided labels and
-// annotations onto the bound launcher Pod. It is called from the
-// bound-provider reconcile path only after the vLLM instance is confirmed
-// serving, so the Pod does not become an InferencePool-matching routing
-// target while its data-plane port (:8000) is still unavailable
-// (issue #629).
+// applyDeferredISCRoutingMetadata is called from the bound-provider reconcile
+// path once the bound vLLM instance is confirmed serving, to write the
+// ISC-provided labels and annotations onto the launcher Pod. Deferring these
+// until the instance is serving keeps the Pod from becoming an
+// InferencePool-matching routing target while its data-plane port (:8000) is
+// still unavailable (issue #629). On successful application
+// serverDat.LabelsApplied is set to true.
 //
-// The labels/annotations to apply are derived from the current
-// InferenceServerConfig; if the ISC's current hash no longer matches the
-// bound instance, the instance is obsolete and label application is
-// skipped (the instance-GC path will delete the instance separately).
-// On success, serverDat.LabelsApplied is set to true.
+// It returns (stop, err). When stop is true the caller must return from the
+// reconcile without relaying readiness: either an error occurred (err != nil,
+// so the item is retried) or a tear-down was requested (err == nil, waiting for
+// the requester deletion to be observed).
+//
+// If the InferenceServerConfig was edited between bind and readiness so that
+// its current hash no longer matches the bound instance, that instance is
+// obsolete and can never carry the current routing labels. Leaving it in place
+// would strand a Ready-but-unrouted instance: the instance-GC path only reaps
+// obsolete instances that are sleeping, and this one is awake. Instead the
+// requester Pod is deleted so a fresh one rebinds against the current ISC; the
+// standard unbind flow (maybeDeleteObsoleteInstance) then removes the obsolete
+// instance from the launcher.
 func (ctl *controller) applyDeferredISCRoutingMetadata(
 	ctx context.Context,
 	requestingPod *corev1.Pod,
 	serverDat *serverData,
 	providingPod *corev1.Pod,
 	iscName string,
-) error {
+) (bool, error) {
 	logger := klog.FromContext(ctx)
+	podOps := ctl.coreclient.Pods(ctl.namespace)
 	isc, err := ctl.iscLister.InferenceServerConfigs(ctl.namespace).Get(iscName)
 	if err != nil {
-		return fmt.Errorf("failed to load InferenceServerConfig %q for deferred label application: %w", iscName, err)
+		return true, fmt.Errorf("failed to load InferenceServerConfig %q for deferred label application: %w", iscName, err)
 	}
 	desired, err := ctl.computeDesiredInstanceState(isc, serverDat.GPUIDs)
 	if err != nil {
-		return fmt.Errorf("failed to compute instance state for deferred label application: %w", err)
+		return true, fmt.Errorf("failed to compute instance state for deferred label application: %w", err)
 	}
 	if desired.instanceID != serverDat.InstanceID {
-		logger.V(2).Info(
-			"Skipping deferred ISC label application: current ISC hash no longer matches bound instance",
-			"instanceID", serverDat.InstanceID, "currentISCHash", desired.instanceID,
-		)
-		return nil
+		// The ISC changed after bind but before the instance became ready, so the
+		// bound instance is obsolete. Delete the requester to force a rebind
+		// against the current ISC. Leave serverDat.Sleeping as-is (the instance is
+		// awake) so the unbind flow's maybeDeleteObsoleteInstance deletes the
+		// obsolete instance from the launcher rather than leaving it orphaned.
+		logger.V(2).Info("Bound instance is obsolete (ISC changed during startup); deleting requester to rebind",
+			"instanceID", serverDat.InstanceID, "currentISCHash", desired.instanceID)
+		delStart := time.Now()
+		err = podOps.Delete(ctx, requestingPod.Name, metav1.DeleteOptions{
+			PropagationPolicy: ptr.To(metav1.DeletePropagationBackground),
+			Preconditions:     &metav1.Preconditions{UID: &requestingPod.UID, ResourceVersion: &requestingPod.ResourceVersion}})
+		delStartStr := delStart.Format(time.RFC3339Nano)
+		if err == nil {
+			logger.V(2).Info("Requested deletion of server-requesting Pod because bound instance is obsolete", "k8sCallStartTime", delStartStr)
+		} else if apierrors.IsGone(err) || apierrors.IsNotFound(err) {
+			logger.V(2).Info("The server-requesting Pod is already gone", "k8sCallStartTime", delStartStr)
+		} else {
+			return true, fmt.Errorf("failed to delete server-requesting Pod for obsolete instance (started %s): %w", delStartStr, err)
+		}
+		serverDat.RequesterDeleteRequested = true
+		return true, nil
 	}
-	serverDat.InstanceISCLabels = desired.iscLabels
-	serverDat.InstanceISCAnnotations = desired.iscAnnotations
 
 	updated := providingPod.DeepCopy()
 	if problems := applyISCRoutingMetadataToLauncherPod(updated, desired); len(problems) > 0 {
@@ -1185,22 +1208,22 @@ func (ctl *controller) applyDeferredISCRoutingMetadata(
 		// and stop; the next ISC edit or reconcile will retry.
 		statusErr, _ := ctl.ensureReqStatus(ctx, requestingPod, serverDat, problems...)
 		if statusErr != nil {
-			return statusErr
+			return true, statusErr
 		}
-		return fmt.Errorf("ISC labels/annotations invalid for deferred application: %s", strings.Join(problems, "; "))
+		return true, fmt.Errorf("ISC labels/annotations invalid for deferred application: %s", strings.Join(problems, "; "))
 	}
 	updStart := time.Now()
-	echo, err := ctl.coreclient.Pods(ctl.namespace).Update(ctx, updated, metav1.UpdateOptions{FieldManager: ControllerName})
+	echo, err := podOps.Update(ctx, updated, metav1.UpdateOptions{FieldManager: ControllerName})
 	updStartStr := updStart.Format(time.RFC3339Nano)
 	if err != nil {
-		return fmt.Errorf("failed to apply deferred ISC labels to launcher Pod %s (started %s): %w", updated.Name, updStartStr, err)
+		return true, fmt.Errorf("failed to apply deferred ISC labels to launcher Pod %s (started %s): %w", updated.Name, updStartStr, err)
 	}
 	serverDat.LabelsApplied = true
 	logger.V(2).Info("Applied deferred ISC labels/annotations to bound launcher Pod",
 		"name", updated.Name, "instanceID", serverDat.InstanceID,
 		"newResourceVersion", echo.ResourceVersion, "k8sCallStartTime", updStartStr,
 	)
-	return nil
+	return false, nil
 }
 
 // clearInstanceStateFromLauncherPod removes the five controller-managed
