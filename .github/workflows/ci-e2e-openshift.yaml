@@ -426,7 +426,7 @@ jobs:
           echo "Cluster domain: $CLUSTER_DOMAIN"
           if echo "$CLUSTER_DOMAIN" | grep -q "pokprod"; then
             echo "Detected pokprod cluster"
-            echo "RUNTIME_CLASS_NAME=nvidia" >> $GITHUB_ENV
+            echo "RUNTIME_CLASS_NAME=nvidia-legacy" >> $GITHUB_ENV
           fi
 
       - name: Clean up resources for this PR
