@@ -103,6 +103,11 @@ const launcherVllmConfigAnnotationKey = "dual-pods.llm-d.ai/vllm-config"
 const iscLabelKeysAnnotationKey = "dual-pods.llm-d.ai/isc-label-keys"
 const iscAnnotationKeysAnnotationKey = "dual-pods.llm-d.ai/isc-annotation-keys"
 
+// launcherISCRoutingMetadataAnnotationKey holds, as JSON, the ISC-provided
+// routing labels and annotations the bound instance was created with, so they
+// can be applied once it is serving and recovered after a restart.
+const launcherISCRoutingMetadataAnnotationKey = "dual-pods.llm-d.ai/isc-routing-metadata"
+
 const providerFinalizer = "dual-pods.llm-d.ai/provider"
 const requesterFinalizer = "dual-pods.llm-d.ai/requester"
 
@@ -445,18 +450,21 @@ type serverData struct {
 
 	ProvidingPodName string
 
-	// The next two fields form a snapshot of the bound launcher-based
-	// vLLM instance's ISC-derived state. Each field may be reassigned
-	// over time, but whichever value (pointer) is
-	// currently stored is deeply immutable for as long as it is stored.
-	InstanceID     string
-	InstanceConfig *VllmConfig
+	// Snapshot of the bound launcher-based instance's ISC-derived state.
+	// A field may be reassigned, but whichever value is stored is deeply
+	// immutable while stored. InstanceISCLabels/InstanceISCAnnotations are the
+	// routing metadata the instance was bound with (applied once it is serving,
+	// see LabelsApplied), reflecting the binding-time commitment rather than the
+	// current InferenceServerConfig.
+	InstanceID             string
+	InstanceConfig         *VllmConfig
+	InstanceISCLabels      map[string]string
+	InstanceISCAnnotations map[string]string
 
 	InstanceKnownToExist bool // meaningful only for launcher-based providers
 
-	// LabelsApplied is true iff the ISC-provided labels and annotations
-	// have been written to the bound launcher Pod. Meaningful only for
-	// launcher-based providers.
+	// LabelsApplied is true iff the ISC-provided labels and annotations have
+	// been written to the bound launcher Pod. Launcher-based providers only.
 	LabelsApplied bool
 
 	DualityMetricAsserted bool
