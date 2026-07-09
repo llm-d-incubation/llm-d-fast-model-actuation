@@ -174,6 +174,8 @@ echo "GPU probe Pod $probe_pod scheduled on Node $testnode — using it for the 
 
 kubectl delete pod "$probe_pod" -n "$NS" --wait=true
 
+echo "$testnode" > testnode
+
 cheer "GPU probe complete — test node is $testnode"
 
 # ---------------------------------------------------------------------------

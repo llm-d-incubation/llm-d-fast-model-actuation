@@ -590,6 +590,19 @@ jobs:
         if: always()
         run: kubectl get all -n "$FMA_NAMESPACE"
 
+      - name: Dump DCGM_FI_DEV_FB_USED on testnode
+        if: always()
+        run: |
+          if [ -r testnode ]
+          then
+            curl -sSkG \
+              -H "Authorization: Bearer $(oc whoami -t)" \
+              --data-urlencode "query=DCGM_FI_DEV_FB_USED{Hostname=\"$(cat testnode)\"}" \
+              https://prometheus-k8s-openshift-monitoring.apps.pokprod001.ete14.res.ibm.com/api/v1/query \
+            | jq '.data.result[]'
+          else echo there is no readable testnode file
+          fi
+
       - name: Dump select node info after test
         if: always()
         run: |
