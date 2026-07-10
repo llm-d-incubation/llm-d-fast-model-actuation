@@ -1299,6 +1299,37 @@ func (ctl *controller) ensureSleepingLabel(ctx context.Context, providingPod *co
 	return echo, nil
 }
 
+// removeISCRoutingLabels strips the ISC selector labels (keys in
+// iscLabelKeysAnnotationKey) from a bound launcher Pod, updating iff any are
+// present. Doing this before the instance is put to sleep or deleted makes EPP
+// drop the launcher from the InferencePool while it can still serve, so no
+// traffic reaches a sleeping or gone instance. Tracking and ISC annotations are
+// left for the caller's final unbind Update. Returns the current Pod so the
+// caller continues with a fresh resourceVersion.
+func (ctl *controller) removeISCRoutingLabels(ctx context.Context, providingPod *corev1.Pod) (*corev1.Pod, error) {
+	var toRemove []string
+	for _, k := range parseSpaceSeparatedAnnotation(providingPod.Annotations[iscLabelKeysAnnotationKey]) {
+		if _, have := providingPod.Labels[k]; have {
+			toRemove = append(toRemove, k)
+		}
+	}
+	if len(toRemove) == 0 {
+		return providingPod, nil
+	}
+	updatedPod := providingPod.DeepCopy()
+	for _, k := range toRemove {
+		delete(updatedPod.Labels, k)
+	}
+	updStart := time.Now()
+	echo, err := ctl.coreclient.Pods(ctl.namespace).Update(ctx, updatedPod, metav1.UpdateOptions{FieldManager: ControllerName})
+	updStartStr := updStart.Format(time.RFC3339Nano)
+	if err != nil {
+		return providingPod, fmt.Errorf("failed to remove ISC routing labels from launcher Pod %s (started %s): %w", providingPod.Name, updStartStr, err)
+	}
+	klog.FromContext(ctx).V(2).Info("Removed ISC routing labels from launcher Pod before sleeping", "name", echo.Name, "removed", toRemove, "newResourceVersion", echo.ResourceVersion, "k8sCallStartTime", updStartStr)
+	return echo, nil
+}
+
 var invalidPodRE = regexp.MustCompile(`^Pod "[a-z0-9.-]*" is invalid`)
 
 func (ctl *controller) enforceSleeperBudget(ctx context.Context, serverDat *serverData, requestingPod *corev1.Pod, sleeperLimit int) (error, bool) {
@@ -1620,6 +1651,15 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 			return err
 		}
 		ctl.ensureDualityMetric(ctx, serverDat, nodeDat.NodeName, true)
+		// De-route before sleeping: drop the launcher from the InferencePool
+		// while the instance can still serve, the mirror of deferring label
+		// application until it is serving. Only needed here, where the launcher
+		// survives the unbind; a Pod being deleted is dropped by EPP via its
+		// DeletionTimestamp. Reassign providingPod for a fresh resourceVersion.
+		var err error
+		if providingPod, err = ctl.removeISCRoutingLabels(ctx, providingPod); err != nil {
+			return err
+		}
 	}
 	// A providingPod with no IP is not scheduled, so we know that it is not awake.
 	// If providingPod is stale then the update will fail.
