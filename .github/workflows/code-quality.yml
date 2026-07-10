@@ -1,4 +1,4 @@
-name: python-code-quality
+name: code-quality
 on:
   push:
     branches:
@@ -7,6 +7,9 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   code-quality:
     runs-on: ubuntu-latest
@@ -14,6 +17,15 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # Go toolchain for the push-stage hooks (go-mod-tidy, golangci-lint-full).
+      # golangci-lint itself is built by pre-commit from a pinned version, so no
+      # separate install is needed. This is the *toolchain* version, distinct from
+      # go.mod's language version; the Go hooks are not pinned to a specific one.
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: "1.25"
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -37,10 +49,22 @@ jobs:
           pip install pytest==9.0.2 -r inference_server/launcher/requirements-sans-vllm.txt
 
       - name: Run pre-commit (lint, format, file and typo checks)
-        # Go/codegen hooks require a Go toolchain and run in their own workflows.
+        # go-mod-tidy and golangci-lint-full run in the push-stage step below;
+        # go-mod-tidy has no `stages` set, so it would also run here — skip it to
+        # avoid running it twice. verify-idl-consumption is a manual-stage hook and
+        # runs in its own workflow (verify-idl-consumption.yml).
         env:
-          SKIP: go-mod-tidy,golangci-lint,verify-idl-consumption
+          SKIP: go-mod-tidy
         run: pre-commit run --all-files --show-diff-on-failure
+
+      - name: Run pre-commit push-stage Go hooks
+        # pre-commit run accepts a single hook id per invocation. Invoking the Go
+        # hooks by id (rather than a bare --hook-stage pre-push) avoids re-running
+        # the Python hooks, which have no `stages` set and therefore run in every
+        # stage. These are intentionally slower and run on push, not every commit.
+        run: |
+          pre-commit run go-mod-tidy --all-files --hook-stage pre-push
+          pre-commit run golangci-lint-full --all-files --hook-stage pre-push
 
       - name: Run pytest launcher
         run: |
@@ -53,7 +77,10 @@ jobs:
         run: |
           echo "Code quality checks completed!"
           echo "For lint/format/typo failures, run pre-commit locally:"
-          echo "  SKIP=go-mod-tidy,golangci-lint,verify-idl-consumption pre-commit run --all-files"
+          echo "  SKIP=go-mod-tidy pre-commit run --all-files"
+          echo "For Go hook failures, run the push-stage hooks locally:"
+          echo "  pre-commit run go-mod-tidy --all-files --hook-stage pre-push"
+          echo "  pre-commit run golangci-lint-full --all-files --hook-stage pre-push"
           echo "For test failures, run the launcher tests directly (pre-commit does not run these):"
           echo "  python -m pytest tests/test_launcher.py -v"
           echo "  python -m pytest tests/test_gputranslator.py -v"

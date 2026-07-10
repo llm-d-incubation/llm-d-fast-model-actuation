@@ -89,7 +89,7 @@ you do **not** need to install a specific golangci-lint globally.
 ### Running the checks
 
 ```bash
-# Run every hook against the whole tree (what CI's python job runs)
+# Run every hook against the whole tree (what CI's code-quality job runs)
 pre-commit run --all-files
 
 # golangci-lint + go mod tidy run automatically on `git push`; to run them on
