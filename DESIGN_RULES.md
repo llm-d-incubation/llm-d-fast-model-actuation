@@ -95,8 +95,8 @@ workflows track `main` by design. Established in
   [`hack/check-action-refs.py`](hack/check-action-refs.py), run in both
   [pre-commit](.pre-commit-config.yaml) (offline: pin format, tag-comment
   presence, and one SHA/tag per action across workflows) and
-  [CI](.github/workflows/check-action-refs.yml) (`--online`, which additionally
-  verifies each tag resolves to its SHA via `gh`).
+  [CI](.github/workflows/check-action-refs.yml) (`--mode online`, which
+  additionally verifies each tag resolves to its SHA via `gh`).
 - Clause **(b)** is **subjective and advisory**: the script does not check it.
   Whoever is doing the work — an AI agent or a human — checks that the chosen
   version has no reported vulnerabilities, has soaked at least 7 days, and is not

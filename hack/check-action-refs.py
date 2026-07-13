@@ -28,7 +28,7 @@ the *mechanical* clauses:
 
   * Every reference to a given action across all workflows uses the same SHA and
     tag.
-  * With ``--online``: the commented tag actually resolves to the pinned SHA
+  * With ``--mode online``: the commented tag actually resolves to the pinned SHA
     (verified via ``gh api``).
 
 It does NOT check clause (b) of DR-10 (no known vulnerabilities / soaked >=7 days /
@@ -37,8 +37,8 @@ reviewer.
 
 Usage (run from the repo root)::
 
-    hack/check-action-refs.py            # offline checks only
-    hack/check-action-refs.py --online   # also verify each tag resolves to its SHA
+    hack/check-action-refs.py                 # offline checks only (default)
+    hack/check-action-refs.py --mode online   # also verify each tag resolves to its SHA
 
 Exits non-zero and prints ``file:line: reason`` for every violation.
 """
@@ -79,49 +79,55 @@ TAG_RE = re.compile(r"^(?P<tag>\S+?)[.,;:]?(?:\s|$)")
 
 
 class Violation(NamedTuple):
-    wf_path: str
-    lineno: int
-    ref: str
-    reason: str
+    """One DR-10 violation.
+
+    Its ``str`` is the reported line, e.g. ``.github/workflows/ci.yml:12:
+    third-party action must be pinned by full 40-hex commit SHA (uses:
+    actions/checkout@v4)``.
+    """
+
+    wf_path: str  # path to the workflow file the offending line appears in
+    lineno: int  # 1-based line number there
+    ref: str  # the offending reference as written
+    reason: str  # human-readable description of the violation
 
     def __str__(self) -> str:
         return f"{self.wf_path}:{self.lineno}: {self.reason} (uses: {self.ref})"
 
 
 class Pin(NamedTuple):
-    """A recorded pin of a third-party action, used by the clause-(a) same-version
-    check to compare its other references against. Fields: the pinned commit
-    ``sha``; its version-tag ``tag``; and the ``wf_path`` and ``lineno`` where this
-    pin was seen (cited when another reference disagrees)."""
+    """A recorded pin of a third-party action.
 
-    sha: str
-    tag: str
-    wf_path: str
-    lineno: int
+    Used by the clause-(a) same-version check to compare an action's other
+    references against.
+    """
+
+    sha: str  # the pinned commit SHA
+    tag: str  # its version-tag comment
+    wf_path: str  # path to the workflow file where this pin was seen
+    lineno: int  # 1-based line number there (cited when another reference disagrees)
 
 
 class UsesRef(NamedTuple):
-    """One parsed ``uses:`` line.
+    """One parsed ``uses:`` line."""
 
-    Fields:
-      * ``wf_path``     -- path to the workflow file the line appears in.
-      * ``lineno``      -- 1-based line number within that file.
-      * ``ref_path``    -- the part of the reference before ``@`` (e.g.
-                           ``actions/checkout`` or a reusable-workflow path).
-      * ``ref_version`` -- what follows ``@``: a commit SHA or a branch/tag.
-      * ``comment``     -- the trailing ``# ...`` comment body, or None.
-      * ``ref``         -- the full reference as written, for reporting.
-    """
-
-    wf_path: str
-    lineno: int
+    wf_path: str  # path to the workflow file the line appears in
+    lineno: int  # 1-based line number within that file
+    # the part of the reference before ``@`` (e.g. ``actions/checkout`` or a
+    # reusable-workflow path)
     ref_path: str
-    ref_version: str
-    comment: Optional[str]
-    ref: str
+    ref_version: str  # what follows ``@``: a commit SHA or a branch/tag
+    comment: Optional[str]  # the trailing ``# ...`` comment body, or None
+    ref: str  # the full reference as written, for reporting
 
 
 def workflow_files() -> list[str]:
+    """Return the workflow-file paths to check.
+
+    These are the sorted paths of every ``*.yml``/``*.yaml`` under
+    ``.github/workflows/`` (relative to the current directory), e.g.
+    ``['.github/workflows/ci.yml', '.github/workflows/release.yaml']``.
+    """
     files: list[str] = []
     for pattern in ("*.yml", "*.yaml"):
         files.extend(glob.glob(os.path.join(".github", "workflows", pattern)))
@@ -129,10 +135,13 @@ def workflow_files() -> list[str]:
 
 
 def repo_of(ref_path: str) -> str:
-    """Return owner/repo for the part of a ``uses:`` ref before the ``@``.
+    """Return the owner/repo of ``ref_path``, which is a ``uses:`` reference
+    with any ``@<ref>`` suffix already stripped off.
 
-    Handles both plain actions (``actions/checkout``) and reusable workflows
-    with a path (``llm-d/llm-d-infra/.github/workflows/x.yaml``).
+    E.g. ``'actions/checkout' -> 'actions/checkout'``, and
+    ``'llm-d/llm-d-infra/.github/workflows/lint.yaml' -> 'llm-d/llm-d-infra'``
+    (a reusable workflow with a path). A ``ref_path`` with no ``/`` is returned
+    unchanged.
     """
     parts = ref_path.split("/")
     if len(parts) < 2:
@@ -142,6 +151,11 @@ def repo_of(ref_path: str) -> str:
 
 def _require_object(data: object, api_path: str, key: str) -> dict:
     """Return ``data[key]`` when both are dicts; exit hard otherwise.
+
+    ``data`` is a parsed ``gh api`` payload, ``api_path`` is the path it came
+    from (for error messages), and ``key`` is the nested object to extract. E.g.
+    given ``data={'object': {'sha': 'abc', 'type': 'commit'}}`` and
+    ``key='object'``, returns ``{'sha': 'abc', 'type': 'commit'}``.
 
     Used to validate the shape of a ``gh api`` JSON payload. An unexpected shape
     (e.g. a JSON array from a ref name that matches several refs, or a missing
@@ -163,7 +177,12 @@ def _require_object(data: object, api_path: str, key: str) -> dict:
 
 
 def extract_tag(comment: Optional[str]) -> Optional[str]:
-    """Return the version tag from a comment body, or None if absent."""
+    """Return the version tag from a ``uses:`` line's trailing comment body, or
+    None if there is none.
+
+    E.g. ``'v7.0.0' -> 'v7.0.0'``, ``'v7.0.0, latest' -> 'v7.0.0'``,
+    ``'v7.0.0 pinned per DR-10' -> 'v7.0.0'``, and ``None -> None``.
+    """
     if not comment:
         return None
     m = TAG_RE.match(comment.strip())
@@ -171,7 +190,15 @@ def extract_tag(comment: Optional[str]) -> Optional[str]:
 
 
 def parse_uses(wf_paths: list[str]) -> Iterator[UsesRef]:
-    """Yield a UsesRef for each ``uses:`` line across the given workflow files."""
+    """Yield a UsesRef for each in-scope ``uses:`` line across ``wf_paths``.
+
+    ``wf_paths`` is a list of workflow-file paths (as from ``workflow_files()``).
+    A line like ``  uses: actions/checkout@11bd719...  # v7.0.0, latest`` yields
+    a UsesRef with ``ref_path='actions/checkout'``,
+    ``ref_version='11bd719...'``, and ``comment='v7.0.0, latest'`` (the whole
+    comment body). Lines whose ref is out of DR-10's scope (local ``./…``
+    actions, ``docker://…`` forms, malformed refs) are skipped.
+    """
     for wf_path in wf_paths:
         with open(wf_path, encoding="utf-8") as f:
             for lineno, line in enumerate(f, start=1):
@@ -202,6 +229,12 @@ class TagResolver:
         self.calls: int = 0
 
     def resolve(self, repo: str, tag: str) -> Optional[str]:
+        """Return the commit SHA that ``tag`` points to in ``repo``, or None if
+        the tag does not resolve.
+
+        E.g. ``resolve('actions/checkout', 'v7.0.0') -> '11bd719...'``. Each
+        ``(repo, tag)`` pair is looked up at most once and cached.
+        """
         key = (repo, tag)
         if key in self._cache:
             return self._cache[key]
@@ -256,7 +289,7 @@ class TagResolver:
                 check=False,
             )
         except FileNotFoundError:
-            sys.exit("error: 'gh' not found; --online requires the GitHub CLI")
+            sys.exit("error: 'gh' not found; --mode online requires the GitHub CLI")
         if out.returncode != 0:
             # gh writes e.g. "gh: Not Found (HTTP 404)" to stderr.
             if "HTTP 404" in out.stderr:
@@ -276,6 +309,14 @@ class TagResolver:
 
 
 def check(online: bool) -> tuple[list[Violation], Optional[TagResolver]]:
+    """Check every workflow's ``uses:`` refs against DR-10's mechanical clauses.
+
+    When ``online`` is true, the tag-resolves-to-the-pinned-SHA clause is checked
+    too (via ``gh``); when false, only the clauses verifiable without network
+    access are. Returns the list of Violations found (empty when all refs comply)
+    together with the TagResolver used when online (so the caller can report the
+    tag-lookup count), or None when offline.
+    """
     violations: list[Violation] = []
     resolver = TagResolver() if online else None
 
@@ -368,13 +409,16 @@ def main() -> int:
     description = __doc__.splitlines()[0] if __doc__ else None
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument(
-        "--online",
-        action="store_true",
-        help="also verify each tag comment resolves to its pinned SHA (uses gh)",
+        "-m",
+        "--mode",
+        choices=["online", "offline"],
+        default="offline",
+        help="'online' also verifies each tag comment resolves to its pinned "
+        "SHA (uses gh); 'offline' (default) runs the mechanical checks only",
     )
     args = parser.parse_args()
 
-    violations, resolver = check(args.online)
+    violations, resolver = check(online=args.mode == "online")
 
     if violations:
         for v in violations:
@@ -386,9 +430,8 @@ def main() -> int:
         )
         return 1
 
-    mode = "online" if args.online else "offline"
     extra = f" ({resolver.calls} tag lookup(s))" if resolver else ""
-    print(f"All GitHub Actions references comply with DR-10 ({mode}){extra}.")
+    print(f"All GitHub Actions references comply with DR-10 ({args.mode}){extra}.")
     return 0
 
 
