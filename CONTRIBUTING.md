@@ -89,11 +89,15 @@ you do **not** need to install a specific golangci-lint globally.
 ### Running the checks
 
 ```bash
-# Run every hook against the whole tree (what CI's code-quality job runs)
+# Run the commit-stage hooks against the whole tree. This does NOT run
+# golangci-lint-full, which is gated on `stages: [pre-push]`. CI's
+# code-quality job runs this, then the pre-push hooks below, then the
+# launcher tests.
 pre-commit run --all-files
 
-# golangci-lint + go mod tidy run automatically on `git push`; to run them on
-# demand (one hook id per invocation):
+# golangci-lint runs only on `git push` (`stages: [pre-push]`); go mod tidy
+# runs on every commit and push. To run them on demand (one hook id per
+# invocation):
 pre-commit run go-mod-tidy --all-files --hook-stage pre-push
 pre-commit run golangci-lint-full --all-files --hook-stage pre-push
 
