@@ -14,8 +14,7 @@
 
 # CI
 
-- [Markdown and Python code quality check](../.github/workflows/python-code-quality.yml)
-- [Go code quality check](../.github/workflows/golangci-lint.yml)
+- [Code quality: Markdown, Python & Go lint/format/typos plus launcher tests](../.github/workflows/code-quality.yml)
 - [Verify IDL consumption](../.github/workflows/verify-idl-consumption.yml)
 - [Test build of dual-pods controller image](../.github/workflows/build-controller-image.yml)
 - [Test build of launcher image](../.github/workflows/build-launcher-image.yml)
