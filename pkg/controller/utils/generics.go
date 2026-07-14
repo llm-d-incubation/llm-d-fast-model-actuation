@@ -77,3 +77,14 @@ func MapSet[Dom comparable, Rng any](urMap map[Dom]Rng, dom Dom, rng Rng) map[Do
 	urMap[dom] = rng
 	return urMap
 }
+
+// MapIsSubset reports whether every key in sub is present in super with an
+// equal value.
+func MapIsSubset[Dom, Rng comparable](sub, super map[Dom]Rng) bool {
+	for k, v := range sub {
+		if sv, ok := super[k]; !ok || sv != v {
+			return false
+		}
+	}
+	return true
+}

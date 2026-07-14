@@ -101,10 +101,12 @@ const launcherInstanceIDAnnotationKey = "dual-pods.llm-d.ai/instance-id"
 const launcherServerPortAnnotationKey = "dual-pods.llm-d.ai/server-port"
 const launcherVllmConfigAnnotationKey = "dual-pods.llm-d.ai/vllm-config"
 
-// launcherISCRoutingMetadataAnnotationKey holds, as JSON, the ISC-provided
-// routing labels and annotations the bound instance was created with, so they
-// can be applied once it is serving and recovered after a restart. Their keys
-// are also what identifies the routing labels/annotations to remove on unbind.
+// launcherISCRoutingMetadataAnnotationKey holds, as the JSON encoding of an
+// iscRoutingMetadata, the ISC-provided routing labels and annotations the bound
+// instance was created with, so they can be applied once it is serving.
+// Externalizing it onto the Pod conveys it reliably from the binding
+// transaction to the later moment when the controller reacts to the instance
+// reaching readiness.
 const launcherISCRoutingMetadataAnnotationKey = "dual-pods.llm-d.ai/isc-routing-metadata"
 
 const providerFinalizer = "dual-pods.llm-d.ai/provider"
