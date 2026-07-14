@@ -18,7 +18,9 @@ package probes
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"sync/atomic"
 	"time"
@@ -28,8 +30,11 @@ import (
 	stubapi "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/spi"
 )
 
-// Run runs an HTTP server managing the /ready endpoint.
-func Run(ctx context.Context, port string, ready *atomic.Bool) error {
+// Start starts an HTTP server managing the /ready endpoint.
+// Returns two values.
+// The second is the error, if any, that arose from trying to start the network listener.
+// The first is the func that will do the serving and return any error that arose (nil for clean shutdown).
+func Start(ctx context.Context, port string, ready *atomic.Bool) (func() error, error) {
 	logger := klog.FromContext(ctx).WithName("probes-server")
 	ctx = klog.NewContext(ctx, logger)
 
@@ -45,8 +50,14 @@ func Run(ctx context.Context, port string, ready *atomic.Bool) error {
 	})
 
 	server := &http.Server{
-		Addr:    ":" + port,
-		Handler: mux,
+		Addr:        ":" + port,
+		BaseContext: func(l net.Listener) context.Context { return ctx },
+		Handler:     mux,
+	}
+
+	listener, err := net.Listen("tcp", server.Addr)
+	if err != nil {
+		return nil, err
 	}
 
 	// Setup graceful termination
@@ -59,13 +70,16 @@ func Run(ctx context.Context, port string, ready *atomic.Bool) error {
 		if err := server.Shutdown(ctx); err != nil {
 			logger.Error(err, "failed to gracefully shutdown")
 		}
+		_ = listener.Close()
 	}()
 
-	logger.Info("starting server", "port", port)
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		return fmt.Errorf("listen and serve error: %w", err)
-	}
-
-	logger.Info("server stopped")
-	return nil
+	return func() error {
+		logger.Info("starting server", "port", port)
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return fmt.Errorf("serve error: %w", err)
+		}
+		logger.Info("server stopped")
+		_ = listener.Close()
+		return nil
+	}, nil
 }

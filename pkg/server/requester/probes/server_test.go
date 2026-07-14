@@ -31,9 +31,12 @@ func FuzzServer(f *testing.F) {
 	var ready atomic.Bool
 	ctx, cancel := context.WithCancel(f.Context())
 	port := "28082"
+	serve, err := Start(ctx, port, &ready)
+	if err != nil {
+		f.Fatalf("Server start failed: %s", err.Error())
+	}
 	go func() {
-		err := Run(ctx, port, &ready)
-		if err != nil {
+		if err := serve(); err != nil {
 			f.Logf("Run failed: %s", err.Error())
 		}
 	}()

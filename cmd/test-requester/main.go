@@ -110,13 +110,13 @@ func main() {
 	var ready atomic.Bool
 
 	var wg sync.WaitGroup
-	wg.Add(2)
 
 	serveSPI, err := coordination.StartWithGPUUUIDs(ctx, strconv.FormatInt(int64(spiPort), 10), &ready, os.Stdout, gpuUUIDs)
 	if err != nil {
 		logger.Error(err, "Failed to start requester SPI server")
 		os.Exit(10)
 	}
+	wg.Add(1)
 	go func() {
 		defer wg.Done()
 
@@ -126,12 +126,17 @@ func main() {
 	}()
 
 	// Start the readiness probe server
+	serveProbes, err := probes.Start(ctx, strconv.FormatInt(int64(probesPort), 10), &ready)
+	if err != nil {
+		logger.Error(err, "Failed to start requester probes server")
+		os.Exit(11)
+	}
+	wg.Add(1)
 	go func() {
 		defer wg.Done()
 
-		err := probes.Run(ctx, strconv.FormatInt(int64(probesPort), 10), &ready)
-		if err != nil {
-			logger.Error(err, "failed to start requester probes server")
+		if err := serveProbes(); err != nil {
+			logger.Error(err, "failed to run requester probes server")
 		}
 	}()
 
