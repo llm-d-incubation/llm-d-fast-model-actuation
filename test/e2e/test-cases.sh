@@ -234,17 +234,19 @@ echo "Launcher Pod is $launcher1"
 # Verify requester is bound to launcher (bidirectional check)
 expect '[ "$(kubectl get pod -n '"$NS"' $req1 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcher1" ]'
 
-# Verify ISC labels and annotations were propagated to launcher
+note "Wait for both pods to be ready (includes vllm startup time)"
+kubectl wait --for condition=Ready pod/$req1 -n "$NS" --timeout=300s
+kubectl wait --for condition=Ready pod/$launcher1 -n "$NS" --timeout=0s
+
+# Verify ISC labels/annotations propagated to the launcher pod. The controller
+# applies these only after the instance is serving, which is when it relays
+# readiness, so a Ready requester (waited for above) guarantees they are present.
 [ "$(kubectl get pod -n "$NS" $launcher1 -o jsonpath='{.metadata.labels.e2e-test\.fma\.llm-d\.ai/isc-label}')" == "test-value" ] || { echo "ERROR: ISC label not propagated to launcher pod $launcher1"; exit 1; }
 [ "$(kubectl get pod -n "$NS" $launcher1 -o jsonpath='{.metadata.annotations.e2e-test\.fma\.llm-d\.ai/isc-annotation}')" == "test-value" ] || { echo "ERROR: ISC annotation not propagated to launcher pod $launcher1"; exit 1; }
 
 # Verify LauncherConfig podTemplate metadata labels/annotations were propagated to launcher pod (Issue #433)
 [ "$(kubectl get pod -n "$NS" $launcher1 -o jsonpath='{.metadata.labels.e2e-test\.fma\.llm-d\.ai/template-label}')" == "from-launcher-config" ] || { echo "ERROR: LauncherConfig podTemplate label is not correctly set on launcher pod $launcher1"; false; }
 [ "$(kubectl get pod -n "$NS" $launcher1 -o jsonpath='{.metadata.annotations.e2e-test\.fma\.llm-d\.ai/template-annotation}')" == "from-launcher-config" ] || { echo "ERROR: LauncherConfig podTemplate annotation is not correctly set on launcher pod $launcher1"; false; }
-
-note "Wait for both pods to be ready (includes vllm startup time)"
-kubectl wait --for condition=Ready pod/$req1 -n "$NS" --timeout=300s
-kubectl wait --for condition=Ready pod/$launcher1 -n "$NS" --timeout=0s
 
 # Discover and remember the assigned GPUs.
 expect '[ -n "$(kubectl get pod -n '"$NS"' $req1 -o jsonpath={.metadata.annotations.dual-pods\\.llm-d\\.ai/accelerators})" ]'
@@ -441,13 +443,15 @@ launcher2=$(kubectl get pods -n "$NS" -o name -l dual-pods.llm-d.ai/dual=$req2 |
 # Verify requester is bound to launcher (bidirectional check)
 expect '[ "$(kubectl get pod -n '"$NS"' $req2 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$launcher1" ]'
 
-# Verify ISC labels and annotations re-propagated after re-bind
-[ "$(kubectl get pod -n "$NS" $launcher1 -o jsonpath='{.metadata.labels.e2e-test\.fma\.llm-d\.ai/isc-label}')" == "test-value" ] || { echo "ERROR: ISC label not re-propagated to launcher pod $launcher1 after re-bind"; exit 1; }
-[ "$(kubectl get pod -n "$NS" $launcher1 -o jsonpath='{.metadata.annotations.e2e-test\.fma\.llm-d\.ai/isc-annotation}')" == "test-value" ] || { echo "ERROR: ISC annotation not re-propagated to launcher pod $launcher1 after re-bind"; exit 1; }
-
 note "Wait for requester to be ready (launcher should already be ready)"
 kubectl wait --for condition=Ready pod/$req2 -n "$NS" --timeout=300s
 kubectl wait --for condition=Ready pod/$launcher1 -n "$NS" --timeout=0s
+
+# Verify ISC labels/annotations re-propagated after re-bind. As at first bind,
+# they are applied only once the woken instance is serving, so a Ready requester
+# (above) guarantees they are present.
+[ "$(kubectl get pod -n "$NS" $launcher1 -o jsonpath='{.metadata.labels.e2e-test\.fma\.llm-d\.ai/isc-label}')" == "test-value" ] || { echo "ERROR: ISC label not re-propagated to launcher pod $launcher1 after re-bind"; exit 1; }
+[ "$(kubectl get pod -n "$NS" $launcher1 -o jsonpath='{.metadata.annotations.e2e-test\.fma\.llm-d\.ai/isc-annotation}')" == "test-value" ] || { echo "ERROR: ISC annotation not re-propagated to launcher pod $launcher1 after re-bind"; exit 1; }
 
 # Verify the same GPU UUID was assigned after wake-up.
 check_gpu_pin $req2

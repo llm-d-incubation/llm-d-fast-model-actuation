@@ -100,8 +100,14 @@ const nominalHashAnnotationKey = "dual-pods.llm-d.ai/nominal"
 const launcherInstanceIDAnnotationKey = "dual-pods.llm-d.ai/instance-id"
 const launcherServerPortAnnotationKey = "dual-pods.llm-d.ai/server-port"
 const launcherVllmConfigAnnotationKey = "dual-pods.llm-d.ai/vllm-config"
-const iscLabelKeysAnnotationKey = "dual-pods.llm-d.ai/isc-label-keys"
-const iscAnnotationKeysAnnotationKey = "dual-pods.llm-d.ai/isc-annotation-keys"
+
+// launcherISCRoutingMetadataAnnotationKey holds, as the JSON encoding of an
+// iscRoutingMetadata, the ISC-provided routing labels and annotations the bound
+// instance was created with, so they can be applied once it is serving.
+// Externalizing it onto the Pod conveys it reliably from the binding
+// transaction to the later moment when the controller reacts to the instance
+// reaching readiness.
+const launcherISCRoutingMetadataAnnotationKey = "dual-pods.llm-d.ai/isc-routing-metadata"
 
 const providerFinalizer = "dual-pods.llm-d.ai/provider"
 const requesterFinalizer = "dual-pods.llm-d.ai/requester"
@@ -445,14 +451,22 @@ type serverData struct {
 
 	ProvidingPodName string
 
-	// The next two fields form a snapshot of the bound launcher-based
-	// vLLM instance's ISC-derived state. Each field may be reassigned
-	// over time, but whichever value (pointer) is
-	// currently stored is deeply immutable for as long as it is stored.
-	InstanceID     string
-	InstanceConfig *VllmConfig
+	// Snapshot of the bound launcher-based instance's ISC-derived state.
+	// A field may be reassigned, but whichever value is stored is deeply
+	// immutable while stored. InstanceISCLabels/InstanceISCAnnotations are the
+	// routing metadata the instance was bound with (applied once it is serving,
+	// see LabelsApplied), reflecting the binding-time commitment rather than the
+	// current InferenceServerConfig.
+	InstanceID             string
+	InstanceConfig         *VllmConfig
+	InstanceISCLabels      map[string]string
+	InstanceISCAnnotations map[string]string
 
 	InstanceKnownToExist bool // meaningful only for launcher-based providers
+
+	// LabelsApplied is true iff the ISC-provided labels and annotations have
+	// been written to the bound launcher Pod. Launcher-based providers only.
+	LabelsApplied bool
 
 	DualityMetricAsserted bool
 

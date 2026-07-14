@@ -498,13 +498,23 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 			serverDat.Sleeping = &sleeping
 		}
 		if *(serverDat.Sleeping) {
-			err = ctl.wakeSleeper(ctx, serverDat, requestingPod, providingPod, serverPort, "discovered-bound")
-			if err != nil {
+			if err = ctl.wakeUp(ctx, serverDat, requestingPod, providingPod, serverPort, "discovered-bound"); err != nil {
 				return err, true
 			}
 		}
-		if err := ctl.ensureSleepingLabel(ctx, providingPod, *(serverDat.Sleeping)); err != nil {
-			return err, true
+		// Reconcile the sleeping label; for a launcher this also applies the
+		// deferred ISC routing labels/annotations in the same update, now that
+		// the instance is serving, so the launcher is not an InferencePool
+		// endpoint before it can serve.
+		if launcherBased {
+			var stop bool
+			if providingPod, stop, err = ctl.applyBoundLauncherLabels(ctx, requestingPod, serverDat, providingPod); stop {
+				return err, err != nil
+			}
+		} else {
+			if providingPod, err = ctl.ensureSleepingLabel(ctx, providingPod, *(serverDat.Sleeping)); err != nil {
+				return err, true
+			}
 		}
 		err, _ = ctl.ensureReqState(ctx, requestingPod, serverDat, shouldAddRequesterFinalizer, false)
 		if err != nil {
@@ -701,7 +711,9 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	// while the vLLM instance is being set up.
 	desiredLauncherPod.Annotations = utils.MapSet(desiredLauncherPod.Annotations, requesterAnnotationKey, string(requestingPod.UID)+" "+requestingPod.Name)
 	desiredLauncherPod.Labels = utils.MapSet(desiredLauncherPod.Labels, api.DualLabelName, requestingPod.Name)
-	problems := applyInstanceStateToLauncherPod(desiredLauncherPod, desiredInstanceState)
+	// Routing labels are applied later, once the instance is serving; validation
+	// runs now so misconfiguration surfaces before we create the launcher Pod.
+	problems := applyControllerMetadataToLauncherPod(desiredLauncherPod, desiredInstanceState)
 	if len(problems) > 0 {
 		return ctl.ensureReqStatus(ctx, requestingPod, serverDat, problems...)
 	}
@@ -1034,9 +1046,20 @@ func (ctl *controller) computeDesiredInstanceState(isc *fmav1alpha1.InferenceSer
 	}, nil
 }
 
-func applyInstanceStateToLauncherPod(providingPod *corev1.Pod, state *vllmInstanceState) []string {
+// iscRoutingMetadata is the JSON shape persisted under
+// launcherISCRoutingMetadataAnnotationKey: the ISC-provided routing labels and
+// annotations the bound launcher-based instance was created with.
+type iscRoutingMetadata struct {
+	Labels      map[string]string `json:"labels,omitempty"`
+	Annotations map[string]string `json:"annotations,omitempty"`
+}
+
+// validateISCRoutingMetadata checks the given ISC-provided labels and
+// annotations against qualified-name rules, reserved prefixes, and collisions
+// with what is already on providingPod, returning any problems found.
+func validateISCRoutingMetadata(providingPod *corev1.Pod, iscLabels, iscAnnotations map[string]string) []string {
 	var problems []string
-	for k, v := range state.iscLabels {
+	for k, v := range iscLabels {
 		if errs := k8svalidation.IsQualifiedName(k); len(errs) > 0 {
 			problems = append(problems, fmt.Sprintf("ISC label key %q is not a valid qualified name: %s", k, strings.Join(errs, "; ")))
 		} else if hasReservedPrefix(k) {
@@ -1048,7 +1071,7 @@ func applyInstanceStateToLauncherPod(providingPod *corev1.Pod, state *vllmInstan
 			problems = append(problems, fmt.Sprintf("ISC label value %q for key %q is not valid: %s", v, k, strings.Join(errs, "; ")))
 		}
 	}
-	for k := range state.iscAnnotations {
+	for k := range iscAnnotations {
 		if errs := k8svalidation.IsQualifiedName(k); len(errs) > 0 {
 			problems = append(problems, fmt.Sprintf("ISC annotation key %q is not a valid qualified name: %s", k, strings.Join(errs, "; ")))
 		} else if hasReservedPrefix(k) {
@@ -1057,33 +1080,51 @@ func applyInstanceStateToLauncherPod(providingPod *corev1.Pod, state *vllmInstan
 			problems = append(problems, fmt.Sprintf("ISC annotation key %q collides with existing pod annotation", k))
 		}
 	}
-	if len(problems) > 0 {
+	return problems
+}
+
+// applyControllerMetadataToLauncherPod writes the controller-managed
+// annotations (instance ID, server port, vLLM config, and the ISC routing
+// metadata the instance is bound with) on the launcher Pod. The routing
+// labels/annotations are not written as Pod labels here; they are deferred
+// until the instance is serving (see applyISCRoutingMetadataToLauncherPod).
+// Persisting the metadata lets the controller apply that committed set later,
+// and recover it after a restart, rather than recomputing from the current ISC.
+// Validation runs here so misconfiguration surfaces at bind/create time.
+func applyControllerMetadataToLauncherPod(providingPod *corev1.Pod, state *vllmInstanceState) []string {
+	if problems := validateISCRoutingMetadata(providingPod, state.iscLabels, state.iscAnnotations); len(problems) > 0 {
 		return problems
 	}
-
-	labelKeys := make([]string, 0, len(state.iscLabels))
-	for k, v := range state.iscLabels {
-		providingPod.Labels = utils.MapSet(providingPod.Labels, k, v)
-		labelKeys = append(labelKeys, k)
-	}
-	slices.Sort(labelKeys)
-
-	annotationKeys := make([]string, 0, len(state.iscAnnotations))
-	for k, v := range state.iscAnnotations {
-		providingPod.Annotations = utils.MapSet(providingPod.Annotations, k, v)
-		annotationKeys = append(annotationKeys, k)
-	}
-	slices.Sort(annotationKeys)
-
 	cfgJSON, err := json.Marshal(state.cfg)
 	if err != nil {
 		return []string{fmt.Sprintf("failed to marshal launcher instance config: %s", err)}
 	}
+	routingJSON, err := json.Marshal(iscRoutingMetadata{Labels: state.iscLabels, Annotations: state.iscAnnotations})
+	if err != nil {
+		return []string{fmt.Sprintf("failed to marshal ISC routing metadata: %s", err)}
+	}
 	providingPod.Annotations = utils.MapSet(providingPod.Annotations, launcherInstanceIDAnnotationKey, state.instanceID)
 	providingPod.Annotations[launcherServerPortAnnotationKey] = strconv.Itoa(int(state.serverPort))
 	providingPod.Annotations[launcherVllmConfigAnnotationKey] = string(cfgJSON)
-	providingPod.Annotations[iscLabelKeysAnnotationKey] = strings.Join(labelKeys, " ")
-	providingPod.Annotations[iscAnnotationKeysAnnotationKey] = strings.Join(annotationKeys, " ")
+	providingPod.Annotations[launcherISCRoutingMetadataAnnotationKey] = string(routingJSON)
+	return nil
+}
+
+// applyISCRoutingMetadataToLauncherPod writes the given ISC-provided labels and
+// annotations onto the launcher Pod. Call only once the instance is serving,
+// with the metadata it was bound with (not a recomputation from the current
+// ISC). The keys removed on unbind are recovered from
+// launcherISCRoutingMetadataAnnotationKey.
+func applyISCRoutingMetadataToLauncherPod(providingPod *corev1.Pod, iscLabels, iscAnnotations map[string]string) []string {
+	if problems := validateISCRoutingMetadata(providingPod, iscLabels, iscAnnotations); len(problems) > 0 {
+		return problems
+	}
+	for k, v := range iscLabels {
+		providingPod.Labels = utils.MapSet(providingPod.Labels, k, v)
+	}
+	for k, v := range iscAnnotations {
+		providingPod.Annotations = utils.MapSet(providingPod.Annotations, k, v)
+	}
 	return nil
 }
 
@@ -1091,11 +1132,71 @@ func commitInstanceState(serverDat *serverData, state *vllmInstanceState) {
 	serverDat.InstanceID = state.instanceID
 	serverDat.InstanceConfig = state.cfg
 	serverDat.ServerPort = state.serverPort
+	serverDat.InstanceISCLabels = state.iscLabels
+	serverDat.InstanceISCAnnotations = state.iscAnnotations
 }
 
-// clearInstanceStateFromLauncherPod removes the five controller-managed
+// applyBoundLauncherLabels reconciles a bound launcher Pod's labels in a single
+// API call: it sets the sleeping label to match serverDat.Sleeping and, unless
+// already applied, adds the ISC routing labels and annotations the instance was
+// bound with. Applying is deferred until the instance is serving so the Pod is
+// not an InferencePool endpoint before it can serve; the metadata comes from
+// serverDat (recovered from the Pod after a restart), so a serving instance
+// keeps the identity it was bound with even if the ISC is later edited (that
+// takes effect on the next bind), avoiding discarding a still-starting instance
+// with a live requester.
+//
+// It returns the current Pod and stop: when stop is true the caller must return
+// from the reconcile (err != nil to retry, err == nil after a tear-down).
+func (ctl *controller) applyBoundLauncherLabels(
+	ctx context.Context,
+	requestingPod *corev1.Pod,
+	serverDat *serverData,
+	providingPod *corev1.Pod,
+) (*corev1.Pod, bool, error) {
+	logger := klog.FromContext(ctx)
+	desiredSleeping := strconv.FormatBool(*serverDat.Sleeping)
+	applyLabels := !serverDat.LabelsApplied
+	if providingPod.Labels[api.SleepingLabelName] == desiredSleeping && !applyLabels {
+		return providingPod, false, nil
+	}
+	updated := providingPod.DeepCopy()
+	updated.Labels = utils.MapSet(updated.Labels, api.SleepingLabelName, desiredSleeping)
+	if applyLabels {
+		if problems := applyISCRoutingMetadataToLauncherPod(updated, serverDat.InstanceISCLabels, serverDat.InstanceISCAnnotations); len(problems) > 0 {
+			// The committed metadata is invalid — not transient (it implies
+			// tampering or a validation change since binding), so retrying would
+			// loop. Unbind by deleting the requester Pod; a fresh requester
+			// starts over.
+			logger.Error(nil, "Committed ISC routing metadata is invalid; deleting requester Pod to unbind", "problems", problems)
+			delErr := ctl.coreclient.Pods(ctl.namespace).Delete(ctx, requestingPod.Name, metav1.DeleteOptions{
+				PropagationPolicy: ptr.To(metav1.DeletePropagationBackground),
+				Preconditions:     &metav1.Preconditions{UID: &requestingPod.UID}})
+			if delErr != nil && !apierrors.IsNotFound(delErr) && !apierrors.IsGone(delErr) {
+				return providingPod, true, fmt.Errorf("failed to delete requester Pod %q (provider %q) after invalid ISC routing metadata: %w", requestingPod.Name, providingPod.Name, delErr)
+			}
+			serverDat.RequesterDeleteRequested = true
+			return providingPod, true, nil
+		}
+	}
+	updStart := time.Now()
+	echo, err := ctl.coreclient.Pods(ctl.namespace).Update(ctx, updated, metav1.UpdateOptions{FieldManager: ControllerName})
+	updStartStr := updStart.Format(time.RFC3339Nano)
+	if err != nil {
+		return providingPod, true, fmt.Errorf("failed to update bound launcher Pod %s (started %s): %w", updated.Name, updStartStr, err)
+	}
+	if applyLabels {
+		serverDat.LabelsApplied = true
+	}
+	logger.V(2).Info("Reconciled bound launcher Pod labels and annotations",
+		"name", echo.Name, "sleeping", desiredSleeping, "labelsApplied", serverDat.LabelsApplied,
+		"instanceID", serverDat.InstanceID, "newResourceVersion", echo.ResourceVersion, "k8sCallStartTime", updStartStr)
+	return echo, false, nil
+}
+
+// clearInstanceStateFromLauncherPod removes the controller-managed
 // launcher-instance annotations from the providing Pod. It is the inverse
-// of applyInstanceStateToLauncherPod's annotation writes.
+// of the annotation writes done by applyControllerMetadataToLauncherPod.
 // Returns true iff any annotation was removed.
 func clearInstanceStateFromLauncherPod(providingPod *corev1.Pod) bool {
 	var changed bool
@@ -1103,8 +1204,7 @@ func clearInstanceStateFromLauncherPod(providingPod *corev1.Pod) bool {
 		launcherInstanceIDAnnotationKey,
 		launcherServerPortAnnotationKey,
 		launcherVllmConfigAnnotationKey,
-		iscLabelKeysAnnotationKey,
-		iscAnnotationKeysAnnotationKey,
+		launcherISCRoutingMetadataAnnotationKey,
 	} {
 		if _, have := providingPod.Annotations[k]; have {
 			delete(providingPod.Annotations, k)
@@ -1115,10 +1215,11 @@ func clearInstanceStateFromLauncherPod(providingPod *corev1.Pod) bool {
 }
 
 // recoverInstanceStateFromLauncherPod populates the serverData snapshot from
-// the controller-written annotations on a bound launcher Pod. The three snapshot
-// fields are written atomically by commitInstanceState and applyInstanceStateToLauncherPod,
-// so if any one is set in serverData the others are too and recovery is a no-op;
-// otherwise all three annotations must be present on the Pod.
+// the controller-written annotations on a bound launcher Pod. It is a no-op if
+// InstanceID is already set; otherwise the instance-id, server-port,
+// vllm-config, and ISC-routing-metadata annotations must all be present.
+// LabelsApplied is derived from whether the routing labels/annotations are
+// already present on the Pod.
 func recoverInstanceStateFromLauncherPod(serverDat *serverData, providingPod *corev1.Pod) error {
 	if serverDat.InstanceID != "" {
 		return nil
@@ -1143,18 +1244,32 @@ func recoverInstanceStateFromLauncherPod(serverDat *serverData, providingPod *co
 	if err := json.Unmarshal([]byte(cfgJSON), cfg); err != nil {
 		return fmt.Errorf("bound launcher Pod %q has invalid annotation %q: %w", providingPod.Name, launcherVllmConfigAnnotationKey, err)
 	}
+	routingJSON, ok := providingPod.Annotations[launcherISCRoutingMetadataAnnotationKey]
+	if !ok {
+		return fmt.Errorf("bound launcher Pod %q is missing annotation %q", providingPod.Name, launcherISCRoutingMetadataAnnotationKey)
+	}
+	var routing iscRoutingMetadata
+	if err := json.Unmarshal([]byte(routingJSON), &routing); err != nil {
+		return fmt.Errorf("bound launcher Pod %q has invalid annotation %q: %w", providingPod.Name, launcherISCRoutingMetadataAnnotationKey, err)
+	}
 
 	serverDat.InstanceID = instanceID
 	serverDat.InstanceConfig = cfg
 	serverDat.ServerPort = int32(port)
+	serverDat.InstanceISCLabels = routing.Labels
+	serverDat.InstanceISCAnnotations = routing.Annotations
+	// The routing labels/annotations are applied in a single atomic update, so
+	// their presence on the Pod means application already completed.
+	serverDat.LabelsApplied = iscRoutingMetadataPresent(providingPod, routing)
 	return nil
 }
 
-func parseSpaceSeparatedAnnotation(value string) []string {
-	if value == "" {
-		return []string{}
-	}
-	return strings.Split(value, " ")
+// iscRoutingMetadataPresent reports whether all of the given ISC routing labels
+// and annotations are already present with matching values on the Pod. Empty
+// metadata (nothing to apply) counts as present.
+func iscRoutingMetadataPresent(providingPod *corev1.Pod, routing iscRoutingMetadata) bool {
+	return utils.MapIsSubset(routing.Labels, providingPod.Labels) &&
+		utils.MapIsSubset(routing.Annotations, providingPod.Annotations)
 }
 
 func getVLLMInstancePort(inst InstanceState) (int32, error) {
@@ -1168,22 +1283,57 @@ func getVLLMInstancePort(inst InstanceState) (int32, error) {
 	return 0, fmt.Errorf("missing annotations[%s]", VllmConfigInferencePortAnnotationKey)
 }
 
-func (ctl *controller) ensureSleepingLabel(ctx context.Context, providingPod *corev1.Pod, desired bool) error {
+// ensureSleepingLabel makes the Pod's sleeping label match desired, updating
+// via the API if needed. It returns the current Pod (the updated echo, or the
+// input unchanged) so the caller can make further updates with a fresh
+// resourceVersion.
+func (ctl *controller) ensureSleepingLabel(ctx context.Context, providingPod *corev1.Pod, desired bool) (*corev1.Pod, error) {
 	logger := klog.FromContext(ctx)
 	desiredStr := strconv.FormatBool(desired)
-	if providingPod.Labels[api.SleepingLabelName] != desiredStr {
-		providingPod = providingPod.DeepCopy()
-		providingPod.Labels = utils.MapSet(providingPod.Labels, api.SleepingLabelName, desiredStr)
-		updStart := time.Now()
-		echo, err := ctl.coreclient.Pods(ctl.namespace).Update(ctx, providingPod, metav1.UpdateOptions{
-			FieldManager: ControllerName})
-		updStartStr := updStart.Format(time.RFC3339Nano)
-		if err != nil {
-			return fmt.Errorf("failed to revise sleeping label on server-providing Pod to %s (started %s): %w", desiredStr, updStartStr, err)
-		}
-		logger.V(2).Info("Updated sleeping label on server-providing Pod", "sleeping", desiredStr, "newResourceVersion", echo.ResourceVersion, "k8sCallStartTime", updStartStr)
+	if providingPod.Labels[api.SleepingLabelName] == desiredStr {
+		return providingPod, nil
 	}
-	return nil
+	updatedPod := providingPod.DeepCopy()
+	updatedPod.Labels = utils.MapSet(updatedPod.Labels, api.SleepingLabelName, desiredStr)
+	updStart := time.Now()
+	echo, err := ctl.coreclient.Pods(ctl.namespace).Update(ctx, updatedPod, metav1.UpdateOptions{
+		FieldManager: ControllerName})
+	updStartStr := updStart.Format(time.RFC3339Nano)
+	if err != nil {
+		return providingPod, fmt.Errorf("failed to revise sleeping label on server-providing Pod to %s (started %s): %w", desiredStr, updStartStr, err)
+	}
+	logger.V(2).Info("Updated sleeping label on server-providing Pod", "sleeping", desiredStr, "newResourceVersion", echo.ResourceVersion, "k8sCallStartTime", updStartStr)
+	return echo, nil
+}
+
+// removeISCRoutingLabels strips the given ISC selector labels from a bound
+// launcher Pod, updating iff any are present. Doing this before the instance is
+// put to sleep or deleted makes EPP drop the launcher from the InferencePool
+// while it can still serve, so no traffic reaches a sleeping or gone instance.
+// The ISC annotations are left for the caller's final unbind Update. Returns
+// the current Pod so the caller continues with a fresh resourceVersion.
+func (ctl *controller) removeISCRoutingLabels(ctx context.Context, providingPod *corev1.Pod, iscLabels map[string]string) (*corev1.Pod, error) {
+	var toRemove []string
+	for k := range iscLabels {
+		if _, have := providingPod.Labels[k]; have {
+			toRemove = append(toRemove, k)
+		}
+	}
+	if len(toRemove) == 0 {
+		return providingPod, nil
+	}
+	updatedPod := providingPod.DeepCopy()
+	for _, k := range toRemove {
+		delete(updatedPod.Labels, k)
+	}
+	updStart := time.Now()
+	echo, err := ctl.coreclient.Pods(ctl.namespace).Update(ctx, updatedPod, metav1.UpdateOptions{FieldManager: ControllerName})
+	updStartStr := updStart.Format(time.RFC3339Nano)
+	if err != nil {
+		return providingPod, fmt.Errorf("failed to remove ISC routing labels from launcher Pod %s (started %s): %w", providingPod.Name, updStartStr, err)
+	}
+	klog.FromContext(ctx).V(2).Info("Removed ISC routing labels from launcher Pod before sleeping", "removed", toRemove, "newResourceVersion", echo.ResourceVersion, "k8sCallStartTime", updStartStr)
+	return echo, nil
 }
 
 var invalidPodRE = regexp.MustCompile(`^Pod "[a-z0-9.-]*" is invalid`)
@@ -1275,7 +1425,9 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 	providingPod.Labels = utils.MapSet(providingPod.Labels, api.DualLabelName, requestingPod.Name)
 	launcherBased := launcherState != nil
 	if launcherBased {
-		problems := applyInstanceStateToLauncherPod(providingPod, launcherState)
+		// Routing labels are applied later, once the instance is serving;
+		// validation runs now so misconfiguration surfaces before we mutate it.
+		problems := applyControllerMetadataToLauncherPod(providingPod, launcherState)
 		if len(problems) > 0 {
 			return ctl.ensureReqStatus(ctx, requestingPod, serverDat, problems...)
 		}
@@ -1306,15 +1458,23 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 		}
 	}
 	if !skipWake {
-		err = ctl.wakeSleeper(ctx, serverDat, requestingPod, providingPod, serverPort, "freshly-bound")
-		if err != nil {
+		// Reached only for direct providers (launcher binds skip the wake); wake
+		// and clear the sleeping label in a separate update.
+		if err = ctl.wakeUp(ctx, serverDat, requestingPod, providingPod, serverPort, "freshly-bound"); err != nil {
+			return err, true
+		}
+		if _, err = ctl.ensureSleepingLabel(ctx, providingPod, false); err != nil {
 			return err, true
 		}
 	}
 	return ctl.ensureReqState(ctx, requestingPod, serverDat, !slices.Contains(requestingPod.Finalizers, requesterFinalizer), false)
 }
 
-func (ctl *controller) wakeSleeper(ctx context.Context, serverDat *serverData, requestingPod, providingPod *corev1.Pod, serverPort int32, description string) error {
+// wakeUp wakes the inference server behind providingPod (a network side effect
+// only) and records it as awake in serverDat. It does not touch the Pod's
+// sleeping label; callers reconcile that separately (folding it into another
+// Pod update where possible).
+func (ctl *controller) wakeUp(ctx context.Context, serverDat *serverData, requestingPod, providingPod *corev1.Pod, serverPort int32, description string) error {
 	if ctl.debugAccelMemory {
 		if err := ctl.accelMemoryIsLowEnough(ctx, requestingPod, serverDat); err != nil {
 			return err
@@ -1322,15 +1482,11 @@ func (ctl *controller) wakeSleeper(ctx context.Context, serverDat *serverData, r
 	}
 	endpoint := fmt.Sprintf("%s:%d", providingPod.Status.PodIP, serverPort)
 	wakeURL := "http://" + endpoint + "/wake_up"
-	logger := klog.FromContext(ctx)
 	_, err := doHTTP(ctx, "wake", "POST", wakeURL, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": requestingPod.Annotations[api.InferenceServerConfigAnnotationName]}), nil, nil)
 	if err != nil {
 		return fmt.Errorf("failed to wake inference server at %s: %w", endpoint, err)
 	}
-	logger.V(2).Info("Woke inference server", "endpoint", endpoint, "description", description)
-	if err := ctl.ensureSleepingLabel(ctx, providingPod, false); err != nil {
-		return err
-	}
+	klog.FromContext(ctx).V(2).Info("Woke inference server", "endpoint", endpoint, "description", description)
 	serverDat.Sleeping = ptr.To(false)
 	return nil
 }
@@ -1502,6 +1658,15 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 			return err
 		}
 		ctl.ensureDualityMetric(ctx, serverDat, nodeDat.NodeName, true)
+		// De-route before sleeping: drop the launcher from the InferencePool
+		// while the instance can still serve, the mirror of deferring label
+		// application until it is serving. Only needed here, where the launcher
+		// survives the unbind; a Pod being deleted is dropped by EPP via its
+		// DeletionTimestamp. Reassign providingPod for a fresh resourceVersion.
+		var err error
+		if providingPod, err = ctl.removeISCRoutingLabels(ctx, providingPod, serverDat.InstanceISCLabels); err != nil {
+			return err
+		}
 	}
 	// A providingPod with no IP is not scheduled, so we know that it is not awake.
 	// If providingPod is stale then the update will fail.
@@ -1556,14 +1721,14 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 	// Ensure finalizer is absent
 	providingPod.Finalizers, fChange = utils.SliceRemoveOnce(providingPod.Finalizers, providerFinalizer)
 	// Remove ISC labels
-	for _, k := range parseSpaceSeparatedAnnotation(providingPod.Annotations[iscLabelKeysAnnotationKey]) {
+	for k := range serverDat.InstanceISCLabels {
 		if _, have := providingPod.Labels[k]; have {
 			delete(providingPod.Labels, k)
 			lChange = true
 		}
 	}
 	// Remove ISC annotations
-	for _, k := range parseSpaceSeparatedAnnotation(providingPod.Annotations[iscAnnotationKeysAnnotationKey]) {
+	for k := range serverDat.InstanceISCAnnotations {
 		if _, have := providingPod.Annotations[k]; have {
 			delete(providingPod.Annotations, k)
 			aChange = true

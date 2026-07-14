@@ -88,20 +88,11 @@ else
   echo "✓ SUCCESS: annotation deletion was rejected, as expected"
 fi
 
-echo "Test 5b: Attempting to change immutable annotation 'dual-pods.llm-d.ai/isc-label-keys' on launcher pod — expect rejection"
-if output=$(kubectl annotate -n "$FMA_NAMESPACE" pod "${launcher1}" "dual-pods.llm-d.ai/isc-label-keys=tampered" --overwrite 2>&1); then
+echo "Test 5b: Attempting to change immutable annotation 'dual-pods.llm-d.ai/isc-routing-metadata' on launcher pod — expect rejection"
+if output=$(kubectl annotate -n "$FMA_NAMESPACE" pod "${launcher1}" "dual-pods.llm-d.ai/isc-routing-metadata=tampered" --overwrite 2>&1); then
   echo "ERROR: annotation change succeeded but should have been rejected"
   echo "kubectl output: ${output}"
   exit 51
-else
-  echo "✓ SUCCESS: annotation change was rejected, as expected"
-fi
-
-echo "Test 5c: Attempting to change immutable annotation 'dual-pods.llm-d.ai/isc-annotation-keys' on launcher pod — expect rejection"
-if output=$(kubectl annotate -n "$FMA_NAMESPACE" pod "${launcher1}" "dual-pods.llm-d.ai/isc-annotation-keys=tampered" --overwrite 2>&1); then
-  echo "ERROR: annotation change succeeded but should have been rejected"
-  echo "kubectl output: ${output}"
-  exit 52
 else
   echo "✓ SUCCESS: annotation change was rejected, as expected"
 fi
