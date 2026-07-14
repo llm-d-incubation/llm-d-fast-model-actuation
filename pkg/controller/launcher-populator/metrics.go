@@ -20,7 +20,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
 	kubemetrics "k8s.io/component-base/metrics"
 	"k8s.io/component-base/metrics/legacyregistry"
 
@@ -28,17 +30,18 @@ import (
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/utils"
 )
 
-// DefaultStuckThreshold is the default minimum age since scheduling after which
-// a scheduled-but-not-yet-Ready launcher is reported in the "stuck" phase. 7.5
-// minutes leaves room for slow image pulls while remaining operationally
-// relevant.
-const DefaultStuckThreshold = 7*time.Minute + 30*time.Second
+// DefaultStuckStartingThreshold is the default minimum age since scheduling
+// after which a scheduled-but-not-yet-Ready launcher is reported in the
+// "stuck_starting" phase. 7.5 minutes leaves room for slow image pulls while
+// remaining operationally relevant.
+const DefaultStuckStartingThreshold = 7*time.Minute + 30*time.Second
 
-// DefaultPendingThreshold is the default minimum age since creation after which
-// an unscheduled launcher is reported in the "pending" phase. Scheduling does
-// not involve a big image pull, so this is much shorter than the stuck
-// threshold; 2 minutes still leaves room for autoscaling / node warm-up.
-const DefaultPendingThreshold = 2 * time.Minute
+// DefaultStuckSchedulingThreshold is the default minimum age since creation
+// after which an unscheduled launcher is reported in the "stuck_scheduling"
+// phase. Scheduling does not involve a big image pull, so this is much shorter
+// than the stuck-starting threshold; 2 minutes still leaves room for
+// autoscaling / node warm-up.
+const DefaultStuckSchedulingThreshold = 2 * time.Minute
 
 // launcherPhase is the value of the "phase" label on fma_launcher_pod_count.
 type launcherPhase string
@@ -47,17 +50,16 @@ const (
 	// phaseBound: the launcher is assigned to a server-requesting Pod.
 	phaseBound launcherPhase = "bound"
 	// phaseUnbound: the launcher uses the current template, is unbound, and is
-	// either Ready or has not yet existed past its pending (unscheduled) or stuck
-	// (scheduled) threshold.
+	// either Ready or has not yet reached its stuck-scheduling (unscheduled) or
+	// stuck-starting (scheduled) threshold.
 	phaseUnbound launcherPhase = "unbound"
-	// phasePending: the launcher uses the current template, is unbound, is not
-	// Ready, has not been scheduled, and has existed (since creation) past the
-	// pending threshold. It is stuck getting scheduled.
-	phasePending launcherPhase = "pending"
-	// phaseStuck: the launcher uses the current template, is unbound, is not
-	// Ready, has been scheduled, and has existed (since scheduling) past the
-	// stuck threshold. It is stuck starting up (e.g. a slow image pull).
-	phaseStuck launcherPhase = "stuck"
+	// phaseStuckScheduling: the launcher uses the current template, is unbound,
+	// has not been scheduled, and has reached its stuck-scheduling threshold.
+	phaseStuckScheduling launcherPhase = "stuck_scheduling"
+	// phaseStuckStarting: the launcher uses the current template, is unbound, is
+	// not Ready, has been scheduled, and has reached its stuck-starting threshold
+	// (e.g. due to a slow image pull).
+	phaseStuckStarting launcherPhase = "stuck_starting"
 	// phaseStale: the launcher was built from a superseded template.
 	phaseStale launcherPhase = "stale"
 )
@@ -66,7 +68,7 @@ const (
 // whose object exists or that has launcher Pods, the gauge always carries an
 // explicit value (including zero) for each phase. This keeps count-based alerts
 // from having to distinguish "0" from "no data".
-var allLauncherPhases = []launcherPhase{phaseBound, phaseUnbound, phasePending, phaseStuck, phaseStale}
+var allLauncherPhases = []launcherPhase{phaseBound, phaseUnbound, phaseStuckScheduling, phaseStuckStarting, phaseStale}
 
 const lcfgNameLabel = "lcfg_name"
 const phaseLabel = "phase"
@@ -87,7 +89,7 @@ func registerMetrics() {
 		launcherPodCountGauge = kubemetrics.NewGaugeVec(&kubemetrics.GaugeOpts{
 			Namespace:      "fma",
 			Name:           "launcher_pod_count",
-			Help:           "Number of launcher Pods by LauncherConfig and phase (bound, unbound, pending, stuck, stale)",
+			Help:           "Number of launcher Pods by LauncherConfig and phase (bound, unbound, stuck_scheduling, stuck_starting, stale)",
 			StabilityLevel: kubemetrics.ALPHA,
 		}, []string{lcfgNameLabel, phaseLabel})
 		legacyregistry.MustRegister(launcherPodCountGauge)
@@ -96,6 +98,9 @@ func registerMetrics() {
 
 // phaseCounts tallies launcher Pods by phase.
 type phaseCounts map[launcherPhase]int
+
+// phaseCountsByNode stores phase tallies indexed by Node name.
+type phaseCountsByNode map[string]phaseCounts
 
 func (pc phaseCounts) total() int {
 	sum := 0
@@ -110,20 +115,20 @@ func (pc phaseCounts) total() int {
 // change.
 type metricsState struct {
 	mu sync.Mutex
-	// perNode is the phase tally of each Node with launchers, per LauncherConfig.
-	perNode map[string]map[string]phaseCounts
-	// agg is the per-LauncherConfig sum of perNode across Nodes, kept in sync
-	// incrementally so publish need not re-sum every Node.
+	// perLCFG is indexed first by LauncherConfig name, then by Node name.
+	perLCFG map[string]phaseCountsByNode
+	// agg is the per-LauncherConfig sum across Nodes, kept in sync incrementally
+	// so publish need not re-sum every Node.
 	agg map[string]phaseCounts
 	// lcExists is the set of LauncherConfig names whose object currently exists.
-	lcExists map[string]bool
+	lcExists sets.Set[string]
 }
 
 func newMetricsState() *metricsState {
 	return &metricsState{
-		perNode:  map[string]map[string]phaseCounts{},
+		perLCFG:  map[string]phaseCountsByNode{},
 		agg:      map[string]phaseCounts{},
-		lcExists: map[string]bool{},
+		lcExists: sets.New[string](),
 	}
 }
 
@@ -134,33 +139,33 @@ func (ms *metricsState) publish(key NodeLauncherKey, counts phaseCounts) {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
 
-	nodes := ms.perNode[lcfg]
-	old := nodes[node]
+	countsByNode := ms.perLCFG[lcfg]
+	oldCounts := countsByNode[node]
 
 	// Fold the change into the running aggregate by its delta.
-	if counts.total() != 0 || old.total() != 0 {
+	if counts.total() != 0 || oldCounts.total() != 0 {
 		agg := ms.agg[lcfg]
 		if agg == nil {
 			agg = phaseCounts{}
 			ms.agg[lcfg] = agg
 		}
 		for _, phase := range allLauncherPhases {
-			agg[phase] += counts[phase] - old[phase]
+			agg[phase] += counts[phase] - oldCounts[phase]
 		}
 	}
 
 	// Update the per-Node store, dropping empty Nodes (and the empty LC map).
 	if counts.total() == 0 {
-		delete(nodes, node)
-		if len(nodes) == 0 {
-			delete(ms.perNode, lcfg)
+		delete(countsByNode, node)
+		if len(countsByNode) == 0 {
+			delete(ms.perLCFG, lcfg)
 		}
 	} else {
-		if nodes == nil {
-			nodes = map[string]phaseCounts{}
-			ms.perNode[lcfg] = nodes
+		if countsByNode == nil {
+			countsByNode = phaseCountsByNode{}
+			ms.perLCFG[lcfg] = countsByNode
 		}
-		nodes[node] = counts
+		countsByNode[node] = counts
 	}
 
 	ms.republishLocked(lcfg)
@@ -172,9 +177,9 @@ func (ms *metricsState) setLCExists(lcfg string, exists bool) {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
 	if exists {
-		ms.lcExists[lcfg] = true
+		ms.lcExists.Insert(lcfg)
 	} else {
-		delete(ms.lcExists, lcfg)
+		ms.lcExists.Delete(lcfg)
 	}
 	ms.republishLocked(lcfg)
 }
@@ -183,11 +188,9 @@ func (ms *metricsState) setLCExists(lcfg string, exists bool) {
 // aggregate, or deletes them once neither its object nor any launcher remains.
 // Callers must hold ms.mu.
 func (ms *metricsState) republishLocked(lcfg string) {
-	if !ms.lcExists[lcfg] && len(ms.perNode[lcfg]) == 0 {
+	if !ms.lcExists.Has(lcfg) && len(ms.perLCFG[lcfg]) == 0 {
 		delete(ms.agg, lcfg)
-		for _, phase := range allLauncherPhases {
-			launcherPodCountGauge.Delete(map[string]string{lcfgNameLabel: lcfg, phaseLabel: string(phase)})
-		}
+		launcherPodCountGauge.DeletePartialMatch(prometheus.Labels{lcfgNameLabel: lcfg})
 		return
 	}
 	agg := ms.agg[lcfg] // nil when the LC exists but has no launchers -> all zeros
@@ -197,13 +200,14 @@ func (ms *metricsState) republishLocked(lcfg string) {
 }
 
 // launcherPhaseOf classifies a launcher Pod into a phase (see the launcherPhase
-// constants) and, for one still counting down toward pending or stuck, also
-// returns the instant at which it would cross that threshold (zero Time if none).
+// constants) and, for one still counting down toward stuck-scheduling or
+// stuck-starting, also returns the instant at which it will reach that threshold
+// (zero Time if none).
 //
 // currentTemplateHash is the node-independent template hash the digest wants for
 // this Pod's LauncherConfig; an empty value (LC gone / not yet digested) makes
 // any templated Pod stale.
-func (ctl *controller) launcherPhaseOf(pod *corev1.Pod, currentTemplateHash string, pendingThreshold, stuckThreshold time.Duration, now time.Time) (launcherPhase, time.Time) {
+func (ctl *controller) launcherPhaseOf(pod *corev1.Pod, currentTemplateHash string, stuckSchedulingThreshold, stuckStartingThreshold time.Duration, now time.Time) (launcherPhase, time.Time) {
 	if bound, _ := ctl.isLauncherBoundToServerRequestingPod(pod); bound {
 		return phaseBound, time.Time{}
 	}
@@ -215,33 +219,35 @@ func (ctl *controller) launcherPhaseOf(pod *corev1.Pod, currentTemplateHash stri
 	}
 	// Measure the age from scheduling (so time waiting in the scheduler is not
 	// blamed), or from creation when never scheduled (so an unschedulable
-	// launcher still surfaces, as pending).
+	// launcher still surfaces as stuck-scheduling).
 	if cond := utils.GetPodCondition(pod, corev1.PodScheduled); cond != nil && cond.Status == corev1.ConditionTrue {
-		return phaseByAge(cond.LastTransitionTime.Time, stuckThreshold, phaseStuck, now)
+		return phaseByAge(cond.LastTransitionTime.Time, stuckStartingThreshold, phaseStuckStarting, now)
 	}
-	return phaseByAge(pod.CreationTimestamp.Time, pendingThreshold, phasePending, now)
+	return phaseByAge(pod.CreationTimestamp.Time, stuckSchedulingThreshold, phaseStuckScheduling, now)
 }
 
-// phaseByAge returns overduePhase when the launcher has been not-yet-Ready past
-// threshold (measured from ref); otherwise it returns phaseUnbound plus the
-// future instant ref+threshold at which it would become overdue.
+// phaseByAge returns overduePhase when the launcher has been not-yet-Ready for
+// at least threshold (measured from ref); otherwise it returns phaseUnbound plus
+// the future instant ref+threshold at which it will become overdue.
 func phaseByAge(ref time.Time, threshold time.Duration, overduePhase launcherPhase, now time.Time) (launcherPhase, time.Time) {
-	if now.Sub(ref) > threshold {
+	overdueAt := ref.Add(threshold)
+	if !now.Before(overdueAt) {
 		return overduePhase, time.Time{}
 	}
-	return phaseUnbound, ref.Add(threshold)
+	return phaseUnbound, overdueAt
 }
 
 // computeKeyPhases classifies every launcher Pod of one (node, LC) key and
 // returns the per-phase tally plus the earliest future instant at which some
-// unbound, not-yet-Ready launcher on the current template would cross into
-// pending or stuck (zero Time if none). Pods being deleted are counted (the
-// metric counts Pod objects that exist) but never schedule a future transition.
+// unbound, not-yet-Ready launcher on the current template will reach its
+// stuck-scheduling or stuck-starting threshold (zero Time if none). Pods being
+// deleted are counted (the metric counts Pod objects that exist) but never
+// schedule a future transition.
 func (ctl *controller) computeKeyPhases(pods []*corev1.Pod, templateHash string, now time.Time) (phaseCounts, time.Time) {
 	counts := phaseCounts{}
 	var earliestTransition time.Time
 	for _, pod := range pods {
-		phase, becomesOverdueAt := ctl.launcherPhaseOf(pod, templateHash, ctl.pendingThreshold, ctl.stuckThreshold, now)
+		phase, becomesOverdueAt := ctl.launcherPhaseOf(pod, templateHash, ctl.stuckSchedulingThreshold, ctl.stuckStartingThreshold, now)
 		counts[phase]++
 		if pod.DeletionTimestamp == nil && becomesOverdueAt.After(now) &&
 			(earliestTransition.IsZero() || becomesOverdueAt.Before(earliestTransition)) {
@@ -252,9 +258,9 @@ func (ctl *controller) computeKeyPhases(pods []*corev1.Pod, templateHash string,
 }
 
 // recordLauncherPhases publishes the phase tally for one (node, LC) key and,
-// when some launcher will become pending or stuck in the future, schedules a
-// re-reconcile of the key at that instant via AddAfter, so the gauge flips
-// without a periodic sweep of all launchers.
+// when some launcher will become stuck-scheduling or stuck-starting in the
+// future, schedules a re-reconcile of the key at that instant via AddAfter, so
+// the gauge flips without a periodic sweep of all launchers.
 //
 // It is called for every key reconcile (from processKey), independent of the
 // key's desired state or whether its Node still exists, so a LauncherConfig's

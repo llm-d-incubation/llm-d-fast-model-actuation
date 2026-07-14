@@ -59,28 +59,28 @@ func NewController(
 	corev1PreInformers corev1preinformers.Interface,
 	fmaInformerFactory fmainformers.SharedInformerFactory,
 	expectationTimeout time.Duration,
-	pendingThreshold time.Duration,
-	stuckThreshold time.Duration,
+	stuckSchedulingThreshold time.Duration,
+	stuckStartingThreshold time.Duration,
 ) (*controller, error) {
 	registerMetrics()
 	ctl := &controller{
-		enqueueLogger:    logger.WithName(ControllerName),
-		coreclient:       coreClient,
-		fmaclient:        fmaClient,
-		namespace:        namespace,
-		podInformer:      corev1PreInformers.Pods().Informer(),
-		podLister:        corev1PreInformers.Pods().Lister(),
-		nodeInformer:     corev1PreInformers.Nodes().Informer(),
-		nodeLister:       corev1PreInformers.Nodes().Lister(),
-		lppInformer:      fmaInformerFactory.Fma().V1alpha1().LauncherPopulationPolicies().Informer(),
-		lppLister:        fmaInformerFactory.Fma().V1alpha1().LauncherPopulationPolicies().Lister(),
-		lcInformer:       fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Informer(),
-		lcLister:         fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Lister(),
-		expectations:     newPendingExpectations(expectationTimeout),
-		pendingThreshold: pendingThreshold,
-		stuckThreshold:   stuckThreshold,
-		clock:            clock.RealClock{},
-		metrics:          newMetricsState(),
+		enqueueLogger:            logger.WithName(ControllerName),
+		coreclient:               coreClient,
+		fmaclient:                fmaClient,
+		namespace:                namespace,
+		podInformer:              corev1PreInformers.Pods().Informer(),
+		podLister:                corev1PreInformers.Pods().Lister(),
+		nodeInformer:             corev1PreInformers.Nodes().Informer(),
+		nodeLister:               corev1PreInformers.Nodes().Lister(),
+		lppInformer:              fmaInformerFactory.Fma().V1alpha1().LauncherPopulationPolicies().Informer(),
+		lppLister:                fmaInformerFactory.Fma().V1alpha1().LauncherPopulationPolicies().Lister(),
+		lcInformer:               fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Informer(),
+		lcLister:                 fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Lister(),
+		expectations:             newPendingExpectations(expectationTimeout),
+		stuckSchedulingThreshold: stuckSchedulingThreshold,
+		stuckStartingThreshold:   stuckStartingThreshold,
+		clock:                    clock.RealClock{},
+		metrics:                  newMetricsState(),
 	}
 	ctl.policy = newDigestedPolicy()
 
@@ -160,17 +160,16 @@ type controller struct {
 	// Written only by the digestQueue worker; read by keyQueue workers.
 	policy *digestedPolicy
 
-	// pendingThreshold is the greatest age (since creation) at which an
-	// unscheduled, not-yet-Ready launcher is still considered not "pending":
-	// once its age exceeds this, it is reported in the "pending" phase of the
+	// stuckSchedulingThreshold is the minimum age (since creation) at which an
+	// unscheduled launcher is reported in the "stuck_scheduling" phase of the
 	// fma_launcher_pod_count metric. It does not change reconcile behavior.
-	pendingThreshold time.Duration
+	stuckSchedulingThreshold time.Duration
 
-	// stuckThreshold is the greatest age (since scheduling) at which a scheduled,
-	// not-yet-Ready launcher is still considered not "stuck": once its age
-	// exceeds this, it is reported in the "stuck" phase of the
-	// fma_launcher_pod_count metric. It does not change reconcile behavior.
-	stuckThreshold time.Duration
+	// stuckStartingThreshold is the minimum age (since scheduling) at which a
+	// scheduled, not-yet-Ready launcher is reported in the "stuck_starting"
+	// phase of the fma_launcher_pod_count metric. It does not change reconcile
+	// behavior.
+	stuckStartingThreshold time.Duration
 
 	// clock is the time source for metric classification; real in production,
 	// a fake in tests so time-dependent classification can be controlled.
@@ -548,7 +547,7 @@ func (ctl *controller) reconcileKey(ctx context.Context, key NodeLauncherKey, de
 	return nil, false
 }
 
-// getCurrentLaunchersOnNode reconciles pending expectations for a specific
+// getCurrentLaunchersOnNode compares pending expectations for a specific
 // config on a specific node against the caller's cache snapshot (cachePods), then
 // returns one of:
 //   - ExpectationsSatisfied with the cache snapshot, when no expectations are
