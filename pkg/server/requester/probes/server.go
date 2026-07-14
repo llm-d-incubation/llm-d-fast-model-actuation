@@ -30,7 +30,8 @@ import (
 	stubapi "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/spi"
 )
 
-// Start starts an HTTP server managing the /ready endpoint.
+// Start binds the network listener for an HTTP server managing the /ready endpoint.
+// It does not begin serving; the returned func does that when invoked.
 // Returns two values.
 // The second is the error, if any, that arose from trying to start the network listener.
 // The first is the func that will do the serving and return any error that arose (nil for clean shutdown).
@@ -71,6 +72,7 @@ func Start(ctx context.Context, port string, ready *atomic.Bool) (func() error, 
 			logger.Error(err, "failed to gracefully shutdown")
 		}
 		_ = listener.Close()
+		logger.Info("shut down completed")
 	}()
 
 	return func() error {
