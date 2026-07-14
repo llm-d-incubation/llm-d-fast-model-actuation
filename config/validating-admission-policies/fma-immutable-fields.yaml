@@ -25,8 +25,7 @@ spec:
           oldObject.metadata.?annotations['dual-pods.llm-d.ai/instance-id'].orValue('') == object.metadata.?annotations['dual-pods.llm-d.ai/instance-id'].orValue('') &&
           oldObject.metadata.?annotations['dual-pods.llm-d.ai/server-port'].orValue('') == object.metadata.?annotations['dual-pods.llm-d.ai/server-port'].orValue('') &&
           oldObject.metadata.?annotations['dual-pods.llm-d.ai/vllm-config'].orValue('') == object.metadata.?annotations['dual-pods.llm-d.ai/vllm-config'].orValue('') &&
-          oldObject.metadata.?annotations['dual-pods.llm-d.ai/isc-label-keys'].orValue('') == object.metadata.?annotations['dual-pods.llm-d.ai/isc-label-keys'].orValue('') &&
-          oldObject.metadata.?annotations['dual-pods.llm-d.ai/isc-annotation-keys'].orValue('') == object.metadata.?annotations['dual-pods.llm-d.ai/isc-annotation-keys'].orValue('') &&
+          oldObject.metadata.?annotations['dual-pods.llm-d.ai/isc-routing-metadata'].orValue('') == object.metadata.?annotations['dual-pods.llm-d.ai/isc-routing-metadata'].orValue('') &&
           oldObject.metadata.?labels['dual-pods.llm-d.ai/dual'].orValue('') == object.metadata.?labels['dual-pods.llm-d.ai/dual'].orValue('') &&
           oldObject.metadata.?labels['dual-pods.llm-d.ai/launcher-config-name'].orValue('') == object.metadata.?labels['dual-pods.llm-d.ai/launcher-config-name'].orValue('')
         )

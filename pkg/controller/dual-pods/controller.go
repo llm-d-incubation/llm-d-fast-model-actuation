@@ -100,12 +100,11 @@ const nominalHashAnnotationKey = "dual-pods.llm-d.ai/nominal"
 const launcherInstanceIDAnnotationKey = "dual-pods.llm-d.ai/instance-id"
 const launcherServerPortAnnotationKey = "dual-pods.llm-d.ai/server-port"
 const launcherVllmConfigAnnotationKey = "dual-pods.llm-d.ai/vllm-config"
-const iscLabelKeysAnnotationKey = "dual-pods.llm-d.ai/isc-label-keys"
-const iscAnnotationKeysAnnotationKey = "dual-pods.llm-d.ai/isc-annotation-keys"
 
 // launcherISCRoutingMetadataAnnotationKey holds, as JSON, the ISC-provided
 // routing labels and annotations the bound instance was created with, so they
-// can be applied once it is serving and recovered after a restart.
+// can be applied once it is serving and recovered after a restart. Their keys
+// are also what identifies the routing labels/annotations to remove on unbind.
 const launcherISCRoutingMetadataAnnotationKey = "dual-pods.llm-d.ai/isc-routing-metadata"
 
 const providerFinalizer = "dual-pods.llm-d.ai/provider"
