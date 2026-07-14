@@ -38,7 +38,7 @@ func FuzzServer(f *testing.F) {
 	}
 	go func() {
 		if err := serve(); err != nil {
-			f.Logf("Run failed: %s", err.Error())
+			f.Logf("Serve failed: %s", err.Error())
 		}
 	}()
 	f.Fuzz(func(t *testing.T, beReady bool) {

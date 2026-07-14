@@ -56,7 +56,6 @@ func main() {
 	if err != nil {
 		logger.Error(err, "Failed to start requester SPI server")
 		os.Exit(10)
-		return
 	}
 
 	wg.Add(1)
@@ -72,7 +71,6 @@ func main() {
 	if err != nil {
 		logger.Error(err, "Failed to start requester probes server")
 		os.Exit(11)
-		return
 	}
 
 	wg.Add(1)
