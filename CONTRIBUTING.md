@@ -128,8 +128,11 @@ is one kind of dependency, whose desired state is design rule DR-10 in
 
 * **Search [github.com/advisories](https://github.com/advisories)** for the
   dependency.
-* **Search the web for CVEs/vulnerabilities** in the specific new version
-  being introduced.
+* **Search the web for CVEs** in the version being adopted and in every version
+  between the old and new ones.
+* **Search the web for vulnerabilities described more broadly** — security
+  issues, supply-chain compromises, exploits, or advisories that may not (yet)
+  carry a CVE identifier — over the same version range.
 * **Read the upstream release notes** for security-relevant changes.
 * **Check the release age.** If the upstream release's publish timestamp
   is less than 7 days ago (use the release's `published` field — for GitHub
@@ -138,6 +141,9 @@ is one kind of dependency, whose desired state is design rule DR-10 in
   7-day soak period has elapsed before merging. Newly published versions
   have had little time for vulnerabilities or supply-chain compromises to
   be discovered and reported.
+
+At the **end** of the review, re-display this checklist and, for each item,
+state what was done and the result found.
 
 ## Commit and Pull Request Style
 
