@@ -51,15 +51,14 @@ func main() {
 	var ready atomic.Bool
 
 	var wg sync.WaitGroup
-	wg.Add(2)
 
 	serveSPI, err := coordination.Start(ctx, spiPort, &ready, os.Stdout)
 	if err != nil {
 		logger.Error(err, "Failed to start requester SPI server")
 		os.Exit(10)
-		return
 	}
 
+	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		if err := serveSPI(); err != nil {
@@ -68,12 +67,17 @@ func main() {
 	}()
 
 	// Start the readiness probe server
+	serveProbes, err := probes.Start(ctx, probesPort, &ready)
+	if err != nil {
+		logger.Error(err, "Failed to start requester probes server")
+		os.Exit(11)
+	}
+
+	wg.Add(1)
 	go func() {
 		defer wg.Done()
-
-		err := probes.Run(ctx, probesPort, &ready)
-		if err != nil {
-			logger.Error(err, "failed to start requester probes server")
+		if err := serveProbes(); err != nil {
+			logger.Error(err, "failed to run requester probes server")
 		}
 	}()
 
