@@ -1,0 +1,38 @@
+name: Check Action References
+
+# Enforces design rule DR-10 (see DESIGN_RULES.md): first-party actions are
+# referenced by @main; third-party actions are pinned by full commit SHA with a
+# version-tag comment that resolves to that SHA. Runs in --online mode so the
+# tag->SHA resolution is verified; CI is the authority for that clause.
+
+on:
+  workflow_dispatch:
+
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/**"
+      - "hack/check-action-refs.py"
+
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/**"
+      - "hack/check-action-refs.py"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Check action references
+        run: hack/check-action-refs.py --mode online
+        env:
+          GH_TOKEN: ${{ github.token }}
