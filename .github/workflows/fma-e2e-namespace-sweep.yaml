@@ -8,7 +8,8 @@ name: Sweep expired FMA E2E namespaces
 
 on:
   schedule:
-    - cron: '13 3 * * *'
+#    - cron: '13 3 * * *' # 03:13 every day
+    - cron: '40 * * * *' # for testing: 40 minutes past every hour
   workflow_dispatch:
 
 permissions:
@@ -16,7 +17,10 @@ permissions:
 
 jobs:
   sweep:
-    runs-on: [self-hosted, openshift, vllm-d]
+    runs-on: [self-hosted, openshift, ${{ matrix.cluster }} ]
+    strategy:
+      matrix:
+        cluster: [vllm-d, pok-prod]
     steps:
       - name: Install kubectl if missing
         run: |
