@@ -172,6 +172,9 @@ class VllmInstance:
         :param log_dir: Directory for log files (defaults to /tmp)
         """
 
+        if config.env_vars is None:
+            config.env_vars = {}
+
         # Check for CUDA device UUIDs and set CUDA_VISIBLE_DEVICES accordingly
         if config.gpu_uuids:
             cuda_indices = []
@@ -182,13 +185,21 @@ class VllmInstance:
                 f"Translated GPU UUIDs {config.gpu_uuids} to indices {cuda_indices}."
             )
 
-            if config.env_vars is None:
-                config.env_vars = {}
             config.env_vars["CUDA_VISIBLE_DEVICES"] = ",".join(cuda_indices)
             logger.info(
                 "Set CUDA_VISIBLE_DEVICES to %s based on UUIDs.",
                 config.env_vars["CUDA_VISIBLE_DEVICES"],
             )
+
+        # Default vLLM's worker multiprocessing method to "fork" unless the
+        # ISC's env_vars already set it. Injected into config.env_vars so it
+        # flows through set_env_vars() alongside every other vLLM env var
+        # (e.g. CUDA_VISIBLE_DEVICES above) instead of being special-cased.
+        config.env_vars.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "fork")
+        logger.info(
+            "Set VLLM_WORKER_MULTIPROC_METHOD to %s.",
+            config.env_vars["VLLM_WORKER_MULTIPROC_METHOD"],
+        )
 
         # Initialize instance variables
         self.instance_id = instance_id

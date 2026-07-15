@@ -173,6 +173,35 @@ class TestVllmInstance:
         assert instance.config == vllm_config
         assert instance.process is None
 
+    def test_instance_sets_default_multiproc_method(self, gpu_translator, tmp_log_dir):
+        """VLLM_WORKER_MULTIPROC_METHOD defaults to 'fork' when the ISC omits it."""
+        config = VllmConfig(options="--model test-model --port 8000")
+        assert config.env_vars is None  # ISC provided none
+        instance = VllmInstance("test-id", config, gpu_translator, log_dir=tmp_log_dir)
+        assert instance.config.env_vars is not None
+        assert instance.config.env_vars["VLLM_WORKER_MULTIPROC_METHOD"] == "fork"
+
+    def test_instance_multiproc_method_override_wins(self, gpu_translator, tmp_log_dir):
+        """An explicit VLLM_WORKER_MULTIPROC_METHOD in ISC's env is preserved."""
+        config = VllmConfig(
+            options="--model test-model --port 8000",
+            env_vars={"VLLM_WORKER_MULTIPROC_METHOD": "spawn"},
+        )
+        instance = VllmInstance("test-id", config, gpu_translator, log_dir=tmp_log_dir)
+        assert instance.config.env_vars["VLLM_WORKER_MULTIPROC_METHOD"] == "spawn"
+
+    def test_instance_multiproc_method_preserves_other_env_vars(
+        self, gpu_translator, tmp_log_dir
+    ):
+        """The default is added without clobbering the ISC's other env vars."""
+        config = VllmConfig(
+            options="--model test-model --port 8000",
+            env_vars={"CUSTOM_VAR": "custom_value"},
+        )
+        instance = VllmInstance("test-id", config, gpu_translator, log_dir=tmp_log_dir)
+        assert instance.config.env_vars["CUSTOM_VAR"] == "custom_value"
+        assert instance.config.env_vars["VLLM_WORKER_MULTIPROC_METHOD"] == "fork"
+
     @patch("launcher.multiprocessing.Process")
     def test_instance_start(
         self, mock_process_class, vllm_config: VllmConfig, gpu_translator, tmp_log_dir
