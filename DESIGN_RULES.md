@@ -53,6 +53,9 @@ Prefer moving a rule (or a clause of one) into the automation tier when a
 mechanical check becomes practical; leave in the subjective tier only what
 genuinely needs judgement.
 
+Normally new rules are numbered as a multiple of 10, to leave room for
+future insertions between existing rules if the need ever arises.
+
 ---
 
 ## DR-10 — GitHub Actions references
