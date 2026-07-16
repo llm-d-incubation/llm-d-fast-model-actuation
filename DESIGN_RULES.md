@@ -1,14 +1,16 @@
 # Design Rules
 
-This document records the project's **design rules**: cross-cutting conventions
-that any change is expected to respect, but that are not captured by the compiler,
-the type system, or ordinary unit tests. They are the kind of expectation that is
-easy to state ("every outbound call from a controller logs how long it took") and
-easy to erode over time unless it is written down and checked.
+This document records the project's **design rules**: cross-cutting
+conventions that any change is expected to respect, but that are not
+captured by the compiler, the type system, or ordinary CI tests. The
+rules here are the kind of expectation that is easy to state ("every
+outbound call from a controller logs how long it took") and easy to
+erode over time unless it is written down and checked.
 
 ## Two tiers of checking
 
-A design rule is placed in one of two tiers, according to **how it is checked**:
+A design rule, or a clause of a design rule, is placed in one of two
+tiers, according to **how it is checked**:
 
 1. **Automation tier** — the rule is checked by automation (a script, a linter).
    Such a check is mechanical, deterministic, and may run in more than one place
@@ -110,16 +112,17 @@ workflows track `main` by design. Established in
 First, some non-exceptions: clause (b) does not ask for the latest release, so
 staying on an older version — including because a newer one has not yet soaked 7
 days — is ordinary **compliance**, not an exception. A genuine exception is a
-deliberate deviation from what clause (b) asks, e.g. staying on a version that has
-a known vulnerability because no fixed release exists yet, or on one that is
-egregiously stale.
+deliberate deviation from what clause (b) asks, e.g. adopting a new version
+early in response to an active attack, or staying on an egregiously old release
+because newer ones introduce an interface change that will take a lot of work
+to adapt to.
 
 Record a clause-(b) exception (per the framework convention above) as free-form
 English **appended to the version-tag comment on the `uses:` line**, naming which
 aspect of clause (b) is being waived, e.g.:
 
 ```yaml
-uses: some/action@<sha>  # v1.2.0 — staying despite open CVE-2026-1234, no fixed release yet
+uses: some/action@<sha>  # v1.2.0 — stuck, see #1237
 ```
 
 Further justification is welcome but not required. (The automation checker reads
