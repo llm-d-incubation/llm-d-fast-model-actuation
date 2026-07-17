@@ -6,6 +6,39 @@
 - [Prometheus Metrics](metrics.md)
 - [Design Rules](../DESIGN_RULES.md)
 
+# Well-lit Path
+
+This will ultimately go into
+https://github.com/llm-d/llm-d/tree/main/guides --- but maybe not for
+some time, because FMA is currently only a sandbox project. In the
+meantime, we home a copy here while we work on developing it.
+
+- [Well-lit Path](../guides/fast-model-actuation/README.md)
+
+As explained in https://github.com/llm-d/llm-d/pull/1779, this is
+maintained using the structured guide mechanism described in
+https://github.com/llm-d/llm-d/pull/1988 . The following shows me
+using the three scripts of that mechanism on the copy in my working
+tree for FMA on my local machine.
+
+```console
+me@mymac llm-d-fast-model-actuation % ../../llm-d/llm-d/scripts/guide-render.py --yaml guides/fast-model-actuation/guide.yaml --readme guides/fast-model-actuation/README.md
+updated guides/fast-model-actuation/README.md
+
+me@mymac llm-d-fast-model-actuation % ../../llm-d/llm-d/scripts/guide-check-yaml.py guides/fast-model-actuation/guide.yaml
+Installed 1 package in 2ms
+guides/fast-model-actuation/guide.yaml: OK
+
+me@mymac llm-d-fast-model-actuation % ../../llm-d/llm-d/scripts/guide-check-readme.py --yaml guides/fast-model-actuation/guide.yaml --readme guides/fast-model-actuation/README.md
+Installed 1 package in 2ms
+guides/fast-model-actuation/README.md: OK
+
+```
+
+To support that, I have
+https://github.com/Vezio/llm-d/tree/structured-guide-implementation
+checked out in `../../llm-d/llm-d/`.
+
 # Dev/test
 
 - [Local dev/test in a `kind` cluster](local-test.md)
