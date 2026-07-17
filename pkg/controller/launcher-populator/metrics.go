@@ -20,7 +20,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 	kubemetrics "k8s.io/component-base/metrics"
@@ -64,12 +63,6 @@ const (
 	phaseStale launcherPhase = "stale"
 )
 
-// allLauncherPhases lists every phase value so that, for every LauncherConfig
-// whose object exists or that has launcher Pods, the gauge always carries an
-// explicit value (including zero) for each phase. This keeps count-based alerts
-// from having to distinguish "0" from "no data".
-var allLauncherPhases = []launcherPhase{phaseBound, phaseUnbound, phaseStuckScheduling, phaseStuckStarting, phaseStale}
-
 const lcfgNameLabel = "lcfg_name"
 const phaseLabel = "phase"
 
@@ -96,18 +89,56 @@ func registerMetrics() {
 	})
 }
 
-// phaseCounts tallies launcher Pods by phase.
-type phaseCounts map[launcherPhase]int
+// phaseCounts tallies launcher Pods by phase. Keeping each phase as a field
+// makes unsupported phases unrepresentable in metricsState.
+type phaseCounts struct {
+	bound           int
+	unbound         int
+	stuckScheduling int
+	stuckStarting   int
+	stale           int
+}
 
 // phaseCountsByNode stores phase tallies indexed by Node name.
 type phaseCountsByNode map[string]phaseCounts
 
 func (pc phaseCounts) total() int {
-	sum := 0
-	for _, n := range pc {
-		sum += n
+	return pc.bound + pc.unbound + pc.stuckScheduling + pc.stuckStarting + pc.stale
+}
+
+func (pc *phaseCounts) addDelta(counts, oldCounts phaseCounts) {
+	pc.bound += counts.bound - oldCounts.bound
+	pc.unbound += counts.unbound - oldCounts.unbound
+	pc.stuckScheduling += counts.stuckScheduling - oldCounts.stuckScheduling
+	pc.stuckStarting += counts.stuckStarting - oldCounts.stuckStarting
+	pc.stale += counts.stale - oldCounts.stale
+}
+
+func (pc *phaseCounts) increment(phase launcherPhase) {
+	switch phase {
+	case phaseBound:
+		pc.bound++
+	case phaseUnbound:
+		pc.unbound++
+	case phaseStuckScheduling:
+		pc.stuckScheduling++
+	case phaseStuckStarting:
+		pc.stuckStarting++
+	case phaseStale:
+		pc.stale++
+	default:
+		panic("unsupported launcher phase: " + string(phase))
 	}
-	return sum
+}
+
+// forEach calls yield once for every supported metric phase, including phases
+// whose count is zero.
+func (pc phaseCounts) forEach(yield func(launcherPhase, int)) {
+	yield(phaseBound, pc.bound)
+	yield(phaseUnbound, pc.unbound)
+	yield(phaseStuckScheduling, pc.stuckScheduling)
+	yield(phaseStuckStarting, pc.stuckStarting)
+	yield(phaseStale, pc.stale)
 }
 
 // metricsState is the source of truth backing launcherPodCountGauge: it holds
@@ -145,13 +176,8 @@ func (ms *metricsState) publish(key NodeLauncherKey, counts phaseCounts) {
 	// Fold the change into the running aggregate by its delta.
 	if counts.total() != 0 || oldCounts.total() != 0 {
 		agg := ms.agg[lcfg]
-		if agg == nil {
-			agg = phaseCounts{}
-			ms.agg[lcfg] = agg
-		}
-		for _, phase := range allLauncherPhases {
-			agg[phase] += counts[phase] - oldCounts[phase]
-		}
+		agg.addDelta(counts, oldCounts)
+		ms.agg[lcfg] = agg
 	}
 
 	// Update the per-Node store, dropping empty Nodes (and the empty LC map).
@@ -190,13 +216,15 @@ func (ms *metricsState) setLCExists(lcfg string, exists bool) {
 func (ms *metricsState) republishLocked(lcfg string) {
 	if !ms.lcExists.Has(lcfg) && len(ms.perLCFG[lcfg]) == 0 {
 		delete(ms.agg, lcfg)
-		launcherPodCountGauge.DeletePartialMatch(prometheus.Labels{lcfgNameLabel: lcfg})
+		phaseCounts{}.forEach(func(phase launcherPhase, _ int) {
+			launcherPodCountGauge.DeleteLabelValues(lcfg, string(phase))
+		})
 		return
 	}
-	agg := ms.agg[lcfg] // nil when the LC exists but has no launchers -> all zeros
-	for _, phase := range allLauncherPhases {
-		launcherPodCountGauge.WithLabelValues(lcfg, string(phase)).Set(float64(agg[phase]))
-	}
+	agg := ms.agg[lcfg] // zero value when the LC exists but has no launchers
+	agg.forEach(func(phase launcherPhase, count int) {
+		launcherPodCountGauge.WithLabelValues(lcfg, string(phase)).Set(float64(count))
+	})
 }
 
 // launcherPhaseOf classifies a launcher Pod into a phase (see the launcherPhase
@@ -207,8 +235,8 @@ func (ms *metricsState) republishLocked(lcfg string) {
 // currentTemplateHash is the node-independent template hash the digest wants for
 // this Pod's LauncherConfig; an empty value (LC gone / not yet digested) makes
 // any templated Pod stale.
-func (ctl *controller) launcherPhaseOf(pod *corev1.Pod, currentTemplateHash string, stuckSchedulingThreshold, stuckStartingThreshold time.Duration, now time.Time) (launcherPhase, time.Time) {
-	if bound, _ := ctl.isLauncherBoundToServerRequestingPod(pod); bound {
+func launcherPhaseOf(pod *corev1.Pod, currentTemplateHash string, stuckSchedulingThreshold, stuckStartingThreshold time.Duration, now time.Time) (launcherPhase, time.Time) {
+	if bound, _ := isLauncherBoundToServerRequestingPod(pod); bound {
 		return phaseBound, time.Time{}
 	}
 	if pod.Annotations[common.LauncherTemplateHashAnnotationKey] != currentTemplateHash {
@@ -247,8 +275,8 @@ func (ctl *controller) computeKeyPhases(pods []*corev1.Pod, templateHash string,
 	counts := phaseCounts{}
 	var earliestTransition time.Time
 	for _, pod := range pods {
-		phase, becomesOverdueAt := ctl.launcherPhaseOf(pod, templateHash, ctl.stuckSchedulingThreshold, ctl.stuckStartingThreshold, now)
-		counts[phase]++
+		phase, becomesOverdueAt := launcherPhaseOf(pod, templateHash, ctl.stuckSchedulingThreshold, ctl.stuckStartingThreshold, now)
+		counts.increment(phase)
 		if pod.DeletionTimestamp == nil && becomesOverdueAt.After(now) &&
 			(earliestTransition.IsZero() || becomesOverdueAt.Before(earliestTransition)) {
 			earliestTransition = becomesOverdueAt

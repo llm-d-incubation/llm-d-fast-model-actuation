@@ -59,7 +59,7 @@ func (ctl *controller) getMatchingNodeNames(ctx context.Context, labelSelector l
 }
 
 // isLauncherBoundToServerRequestingPod checks if the launcher pod is bound to any server-requesting pod
-func (ctl *controller) isLauncherBoundToServerRequestingPod(launcherPod *corev1.Pod) (bool, string) {
+func isLauncherBoundToServerRequestingPod(launcherPod *corev1.Pod) (bool, string) {
 	// Check if the launcher pod has annotations indicating assignment to a server-requesting pod
 	requesterAnnotationValue, exists := launcherPod.Annotations[common.RequesterAnnotationKey]
 	if !exists {

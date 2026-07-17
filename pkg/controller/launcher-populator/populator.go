@@ -459,7 +459,7 @@ func (ctl *controller) reconcileKey(ctx context.Context, key NodeLauncherKey, de
 			deletionInProgress = true
 			continue
 		}
-		isBound, _ := ctl.isLauncherBoundToServerRequestingPod(pod)
+		isBound, _ := isLauncherBoundToServerRequestingPod(pod)
 		if isBound {
 			liveBoundCount++
 			continue
