@@ -29,9 +29,9 @@ FMA also supports instant model switching: if a new requesting pod references a 
 
 ## Prerequisites
 
-This guide assumes you have a Kubernetes cluster with GPU nodes and the [llm-d router](../../guides/recipes/router/README.md) infrastructure available. If you are starting from an existing llm-d deployment, the Gateway API Inference Extension CRDs may already be installed and you can skip that step.
+This guide assumes you have a Kubernetes cluster with GPU nodes and the [llm-d router](https://github.com/llm-d/llm-d/tree/main/guides/recipes/router) infrastructure available. If you are starting from an existing llm-d deployment, the Gateway API Inference Extension CRDs may already be installed and you can skip that step.
 
-- Have the [proper client tools installed on your local system](../../helpers/client-setup/README.md) to use this guide.
+- Have the [proper client tools installed on your local system](https://github.com/llm-d/llm-d/blob/main/helpers/client-setup/README.md) to use this guide.
 
 - Checkout llm-d repo:
 
@@ -239,7 +239,7 @@ Re-run the inference request from step 2 to confirm the model is serving again.
 This guide uses [`llmdbenchmark`](https://github.com/llm-d/llm-d-benchmark) — the supported standard CLI for llm-d performance benchmarking. It defaults to the `nop` harness (which stands the stack up and validates it end-to-end without driving a synthetic load); the richer, FMA-specific experimentation workflow lives in [`llm-d-benchmark`](https://github.com/llm-d/llm-d-benchmark) itself.
 
 > [!IMPORTANT]
-> The Benchmarking section below contains only the **fast-model-actuation-specific commands** needed to drive the stack you just deployed — for everything else (and especially when something goes wrong), start at [`helpers/benchmark.md`](../../helpers/benchmark.md).
+> The Benchmarking section below contains only the **fast-model-actuation-specific commands** needed to drive the stack you just deployed — for everything else (and especially when something goes wrong), start at [`helpers/benchmark.md`](https://github.com/llm-d/llm-d/blob/main/helpers/benchmark.md).
 
 ### 1. Install the CLI
 
