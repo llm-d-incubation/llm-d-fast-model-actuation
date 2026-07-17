@@ -2,10 +2,12 @@
 
 ## Overview
 
-Fast Model Actuation (FMA) enables rapid model loading and switching for LLM inference on Kubernetes by exploiting vLLM sleep/wake and model swapping. In Kubernetes, GPUs are bound 1-to-1 to pods: a pod that requests a GPU holds it exclusively for its lifetime. FMA uses the following **dual pod** technique to circumvent this constraint:
+Fast Model Actuation (FMA) addresses vllm startup time using two technologies. One is vLLM sleep and wake, which can entirely avoid model loading and CUDA graph compilation in lucky scenarios. The other is running multiple vllm processes as children of a launcher process that has already done the Python module loading. FMA can manage multiple vllm instances bound to one GPU, with one instance awake at a time, to accomplish fast switching of which model that GPU is used for; this generalizes to multiple GPUs of one node.
+
+In Kubernetes, a Pod that requests and is allocated some GPUs keeps that exclusive allocation for the Pod's lifetime. FMA uses the following **dual pod** technique to circumvent this constraint:
 
 - **Server-requesting Pods** reserve GPU resources via the Kubernetes scheduler but do not run inference themselves.
-- **Launcher Pods** (server-providing) run vLLM without requesting GPUs. They gain access to GPUs via `CUDA_VISIBLE_DEVICES`, directed by the FMA controller to the specific GPU(s) reserved by the requesting pod.
+- **Launcher Pods** (server-providing) run vLLM without requesting GPUs. They (a) gain access to all GPUs of their Node via special provisions that do not count this access as usage and (b) using `CUDA_VISIBLE_DEVICES` as directed by the FMA controller get vllm to use the specific GPU(s) reserved for the requesting pod.
 - **FMA Controllers** manage the lifecycle: binding requesting pods to launchers, starting vLLM instances, and orchestrating sleep/wake.
 
 Server-requesting pods are managed through standard Kubernetes controllers such as Deployments and autoscalers. The FMA controller watches these pods and translates scheduler decisions into actions on launcher pods and GPUs.
