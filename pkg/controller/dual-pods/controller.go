@@ -37,9 +37,11 @@ import (
 	apitypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	corev1preinformers "k8s.io/client-go/informers/core/v1"
+	"k8s.io/client-go/kubernetes/scheme"
 	coreclient "k8s.io/client-go/kubernetes/typed/core/v1"
 	corev1listers "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
 	kubemetrics "k8s.io/component-base/metrics"
 	"k8s.io/component-base/metrics/legacyregistry"
@@ -312,6 +314,8 @@ func (config ControllerConfig) NewController(
 		accelMemoryLimitMiB:       config.AcceleratorSleepingMemoryLimitMiB,
 		nodeNameToData:            map[string]*nodeData{},
 	}
+	ctl.eventBroadcaster = record.NewBroadcaster()
+	ctl.recorder = ctl.eventBroadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: ControllerName})
 	err := ctl.podInformer.AddIndexers(cache.Indexers{
 		inferenceServerConfigIndexName: inferenceServerConfigIndexFunc,
 		launcherConfigHashIndexName:    launcherConfigHashIndexFunc,
@@ -360,16 +364,20 @@ type controller struct {
 	enqueueLogger klog.Logger
 	coreclient    coreclient.CoreV1Interface
 	namespace     string
-	podInformer   cache.SharedIndexInformer
-	podLister     corev1listers.PodLister
-	cmInformer    cache.SharedIndexInformer
-	cmLister      corev1listers.ConfigMapLister
-	nodeInformer  cache.SharedIndexInformer
-	nodeLister    corev1listers.NodeLister
-	iscInformer   cache.SharedIndexInformer
-	iscLister     fmalisters.InferenceServerConfigLister
-	lcInformer    cache.SharedIndexInformer
-	lcLister      fmalisters.LauncherConfigLister
+
+	eventBroadcaster record.EventBroadcaster
+	recorder         record.EventRecorder
+
+	podInformer  cache.SharedIndexInformer
+	podLister    corev1listers.PodLister
+	cmInformer   cache.SharedIndexInformer
+	cmLister     corev1listers.ConfigMapLister
+	nodeInformer cache.SharedIndexInformer
+	nodeLister   corev1listers.NodeLister
+	iscInformer  cache.SharedIndexInformer
+	iscLister    fmalisters.InferenceServerConfigLister
+	lcInformer   cache.SharedIndexInformer
+	lcLister     fmalisters.LauncherConfigLister
 	genctlr.KnowsProcessedSync[queueItem]
 
 	// Histogram vector, labels needing values are: purpose, method, isc_name, status_code
@@ -859,6 +867,8 @@ func getProviderNodeName(pod *corev1.Pod) (string, error) {
 }
 
 func (ctl *controller) Start(ctx context.Context) error {
+	ctl.eventBroadcaster.StartRecordingToSink(&coreclient.EventSinkImpl{Interface: ctl.coreclient.Events("")})
+	context.AfterFunc(ctx, ctl.eventBroadcaster.Shutdown)
 	if !cache.WaitForNamedCacheSync(ControllerName, ctx.Done(), ctl.cmInformer.HasSynced, ctl.podInformer.HasSynced, ctl.nodeInformer.HasSynced, ctl.iscInformer.HasSynced, ctl.lcInformer.HasSynced) {
 		return fmt.Errorf("caches not synced before end of Start context")
 	}

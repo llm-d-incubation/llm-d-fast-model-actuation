@@ -1179,6 +1179,8 @@ func (ctl *controller) applyBoundLauncherLabels(
 			// loop. Unbind by deleting the requester Pod; a fresh requester
 			// starts over.
 			logger.Error(nil, "Committed ISC routing metadata is invalid; deleting requester Pod to unbind", "problems", problems)
+			ctl.recorder.Eventf(requestingPod, corev1.EventTypeWarning, "InvalidRoutingMetadata",
+				"Deleting server-requesting Pod to unbind: committed ISC routing metadata is invalid: %s", strings.Join(problems, "; "))
 			delErr := ctl.coreclient.Pods(ctl.namespace).Delete(ctx, requestingPod.Name, metav1.DeleteOptions{
 				PropagationPolicy: ptr.To(metav1.DeletePropagationBackground),
 				Preconditions:     &metav1.Preconditions{UID: &requestingPod.UID}})
