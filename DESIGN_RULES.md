@@ -55,8 +55,13 @@ Prefer moving a rule (or a clause of one) into the automation tier when a
 mechanical check becomes practical; leave in the subjective tier only what
 genuinely needs judgement.
 
-Normally new rules are numbered as a multiple of 10, to leave room for
-future insertions between existing rules if the need ever arises.
+Rule IDs are not contiguous. Normally a new rule is assigned a number
+that is a multiple of 10. That makes it possible to split a rule in
+two or insert a new rule between two existing rules, should the need
+ever arise.
+
+Each rule is a `##` level subsection in the following Markdown, and
+has `###` or deeper level internals.
 
 ---
 
