@@ -1,3 +1,4 @@
+---
 name: our-git-commits
 description: Things to do when making a Git commit
 trigger: When the user asks to commit changes, create a commit, make a git commit, amend a commit, revise a commit, reword a commit message, or any other action that results in running a `git commit` command
