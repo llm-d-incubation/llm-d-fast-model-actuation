@@ -20,6 +20,7 @@ spec:
         app.kubernetes.io/name: fma-controllers
         app.kubernetes.io/component: launcher-populator
         app.kubernetes.io/instance: {{ .Release.Name }}
+        scrape: "true"
     spec:
       serviceAccountName: {{ .Release.Name }}-fma-controllers
       containers:
@@ -30,7 +31,7 @@ spec:
             - /ko-app/launcher-populator
             - --namespace={{ .Release.Namespace }}
           ports:
-            - containerPort: 8080
+            - containerPort: 8002
               name: metrics
               protocol: TCP
           resources:

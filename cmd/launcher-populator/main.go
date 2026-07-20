@@ -27,6 +27,7 @@ import (
 
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/common"
 	launcherpopulator "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/launcher-populator"
+	fmaobs "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/observability"
 	"github.com/spf13/pflag"
 
 	kubeinformers "k8s.io/client-go/informers"
@@ -42,11 +43,18 @@ func main() {
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 	overrides := &clientcmd.ConfigOverrides{}
 
+	obsOpts := fmaobs.DefaultOptions()
+
 	klog.InitFlags(flag.CommandLine)
 	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
 	common.AddKubernetesClientFlags(*pflag.CommandLine, loadingRules, overrides)
 	expectationTimeout := pflag.Duration("expectation-timeout", launcherpopulator.DefaultExpectationTimeout,
 		"How long to wait for the informer cache to reflect pending Pod mutations before falling back to a direct apiserver query")
+	stuckSchedulingThreshold := pflag.Duration("stuck-scheduling-threshold", launcherpopulator.DefaultStuckSchedulingThreshold,
+		"Minimum age (since creation) after which an unscheduled launcher is reported in the \"stuck_scheduling\" phase of fma_launcher_pod_count")
+	stuckStartingThreshold := pflag.Duration("stuck-starting-threshold", launcherpopulator.DefaultStuckStartingThreshold,
+		"Minimum age (since scheduling) after which a scheduled, not-yet-Ready launcher is reported in the \"stuck_starting\" phase of fma_launcher_pod_count")
+	obsOpts.AddToFlagSet(pflag.CommandLine)
 	pflag.Parse()
 
 	// Create a context with cancellation signal
@@ -96,6 +104,8 @@ func main() {
 		kubePreInformers.Core().V1(),
 		fmaPreInformers,
 		*expectationTimeout,
+		*stuckSchedulingThreshold,
+		*stuckStartingThreshold,
 	)
 	if err != nil {
 		klog.Fatal(err)
@@ -104,6 +114,9 @@ func main() {
 	// Start informers
 	kubePreInformers.Start(ctx.Done())
 	fmaPreInformers.Start(ctx.Done())
+
+	// Serve Prometheus /metrics and Go /debug/pprof.
+	obsOpts.Start(ctx)
 
 	// Start the controller in a goroutine
 	go func() {
