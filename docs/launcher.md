@@ -346,7 +346,7 @@ Retrieve stdout/stderr logs from a specific vLLM instance as raw bytes.
 
 **Request Headers:**
 
-- `Range` (optional): Byte range to retrieve, following [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110#name-range-requests). Supported formats:
+- `Range` (optional): Byte range to retrieve, following [RFC 9110](http://web.archive.org/web/20260520194653/https://www.rfc-editor.org/rfc/rfc9110). Supported formats:
   - `Range: bytes=START-END` — retrieve bytes from START to END (both inclusive)
   - `Range: bytes=START-` — retrieve bytes from START to end of log (up to 1 MB)
   - Suffix ranges (`bytes=-N`) are **not** supported.
@@ -368,7 +368,7 @@ Content-Type: application/octet-stream
 
 - `400 Bad Request`: Malformed or unsupported Range header
 - `404 Not Found`: Instance not found
-- `416 Range Not Satisfiable`: The requested start position is beyond available log content. The response includes a `Content-Range: bytes */N` header (per [RFC 9110 §15.5.17](https://www.rfc-editor.org/rfc/rfc9110#status.416)) with an empty body, where `N` is the total number of bytes captured so far.
+- `416 Range Not Satisfiable`: The requested start position is beyond available log content. The response includes a `Content-Range: bytes */N` header (per [RFC 9110 §15.5.17](http://web.archive.org/web/20260520194653/https://www.rfc-editor.org/rfc/rfc9110)) with an empty body, where `N` is the total number of bytes captured so far.
 
 ---
 
