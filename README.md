@@ -19,22 +19,28 @@ has its model tensors in main (CPU) memory rather than accelerator
 inference requests --- but has freed up accelerator resources for use
 by a different instance. But the sleeping instance is still a running
 process (e.g., it can still serve administrative requests) as far as
-the OS is concerned. The process of waking up the sleeping instance is
-very fast; for example, taking about 3 seconds for a model with 64 GiB
-of tensor data. This behavior is available in vLLM today.
+the OS is concerned. And that process is still the main process of a
+container in a Pod, as far as Kubernetes is concerned. The process of
+waking up the sleeping instance is very fast; for example, taking
+about 3 seconds for a model with 64 GiB of tensor data. This behavior
+is available in vLLM today.
 
-2. Model swapping. In model swapping techniques, there is a persistent
-management process that can run various subsidiary inference server
-processes over time. The management process does basic code loading
-and initialization work of the inference server so that this work does
-not have to be done at the startup of the inference server process,
-reducing that startup latency. The inference servers may be able to
-sleep and wake up.
+2. A vllm launcher process. This is a process that can have multiple
+child processes, each running a distinct vllm instance (which is
+itself the usual parent/child pair of main and engine). The launcher
+loads the Python modules, shaving the time for that off of the startup
+of each launched vllm instance. The launcher has a network API for
+CRUDL of vllm instances.
 
-A process with such flexibility does not easily fit into the
-Kubernetes milieu. The most obvious and natural way in Kubernetes to
-define a desired inference server is to create a `Pod`
-object. However, a `Pod` has a static allocation of accelerator
+By reducing the startup latency of vllm instances, these ideas reduce
+the latency to change which model a given accelerator (or array of
+accelerators) is being used for. We sometimes use the term "model
+swapping" to evoke this idea.
+
+A process with sleep/wake and/or launcher functionality does not
+easily fit into the Kubernetes milieu. The most obvious and natural
+way in Kubernetes to define a desired inference server is to create a
+`Pod` object. However, a `Pod` has a static allocation of accelerator
 resources and a static command line. That is, the obvious way to
 define a `Pod` is such that it serves one fixed model and server
 options, with no resource-freeing hiatus. This repository contains a
@@ -57,10 +63,11 @@ The topics above are realized by the following software components.
   the [inference_server/launcher](inference_server/launcher)
   directory.
 
-- A **launcher-populator** controller, which watches LauncherConfig
-  and LauncherPopulationPolicy custom resources and ensures that the
-  right number of launcher pods exist on each node. This controller is
-  also written in Go.
+- A **launcher-population controller** (also called the **launcher
+  populator** or simply the **populator**), which watches
+  LauncherConfig and LauncherPopulationPolicy objects and ensures that
+  the right number of launcher pods exist on each node. This
+  controller is also written in Go.
 
 These controllers are deployed together via a unified Helm chart at
 [charts/fma-controllers](charts/fma-controllers). The chart also
@@ -78,11 +85,14 @@ The repository defines three Custom Resource Definitions (CRDs):
 These CRD definitions live in [config/crd](config/crd) and the Go
 types are in [pkg/api](pkg/api).
 
-The development roadmap has three milestones. Milestone 2, which
-introduced vLLM sleep/wake without the launcher, is finished.
-Milestone 3, which adds launcher-based model swapping where a
-persistent launcher process manages vLLM instances on each node, is
-under implementation.
+The development roadmap started with three milestones and then shifts
+to more nuanced "releases". Milestone 2, which introduced vLLM
+sleep/wake without the launcher, is finished.  Milestone 3 (AKA minor
+release 0.6), which adds the launcher, is essentially finished; we are
+finding and fixing bugs in a series of patch releases. The next major
+step is minor release 0.7, in which we expect to introduce a TCP
+reverse-proxy in the requester Pod, to make it an even better
+representative of the inference server.
 
 For further design documentation, see [the docs
 directory](docs/README.md).
