@@ -63,6 +63,12 @@ const (
 	phaseStale launcherPhase = "stale"
 )
 
+// isStuck reports whether the phase is one of the two stuck phases the
+// populator acts on (labels, Events, and single retry).
+func (p launcherPhase) isStuck() bool {
+	return p == phaseStuckScheduling || p == phaseStuckStarting
+}
+
 const lcfgNameLabel = "lcfg_name"
 const phaseLabel = "phase"
 

@@ -19,7 +19,9 @@ package launcherpopulator
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/common"
 	corev1 "k8s.io/api/core/v1"
@@ -78,6 +80,17 @@ func isLauncherBoundToServerRequestingPod(launcherPod *corev1.Pod) (bool, string
 	return true, parts[1]
 }
 
+// retryCountOf returns the launcher-populator retry count recorded on a Pod. It
+// is 0 when the annotation is absent or not a positive integer.
+func retryCountOf(pod *corev1.Pod) int {
+	if v, ok := pod.Annotations[common.LauncherRetryCountAnnotationKey]; ok {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 0
+}
+
 // listPodsFromCache reads launcher pods from the informer's local cache (cheap).
 func (ctl *controller) listPodsFromCache(key NodeLauncherKey) ([]*corev1.Pod, error) {
 	launcherLabels := map[string]string{
@@ -123,9 +136,11 @@ func (ctl *controller) createLaunchers(ctx context.Context, node *corev1.Node, k
 	// Create the specified number of launcher pods
 	for i := 0; i < count; i++ {
 
+		callStart := ctl.clock.Now()
 		createdPod, err := ctl.coreclient.Pods(ctl.namespace).Create(ctx, launcherPodTemplate.DeepCopy(), metav1.CreateOptions{})
+		callStartStr := callStart.Format(time.RFC3339Nano)
 		if err != nil {
-			return fmt.Errorf("failed to create launcher pod: %w", err)
+			return fmt.Errorf("failed to create launcher pod (started %s): %w", callStartStr, err)
 		}
 		// Record expectation for this specific Pod UID immediately after creation.
 		ctl.expectations.expectCreation(key, createdPod.UID)
@@ -133,7 +148,8 @@ func (ctl *controller) createLaunchers(ctx context.Context, node *corev1.Node, k
 			"pod", createdPod.Name,
 			"uid", createdPod.UID,
 			"resourceVersion", createdPod.ResourceVersion,
-			"node", node.Name)
+			"node", node.Name,
+			"k8sCallStartTime", callStartStr)
 	}
 
 	return nil
