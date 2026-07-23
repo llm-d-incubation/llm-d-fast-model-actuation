@@ -1,9 +1,11 @@
 # Fast Model Actuation with Process Flexibility and Dual Pods
 
-Model flexibility refers to using vLLM sleep/wake and/or model
-swapping (e.g., [launcher based model-swapping](launcher.md)).  Dual
-pods is a technique for making model flexibility usable in the
-Kubernetes milieu.
+Fast model actuation involves using either or both (a) vLLM sleep/wake
+and/or (b) launcher processes. Both of those make a process a flexible
+platform rather than a unit of workload. This is a conceptual mismatch
+for Kubernetes, and the _dual pods_ technique is a way of bridging
+that mismatch --- making such flexible processes usable in Kubernetes,
+llm-d in particular.
 
 ## Introduction to dual pods
 
@@ -21,30 +23,33 @@ desired inference servers and (2) the server-providing Pods that
 actually run the inference servers.
 
 The dual pods technique takes advantage of something that we have
-observed: for nodes that run inference servers, just one resource
-determines what Pods can run, when and where: the accelerators (GPUs);
-CPU and main memory are always sufficient when the constraints on
-accelerator usage are met. The dual pods technique also relies on the
-fact that we can construct Pods that have access to all of the
-accelerators on their node while being accounted --- in the Kubernetes
-scheduler and kubelet --- as consuming none of them. The
-server-requesting Pod's resource requirements consist of the
-accelerator usage of the inference server, and a small amount of CPU
-and main memory. The server-providing Pod's `.spec` has resource
-requirements that hold the CPU and main memory needed to run the
-inference server, and zero accelerators. The container that actually
-runs vLLM has an environment variable setting that directs vLLM to use
-the accelerators that were chosen by the Kubernetes scheduler and
-kubelet for the server-requesting Pod.
+observed in practice: for nodes that run inference servers, only one
+resource is constrained enough to actually affect scheduling ---
+accelerators (GPUs). CPU and main memory are always (well, almost
+always) sufficient when the constraints on accelerator usage are
+met. The dual pods technique also relies on the fact that we can
+construct Pods that have access to all of the accelerators on their
+node while being accounted --- in the Kubernetes scheduler and kubelet
+--- as consuming none of them. The server-requesting Pod's resource
+requirements consist of the accelerator usage of the inference server,
+and a small amount of CPU and main memory. The server-providing Pod's
+`.spec` has resource requirements that hold the CPU and main memory
+needed to run the inference server(s), and zero accelerators. The
+container that actually runs vLLM has an environment variable setting
+that directs vLLM to use the accelerators that were chosen by the
+Kubernetes scheduler and kubelet for the server-requesting Pod.
 
-The server-requesting Pod (a) has a container --- described as the
-_requester_ container --- that is part of the implementation of the
-dual-pods technique, (b) does _not_ have a container that runs vLLM,
-and (c) has an annotation that contains a patch that, roughly
-speaking (there is a precise statement below), changes the
-server-requesting Pod into the server-providing Pod.
+The server-requesting Pod
 
-Kubernetes (in its scheduler and kubelets) allocates and assigns
+- has a container --- which we call the _requester_ container --- that
+  is part of the implementation of the dual-pods technique,
+
+- does _not_ have a container that runs vLLM, and
+
+- has an annotation that provides what the FMA controllers need to
+  bridge from server-requesting Pod to server-providing Pod.
+
+Kubernetes (in its Pod scheduler and kubelets) allocates and assigns
 accelerators to the server-requesting Pods as normal, but the
 requester container in those Pods only reports on those
 assignments. The server-providing Pods adopt those assignments to
@@ -52,10 +57,15 @@ actually use the accelerators to run the inference servers.
 
 Clients/users of the dual pods technique create and delete
 server-requesting Pods roughly as they would if those Pods ran the
-inference servers. There is a dual pods controller that manages the
+inference servers. There is a dual-pods controller that manages the
 server-providing Pods in reaction to the server-requesting Pods, and
 relays some state from the server-providing Pods back to the
 server-requesting Pods.
+
+A launcher process is _preparation_ for running vLLM, and can be
+created proactively. FMA defines `LauncherPopulationPolicy` objects
+that direct proactive maintenance of a population of launchers. FMA
+includes a controller that does the prescribed maintenance.
 
 The dual pods technique involves allocating some amount of each GPU's
 memory to sleeping vLLM instances and the rest to awake vLLM
@@ -77,87 +87,129 @@ is not yet supported.
   cluster. Also creates an
   [InferencePool](https://github.com/kubernetes-sigs/gateway-api-inference-extension/blob/main/api/v1/inferencepool_types.go)
   object and associated llm-d objects for each of those model
-  variants.
+  variants. Also creates, when launchers are used, the
+  `InferenceServerConfig`, `LauncherConfig`, and
+  `LauncherPopulationPolicy` objects that direct FMA's construction of
+  server-providing Pods.
 
 - **llm-d administrator**. Deploys and configures llm-d on the cluster.
 
 - **Inference client**. Outside the cluster. Submits inference
   requests, consumes responses. Judges SLO attainment.
 
-## Design
+## Scope Notes
 
-Note: this document covers the design for milestones 2 and 3.
-Milestone 2 (vLLM sleep/wake without the launcher) is finished.
-Milestone 3 (launcher-based model swapping) is under implementation;
+Note: this document covers the design for both milestones 2 and 3.
+Milestone 2 used vLLM sleep/wake but no launchers.
+Milestone 3 involves both sleep/wake and launchers;
 see [launcher](launcher.md) for details on the launcher API.
 
-### Drawing
+A deployment of FMA operates within one Kubernetes API object
+namespace. The custom resources defined by FMA are namespaced.  Sadly,
+`CustomResourceDefinition` objects and some others defined by
+Kubernetes are cluster-scoped.
 
-#### Milestone 2
+## Drawing
+
+### Direct Providers (Milestone 2)
 
 ![Boxes and arrows illustrating the milestone 2 design here](llm-d-fma-arch-m2.drawio.svg)
 
-#### Milestone 3
+### Using Launchers (Milestone 3)
 
 ![Boxes and arrows illustrating the milestone 3 design here](llm-d-fma-arch-m3.drawio.svg)
 
-### Dual Pods API
+## Dual Pods API
 
-We defined an API that is hoped to work for both milestone 2 and
-milestone 3. That API is in [pkg/api](../pkg/api) and in this
-section. The patch defined in the server-requesting Pod converts the
+The API is in [pkg/api](../pkg/api) and in this section.
+
+### Direct Providers API
+
+A server-requesting Pod that requests using only sleep/wake (no
+launcher) does so by having an annotation whose name (key) is
+`dual-pods.llm-d.ai/server-patch` and whose value converts the
 server-requesting Pod's `.metadata.labels` and `.spec` into those of a
 _nominal_ server-providing Pod and defines the annotations of that
-Pod. This nominal server-providing Pod could satisfactorily run the
-inference server. However, the dual-pods controller is allowed to
-create different sorts of server-providing Pods that, ultimately, run
-inference servers according to the nominal server-providing Pod.
+Pod.
 
-The dual-pods controller that works with just the existing sleep/wake
-functionality concludes that to create a server-providing Pod for a
-particular model, it uses the nominal server-providing PodSpec,
-labels, and annotations directly. A dual-pods controller that works
-with the launcher-based model swapping will create a server-providing
-Pod that runs the launcher. To swap a model in, the controller issues
-a request (to the launcher) that includes the command line arguments,
-environment variable settings, and assigned accelerator set (the ones
-assigned to the server-requesting Pod) for running `vllm serve`. To
-swap a model out, the controller issues a request that does not
-include those details.
+The dual-pods controller further customizes the nominal
+server-providing Pod to make it run on the same Node as the
+server-requesting Pod and use the same accelerators.
 
-### Scenarios
+### Launcher-based API
+
+A server-requesting Pod that requests using a launcher as well as
+sleep/wake does so by having an annotation whose name (key) is
+`dual-pods.llm-d.ai/inference-server-config` and whose value is the
+name of an
+[`InferenceServerConfig`](../api/fma/v1alpha1/inferenceserverconfig_types.go)
+object. That object provides the parameters of vLLM and also the name
+of a [`LauncherConfig`](../api/fma/v1alpha1/launcherconfig_types.go)
+object. That object, in turn, holds the template to use when creating
+the launcher Pods.
+
+Additionally,
+[`LauncherPopulationPolicy`](../api/fma/v1alpha1/launcherpopulationpolicy_types.go)
+objects call for a proactive population of launchers, as follows.
+
+- Each `LauncherPopulationPolicy` has a node selector --- a predicate
+  that tests whether that policy should apply to a given Node. This is
+  implicitly applied to all Nodes to find the relevant ones.
+
+- Each `LauncherPopulationPolicy` defines a partial map from
+  `LauncherConfig` to a desired number of launcher Pods.
+
+- All the `LauncherPopulationPolicy` objects together collectively
+  define a map, called `PopulationPolicy`, from (Node, LauncherConfig)
+  to count. For a given (N, C) this count is the maximum of the counts
+  prescribed by the `LauncherPopulationPolicy` objects that select N
+  and declare a count for C (zero if there are none).
+
+- The collective meaning of all the `LauncherPopulationPolicy` objects
+  and all the server-requesting Pods is that for a given (Node,
+  LauncherConfig) the number of launchers that should exist is the
+  larger of
+    (a) what `PopulationPolicy` says for that pair, and
+    (b) the number needed to satisfy the existing server-requesting Pods.
+
+TODO: write up https://github.com/llm-d-incubation/llm-d-fast-model-actuation/issues/201
+
+## Scenarios
 
 The outer product of
 
 1. (scaling)
 
-    a. Scale out an existing set. Note: this is not something with an
-      SLO? Or do we evaluate this as a matter of shifting from failing
-      SLO to passing (due to added capacity)?
-    b. Scale set out from zero
+    a. Scale out an existing non-empty set.
+    b. Create a non-empty set (equivalently: Scale set out from zero).
 
 2. (single GPU vs. not)
 
     a. Resource request/limit is 1 GPU
     b. Resource request/limit is multiple GPUs
 
-3. (wake or not)
+3. (activation style)
 
-    a. There is a sleeping vLLM instance that can be woken and used
-    b. A new vLLM instance must be created; in milestone 3 this further divides into:
-        i. An existing launcher can be used
-        ii. A new launcher has to be created
+    - **hot-start**: There is a sleeping vLLM instance that can be woken and used
+    - **direct cold-start**: A new direct server-providing Pod must be created
+    - **warm-start**: A suitable launcher exists but must create a new vLLM instance
+    - **launcher cold-start**: A new launcher must be created and create a new vLLM instance
 
-4. (resource reclamation)
+4. (vLLM instance reclamation)
 
-    a. No vLLM instances need to be deleted first
-    b. One vLLM instance needs to be deleted first
-    c. Multiple vLLM instances need to be deleted first (can only
-       happen when multiple GPUs are needed for the new vLLM instance)
+    - No vLLM instances need to be deleted first
+    - One vLLM instance needs to be deleted first
+    - Multiple vLLM instances need to be deleted first
 
-### What goes in a server-requesting Pod
+5. (launcher reclamation)
 
-Here is an example.
+    - No launchers need to be deleted first
+    - One launcher needs to be deleted first
+    - Multiple launchers need to be deleted first
+
+## What goes in a direct server-requesting Pod
+
+Here is an example of a server-requesting Pod that requests a direct provider.
 
 ```yaml
 apiVersion: v1
@@ -277,7 +329,7 @@ Following are some features to note.
   so that they get allocated and assigned to the requester container
   --- even though it will not actually use them.
 
-### The corresponding nominal server-providing Pod
+## The corresponding nominal server-providing Pod
 
 Here is an example of what the dual-pods controller would derive.
 
@@ -327,10 +379,11 @@ spec:
         memory: 9Gi
 ```
 
-### The dual-pods controller data and logic
+## Launcher-based Pods
 
-The dual-pods controller works entirely within the confines of one
-given Kubernetes API object namespace.
+TODO: write this
+
+## Notes on the dual-pods controller
 
 The dual-pods controller follows the usual style for a Go-based
 Kubernetes controller: informers and a workqueue. To minimize
@@ -339,21 +392,6 @@ informers.
 
 The central item of interest in the controller is an inference server,
 identified by the UID of its server-requesting Pod.
-
-This controller's workqueue is hierarchical. An entry may refer to the
-`gpu-map` ConfigMap or to a Node. The controller's internal data for
-a Node consists of:
-
-- a map from inference server ID to internal data about that inference
-  server; and
-- a set of references to inference servers on that node that need work.
-
-The reason for the hierarchy is as follows. Recall that a workqueue
-excludes concurrent work on a given object reference in the queue. For
-a given Node, the controller works on just one inference server at a
-time. That is because enforcing the budget on GPU memory for sleeping
-vLLM instances may involve processing any or all of the sleeping
-inference servers on the same node.
 
 The binding between inference server and server-providing Pod is
 stored, first and foremost, in an annotation on the server-providing
@@ -365,12 +403,10 @@ maintains an index that allows looking up the server-providing Pod(s)
 (the controller intends there to be at most one!) that are bound to a
 given inference server.
 
-The controller syncs a given inference server according to the
-following principles.
-
-It is only when the server-requesting Pod does not exist and there is
-no bound server-providing Pod that the controller can forget about a
-given inference server.
+A given server-requesting Pod is bound to a server-providing Pod at
+most once. If trouble develops this may signal a condition that the
+client/user may need to be aware of and so is reflected back by the
+controller deleting the server-requesting Pod.
 
 The controller maintains a finalizer on the server-requesting Pod, so
 that its deletion can be delayed until the server-providing Pod is
@@ -399,26 +435,6 @@ treat these two states differently, relaying the deletion of (2) back
 to the server-requesting Pod but not deleting the server-requesting
 Pod in state (1).
 
-When the server-requesting Pod is absent or in the process of being
-deleted, and there is a bound server-providing pod, the controller
-unbinds the server-providing Pod. The controller first considers
-whether the server-providing Pod appears to be broken; if so then the
-controller initiates deletion of the server-providing Pod.
-
-Unbinding the server-providing Pod consists of the following. If the
-controller knows an IP address for that Pod and does not know that it
-is asleep then the controller will make the HTTP request that puts the
-Pod to sleep. The controller updates the Pod object to remove the
-controller's finalizer and the annotation that declares the binding.
-
-Apart from the above relaying of deletions, the controller does no
-more work if the Node is absent or in the process of deletion.
-
-Once the server-requesting Pod has an IP address, the controller can
-do the HTTP request to the requester container to retrieve the list of
-assigned GPU UUIDs. Once this is successfully done, the controller
-remembers it and does not repeat it.
-
 Controlling sleep/wake is secondary to binding. An unbound
 server-providing Pod is asleep. The transitions between asleep and
 awake happen while bound: wake up ASAP after binding, go to sleep just
@@ -429,27 +445,11 @@ not in the process of being deleted, the controller will relay
 readiness from the provider to the requester if it has not already
 done so for the current state.
 
-There is a possible timing splinter, where a server-requesting Pod
-gets scheduled to a Node and starts running but then the Node becomes
-unschedulable before a server-providing can be created and scheduled
-there. In this case the dual-pods controller initiates deletion of the
-server-requesting Pod, because it is stuck.
-
-The controller's Pod informer maintains an index on Pods by a hash of
-characteristics of the nominal server-providing Pod. These
-characteristics include all that are relevant to the question of
-whether this Pod, if it has a sleeping vLLM instance, would be correct
-to wake and bind to a given server-requesting Pod. When the controller
-is faced with the question of whether there is a suitable sleeping
-vLLM instance to be woken and bound, this index provides the answer.
-
-If there is an unsatisfied server-requesting Pod, and no suitable
-sleeping vLLM instance to wake up and bind, then it is time to create
-a new server-providing Pod.
-
 Just before creating a new server-providing Pod, the controller
 enforces the budget on accelerator memory for sleeping vLLM instances
 (see below).
+
+TODO: remaining updates for milestone 3
 
 When making a new vLLM instance: the Kubernetes scheduler and kubelet
 have already assured that there is no other server-requesting Pod
@@ -460,7 +460,7 @@ creating a new server-providing Pod. This Pod uses the
 CUDA_VISIBLE_DEVICES environment variable to convey the assigned set
 of accelerators.
 
-#### Respecting the accelerator memory budget
+### Respecting the accelerator memory budget
 
 At present the dual-pods controller uses a simple approximation: a
 limit on the number of sleeping vLLM instances, which must be obeyed
@@ -476,7 +476,7 @@ consists of deleting instances as needed, least recently used
 first. This very simple policy is our starting point. More complex
 policies could be developed, based on observed need.
 
-#### Readiness Relay
+### Readiness Relay
 
 The relay of readiness goes as follows.
 
@@ -495,7 +495,7 @@ The relay of readiness goes as follows.
   controller tells the requester that the inference server is not
   ready (if the controller has not already done so).
 
-#### GPU UUID vs. Index
+### GPU UUID vs. Index
 
 The GPU assignment query from the dual-pods controller to the
 server-requesting Pod returns a list of GPU UUIDs. The controller
