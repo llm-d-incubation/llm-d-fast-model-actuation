@@ -15,7 +15,7 @@ permissions:
   contents: read
 
 jobs:
-  sweep:
+  sweep-old:
     runs-on: [self-hosted, openshift, vllm-d]
     steps:
       - name: Install kubectl if missing
@@ -32,22 +32,31 @@ jobs:
           chmod +x kubectl
           sudo mv kubectl /usr/local/bin/
 
+      - name: Checkout source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
       - name: Delete expired namespaces
+        run: hack/delete-expired-namespaces.sh
+
+  sweep-new:
+    runs-on: [self-hosted, openshift, pok-prod]
+    steps:
+      - name: Install kubectl if missing
         run: |
-          set -euo pipefail
-          today=$(date -u +%Y-%m-%d)
-          echo "Today (UTC): $today"
-          kubectl get namespace \
-            -l fma-e2e.llm-d.ai/sweep=true \
-            -o json \
-          | jq -r --arg today "$today" '
-              .items[]
-              | .metadata.annotations["fma-e2e.llm-d.ai/expires-at"] as $expires
-              | select($expires != null and $expires < $today)
-              | .metadata.name
-            ' \
-          | while read -r name; do
-              [ -n "$name" ] || continue
-              echo "Deleting expired namespace: $name"
-              kubectl delete namespace "$name" --ignore-not-found --timeout=180s || true
-            done
+          if command -v kubectl &>/dev/null; then
+            echo "kubectl already installed: $(kubectl version --client=true 2>/dev/null | head -1)"
+            exit 0
+          fi
+          KUBECTL_VERSION="v1.31.14"
+          KUBECTL_SHA256="8791ec7c8966b61420d55103a5fb948de9f0ca3d7306d789734975ad9704bdb0"
+          echo "Installing kubectl version: $KUBECTL_VERSION"
+          curl -fsSL --retry 3 --retry-delay 5 -o kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          echo "${KUBECTL_SHA256}  kubectl" | sha256sum --check
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
+
+      - name: Checkout source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Delete expired namespaces
+        run: hack/delete-expired-namespaces.sh
