@@ -6,6 +6,10 @@
 - [Prometheus Metrics](metrics.md)
 - [Design Rules](../DESIGN_RULES.md)
 
+# Well-Lit Path
+
+There is an llm-d "well-lit path" document [in the llm-d repo](https://github.com/llm-d/llm-d/tree/main/guides/fast-model-actuation).
+
 # Dev/test
 
 - [Local dev/test in a `kind` cluster](local-test.md)
