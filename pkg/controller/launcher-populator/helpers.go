@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/common"
 	corev1 "k8s.io/api/core/v1"
@@ -136,11 +135,9 @@ func (ctl *controller) createLaunchers(ctx context.Context, node *corev1.Node, k
 	// Create the specified number of launcher pods
 	for i := 0; i < count; i++ {
 
-		callStart := ctl.clock.Now()
 		createdPod, err := ctl.coreclient.Pods(ctl.namespace).Create(ctx, launcherPodTemplate.DeepCopy(), metav1.CreateOptions{})
-		callStartStr := callStart.Format(time.RFC3339Nano)
 		if err != nil {
-			return fmt.Errorf("failed to create launcher pod (started %s): %w", callStartStr, err)
+			return fmt.Errorf("failed to create launcher pod: %w", err)
 		}
 		// Record expectation for this specific Pod UID immediately after creation.
 		ctl.expectations.expectCreation(key, createdPod.UID)
@@ -148,8 +145,7 @@ func (ctl *controller) createLaunchers(ctx context.Context, node *corev1.Node, k
 			"pod", createdPod.Name,
 			"uid", createdPod.UID,
 			"resourceVersion", createdPod.ResourceVersion,
-			"node", node.Name,
-			"k8sCallStartTime", callStartStr)
+			"node", node.Name)
 	}
 
 	return nil

@@ -112,6 +112,29 @@ func ready(p *corev1.Pod) *corev1.Pod {
 	return p
 }
 
+// createdAt sets the Pod's creation timestamp. With no PodScheduled condition,
+// age is measured from creation for stuck_scheduling classification.
+func createdAt(p *corev1.Pod, t time.Time) *corev1.Pod {
+	p.CreationTimestamp = metav1.NewTime(t)
+	return p
+}
+
+// listLaunchers returns all launcher Pods currently in the fake clientset,
+// used to rebuild a reconcile's cache snapshot between passes.
+func listLaunchers(t *testing.T, cs *k8sfake.Clientset) []*corev1.Pod {
+	t.Helper()
+	list, err := cs.CoreV1().Pods(stuckTestNamespace).List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		t.Fatalf("list pods: %v", err)
+	}
+	out := make([]*corev1.Pod, 0, len(list.Items))
+	for i := range list.Items {
+		p := list.Items[i]
+		out = append(out, &p)
+	}
+	return out
+}
+
 func nodeTemplate() *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -141,6 +164,16 @@ func drainEvents(rec *record.FakeRecorder) []string {
 			return events
 		}
 	}
+}
+
+// containsSubstr reports whether any event string contains sub.
+func containsSubstr(events []string, sub string) bool {
+	for _, e := range events {
+		if strings.Contains(e, sub) {
+			return true
+		}
+	}
+	return false
 }
 
 // assertWarningLauncherStuck asserts there is exactly one Event and that it is a
@@ -232,7 +265,7 @@ func TestHandleStuckLaunchersExhaustedLabelsAndReports(t *testing.T) {
 	if err != nil {
 		t.Fatalf("exhausted pod must be kept: %v", err)
 	}
-	if got.Labels[common.LauncherStuckLabelKey] != common.LauncherStuckLabelValue {
+	if got.Labels[common.LauncherStuckLabelKey] != "true" {
 		t.Errorf("expected stuck label on exhausted pod, labels=%v", got.Labels)
 	}
 	assertWarningLauncherStuck(t, drainEvents(rec), "exhausted")
@@ -242,7 +275,7 @@ func TestHandleStuckLaunchersExhaustedLabelsAndReports(t *testing.T) {
 // a stuck, exhausted, already-labeled launcher produces no further Event.
 func TestHandleStuckLaunchersExhaustedAlreadyLabeledNoEvent(t *testing.T) {
 	pod := scheduledNotReadyAt(stuckLauncherPod("launcher-stuck-3", "1"), stuckTestNow.Add(-10*time.Minute))
-	pod.Labels[common.LauncherStuckLabelKey] = common.LauncherStuckLabelValue
+	pod.Labels[common.LauncherStuckLabelKey] = "true"
 	ctl, _, rec := newStuckTestController(stuckTestNow, pod)
 
 	created, err := ctl.handleStuckLaunchers(context.Background(), stuckTestKey(), testNode(), []*corev1.Pod{pod}, testTemplateHash, nodeTemplate())
@@ -262,7 +295,7 @@ func TestHandleStuckLaunchersExhaustedAlreadyLabeledNoEvent(t *testing.T) {
 // stays as a false positive.
 func TestHandleStuckLaunchersClearsLabelOnRecovery(t *testing.T) {
 	pod := ready(stuckLauncherPod("launcher-recovered", "1"))
-	pod.Labels[common.LauncherStuckLabelKey] = common.LauncherStuckLabelValue
+	pod.Labels[common.LauncherStuckLabelKey] = "true"
 	ctl, cs, rec := newStuckTestController(stuckTestNow, pod)
 
 	created, err := ctl.handleStuckLaunchers(context.Background(), stuckTestKey(), testNode(), []*corev1.Pod{pod}, testTemplateHash, nodeTemplate())
@@ -352,5 +385,176 @@ func TestReconcileKeyRetryCreateFailureKeepsOriginal(t *testing.T) {
 	}
 	if !podExists(t, cs, pod.Name) {
 		t.Errorf("stuck original must be kept when its replacement Create fails")
+	}
+}
+
+// G1: TestHandleStuckLaunchersIgnoresHealthy verifies a not-stuck, unlabeled
+// launcher is left completely untouched — no replacement, no Event, no label.
+func TestHandleStuckLaunchersIgnoresHealthy(t *testing.T) {
+	pod := ready(stuckLauncherPod("launcher-healthy", ""))
+	ctl, cs, rec := newStuckTestController(stuckTestNow, pod)
+
+	created, err := ctl.handleStuckLaunchers(context.Background(), stuckTestKey(), testNode(), []*corev1.Pod{pod}, testTemplateHash, nodeTemplate())
+	if err != nil {
+		t.Fatalf("handleStuckLaunchers: %v", err)
+	}
+	if created {
+		t.Errorf("healthy launcher must not be recreated")
+	}
+	if events := drainEvents(rec); len(events) != 0 {
+		t.Errorf("expected no Events for healthy launcher, got %v", events)
+	}
+	got, err := cs.CoreV1().Pods(stuckTestNamespace).Get(context.Background(), pod.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if _, ok := got.Labels[common.LauncherStuckLabelKey]; ok {
+		t.Errorf("healthy launcher must not be labeled stuck, labels=%v", got.Labels)
+	}
+	if all := listLaunchers(t, cs); len(all) != 1 {
+		t.Errorf("expected no new Pods, got %d", len(all))
+	}
+}
+
+// G2: TestExcessDeletionOrder verifies the deletion ordering that both downsizing
+// and interrupted-retry convergence rely on: stuck before healthy, and among
+// stuck launchers the lower retry generation first.
+func TestExcessDeletionOrder(t *testing.T) {
+	healthy := ready(stuckLauncherPod("healthy", ""))
+	stuckGen1 := scheduledNotReadyAt(stuckLauncherPod("stuck-gen1", "1"), stuckTestNow.Add(-10*time.Minute))
+	stuckGen0 := scheduledNotReadyAt(stuckLauncherPod("stuck-gen0", ""), stuckTestNow.Add(-10*time.Minute))
+	ctl, _, _ := newStuckTestController(stuckTestNow)
+
+	// Input deliberately out of order.
+	ordered := ctl.excessDeletionOrder([]*corev1.Pod{healthy, stuckGen1, stuckGen0}, testTemplateHash)
+
+	var names []string
+	for _, p := range ordered {
+		names = append(names, p.Name)
+	}
+	want := []string{"stuck-gen0", "stuck-gen1", "healthy"}
+	if strings.Join(names, ",") != strings.Join(want, ",") {
+		t.Errorf("excessDeletionOrder = %v, want %v", names, want)
+	}
+}
+
+// G3: TestHandleStuckLaunchersRetriesStuckScheduling verifies the unscheduled
+// (stuck_scheduling) variant is handled the same way as stuck_starting: retried,
+// and the Event names the correct phase.
+func TestHandleStuckLaunchersRetriesStuckScheduling(t *testing.T) {
+	// Old creation, never scheduled -> stuck_scheduling.
+	pod := createdAt(stuckLauncherPod("launcher-unsched", ""), stuckTestNow.Add(-10*time.Minute))
+	ctl, cs, rec := newStuckTestController(stuckTestNow, pod)
+
+	created, err := ctl.handleStuckLaunchers(context.Background(), stuckTestKey(), testNode(), []*corev1.Pod{pod}, testTemplateHash, nodeTemplate())
+	if err != nil {
+		t.Fatalf("handleStuckLaunchers: %v", err)
+	}
+	if !created {
+		t.Errorf("expected a replacement for a stuck_scheduling launcher")
+	}
+	if got := launcherPodsWithRetryCount(t, cs, "1"); len(got) != 1 {
+		t.Errorf("expected 1 replacement carrying retry-count=1, got %d", len(got))
+	}
+	assertWarningLauncherStuck(t, drainEvents(rec), "stuck_scheduling")
+}
+
+// G4: TestSetStuckLabelIgnoresNotFound verifies labeling a Pod that no longer
+// exists is a no-op (no error), since the Pod may be deleted concurrently.
+func TestSetStuckLabelIgnoresNotFound(t *testing.T) {
+	ctl, _, _ := newStuckTestController(stuckTestNow) // empty clientset
+	pod := stuckLauncherPod("launcher-gone", "1")
+
+	if err := ctl.setStuckLabel(context.Background(), pod, true); err != nil {
+		t.Errorf("setStuckLabel on missing Pod should be ignored, got %v", err)
+	}
+	if err := ctl.setStuckLabel(context.Background(), pod, false); err != nil {
+		t.Errorf("clearing label on missing Pod should be ignored, got %v", err)
+	}
+}
+
+// G5: TestReconcileKeyRetryConvergence drives reconcileKey across passes to
+// verify the create-before-delete retry converges: pass 1 creates a gen-1
+// replacement while keeping the stuck original; pass 2 deletes the superseded
+// original as excess and, since the replacement is still stuck and has no retry
+// left, labels and reports it. Expectations are reset between passes to model
+// the informer cache having caught up.
+func TestReconcileKeyRetryConvergence(t *testing.T) {
+	ctx := context.Background()
+	orig := scheduledNotReadyAt(stuckLauncherPod("launcher-conv", ""), stuckTestNow.Add(-10*time.Minute))
+	ctl, cs, rec := newStuckTestController(stuckTestNow, orig)
+
+	// Pass 1: stuck gen-0, desired=1 -> create gen-1 replacement, keep original.
+	err, requeue := ctl.reconcileKey(ctx, stuckTestKey(), 1, testTemplateHash, nodeTemplate(), []*corev1.Pod{orig})
+	if err != nil || !requeue {
+		t.Fatalf("pass1 reconcileKey: err=%v requeue=%v (want nil,true)", err, requeue)
+	}
+	if !podExists(t, cs, orig.Name) {
+		t.Errorf("pass1: original must be kept (create-before-delete)")
+	}
+	if got := launcherPodsWithRetryCount(t, cs, "1"); len(got) != 1 {
+		t.Fatalf("pass1: expected 1 gen-1 replacement, got %d", len(got))
+	}
+	if !containsSubstr(drainEvents(rec), "recreating") {
+		t.Errorf("pass1: expected a recreating Event")
+	}
+
+	// Pass 2: cache now holds both; reset expectations (cache caught up).
+	cache2 := listLaunchers(t, cs)
+	ctl.expectations = newPendingExpectations(time.Minute)
+	err, requeue = ctl.reconcileKey(ctx, stuckTestKey(), 1, testTemplateHash, nodeTemplate(), cache2)
+	if err != nil {
+		t.Fatalf("pass2 reconcileKey: %v", err)
+	}
+	if !requeue {
+		t.Errorf("pass2: expected requeue after excess-deleting the superseded original")
+	}
+	if podExists(t, cs, orig.Name) {
+		t.Errorf("pass2: superseded original must be excess-deleted")
+	}
+	repl := launcherPodsWithRetryCount(t, cs, "1")
+	if len(repl) != 1 {
+		t.Fatalf("pass2: expected the gen-1 replacement to remain, got %d", len(repl))
+	}
+	if repl[0].Labels[common.LauncherStuckLabelKey] != "true" {
+		t.Errorf("pass2: replacement should be labeled stuck once retries are exhausted, labels=%v", repl[0].Labels)
+	}
+	if !containsSubstr(drainEvents(rec), "exhausted") {
+		t.Errorf("pass2: expected an exhausted Event")
+	}
+}
+
+// TestHandleStuckLaunchersPropagatesLabelPatchError verifies that a non-NotFound
+// error from the label Patch is surfaced (not swallowed), on both the set (stuck
+// exhausted) and clear (recovered) label paths.
+func TestHandleStuckLaunchersPropagatesLabelPatchError(t *testing.T) {
+	cases := []struct {
+		name string
+		pod  *corev1.Pod
+	}{
+		{
+			name: "set on exhausted",
+			pod:  scheduledNotReadyAt(stuckLauncherPod("launcher-exhausted", "1"), stuckTestNow.Add(-10*time.Minute)),
+		},
+		{
+			name: "clear on recovery",
+			pod: func() *corev1.Pod {
+				p := ready(stuckLauncherPod("launcher-recovered", "1"))
+				p.Labels[common.LauncherStuckLabelKey] = "true"
+				return p
+			}(),
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctl, cs, _ := newStuckTestController(stuckTestNow, tc.pod)
+			cs.PrependReactor("patch", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+				return true, nil, apierrors.NewInternalError(errors.New("boom"))
+			})
+			_, err := ctl.handleStuckLaunchers(context.Background(), stuckTestKey(), testNode(), []*corev1.Pod{tc.pod}, testTemplateHash, nodeTemplate())
+			if err == nil {
+				t.Errorf("expected the label Patch error to propagate")
+			}
+		})
 	}
 }

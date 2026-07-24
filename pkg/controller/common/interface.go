@@ -47,10 +47,6 @@ const (
 	// launcher that has since become Ready.
 	LauncherStuckLabelKey = "dual-pods.llm-d.ai/launcher-stuck"
 
-	// LauncherStuckLabelValue is the value the launcher-populator sets for
-	// LauncherStuckLabelKey.
-	LauncherStuckLabelValue = "true"
-
 	// LauncherRetryCountAnnotationKey records how many times the
 	// launcher-populator has recreated a launcher for a slot in response to the
 	// previous launcher being stuck. It lives in an annotation rather than a
