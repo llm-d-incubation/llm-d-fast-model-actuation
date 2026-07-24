@@ -35,6 +35,25 @@ const (
 	// LauncherTemplateHashAnnotationKey is the node-independent template hash on a launcher Pod, used for spec-drift detection.
 	LauncherTemplateHashAnnotationKey = "dual-pods.llm-d.ai/launcher-populator-template-hash"
 
+	// LauncherStuckLabelKey is set by the launcher-populator on a launcher Pod
+	// that is currently stuck (existing past a configured threshold without
+	// becoming Ready, or without ever being scheduled) and has exhausted its
+	// retry. Its value is "true". It is findable state that outlives the
+	// corresponding Kubernetes Event, so an operator can locate stuck launchers
+	// with a label selector:
+	//   kubectl get pods -l dual-pods.llm-d.ai/launcher-stuck=true
+	// The label denotes the *current* condition: the populator removes it again
+	// if the launcher later recovers, so it is never a false positive on a
+	// launcher that has since become Ready.
+	LauncherStuckLabelKey = "dual-pods.llm-d.ai/launcher-stuck"
+
+	// LauncherRetryCountAnnotationKey records how many times the
+	// launcher-populator has recreated a launcher for a slot in response to the
+	// previous launcher being stuck. It lives in an annotation rather than a
+	// label because label volume is a more precious resource, and it survives
+	// controller restarts so the single-retry cap holds across them.
+	LauncherRetryCountAnnotationKey = "dual-pods.llm-d.ai/launcher-retry-count"
+
 	// LauncherServicePort is the port number on which the launcher exposes its HTTP service
 	// for the management of vLLM instances.
 	// This is a contract between the controllers and the launcher implementation.

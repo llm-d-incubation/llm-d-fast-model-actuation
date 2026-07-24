@@ -19,6 +19,7 @@ package launcherpopulator
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/common"
@@ -76,6 +77,17 @@ func isLauncherBoundToServerRequestingPod(launcherPod *corev1.Pod) (bool, string
 	// @TODO if need, we can append the check logic in further PR
 
 	return true, parts[1]
+}
+
+// retryCountOf returns the launcher-populator retry count recorded on a Pod. It
+// is 0 when the annotation is absent or not a positive integer.
+func retryCountOf(pod *corev1.Pod) int {
+	if v, ok := pod.Annotations[common.LauncherRetryCountAnnotationKey]; ok {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 0
 }
 
 // listPodsFromCache reads launcher pods from the informer's local cache (cheap).
