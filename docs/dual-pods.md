@@ -1,11 +1,11 @@
 # Fast Model Actuation with Process Flexibility and Dual Pods
 
 Fast model actuation involves using either or both (a) vLLM sleep/wake
-and/or (b) launcher processes. Both of those make a process a flexible
-platform rather than a unit of workload. This is a conceptual mismatch
-for Kubernetes, and the _dual pods_ technique is a way of bridging
-that mismatch --- making such flexible processes usable in Kubernetes,
-llm-d in particular.
+and/or (b) [launcher](launcher.md) processes. Both of those make a
+process a flexible platform rather than a unit of workload. This is a
+conceptual mismatch for Kubernetes, and the _dual pods_ technique is a
+way of bridging that mismatch --- making such flexible processes
+usable in Kubernetes, llm-d in particular.
 
 ## Introduction to dual pods
 
@@ -24,7 +24,7 @@ actually run the inference servers.
 
 The dual pods technique takes advantage of something that we have
 observed in practice: for nodes that run inference servers, only one
-resource is constrained enough to actually affect scheduling ---
+resource is constrained enough to actually affect scheduling --- the
 accelerators (GPUs). CPU and main memory are always (well, almost
 always) sufficient when the constraints on accelerator usage are
 met. The dual pods technique also relies on the fact that we can
@@ -34,12 +34,13 @@ node while being accounted --- in the Kubernetes scheduler and kubelet
 requirements consist of the accelerator usage of the inference server,
 and a small amount of CPU and main memory. The server-providing Pod's
 `.spec` has resource requirements that hold the CPU and main memory
-needed to run the inference server(s), and zero accelerators. The
-container that actually runs vLLM has an environment variable setting
-that directs vLLM to use the accelerators that were chosen by the
-Kubernetes scheduler and kubelet for the server-requesting Pod.
+needed to run the inference server(s), and zero accelerators. The dual
+pods implementation gives to the process that actually runs vLLM an
+environment variable setting that directs vLLM and the nvidia runtime
+to use the accelerators that were chosen by the Kubernetes scheduler
+and kubelet for the server-requesting Pod.
 
-The server-requesting Pod
+The server-requesting Pod:
 
 - has a container --- which we call the _requester_ container --- that
   is part of the implementation of the dual-pods technique,
@@ -101,8 +102,7 @@ is not yet supported.
 
 Note: this document covers the design for both milestones 2 and 3.
 Milestone 2 used vLLM sleep/wake but no launchers.
-Milestone 3 involves both sleep/wake and launchers;
-see [launcher](launcher.md) for details on the launcher API.
+Milestone 3 involves both sleep/wake and launchers.
 
 A deployment of FMA operates within one Kubernetes API object
 namespace. The custom resources defined by FMA are namespaced.  Sadly,
@@ -127,7 +127,8 @@ The API is in [pkg/api](../pkg/api) and in this section.
 
 A server-requesting Pod that requests using only sleep/wake (no
 launcher) does so by having an annotation whose name (key) is
-`dual-pods.llm-d.ai/server-patch` and whose value converts the
+`dual-pods.llm-d.ai/server-patch` and whose value is a patch string
+(of the Kubernetes "strategic merge" type) that converts the
 server-requesting Pod's `.metadata.labels` and `.spec` into those of a
 _nominal_ server-providing Pod and defines the annotations of that
 Pod.
@@ -172,7 +173,41 @@ objects call for a proactive population of launchers, as follows.
     (a) what `PopulationPolicy` says for that pair, and
     (b) the number needed to satisfy the existing server-requesting Pods.
 
-TODO: write up https://github.com/llm-d-incubation/llm-d-fast-model-actuation/issues/201
+### User-initiated changes to relevant API objects
+
+FMA is written in the usual Kubernetes style: it primarily reacts to
+create/update/delete of the Kubernetes API objects that are its
+inputs, in an eventually-consistent way. The input objects can be
+created in any order; FMA will react at any given time as best it can
+to the inputs that currently exist. This leaves a few more questions,
+addressed in the following subsections.
+
+#### What happens when a server-requesting Pod changes what it is requesting?
+
+FMA uses Kubernetes admission control (a `ValidatingAdmissionPolicy`
+and a `ValidatingAdmissionPolicyBinding`) to suppress such changes
+while the server-requesting Pod is bound to a server-providing Pod.
+
+#### What happens to existing launcher Pods when a LauncherConfig changes?
+
+Each corresponding launcher Pod that is not bound and was created from
+the wrong LauncherConfig spec is deleted. Then the launcher population
+controller will create a replacement if that is still
+appropriate. While the LauncherConfig object does not exist, FMA does
+not consider any corresponding launcher to be wrong.
+
+#### What happens to existing uses when an InferenceServerConfigSpec changes?
+
+Each vLLM instance that is unbound and created from the wrong
+InferenceServerConfigSpec contents is deleted.
+
+#### What happens if somebody changes one of the annotations that our implementation uses to link things together?
+
+(You may not have known that there are such things. They are not
+user-serviceable parts.)
+
+FMA uses Kubernetes admission control (a `ValidatingAdmissionPolicy`
+and a `ValidatingAdmissionPolicyBinding`) to suppress such changes.
 
 ## Scenarios
 
@@ -381,6 +416,203 @@ spec:
 
 ## Launcher-based Pods
 
+Following is an example of a `ReplicaSet` of server-requesting pods.
+
+```yaml
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: example-requesters
+  labels:
+    app: dp-example
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dp-example
+  template:
+    metadata:
+      labels:
+        app: dp-example
+      annotations:
+        dual-pods.llm-d.ai/inference-server-config: example
+    spec:
+      nodeSelector:
+        nvidia.com/gpu.family: hopper
+      containers:
+        - name: inference-server
+          image: ghcr.io/llm-d-incubation/llm-d-fast-model-actuation/requester:v0.6.2
+          imagePullPolicy: IfNotPresent
+          ports:
+          - name: probes
+            containerPort: 8080
+          - name: spi
+            containerPort: 8081
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            limits:
+              nvidia.com/gpu: "1"
+              cpu: "200m"
+              memory: 250Mi
+```
+
+Following is an example of what the referenced config object might
+look like.
+
+```yaml
+apiVersion: fma.llm-d.ai/v1alpha1
+kind: InferenceServerConfig
+metadata:
+  name: example
+spec:
+  modelServerConfig:
+    port: 8005
+    options: >-
+      --model TinyLlama/TinyLlama-1.1B-Chat-v1.0
+      --enable-sleep-mode
+      --gpu-memory-utilization 0.85
+    env_vars:
+      VLLM_SERVER_DEV_MODE: "1"
+      VLLM_LOGGING_LEVEL: "DEBUG"
+      USER: inductor-fantasy
+    labels:
+      e2e-test.fma.llm-d.ai/isc-label: test-value
+    annotations:
+      e2e-test.fma.llm-d.ai/isc-annotation: test-value
+  launcherConfigName: example
+```
+
+The capping of the GPU memory utilization at 0.85 leaves room for a
+few vLLM instances that are sleeping. Note that the default is 0.9,
+deliberately leaving room because vLLM's control over its GPU memory
+usage is imprecise. To calculate the right utilization cap for your
+usage, measure the amount of GPU memory that remains in use while the
+GPU has one sleeping vLLM instance and no awake one. Pick a number of
+sleeping vLLM instances that you want to allow to coexist with one
+awake instance. Multiply by the amount of GPU memory that each
+sleeping instance takes, and convert to a fraction of the GPU's total
+memory. Subtract that from 0.95, and you will probably be good.
+
+The configuration objects exhibited here and the FMA container images
+have been engineered to be easily usable on OpenShift without special
+security-context privileges. In particular, no particular userid or
+username is specified anywhere that OpenShift can see it.
+
+The setting of the environment variable "USER" to some value (it does
+not really matter what the value is, as long as it is syntactically
+valid) is necessary to cope with overzealous caching by the
+Inductor. That thing insists on having a distinct cache for every
+user, and insists on determining the user name. Most of the cache
+configuration is in the `LauncherConfig` (see next), but the `USER`
+hack is buried here so that it does not confuse OpenShift or the OS.
+
+Following is an example of what a launcher config object looks like.
+
+```yaml
+apiVersion: fma.llm-d.ai/v1alpha1
+kind: LauncherConfig
+metadata:
+  name: example
+spec:
+  maxInstances: 2
+  podTemplate:
+    metadata:
+      labels:
+        example.com/template-label: example-from-lc
+      annotations:
+        example.com/template-annotation: Example from LC
+    spec:
+      serviceAccountName: example
+      containers:
+        - name: inference-server
+          image: ghcr.io/llm-d-incubation/llm-d-fast-model-actuation/launcher:v0.6.2
+          imagePullPolicy: IfNotPresent
+          command:
+          - /app/launcher.py
+          - --log-level=info
+          env:
+          - name: HF_HOME
+            value: "/tmp"
+          - name: VLLM_CACHE_ROOT
+            value: "/tmp"
+          - name: FLASHINFER_WORKSPACE_BASE
+            value: "/tmp"
+          - name: TRITON_CACHE_DIR
+            value: "/tmp"
+          - name: XDG_CACHE_HOME
+            value: "/tmp"
+          - name: XDG_CONFIG_HOME
+            value: "/tmp"
+          resources:
+            limits:
+              ephemeral-storage: "4.5Gi"
+```
+
+The settings of various environment variables to refer to `/tmp`
+configures the locations of the various caches that vLLM maintains on
+the filesystem.
+
+TODO: exmplain the ephemeral-storage setting.
+
+Following is an example launcher population policy object.
+
+```yaml
+apiVersion: fma.llm-d.ai/v1alpha1
+kind: LauncherPopulationPolicy
+metadata:
+  name: example
+spec:
+  enhancedNodeSelector:
+    labelSelector:
+      matchLabels:
+        nvidia.com/gpu.family: hopper
+  countForLauncher:
+    - launcherConfigName: example
+      launcherCount: 8
+```
+
+In this example the desired number of launchers is 8, which is what
+you would typically use when the nodes have 8 GPUs.
+
+## Observability
+
+### FYI labels and annotations
+
+The FMA controllers put some labels and annotations on Pods purely for
+the sake of observability; these labels and annotations are not
+consumed by the FMA controllers. They are as follows.
+
+- annotation **dual-pods.llm-d.ai/accelerators**. Put on both
+  requester and provider Pods. Value is a comma-separated list of GPU
+  UUIDs.
+
+- label **dual-pods.llm-d.ai/dual**. Put on both requester and
+  provider Pods. Value is the name of the dual Pod.
+
+- label **dual-pods.llm-d.ai/sleeping**. Maintained on the provider
+  Pod, reflecting what the controller knows about the sleep/wake state
+  of the vLLM instance(s) there. The value is "true" or "false",
+  despite there being a relevant third state: starting up. In the case
+  of a launcher: the value is "false" when the controller knows that
+  there is an awake (and ready to serve inference requests) vLLM
+  instance, "true" otherwise.
+
+- label **dual-pods.llm-d.ai/instance**. Appears on a requester Pod
+  while it is bound to a launcher. Value is the ID that FMA uses to
+  distinguish the relevant vLLM instance from others in the same
+  launcher.
+
+### Kubernetes Event objects
+
+TODO: write this
+
+### Prometheus metrics
+
 TODO: write this
 
 ## Notes on the dual-pods controller
@@ -498,16 +730,19 @@ The relay of readiness goes as follows.
 ### GPU UUID vs. Index
 
 The GPU assignment query from the dual-pods controller to the
-server-requesting Pod returns a list of GPU UUIDs. The controller
-translates this to a list of GPU indices to put in the
+server-requesting Pod returns a list of GPU UUIDs.
+
+When the server-providing Pod is a launcher (milestone 3), the
+launcher reads the UUIDs of the GPUs on its node, and the request to
+launch a vLLM instance carries the list of assigned GPU UUIDs. The
+launcher translates from UUID to index and puts the list of indices in
+the vLLM container's CUDA_VISIBLE_DEVICES.
+
+In the direct provider case (milestone 2), the dual-pods controller
+translates the GPU UUID list to a list of GPU indices to put in the
 CUDA_VISIBLE_DEVICES envar of the server-providing Pod. To support
 that translation, we use a ConfigMap named "gpu-map". There is [a
 script](../scripts/ensure-nodes-mapped.sh) that ensures that the
 ConfigMap is populated with the needed information. The dual-pods
 controller reads the mapping from GPU UUID to index from that
 ConfigMap.
-
-In milestone 3, the launcher reads the UUIDs of the GPUs on its node,
-and the request to launch a vLLM instance carries the list of assigned
-GPU UUIDs. The launcher translates from UUID to index and puts the
-list of indices in the vLLM container's CUDA_VISIBLE_DEVICES.
