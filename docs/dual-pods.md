@@ -196,7 +196,7 @@ controller will create a replacement if that is still
 appropriate. While the LauncherConfig object does not exist, FMA does
 not consider any corresponding launcher to be wrong.
 
-#### What happens to existing uses when an InferenceServerConfigSpec changes?
+#### What happens to existing vLLM instances when an InferenceServerConfigSpec changes?
 
 Each vLLM instance that is unbound and created from the wrong
 InferenceServerConfigSpec contents is deleted.
@@ -557,7 +557,7 @@ The settings of various environment variables to refer to `/tmp`
 configures the locations of the various caches that vLLM maintains on
 the filesystem.
 
-TODO: exmplain the ephemeral-storage setting.
+TODO: explain the ephemeral-storage setting.
 
 Following is an example launcher population policy object.
 
