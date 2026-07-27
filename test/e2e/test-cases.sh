@@ -908,3 +908,11 @@ sleep 5
 expect "curl http://localhost:28002/metrics > scrape2.metrics"
 kill $pfpid
 pfpid=""
+
+note "Saving a final scrape of the launcher population controller; expect port-forward and curl noise"
+kubectl port-forward -n "$NS" deployment/"${FMA_CHART_INSTANCE_NAME}-launcher-populator" 28003:8002 &
+pfpid=$!
+sleep 5
+expect "curl http://localhost:28003/metrics > scrape2p.metrics"
+kill $pfpid
+pfpid=""

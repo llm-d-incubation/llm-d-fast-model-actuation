@@ -665,6 +665,10 @@ jobs:
         if: always()
         run: cat scrape2.metrics || true
 
+      - name: dump scrape of launcher population controller
+        if: always()
+        run: cat scrape2p.metrics || true
+
       - name: Clean up test objects
         if: always()
         run: |
