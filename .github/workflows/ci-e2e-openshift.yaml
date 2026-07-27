@@ -665,6 +665,11 @@ jobs:
         if: always()
         run: cat scrape2.metrics || true
 
+      - name: dump scrape of launcher population controller
+        if: always()
+        run: cat scrape2p.metrics || true
+
+
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.26'
