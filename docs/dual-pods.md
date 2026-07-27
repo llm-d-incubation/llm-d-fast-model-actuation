@@ -487,16 +487,9 @@ spec:
   launcherConfigName: example
 ```
 
-The capping of the GPU memory utilization at 0.85 leaves room for a
-few vLLM instances that are sleeping. Note that the default is 0.9,
-deliberately leaving room because vLLM's control over its GPU memory
-usage is imprecise. To calculate the right utilization cap for your
-usage, measure the amount of GPU memory that remains in use while the
-GPU has one sleeping vLLM instance and no awake one. Pick a number of
-sleeping vLLM instances that you want to allow to coexist with one
-awake instance. Multiply by the amount of GPU memory that each
-sleeping instance takes, and convert to a fraction of the GPU's total
-memory. Subtract that from 0.95, and you will probably be good.
+For an explanation of the principles that led to the
+`--gpu-memory-utilization 0.85` setting, see [GPU memory
+planning](#gpu-memory-planning) below.
 
 The configuration objects exhibited here and the FMA container images
 have been engineered to be easily usable on OpenShift without special
@@ -557,7 +550,8 @@ The settings of various environment variables to refer to `/tmp`
 configures the locations of the various caches that vLLM maintains on
 the filesystem.
 
-TODO: explain the ephemeral-storage setting.
+See [Persistent storage planning](#persistent-storage-planning) for
+the principles behind that `ephemeral-storage: "4.5Gi"` setting.
 
 Following is an example launcher population policy object.
 
@@ -578,6 +572,67 @@ spec:
 
 In this example the desired number of launchers is 8, which is what
 you would typically use when the nodes have 8 GPUs.
+
+### Resource planning
+
+#### Persistent storage planning
+
+For server-requesting Pods, there is no significant usage of
+persistent storage.
+
+For launcher Pods, look at the `.spec.maxInstances` of the
+`LauncherConfig` and multiply that by the persistent storage needed
+for one instance. Additionally, allow a few hundred MB for
+miscellaneous other stuff.
+
+The persistent storage needed for one model depends on the technique
+used to load model tensors. If that involves the Hugging Face model
+cache then you will need to plan on that being populated. This volume
+of persistent storage needed for a model can be estimated as the
+product of the number of its parameters by the parameter
+size. Consider
+[TinyLlama/TinyLlama-1.1B-Chat-v1.0](https://huggingface.co/TinyLlama/TinyLlama-1.1B-Chat-v1.0)
+for example. Hugging Face reports that it has 1 billion parameters and
+uses a two-byte datatype; thus, allow about 2 GB for its persistent
+storage.
+
+#### Main memory planning
+
+For server-requesting Pods, there is no significant usage of
+main memory.
+
+For launcher Pods, multiply the `.spec.maxInstances` of the
+`LauncherConfig` by the main memory needed for one vLLM instance.
+
+The main memory used for one vLLM instance includes at least one copy
+of the model tensors. This is the copy made by vLLM's level-1 sleep
+operation.
+
+Depending on the technique used by vLLM to load the model tensors
+there may be an additional copy in main memory. For example, when
+using a technique that reads the model tensors from a file, a copy of
+the model tensors may be left in the OS's page cache [TODO: is this
+really an issue for the vLLM container?].
+
+For launcher population policy, remember that the main memory used by
+one launcher has to be multiplied by the number of launchers on a Node
+to get the total amount of the Node's main memory that will be used by
+the launchers.
+
+#### GPU memory planning
+
+There is an important command-line parameter of vLLM:
+`--gpu-memory-utilization`; it takes a floating-point value. This is a
+cap on the fraction (yes, fraction, not percentage) of the GPU's
+memory that vLLM should plan to use (for model tensors, CUDA graphs
+and other context stuff, and kv cache). The default is 0.9,
+deliberately leaving room because vLLM's control over its GPU memory
+usage is imprecise. To calculate the right utilization cap for your
+usage, measure the amount of GPU memory that remains in use while the
+GPU has one sleeping vLLM instance and no awake one. Multiply by 1
+less than the `.spec.maxInstances` of the `LauncherConfig`, and
+convert to a fraction of the GPU's total memory. Subtract that from
+0.9.
 
 ## Observability
 
