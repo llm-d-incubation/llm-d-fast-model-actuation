@@ -7,6 +7,10 @@
 - Kubernetes REST client metrics (`rest_client_...`)
 - Kubernetes workqueue metrics (`workqueue_...`)
 
+See [the Kubernetes metrics
+documentation](https://v1-34.docs.kubernetes.io/docs/reference/instrumentation/metrics/)
+for information about those.
+
 ## Dual-pods controller inner work queue
 
 ### fma_dpc_innerqueue_adds_total
@@ -66,6 +70,21 @@ Vector of gauges: Number of server-requesting Pods.
 Labels are as follows.
 
 - `isc_name`: Name of the relevant InferenceServerConfig
+
+### fma_launcher_pod_count
+
+Vector of gauges: Number of launcher Pods.
+
+Labels are as follows.
+
+- `lcfg_name`: Name of the relevant LauncherConfig
+
+- `phase`: one of the following:
+    - `bound`: bound to a server-requesting Pod
+    - `unbound`: not bound, but has not been in this state for too long
+    - `stale`: was created from outdated `LauncherConfig` contents
+    - `stuck_scheduling`: not scheduled, and age meets or exceeds the `--stuck-scheduling-threshold` argument of the launcher population controller
+    - `stuck_starting`: scheduled but not yet "ready", and the time since being scheduled meets or exceeds the `--stuck-starting-threshold` argument of the launcher population controller
 
 ### fma_isc_count
 

@@ -613,7 +613,7 @@ TODO: write this
 
 ### Prometheus metrics
 
-TODO: write this
+See [the Prometheus metrics documentation](metrics.md).
 
 ## Notes on the dual-pods controller
 
