@@ -673,17 +673,19 @@ jobs:
           kubectl scale -n "$FMA_NAMESPACE" "deploy/${FMA_CHART_INSTANCE_NAME}-dpc-coverdata-inspector" --replicas=1
           kubectl wait -n "$FMA_NAMESPACE" "deploy/${FMA_CHART_INSTANCE_NAME}-dpc-coverdata-inspector" --for condition=Available
           insp=$(kubectl get -n "$FMA_NAMESPACE" pods -l app.kubernetes.io/component=dpc-coverdata-inspector -o name | sed s:^pod/::)
-          mkdir dpc-coverdata
+          mkdir -p dpc-cover/data
           kubectl wait -n "$FMA_NAMESPACE" pod "${insp}" --for condition=Ready
-          kubectl cp -n "$FMA_NAMESPACE" "${insp}:var/coverdata" dpc-coverdata
+          kubectl cp -n "$FMA_NAMESPACE" "${insp}:var/coverdata" dpc-cover/data
           kubectl scale -n "$FMA_NAMESPACE" "deploy/${FMA_CHART_INSTANCE_NAME}-dual-pods-controller" --replicas=1
+          go tool covdata textfmt -i=dpc-cover/data -o dpc-cover/profile.txt
+          go tool cover -func=dpc-cover/profile.txt -o doc-cover/func.txt
 
       - name: upload coverage data from dual pods controller
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: dpc-coverdata
-          path: dpc-coverdata
+          name: dpc-cover
+          path: dpc-cover
           retention-days: 14
 
       - name: Clean up test objects
