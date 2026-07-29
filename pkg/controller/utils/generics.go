@@ -57,6 +57,26 @@ func SliceMap[Domain, Range any](slice []Domain, mapFn func(Domain) (Range, erro
 	return mapped, errors
 }
 
+// SliceFilter returns the elements for which keep returns true, preserving
+// their original order. This returns a new slice rather than modifying the
+// given one.
+func SliceFilter[Elt any](slice []Elt, keep func(Elt) bool) []Elt {
+	filtered := make([]Elt, 0, len(slice))
+	for _, elt := range slice {
+		if keep(elt) {
+			filtered = append(filtered, elt)
+		}
+	}
+	return filtered
+}
+
+// Not1 negates a single-argument predicate.
+func Not1[Arg any](predicate func(Arg) bool) func(Arg) bool {
+	return func(arg Arg) bool {
+		return !predicate(arg)
+	}
+}
+
 // SliceRemoveOnce removes the first occurrence of the given element from the given slice.
 // This returns a new slice rather than side-effecting the given one.
 func SliceRemoveOnce[Elt comparable](slice []Elt, goner Elt) ([]Elt, bool) {

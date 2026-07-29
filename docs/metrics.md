@@ -71,21 +71,6 @@ Labels are as follows.
 
 - `isc_name`: Name of the relevant InferenceServerConfig
 
-### fma_launcher_pod_count
-
-Vector of gauges: Number of launcher Pods.
-
-Labels are as follows.
-
-- `lcfg_name`: Name of the relevant LauncherConfig
-
-- `phase`: one of the following:
-    - `bound`: bound to a server-requesting Pod
-    - `unbound`: not bound, but has not been in this state for too long
-    - `stale`: was created from outdated `LauncherConfig` contents
-    - `stuck_scheduling`: not scheduled, and age meets or exceeds the `--stuck-scheduling-threshold` argument of the launcher population controller
-    - `stuck_starting`: scheduled but not yet "ready", and the time since being scheduled meets or exceeds the `--stuck-starting-threshold` argument of the launcher population controller
-
 ### fma_isc_count
 
 Vector of gauges: Number of InferenceServerConfig objects.
@@ -93,6 +78,45 @@ Vector of gauges: Number of InferenceServerConfig objects.
 Labels are as follows.
 
 - `launcher_config_name`: Name of the relevant LauncherConfig
+
+### fma_launcher_pod_count
+
+Vector of gauges: Number of launcher Pods for each LauncherConfig and
+lifecycle phase. This metric deliberately has no Node label, so its
+cardinality does not grow with the number of Nodes.
+
+Labels are as follows.
+
+- `lcfg_name`: name of the relevant LauncherConfig
+- `phase`: one of the following:
+  - `bound`: assigned to a server-requesting Pod
+  - `unbound`: uses the current launcher template, is not bound, and is either
+    Ready or has not reached a stuck threshold
+  - `stuck_scheduling`: uses the current launcher template, is unbound and
+    not scheduled, and has reached the configured scheduling threshold,
+    measured from Pod creation
+  - `stuck_starting`: uses the current launcher template, is unbound,
+    scheduled but not Ready, and has reached the configured starting
+    threshold, measured from scheduling
+  - `stale`: is unbound and was created from a superseded launcher template
+
+The launcher-populator's `--stuck-scheduling-threshold` and
+`--stuck-starting-threshold` flags configure the two stuck thresholds.
+When the controller observes a retained launcher in either stuck phase without
+the stuck label, it publishes a `LauncherStuck` Warning Event and sets the
+`dual-pods.llm-d.ai/launcher-stuck=true` label. The label makes the current
+condition discoverable after the Event expires and suppresses further Events
+while the Pod remains stuck. If the launcher recovers, the controller removes
+the label.
+
+The Event is emitted before the label Patch is attempted. Because they are
+separate Kubernetes API transactions, a controller failure between them or a
+failed Patch can produce a duplicate Event on a later reconcile. This ordering
+deliberately favors a possible duplicate over losing the Event entirely.
+
+A stuck launcher remains in place and continues to count toward the desired
+launcher population. The controller does not automatically replace or retry
+it; users decide how to respond using the metric, Event, and label.
 
 ## FMA requester-provider binding
 
