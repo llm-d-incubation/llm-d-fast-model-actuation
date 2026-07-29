@@ -22,6 +22,8 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/spf13/pflag"
@@ -36,6 +38,8 @@ import (
 	fmainformers "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/generated/informers/externalversions"
 	fmaobs "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/observability"
 )
+
+const InterruptSubcommand = "interrupt-1"
 
 func main() {
 	config := dpctlr.ControllerConfig{
@@ -56,10 +60,24 @@ func main() {
 	AddFlags(*pflag.CommandLine, loadingRules, overrides)
 	obsOpts.AddToFlagSet(pflag.CommandLine)
 	pflag.Parse()
-	ctx := context.Background()
+	args := pflag.Args()
+	intWasIgnored := signal.Ignored(os.Interrupt)
+	termWasIgnored := signal.Ignored(syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	logger := klog.FromContext(ctx)
+	myPID := os.Getpid()
+	logger.Info("Start", "time", time.Now(), "pid", myPID, "intWasIgnored", intWasIgnored, "termWasIgnored", termWasIgnored)
 
-	logger.V(1).Info("Start", "time", time.Now())
+	if len(args) > 1 || len(args) == 1 && args[0] != InterruptSubcommand {
+		logger.Error(nil, fmt.Sprintf("%s usage: [%s]", os.Args[0], InterruptSubcommand))
+		os.Exit(99)
+	}
+
+	if len(args) == 1 && args[0] == InterruptSubcommand {
+		interrupt1(logger)
+		return
+	}
 
 	pflag.CommandLine.VisitAll(func(f *pflag.Flag) {
 		logger.V(1).Info("Flag", "name", f.Name, "value", f.Value.String())
@@ -108,6 +126,7 @@ func main() {
 		klog.Fatal(err)
 	}
 	<-ctx.Done()
+	logger.Info("Done")
 }
 
 func AddFlags(flags pflag.FlagSet, loadingRules *clientcmd.ClientConfigLoadingRules, overrides *clientcmd.ConfigOverrides) {
@@ -116,4 +135,19 @@ func AddFlags(flags pflag.FlagSet, loadingRules *clientcmd.ClientConfigLoadingRu
 	flags.StringVar(&overrides.Context.AuthInfo, "user", overrides.Context.AuthInfo, "The name of the kubeconfig user to use")
 	flags.StringVar(&overrides.Context.Cluster, "cluster", overrides.Context.Cluster, "The name of the kubeconfig cluster to use")
 	flags.StringVarP(&overrides.Context.Namespace, "namespace", "n", overrides.Context.Namespace, "The name of the Kubernetes Namespace to work in (NOT optional)")
+}
+
+// interrupt1 sends SIGINT to PID 1
+func interrupt1(logger klog.Logger) {
+	proc1, err := os.FindProcess(1)
+	if err != nil {
+		logger.Error(err, "Failed to FindProcess(1)")
+		os.Exit(95)
+	}
+	err = proc1.Signal(os.Interrupt)
+	if err != nil {
+		logger.Error(err, "Failed to send SIGINT to PID 1")
+		os.Exit(98)
+	}
+	logger.Info("Sent SIGINT to PID 1")
 }
