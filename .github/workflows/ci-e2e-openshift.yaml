@@ -673,7 +673,12 @@ jobs:
         if: always()
         run: |
           kubectl scale -n "$FMA_NAMESPACE" "deploy/${FMA_CHART_INSTANCE_NAME}-dual-pods-controller" --replicas=0
-          kubectl wait -n "$FMA_NAMESPACE" "deploy/${FMA_CHART_INSTANCE_NAME}-dual-pods-controller" --for condition=Available
+          let try=1
+          while (( try <= 6 )) && ! kubectl get -n "$FMA_NAMESPACE" pods -l "app.kubernetes.io/instance=${FMA_CHART_INSTANCE_NAME},app.kubernetes.io/component=dual-pods-controller" -o name | wc -l | grep -wq 0; do
+              sleep 15
+              let try=try+1
+          done
+          echo scaling up the inspector after DPC wait try $try
           kubectl scale -n "$FMA_NAMESPACE" "deploy/${FMA_CHART_INSTANCE_NAME}-dpc-coverdata-inspector" --replicas=1
           kubectl wait -n "$FMA_NAMESPACE" "deploy/${FMA_CHART_INSTANCE_NAME}-dpc-coverdata-inspector" --for condition=Available
           insp=$(kubectl get -n "$FMA_NAMESPACE" pods -l app.kubernetes.io/component=dpc-coverdata-inspector -o name | sed s:^pod/::)

@@ -165,7 +165,12 @@ jobs:
         if: always()
         run: |
           kubectl scale deploy/fma-dual-pods-controller --replicas=0
-          kubectl wait deploy/fma-dual-pods-controller --for condition=Available
+          let try=1
+          while (( try <= 6 )) && ! kubectl get pods -l "app.kubernetes.io/component=dual-pods-controller" -o name | wc -l | grep -wq 0; do
+              sleep 15
+              let try=try+1
+          done
+          echo scaling up the inspector after DPC wait try $try
           kubectl scale deploy/fma-dpc-coverdata-inspector --replicas=1
           kubectl wait deploy/fma-dpc-coverdata-inspector --for condition=Available
           insp=$(kubectl get pods -l app.kubernetes.io/component=dpc-coverdata-inspector -o name | sed s:^pod/::)
