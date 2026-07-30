@@ -1,5 +1,17 @@
 # This file has been modified with the assistance of Claude Opus 4.6
 {{- if .Values.dualPodsController.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: "{{ .Release.Name }}-coverdata-dual-pods-controller"
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -32,9 +44,56 @@ spec:
         - "--namespace={{ .Release.Namespace }}"
         - "--sleeper-limit={{ .Values.dualPodsController.sleeperLimit }}"
         - "--debug-accelerator-memory={{ .Values.dualPodsController.debugAcceleratorMemory }}"
+        env:
+        - name: GOCOVERDIR
+          value: /var/coverdata
         ports:
         - containerPort: 8002
           name: metrics
           protocol: TCP
+        volumeMounts:
+        - name: coverdata
+          mountPath: "/var/coverdata"
       serviceAccountName: {{ .Release.Name }}-fma-controllers
+      volumes:
+      - name: coverdata
+        persistentVolumeClaim:
+          claimName: "{{ .Release.Name }}-coverdata-dual-pods-controller"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    {{- include "fma-controllers.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dpc-coverdata-inspector
+  name: "{{ .Release.Name }}-dpc-coverdata-inspector"
+spec:
+  replicas: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: fma-controllers
+      app.kubernetes.io/component: dpc-coverdata-inspector
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: fma-controllers
+        app.kubernetes.io/component: dpc-coverdata-inspector
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      containers:
+      - name: inspector
+        image: "{{ .Values.global.coverdataInspectorImage }}"
+        imagePullPolicy: IfNotPresent
+        command:
+        - sleep
+        - "86400"
+        volumeMounts:
+        - name: coverdata
+          mountPath: "/var/coverdata"
+      serviceAccountName: {{ .Release.Name }}-fma-controllers
+      volumes:
+      - name: coverdata
+        persistentVolumeClaim:
+          claimName: "{{ .Release.Name }}-coverdata-dual-pods-controller"
 {{- end }}

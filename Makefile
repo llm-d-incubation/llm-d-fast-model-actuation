@@ -44,7 +44,7 @@ build-and-push-requester:
 
 .PHONY: build-controller-local
 build-controller-local:
-	KO_DOCKER_REPO=ko.local ko build -B ./cmd/dual-pods-controller -t ${IMAGE_TAG} --platform linux/$(shell go env GOARCH)
+	GOFLAGS="-cover -coverpkg=$(shell go list ./... | grep -v pkg/generated/ | paste -sd, -)" KO_DOCKER_REPO=ko.local ko build -B ./cmd/dual-pods-controller -t ${IMAGE_TAG} --platform linux/$(shell go env GOARCH)
 	docker tag ko.local/dual-pods-controller:${IMAGE_TAG} ${CONTROLLER_IMG}
 
 .PHONY: load-controller-local
@@ -53,7 +53,7 @@ load-controller-local:
 
 .PHONY: build-controller
 build-controller:
-	KO_DOCKER_REPO=$(CONTAINER_IMG_REG) ko build -B ./cmd/dual-pods-controller -t ${IMAGE_TAG} --platform all
+	GOFLAGS="-cover -coverpkg=$(shell go list ./... | grep -v pkg/generated/ | paste -sd, -)" KO_DOCKER_REPO=$(CONTAINER_IMG_REG) ko build -B ./cmd/dual-pods-controller -t ${IMAGE_TAG} --platform all
 
 .PHONY: build-test-requester-local
 build-test-requester-local:

@@ -19,6 +19,9 @@ global:
   # This suppresses image pulls for the dual-pods controller.
   local: false
 
+  # Defines the image used to create coverdata inspector Pods
+  coverdataInspectorImage: busybox:1.38.0
+
 # Dual-pods controller configuration
 dualPodsController:
   enabled: true

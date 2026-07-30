@@ -22,6 +22,8 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/spf13/pflag"
@@ -56,10 +58,12 @@ func main() {
 	AddFlags(*pflag.CommandLine, loadingRules, overrides)
 	obsOpts.AddToFlagSet(pflag.CommandLine)
 	pflag.Parse()
-	ctx := context.Background()
+	termWasIgnored := signal.Ignored(syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
+	defer stop()
 	logger := klog.FromContext(ctx)
-
-	logger.V(1).Info("Start", "time", time.Now())
+	myPID := os.Getpid()
+	logger.Info("Start", "time", time.Now(), "pid", myPID, "termWasIgnored", termWasIgnored)
 
 	pflag.CommandLine.VisitAll(func(f *pflag.Flag) {
 		logger.V(1).Info("Flag", "name", f.Name, "value", f.Value.String())
@@ -108,6 +112,7 @@ func main() {
 		klog.Fatal(err)
 	}
 	<-ctx.Done()
+	logger.Info("Done")
 }
 
 func AddFlags(flags pflag.FlagSet, loadingRules *clientcmd.ClientConfigLoadingRules, overrides *clientcmd.ConfigOverrides) {
