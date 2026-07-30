@@ -92,7 +92,7 @@ func NewController(
 	// digest mutations are serial. KnowsProcessedSync emits the
 	// onDigestSyncProcessed hook after the initial batch drains, which is when
 	// keyQueue's workers start.
-	digestQueue := genctlr.NewKnowsProcessedSync[queueItem](
+	digestQueue := genctlr.NewKnowsProcessedSync(
 		ControllerName+"-digest", 1,
 		ctl.processDigestItem,
 		makeDigestSentinel, isDigestSentinel,
@@ -104,7 +104,7 @@ func NewController(
 	// Multiple workers process keys in parallel; concurrency safety relies on
 	// digestedPolicy.mu (RLock for snapshot reads, Lock for digest mutations
 	// performed by digestQueue's single worker).
-	keyQueue := genctlr.NewQueueAndWorkers[keyItem](
+	keyQueue := genctlr.NewQueueAndWorkers(
 		ControllerName+"-key", 4,
 		ctl.processKeyItem,
 	)
@@ -614,7 +614,7 @@ func (ctl *controller) setStuckLabel(ctx context.Context, pod *corev1.Pod, stuck
 	if stuck {
 		labelValue = `"true"`
 	}
-	patch := []byte(fmt.Sprintf(`{"metadata":{"labels":{%q:%s}}}`, common.LauncherStuckLabelKey, labelValue))
+	patch := fmt.Appendf([]byte{}, `{"metadata":{"labels":{%q:%s}}}`, common.LauncherStuckLabelKey, labelValue)
 	callStart := ctl.clock.Now()
 	_, err := ctl.coreclient.Pods(pod.Namespace).Patch(ctx, pod.Name, types.MergePatchType, patch, metav1.PatchOptions{})
 	callStartStr := callStart.Format(time.RFC3339Nano)
