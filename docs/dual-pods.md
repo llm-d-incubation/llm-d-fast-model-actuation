@@ -682,7 +682,25 @@ consume them. They are as follows.
 
 ### Kubernetes Event objects
 
-TODO: write this
+The FMA controllers publish the following sorts of Kubernetes `Event`
+objects.
+
+#### LauncherStuck events
+
+Such an `Event` is associated with a launcher Pod, is a `Warning`, has
+reason `LauncherStuck`, and its message is "Launcher is stuck (phase);
+leaving it in place for investigation". Here `(phase)` is either
+`(stuck_scheduling)` or `(stuck_starting)`.
+
+#### OutdatedRoutingMetadata events
+
+Such an `Event` is associated with a server-requesting Pod, is a
+`Warning`, has reason `OutdatedRoutingMetadata`, and has a message
+that begins with "Deleting server-requesting Pod because bound
+launcher is committed to outdated ISC routing metadata" and continues
+with particulars. This happens when the labels in the
+`InferenceServerConfig` are changed during startup of a vLLM instance
+(don't do that!).
 
 ### Prometheus metrics
 
