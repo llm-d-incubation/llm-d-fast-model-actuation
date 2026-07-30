@@ -583,9 +583,9 @@ you would typically use when the nodes have 8 GPUs.
 
 ### FYI labels and annotations
 
-The FMA controllers put some labels and annotations on Pods purely for
-the sake of observability; these labels and annotations are not
-consumed by the FMA controllers. They are as follows.
+The FMA controllers put some labels and annotations on Pods primarily
+for observability. Except where noted below, the controllers do not
+consume them. They are as follows.
 
 - annotation **dual-pods.llm-d.ai/accelerators**. Put on both
   requester and provider Pods. Value is a comma-separated list of GPU
@@ -606,6 +606,18 @@ consumed by the FMA controllers. They are as follows.
   while it is bound to a launcher. Value is the ID that FMA uses to
   distinguish the relevant vLLM instance from others in the same
   launcher.
+
+- label **dual-pods.llm-d.ai/launcher-stuck**. Maintained on an
+  unbound launcher Pod when the launcher has remained unscheduled or
+  not Ready for at least the corresponding configured stuck
+  threshold. Its value is "true". The launcher population controller
+  consumes this label to avoid publishing a duplicate `LauncherStuck`
+  Event on every reconciliation, and removes it if the launcher
+  recovers. To list currently stuck launchers, use:
+
+  ```shell
+  kubectl get pods -l dual-pods.llm-d.ai/launcher-stuck=true
+  ```
 
 ### Kubernetes Event objects
 

@@ -30,9 +30,11 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 
 	corev1preinformers "k8s.io/client-go/informers/core/v1"
+	"k8s.io/client-go/kubernetes/scheme"
 	coreclient "k8s.io/client-go/kubernetes/typed/core/v1"
 	corev1listers "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/clock"
 
@@ -82,6 +84,8 @@ func NewController(
 		clock:                    clock.RealClock{},
 		metrics:                  newMetricsState(),
 	}
+	ctl.eventBroadcaster = record.NewBroadcaster()
+	ctl.recorder = ctl.eventBroadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: ControllerName})
 	ctl.policy = newDigestedPolicy()
 
 	// digestQueue carries funcItem (LC/LPP/Node references). Single worker, so
@@ -132,14 +136,20 @@ type controller struct {
 	coreclient    coreclient.CoreV1Interface
 	fmaclient     fmaclientv1alpha1.FmaV1alpha1Interface
 	namespace     string
-	podInformer   cache.SharedIndexInformer
-	podLister     corev1listers.PodLister
-	nodeInformer  cache.SharedIndexInformer
-	nodeLister    corev1listers.NodeLister
-	lppInformer   cache.SharedIndexInformer
-	lppLister     fmalisters.LauncherPopulationPolicyLister
-	lcInformer    cache.SharedIndexInformer
-	lcLister      fmalisters.LauncherConfigLister
+
+	// eventBroadcaster/recorder publish Kubernetes Events on launcher Pods (e.g.
+	// a Warning when a launcher becomes stuck).
+	eventBroadcaster record.EventBroadcaster
+	recorder         record.EventRecorder
+
+	podInformer  cache.SharedIndexInformer
+	podLister    corev1listers.PodLister
+	nodeInformer cache.SharedIndexInformer
+	nodeLister   corev1listers.NodeLister
+	lppInformer  cache.SharedIndexInformer
+	lppLister    fmalisters.LauncherPopulationPolicyLister
+	lcInformer   cache.SharedIndexInformer
+	lcLister     fmalisters.LauncherConfigLister
 
 	// digestQueue processes API-object references (LC/LPP/Node). Single worker;
 	// the SOLE writer of ctl.policy.
@@ -161,14 +171,12 @@ type controller struct {
 	policy *digestedPolicy
 
 	// stuckSchedulingThreshold is the minimum age (since creation) at which an
-	// unscheduled launcher is reported in the "stuck_scheduling" phase of the
-	// fma_launcher_pod_count metric. It does not change reconcile behavior.
+	// unscheduled launcher is classified in the "stuck_scheduling" phase.
 	stuckSchedulingThreshold time.Duration
 
 	// stuckStartingThreshold is the minimum age (since scheduling) at which a
-	// scheduled, not-yet-Ready launcher is reported in the "stuck_starting"
-	// phase of the fma_launcher_pod_count metric. It does not change reconcile
-	// behavior.
+	// scheduled, not-yet-Ready launcher is classified in the "stuck_starting"
+	// phase.
 	stuckStartingThreshold time.Duration
 
 	// clock is the time source for metric classification; real in production,
@@ -330,6 +338,8 @@ func (ctl *controller) OnDelete(obj any) {
 }
 
 func (ctl *controller) Start(ctx context.Context) error {
+	ctl.eventBroadcaster.StartRecordingToSink(&coreclient.EventSinkImpl{Interface: ctl.coreclient.Events("")})
+	context.AfterFunc(ctx, ctl.eventBroadcaster.Shutdown)
 	if !cache.WaitForNamedCacheSync(ControllerName, ctx.Done(), ctl.lppInformer.HasSynced, ctl.lcInformer.HasSynced, ctl.podInformer.HasSynced, ctl.nodeInformer.HasSynced) {
 		return fmt.Errorf("caches not synced before end of Start context")
 	}
@@ -505,10 +515,12 @@ func (ctl *controller) reconcileKey(ctx context.Context, key NodeLauncherKey, de
 		"desired", desiredCount, "diff", diff)
 
 	// Delete excess pods.
+	excessDeletionTargets := sets.New[types.UID]()
 	if diff < 0 {
 		numToDelete := -diff
 		for i := len(liveUnboundCurrentPods) - 1; i >= 0 && numToDelete > 0; i-- {
 			pod := liveUnboundCurrentPods[i]
+			excessDeletionTargets.Insert(pod.UID)
 			err := ctl.coreclient.Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{
 				Preconditions: &metav1.Preconditions{UID: &pod.UID, ResourceVersion: &pod.ResourceVersion},
 			})
@@ -530,7 +542,19 @@ func (ctl *controller) reconcileKey(ctx context.Context, key NodeLauncherKey, de
 		}
 	}
 
-	// If any deletions happened or are in progress, requeue before creating.
+	// Report stuck launchers among only the Pods not targeted for excess
+	// deletion in this reconcile. Skipped in orphan cleanup (nil template).
+	if nodeIndependentLauncherTemplate != nil {
+		retained := utils.SliceFilter(liveUnboundCurrentPods, utils.Not1(func(pod *corev1.Pod) bool {
+			return excessDeletionTargets.Has(pod.UID)
+		}))
+		if err := ctl.reportStuckLaunchers(ctx, retained, templateHash); err != nil {
+			return err, true
+		}
+	}
+
+	// If any deletions happened or are in progress, requeue before creating for
+	// the desired count.
 	if didDelete || deletionInProgress {
 		return nil, true
 	}
@@ -545,6 +569,64 @@ func (ctl *controller) reconcileKey(ctx context.Context, key NodeLauncherKey, de
 	}
 
 	return nil, false
+}
+
+// reportStuckLaunchers reports stuck launchers among retained unbound Pods,
+// using the same stuck_scheduling / stuck_starting classification as the
+// fma_launcher_pod_count metric. A stuck launcher remains in place and counts
+// toward the desired population. The stuck label gates the Warning Event; a Pod
+// that is no longer stuck has the label cleared.
+func (ctl *controller) reportStuckLaunchers(ctx context.Context, retained []*corev1.Pod, templateHash string) error {
+	logger := klog.FromContext(ctx)
+	now := ctl.clock.Now()
+
+	for _, pod := range retained {
+		phase, _ := launcherPhaseOf(pod, templateHash, ctl.stuckSchedulingThreshold, ctl.stuckStartingThreshold, now)
+		labeled := pod.Labels[common.LauncherStuckLabelKey] == "true"
+		stuck := phase.isStuck()
+
+		if labeled == stuck {
+			continue
+		}
+
+		if stuck {
+			ctl.recorder.Eventf(pod, corev1.EventTypeWarning, "LauncherStuck",
+				"Launcher is stuck (%s); leaving it in place for investigation", phase)
+		}
+		if err := ctl.setStuckLabel(ctx, pod, stuck); err != nil {
+			return err
+		}
+		if stuck {
+			logger.Info("Reported stuck launcher", "pod", pod.Name, "uid", pod.UID, "phase", phase)
+		} else {
+			logger.Info("Cleared stuck label from recovered launcher", "pod", pod.Name, "uid", pod.UID)
+		}
+	}
+
+	return nil
+}
+
+// setStuckLabel adds (stuck) or removes (!stuck) the LauncherStuckLabelKey label
+// on a launcher Pod, logging the call per DR-20. NotFound is ignored.
+func (ctl *controller) setStuckLabel(ctx context.Context, pod *corev1.Pod, stuck bool) error {
+	logger := klog.FromContext(ctx)
+	labelValue := "null" // JSON null removes the label
+	if stuck {
+		labelValue = `"true"`
+	}
+	patch := []byte(fmt.Sprintf(`{"metadata":{"labels":{%q:%s}}}`, common.LauncherStuckLabelKey, labelValue))
+	callStart := ctl.clock.Now()
+	_, err := ctl.coreclient.Pods(pod.Namespace).Patch(ctx, pod.Name, types.MergePatchType, patch, metav1.PatchOptions{})
+	callStartStr := callStart.Format(time.RFC3339Nano)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			logger.V(2).Info("Launcher Pod gone before stuck-label patch", "pod", pod.Name, "k8sCallStartTime", callStartStr)
+			return nil
+		}
+		return fmt.Errorf("failed to patch stuck label on launcher pod %s (started %s): %w", pod.Name, callStartStr, err)
+	}
+	logger.V(2).Info("Patched stuck label on launcher Pod", "pod", pod.Name, "stuck", stuck, "k8sCallStartTime", callStartStr)
+	return nil
 }
 
 // getCurrentLaunchersOnNode compares pending expectations for a specific
