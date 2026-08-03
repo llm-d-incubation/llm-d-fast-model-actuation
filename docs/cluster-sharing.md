@@ -122,20 +122,20 @@ object.
   holding the definition of a ClusterRole that declares that
   privilege.
 
-    The following demonstrates where these YAMLs are found and what
-    are the names of the objects defined in them.
+    The following demonstrates the names of the policy objects and
+    where the YAML for them is.
 
     ```console
-    me@mymac llm-d-fast-model-actuation % (cd config/validating-admission-policies; grep name: *)
-    bind-fma-bound-serverreqpod.yaml:  name: bind-fma-bound-serverreqpod
-    bind-fma-immutable-fields.yaml:  name: bind-fma-immutable-fields
-    fma-bound-serverreqpod.yaml:  name: fma-bound-serverreqpod
-    fma-immutable-fields.yaml:  name: fma-immutable-fields
+    me@mymac llm-d-fast-model-actuation % yq -o json eval .metadata.name config/validating-admission-policies.yaml
+    "bind-fma-bound-serverreqpod"
+    "bind-fma-immutable-fields"
+    "fma-bound-serverreqpod"
+    "fma-immutable-fields"
     ```
 
 - If/when it is desired to remove FMA from a shared cluster, an
   authorized person can use `kubectl delete -f
-  config/validating-admission-policies` to remove all the FMA
+  config/validating-admission-policies.yaml` to remove all the FMA
   ValidatingAdmissionPolicy[Binding] objects.
 
 - The Helm chart does nothing about these policy objects.
