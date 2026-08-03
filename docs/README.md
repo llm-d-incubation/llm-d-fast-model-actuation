@@ -10,6 +10,10 @@
 
 There is an llm-d "well-lit path" document [in the llm-d repo](https://github.com/llm-d/llm-d/tree/main/guides/fast-model-actuation).
 
+# Install
+
+- [General installation instructions](install.md)
+
 # Dev/test
 
 - [Local dev/test in a `kind` cluster](local-test.md)
