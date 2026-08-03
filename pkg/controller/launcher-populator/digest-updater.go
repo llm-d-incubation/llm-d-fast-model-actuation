@@ -44,6 +44,7 @@ func (ctl *controller) updateDigestForLC(ctx context.Context, name string) error
 	var templateErr, templateHash, prevTemplateHash string
 	var nodeIndep *corev1.Pod
 	var good bool
+	var exists bool
 
 	prevDigest := ctl.policy.lcs[name]
 	prevExists := prevDigest != nil && prevDigest.object != nil
@@ -81,12 +82,13 @@ func (ctl *controller) updateDigestForLC(ctx context.Context, name string) error
 			templateHash:    templateHash,
 			nodeIndependent: nodeIndep,
 		}
+		exists = true
 		// The LauncherConfig object exists, so its fma_launcher_pod_count series
 		// must exist (as explicit zeros until launchers arrive).
 		ctl.metrics.setLCExists(name, true)
 	}
 
-	if prevGood != good || good && (prevTemplateHash != templateHash) {
+	if prevExists != exists || prevGood != good || good && (prevTemplateHash != templateHash) {
 		for _, lppName := range ctl.policy.lppNamesRefByLC(name) {
 			ctl.digestQueue.Queue.Add(funcItem{Kind: kindLPP, Name: lppName})
 		}
