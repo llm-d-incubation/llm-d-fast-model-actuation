@@ -1,7 +1,7 @@
 # Design
 
-- [Launcher](launcher.md)
 - [Fast Model Actuation with Process Flexibility and Dual Pods](dual-pods.md)
+- [Launcher](launcher.md)
 - [Cluster Sharing](cluster-sharing.md)
 - [Prometheus Metrics](metrics.md)
 - [Design Rules](../DESIGN_RULES.md)
