@@ -70,7 +70,7 @@ existing when installing FMA.
 
 The FMA controllers need authorization to get/list/watch Node
 objects. If your cluster does not authorize every authenticated client
-to get/list/atch Node objects then you will need to (a) create a
+to get/list/watch Node objects then you will need to (a) create a
 `ClusterRole` object that grants such authorization and (b) include a
 setting of `global.nodeViewClusterRole` to that name when
 instantiating the FMA Helm chart.
@@ -108,7 +108,7 @@ Those objects need to get created in the cluster. For example, by
 not authorized to do that then ask a cluster administrator to do it
 for you or to grant you authorization to do it yourself; there is an
 example `ClusterRole` for the latter in
-[config/fma-cluster-admin/fma-policy-admin-clusterrole.yaml.yaml](config/fma-cluster-admin/fma-policy-admin-clusterrole.yaml).
+[config/fma-cluster-admin/fma-policy-admin-clusterrole.yaml](config/fma-cluster-admin/fma-policy-admin-clusterrole.yaml).
 
 ## Instantiating the chart
 
