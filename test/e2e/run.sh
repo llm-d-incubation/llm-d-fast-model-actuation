@@ -151,7 +151,7 @@ make load-controller-local
 : Create the ValidatingAdmissionPolicy[Binding] objects if possible
 
 if kubectl api-resources --api-group=admissionregistration.k8s.io -o name | grep -q 'validatingadmissionpolicies'; then
-  kubectl apply -f config/validating-admission-policies
+  kubectl apply -f config/validating-admission-policies.yaml
 fi
 
 : Deploy the FMA controllers in the cluster

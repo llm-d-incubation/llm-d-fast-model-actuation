@@ -68,7 +68,7 @@ only for rejecting improper object updates. [Example
 demonstrates some such rejections.
 
 ```shell
-kubectl apply -f config/validating-admission-policies
+kubectl apply -f config/validating-admission-policies.yaml
 ```
 
 Instantiate the Helm chart for the FMA controllers. This deploys both
