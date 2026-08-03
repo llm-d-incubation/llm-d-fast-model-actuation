@@ -80,13 +80,16 @@ instantiating the FMA Helm chart.
 The YAML for the `CustomResourceDefinition` objects that define FMA's
 custom resources are in [config/crd](../config/crd). Those objects
 need to get created in the cluster. For example, by `kubectl apply -f
-config/crd`.
+config/crd`. If you are not authorized to do that then ask a cluster
+administrator to do it for you or to grant you authorization to do it
+yourself; there is an example `ClusterRole` for the latter in
+[config/fma-cluster-admin/fma-crd-admin-clusterrole.yaml](config/fma-cluster-admin/fma-crd-admin-clusterrole.yaml).
 
-If you are automating that, note that merely getting a
-`CustomResourceDefinition` object created is not enough for it to take
-full effect. The Kubernetes apiservers take a little time to digest
-the contents of those objects. If you need to automate waiting for
-that to happen, wait for each of them to have an entry in
+If you are automating creation of these `CustomResourceDefinition`
+objects, note that merely getting the object created is not enough for
+it to take full effect. The Kubernetes apiservers take a little time
+to digest the contents of those objects. If you need to automate
+waiting for that to happen, wait for each of them to have an entry in
 `.status.conditions` with type "Established" and value "true". The
 names of these objects are as follows.
 
@@ -101,7 +104,11 @@ FMA uses two `ValidatingAdmissionPolicy` objects and two corresponding
 modifications. YAML for all four is found in
 [config/validating-admission-policies](../config/validating-admission-policies).
 Those objects need to get created in the cluster. For example, by
-`kubectl apply -f config/validating-admission-policies`.
+`kubectl apply -f config/validating-admission-policies`. If you are
+not authorized to do that then ask a cluster administrator to do it
+for you or to grant you authorization to do it yourself; there is an
+example `ClusterRole` for the latter in
+[config/fma-cluster-admin/fma-policy-admin-clusterrole.yaml.yaml](config/fma-cluster-admin/fma-policy-admin-clusterrole.yaml).
 
 ## Instantiating the chart
 
