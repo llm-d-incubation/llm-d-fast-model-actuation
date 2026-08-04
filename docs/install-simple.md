@@ -161,6 +161,9 @@ The `OPTIONS` are as follows. Only one is required: `--release`.
 
 - `--release $release` identifies the release to install.
 
+- `--namespace $nsname` identifies the Kubernetes API object namespace
+  to install FMA into. Defaults to the current namespace.
+
 - `--existing-node-view-cluster-role $crname` identifies a
   pre-existing `ClusterRole` that grants authorization to
   get/list/watch `Node` objects. This is exclusive with
@@ -194,3 +197,6 @@ The `OPTIONS` are as follows. Only one is required: `--release`.
 - `--chart-set $path=$val` is for setting any of the other "values" of
   the FMA Helm chart. This uses the same syntax and semantics as in
   the `--set $path=$val` option on `helm install`. May be repeated.
+
+- `--chart-instance-name $name` is the name to use for the FMA Helm
+  chart instance. Defaults to "fma".
