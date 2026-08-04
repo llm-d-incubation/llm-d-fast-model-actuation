@@ -98,7 +98,7 @@ func (ctl *controller) updateDigestForLC(ctx context.Context, name string) error
 
 // updateDigestForLPP is the SOLE place that:
 //   - runs getMatchingNodes (collecting selector errors);
-//   - determines which referenced LCs are missing (by reading ctl.policy.lcs);
+//   - determines which referenced LCs are missing or malformed (by reading ctl.policy.lcs);
 //   - writes LauncherPopulationPolicy.Status (via setLPPStatusErrors);
 //   - records the per-LPP derived data into ctl.policy.lpps[name];
 //   - applies the LPP to digest entries on every matched node.
@@ -151,18 +151,22 @@ func (ctl *controller) updateDigestForLPP(ctx context.Context, lppName string) e
 				return fmt.Errorf("failed to get matching nodes for policy %s: %w", lpp.Name, matchErr)
 			}
 		}
-		// Compute missing-LC errors by consulting ctl.policy.lcs only.
-		var missingLCs []string
+		// Compute LC reference errors by consulting ctl.policy.lcs only.
+		var lcRefErrs []string
 		for _, cr := range lpp.Spec.CountForLauncher {
 			lcd := ctl.policy.lcDigestFor(cr.LauncherConfigName)
 			if lcd == nil || lcd.object == nil {
-				missingLCs = append(missingLCs, fmt.Sprintf(
+				lcRefErrs = append(lcRefErrs, fmt.Sprintf(
 					"LauncherConfig %q referenced in CountForLauncher does not exist", cr.LauncherConfigName))
+			} else if lcd.templateErr != "" {
+				lcRefErrs = append(lcRefErrs, fmt.Sprintf(
+					"LauncherConfig %q referenced in CountForLauncher is malformed: %s", cr.LauncherConfigName, lcd.templateErr),
+				)
 			}
 		}
 
 		// Combine all user-facing errors and write LPP.Status (the SOLE writer).
-		allErrs := append(selectorErrs, missingLCs...)
+		allErrs := append(selectorErrs, lcRefErrs...)
 		if statusErr := ctl.setLPPStatusErrors(ctx, lpp, allErrs); statusErr != nil {
 			return fmt.Errorf("failed to set Status for policy %s: %w", lpp.Name, statusErr)
 		}
