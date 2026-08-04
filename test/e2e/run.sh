@@ -84,10 +84,6 @@ kubectl wait --for condition=Ready node fmatest-worker2
 # Display health, prove we don't have https://kind.sigs.k8s.io/docs/user/known-issues/#pod-errors-due-to-too-many-open-files
 kubectl get pods -A -o wide
 
-kubectl create clusterrole node-viewer --verb=get,list,watch --resource=nodes
-
-kubectl create -f ./config/crd/
-
 kubectl apply -f - <<EOF
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -150,23 +146,16 @@ make load-controller-local
 
 : Create the ValidatingAdmissionPolicy[Binding] objects if possible
 
-if kubectl api-resources --api-group=admissionregistration.k8s.io -o name | grep -q 'validatingadmissionpolicies'; then
-  kubectl apply -f config/validating-admission-policies.yaml
-fi
-
 : Deploy the FMA controllers in the cluster
 
 img_reg=$(make echo-var VAR=CONTAINER_IMG_REG)
 img_tag=$(make echo-var VAR=IMAGE_TAG)
 
-helm upgrade --install fma charts/fma-controllers \
-  --set global.imageRegistry="$img_reg" \
-  --set global.imageTag="$img_tag" \
-  --set global.nodeViewClusterRole=node-viewer \
-  --set dualPodsController.sleeperLimit=2 \
-  --set global.local=true \
-  --set dualPodsController.debugAcceleratorMemory=false \
-  --set launcherPopulator.enabled=false
+scripts/install-fma.sh --image-tag "$img_tag" --oci-registry "$img_reg" \
+    --ensure-node-view-cluster-role node-viewer \
+    --install-crds true \
+    --install-admission-policies true \
+    --enable-launcher-populator false
 
 : Test Pod creation
 

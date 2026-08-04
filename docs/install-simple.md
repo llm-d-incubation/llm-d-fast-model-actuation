@@ -1,11 +1,13 @@
-# Installing a release of FMA
+# Installing FMA
 
-**DOCUMENT STATUS**: This is a proposal for a simpler install
-  procedure, to be introduced at release 0.6.4-alpha.1. It will not
-  work on earlier releases.
-
-This document is about installing a given release of FMA. For dev/test
-of a general commit of the repo, see
+This document is about scripted installation of FMA. The install
+script can install either (a) a given release without requiring a `git
+clone` or (b) whatever version is in the local Git working tree of
+this repo. Regardless of (a) vs. (b), the version of FMA being
+installed must include PR 700; the first release of sufficient vintage
+will be 0.6.4-alpha.1.  For case (b), you must have already built the
+container images and made them available to the target Kubernetes
+cluster. For more on dev/test of a general commit of the repo, see
 [README.md#devtest](README.md#devtest).
 
 FMA, like llm-d, is primarily confined to operate in one Kubernetes
@@ -23,8 +25,8 @@ cluster-scoped objects are required, they are changed rarely and
 carefully. See the [document about cluster
 sharing](cluster-sharing.md).
 
-Installing FMA is done by invoking a `bash` script from the FMA
-repository on GitHub. You can invoke it in curl-to-bash style.
+Scripted installation is done by invoking one script. You can invoke
+it in curl-to-bash style.
 
 FMA has [a Helm chart](../charts/fma-controllers) that covers all of
 the namespace-scoped objects involved in deploying FMA. Instantiation
@@ -148,18 +150,33 @@ directory that the installer reads from.
 ## Using the installer script
 
 The install script is at
-[scripts/install-fma-release.sh](../scripts/install-fma-release.sh). Following
-is a synopsis of using it in a curl-to-bash fashion to install a
-release whose [semantic version](https://semver.org) (e.g., "0.6.4")
-is in the shell variable named `release`.
+[scripts/install-fma.sh](../scripts/install-fma.sh). Following is a
+synopsis of using it in a curl-to-bash fashion.
 
 ```shell
-bash <(curl https://raw.githubusercontent.com/llm-d-incubation/llm-d-fast-model-actuation/refs/tags/v$release/scripts/install-fma-release.sh) OPTIONS
+bash <(curl https://raw.githubusercontent.com/llm-d-incubation/llm-d-fast-model-actuation/refs/tags/v$release/scripts/install-fma.sh) OPTIONS
 ```
 
-The `OPTIONS` are as follows. Only one is required: `--release`.
+You must use exactly one of the following two cases.
 
-- `--release $release` identifies the release to install.
+1. Specify a release to install, identified by [semantic
+   version](https://semver.org) without leading "v". In this case you
+   may also specify `--oci-registry` if you have staged the release's
+   OCI images there.
+
+2. Specify both `--image-tag` and `--oci-registry`, which means to
+   install from the Git local working tree under the assumption that
+   the container images have been built and are available in the
+   target Kubernetes cluster using the values specified here.
+
+The `OPTIONS` are as follows.
+
+- `--release $semver` identifies the release to install. No leading
+  "v". This is exclusive with `--image-tag`.
+
+- `--image-tag $imgtag` identifies the container image tag to use when
+  constructing references to the images. This is exclusive with
+  `--release`.
 
 - `--namespace $nsname` identifies the Kubernetes API object namespace
   to install FMA into. Defaults to the current namespace.
@@ -189,10 +206,13 @@ The `OPTIONS` are as follows. Only one is required: `--release`.
 
 - `--oci-registry $reg` defines the OCI registry and namespace to use
   in place of "ghcr.io/llm-d-incubation/llm-d-fast-model-actuation".
+  Required when `--image-tag` is also specified.
 
 - `--config-dir $pathname` defines the directory from which to read
-  `crds.yaml` and/or `validating-admission-policies.yaml` (the default
-  is to read them from the right release content on GitHub.com).
+  `crds.yaml` and/or `validating-admission-policies.yaml`. When
+  installing a release, the default is to read them from the right
+  release content on GitHub.com. When installing from the local Git
+  working tree, the default is "config".
 
 - `--chart-set $path=$val` is for setting any of the other "values" of
   the FMA Helm chart. This uses the same syntax and semantics as in
