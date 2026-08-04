@@ -158,20 +158,24 @@ objects call for a proactive population of launchers, as follows.
   implicitly applied to all Nodes to find the relevant ones.
 
 - Each `LauncherPopulationPolicy` defines a partial map from
-  `LauncherConfig` to a desired number of launcher Pods.
+  `LauncherConfig` name to a desired number of launcher Pods.
 
 - All the `LauncherPopulationPolicy` objects together collectively
-  define a map, called `PopulationPolicy`, from (Node, LauncherConfig)
-  to count. For a given (N, C) this count is the maximum of the counts
-  prescribed by the `LauncherPopulationPolicy` objects that select N
-  and declare a count for C (zero if there are none).
+  define a map, called `PopulationPolicy`, from (`Node`,
+  `LauncherConfig` name) to count. For a given (N, C) this count is
+  the maximum of the counts prescribed by the
+  `LauncherPopulationPolicy` objects that select N and declare a count
+  for C (zero if there are none).
 
 - The collective meaning of all the `LauncherPopulationPolicy` objects
-  and all the server-requesting Pods is that for a given (Node,
-  LauncherConfig) the number of launchers that should exist is the
-  larger of
+  and all the server-requesting Pods is that for a given (`Node`,
+  `LauncherConfig` name) the number of launchers that should exist
+  is the larger of
     (a) what `PopulationPolicy` says for that pair, and
     (b) the number needed to satisfy the existing server-requesting Pods.
+  However: while there is no `LauncherConfig` with the given name or
+  that `LauncherConfig` exists and has a malformed Pod template, the
+  FMA controllers will not create or delete launchers.
 
 ### User-initiated changes to relevant API objects
 
