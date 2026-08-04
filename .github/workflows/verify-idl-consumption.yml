@@ -9,7 +9,7 @@ on:
       - ".github/workflows/verify-idl-consumption.yml"
       - Makefile
       - api/**
-      - config/crd/**
+      - config/**
 
   pull_request:
     branches:
