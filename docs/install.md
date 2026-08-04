@@ -62,6 +62,10 @@ the cluster-scoped objects. To get the available sources (YAML files),
 you need to `git clone` this repo and `git checkout` the desired
 release.
 
+(Some of these individual YAML files will disappear after release
+0.6.4, by which time you should be using [the simpler install
+instructions](install-simple.md).)
+
 The following subsections describe the various categories of
 cluster-scoped objects that you will need to create or find already
 existing when installing FMA.

@@ -12,7 +12,8 @@ There is an llm-d "well-lit path" document [in the llm-d repo](https://github.co
 
 # Install
 
-- [General installation instructions](install.md)
+- [General installation instructions for release 0.6.4 and earlier](install.md)
+- [General installation instructions for release 0.6.4-alpha.1 and later](install-simple.md)
 
 # Dev/test
 
