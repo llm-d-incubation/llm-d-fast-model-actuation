@@ -1034,18 +1034,12 @@ func (ctl *controller) getNodeData(nodeName string) *nodeData {
 	return ans
 }
 
+// add enqueues item for immediate processing.
+// For an already-queued item whose processAfter is set to a future time
+// (e.g., due to a prior rate-limited retry via addAfter), a fresh notification
+// means the item should be reconciled now, not at that previously scheduled time.
 func (nodeDat *nodeData) add(item itemOnNode) {
-	nodeDat.ItemsMutex.Lock()
-	defer nodeDat.ItemsMutex.Unlock()
-	if _, exist := nodeDat.LocalQueue[item]; exist {
-		return // already queued
-	}
-	now := time.Now()
-	nodeDat.LocalQueue[item] = &scheduledItem{
-		addTime: now, processAfter: now,
-	}
-	addsCounters.WithLabelValues(nodeDat.NodeName).Inc()
-	queueDepthGauges.WithLabelValues(nodeDat.NodeName).Set(float64(len(nodeDat.LocalQueue)))
+	nodeDat.addAfter(item, time.Now())
 }
 
 func (nodeDat *nodeData) addAfter(item itemOnNode, after time.Time) {
