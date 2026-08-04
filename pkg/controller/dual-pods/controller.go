@@ -135,7 +135,7 @@ func GPUIndexFunc(obj any) ([]string, error) {
 		return []string{}, nil
 	}
 	isCtr := &pod.Spec.Containers[isIdx]
-	ev := utils.SliceGetByFeature(isCtr.Env, EnvVarName, "CUDA_VISIBLE_DEVICES")
+	ev := utils.SliceGetByFeature(isCtr.Env, utils.EnvVarName, "CUDA_VISIBLE_DEVICES")
 	if ev == nil || len(ev.Value) == 0 {
 		return []string{}, nil
 	}
@@ -145,8 +145,6 @@ func GPUIndexFunc(obj any) ([]string, error) {
 	})
 	return keys, nil
 }
-
-func EnvVarName(ev *corev1.EnvVar) string { return ev.Name }
 
 const nominalHashIndexName = "nominal"
 

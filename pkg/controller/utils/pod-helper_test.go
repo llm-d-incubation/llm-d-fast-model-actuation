@@ -221,3 +221,33 @@ func TestBuildLauncherPodFromTemplate_NodeIndependentTemplateHash(t *testing.T) 
 		t.Fatalf("legacy launcher-config-hash must differ between nodes, both = %q", legacyA)
 	}
 }
+
+// TestConfigureRequiredEnvVars verifies that required vars are updated in place
+// when present and appended otherwise (in declaration order), while non-required
+// vars are preserved.
+func TestConfigureRequiredEnvVars(t *testing.T) {
+	initial := []corev1.EnvVar{
+		{Name: "CUSTOM_VAR", Value: "custom-value"},
+		{Name: "PYTHONPATH", Value: "/old"},
+	}
+	container := &corev1.Container{Env: initial}
+
+	configureRequiredEnvVars(container)
+
+	// Pre-existing entries are kept in place at the front, with required ones
+	// updated in place.
+	if container.Env[0] != (corev1.EnvVar{Name: "CUSTOM_VAR", Value: "custom-value"}) {
+		t.Errorf("non-required var not preserved: %+v", container.Env[0])
+	}
+	if container.Env[1] != (corev1.EnvVar{Name: "PYTHONPATH", Value: "/app"}) {
+		t.Errorf("pre-existing required var not updated in place: %+v", container.Env[1])
+	}
+	// Missing required vars are appended in requiredEnvVars declaration order.
+	tail := container.Env[len(initial):]
+	want := requiredEnvVars[1:] // PYTHONPATH already present; rest are appended
+	for i := range want {
+		if tail[i] != want[i] {
+			t.Errorf("appended[%d] = %+v, want %+v (declaration order)", i, tail[i], want[i])
+		}
+	}
+}

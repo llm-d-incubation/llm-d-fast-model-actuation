@@ -321,36 +321,25 @@ func SpecializeLauncherTemplateToNode(nodeIndependent *corev1.Pod, nodeName stri
 	return nodeDependent
 }
 
-// configureRequiredEnvVars adds or updates required environment variables
+var requiredEnvVars = []corev1.EnvVar{
+	{Name: "PYTHONPATH", Value: "/app"},
+	{Name: "NVIDIA_VISIBLE_DEVICES", Value: "all"},
+	{Name: "NVIDIA_DRIVER_CAPABILITIES", Value: "compute,utility"},
+	{Name: "VLLM_SERVER_DEV_MODE", Value: "1"},
+}
+
+// configureRequiredEnvVars adds or updates required environment variables.
 func configureRequiredEnvVars(container *corev1.Container) {
-	envVars := map[string]string{
-		"PYTHONPATH":                 "/app",
-		"NVIDIA_VISIBLE_DEVICES":     "all",
-		"NVIDIA_DRIVER_CAPABILITIES": "compute,utility",
-		"VLLM_SERVER_DEV_MODE":       "1",
-	}
-
-	// Create a mapping of existing environment variables for easy lookup
-	existingEnv := make(map[string]*corev1.EnvVar)
-	for i := range container.Env {
-		envVar := &container.Env[i]
-		existingEnv[envVar.Name] = envVar
-	}
-
-	// Add or update required environment variables
-	for envName, envValue := range envVars {
-		if envVar, exists := existingEnv[envName]; exists {
-			// If it already exists, update its value
-			envVar.Value = envValue
+	for _, r := range requiredEnvVars {
+		if i := SliceIndexFeature(container.Env, EnvVarName, r.Name); i >= 0 {
+			container.Env[i] = r
 		} else {
-			// If it doesn't exist, add a new environment variable
-			container.Env = append(container.Env, corev1.EnvVar{
-				Name:  envName,
-				Value: envValue,
-			})
+			container.Env = append(container.Env, r)
 		}
 	}
 }
+
+func EnvVarName(ev *corev1.EnvVar) string { return ev.Name }
 
 // removeGPUResourceLimits removes nvidia.com/gpu from container resource limits and requests
 func removeGPUResourceLimits(container *corev1.Container) {
