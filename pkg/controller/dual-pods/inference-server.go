@@ -1913,7 +1913,7 @@ func (serverDat *serverData) getNominalServerProvidingPod(ctx context.Context, r
 		isCtr := &pod.Spec.Containers[cIdx]
 
 		// ensure the value of CUDA_VISIBLE_DEVICES envar for the inference server container
-		if ev := utils.SliceGetByFeature(isCtr.Env, EnvVarName, "CUDA_VISIBLE_DEVICES"); ev == nil {
+		if ev := utils.SliceGetByFeature(isCtr.Env, utils.EnvVarName, "CUDA_VISIBLE_DEVICES"); ev == nil {
 			isCtr.Env = append(isCtr.Env, corev1.EnvVar{
 				Name:  "CUDA_VISIBLE_DEVICES",
 				Value: *serverDat.GPUIndicesStr,
