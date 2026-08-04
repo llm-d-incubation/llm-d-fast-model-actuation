@@ -3,11 +3,13 @@
 set -euo pipefail
 
 release=""
+img_tag=""
 ns=$(kubectl get sa default -o jsonpath='{.metadata.namespace}')
 existing_nvcr=""
 ensure_nvcr=""
 install_crds="false"
 install_aps="false"
+enable_lp="true"
 oci_reg=""
 config_dir=""
 chart_set=()
@@ -17,18 +19,23 @@ function usage() {
     (
         (( $# > 0 )) && echo "$*" || true
         cat <<EOF
-$0 usage: --release \$semver OPTIONS
+$0 usage: OPTIONS
 
-where OPTIONS are any of the following.
+where OPTIONS are any of the following, but you must
+specify either --release or both --image-tag and --oci-registry.
 
+    --release[=]\$semver
+    --image-tag[=]\$tag
     --namespace[=]\$ns
     --existing-node-view-cluster-role[=]\$crname
     --ensure-node-view-cluster-role[=]\$crname
     --install-crds[=]\$trueorfalse
     --install-admission-policies[=]\$trueorfalse
+    --enable-launcher-populator[=]\$trueorfalse
+    --oci-registry[=]\$registry
     --config-dir[=]\$pathname
-    --chart-set[=]\$path=\$val (may be repeated)
     --chart-instance-name[=]\$chart_instance_name
+    --chart-set[=]\$path=\$val (may be repeated)
 EOF
     ) >& 2
 }
@@ -47,6 +54,13 @@ while (( $# > 0 )); do
         (--namespace) if (( $# > 1 ))
                     then ns="$2"; shift
                     else usage missing value for --namespace; exit 1
+                    fi;;
+
+        (--image-tag=*)
+            img_tag=${1#--image-tag=};;
+        (--image-tag) if (( $# > 1 ))
+                    then img_tag="$2"; shift
+                    else usage missing value for --image-tag; exit 1
                     fi;;
 
         (--existing-node-view-cluster-role=*)
@@ -75,6 +89,13 @@ while (( $# > 0 )); do
         (--install-admission-policies) if (( $# > 1 ))
                     then install_aps="$2"; shift
                     else usage missing value for --install-admission-policies; exit 1
+                    fi;;
+
+        (--enable-launcher-populator=*)
+            enable_lp=${1#--enable-launcher-populator=};;
+        (--enable-launcher-populator) if (( $# > 1 ))
+                    then enable_lp="$2"; shift
+                    else usage missing value for --enable-launcher-populator; exit 1
                     fi;;
 
         (--oci-registry=*)
@@ -111,11 +132,6 @@ while (( $# > 0 )); do
     shift
 done
 
-if [[ -z "$release" ]]
-then usage --release must not be the empty string
-     exit 1
-fi
-
 case "$install_crds" in
     (true|false) ;;
     (*) usage "--install-crds must be given 'true' or 'false'";
@@ -135,13 +151,23 @@ fi
 
 oci_reg="${oci_reg:-ghcr.io/llm-d-incubation/llm-d-fast-model-actuation}"
 
+if [ -n "$release" ] && [ -z "$img_tag" ]; then
+   echo "Installing FMA release $release with" >&2
+elif [ -n "$img_tag" ] && [ -n "$oci_reg" ] && [ -z "$release" ]; then
+    config_dir="${config_dir:-config}"
+    echo "Installing FMA from local tree and images in $oci_reg tagged $img_tag, with" >&2
+else
+    usage "You must choose between installing a release or a local tree"
+    exit 1
+fi
+
 cat >&2 <<EOF
-Installing FMA release $release with
     --namespace=$ns
     --existing-node-view-cluster-role=$existing_nvcr
     --ensure-node-view-cluster-role=$ensure_nvcr
     --install-crds=$install_crds
     --install-admission-policies=$install_aps
+    --enable-launcher-populator=$enable_lp
     --config-dir=$config_dir
     --chart-instance-name=$chart_instance_name
 EOF
@@ -195,7 +221,7 @@ if [[ "$install_crds" == "true" ]]; then
             exit 1
         fi
         kubectl wait -n "$ns" crd "$name" --for condition=Established
-	echo "CRD $name is Established" >&2
+        echo "CRD $name is Established" >&2
     done
 fi
 
@@ -206,29 +232,37 @@ else
     kubectl apply -n "$ns" -f "https://raw.githubusercontent.com/llm-d-incubation/llm-d-fast-model-actuation/refs/tags/v$release/config/validating-admission-policies.yaml"
 fi
 
-helm_args=()
+if [ -n "$release" ]; then
+    helm_args=("oci://${oci_reg}/charts/fma-controllers" --version "$release")
+else
+    helm_args=(charts/fma-controllers --set global.local=true)
+fi
+
 for arg in "${chart_set[@]}"; do
     helm_args+=(--set "$arg")
 done
-
-helm_args+=(
-    --set global.imageRegistry="${oci_reg}"
-    --set global.imageTag="v${release}"
-)
 
 if [ -n "$nvcr" ]; then
     helm_args+=(--set global.nodeViewClusterRole="${nvcr}")
 fi
 
+if [ "$enable_lp" == "false" ]; then
+    helm_args+=(--set launcherPopulator.enabled=false)
+fi
+
+
 helm upgrade --install "$chart_instance_name" \
-    "oci://${oci_reg}/charts/fma-controllers" \
-    --version "$release" \
-    -n "$ns" \
-    "${helm_args[@]}"
+    "${helm_args[@]}" \
+    --namespace "$ns" \
+    --set global.imageRegistry="${oci_reg}" \
+    --set global.imageTag="${img_tag:-v${release}}"
 
 kubectl wait -n "$ns" --for=condition=available --timeout=180s \
     deployment "${chart_instance_name}-dual-pods-controller"
-kubectl wait -n "$ns" --for=condition=available --timeout=120s \
-    deployment "${chart_instance_name}-launcher-populator"
+
+if [ "$enable_lp" != "false" ]; then
+    kubectl wait -n "$ns" --for=condition=available --timeout=120s \
+            deployment "${chart_instance_name}-launcher-populator"
+fi
 
 echo "FMA successfully installed" >&2
