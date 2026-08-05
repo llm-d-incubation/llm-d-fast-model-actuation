@@ -180,7 +180,7 @@ EOF
     idx=0
     n=${#chart_set[*]}
     while (( idx < n )); do
-	echo "    --chart-set ${chart_set[$idx]}" >&2
+        echo "    --chart-set ${chart_set[$idx]}" >&2
         let idx=idx+1
     done
 )
@@ -248,8 +248,12 @@ else
     helm_args=(charts/fma-controllers --set global.local=true)
 fi
 
-for arg in "${chart_set[@]}"; do
-    helm_args+=(--set "$arg")
+
+idx=0
+n=${#chart_set[*]}
+while (( idx < n )); do
+    helm_args+=(--set "${chart_set[$idx]}")
+    let idx=idx+1
 done
 
 if [ -n "$nvcr" ]; then
