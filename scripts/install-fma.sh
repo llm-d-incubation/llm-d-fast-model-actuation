@@ -144,6 +144,12 @@ case "$install_aps" in
         exit 1;;
 esac
 
+case "$enable_lp" in
+    (true|false) ;;
+    (*) usage "--enable-launcher-populator must be given 'true' or 'false'";
+        exit 1;;
+esac
+
 if [ -n "$existing_nvcr" ] && [ -n "$ensure_nvcr" ]; then
     usage "You can not specify both --existing-node-view-cluster-role and --ensure-node-view-cluster-role"
     exit 1
@@ -170,11 +176,14 @@ cat >&2 <<EOF
     --config-dir=$config_dir
     --chart-instance-name=$chart_instance_name
 EOF
-if [[ -n "${chart_set[*]}" ]]; then
-    for setting in "${chart_set[*]}"; do
-        echo "    --chart-set $setting" >&2
+(
+    idx=0
+    n=${#chart_set[*]}
+    while (( idx < n )); do
+	echo "    --chart-set ${chart_set[$idx]}" >&2
+        let idx=idx+1
     done
-fi
+)
 
 nvcr="${existing_nvcr}${ensure_nvcr}"
 
@@ -214,11 +223,13 @@ if [[ "$install_crds" == "true" ]]; then
     fi
     yq -o json eval . <<<$ysrc | jq -c . | while read -r obj; do
         crd_name=$(jq -r .metadata.name <<<$obj)
-        if kubectl get crd "$crd_name" -o json 2>/dev/null | jq -e --slurpfile desired <(jq .spec <<<$obj) '.spec as $existing | ($existing * $desired[0]) == $existing' &>/dev/null; then
+        if ! kubectl get crd "$crd_name" &>/dev/null; then
+            kubectl create -f - <<<$obj
+        elif kubectl get crd "$crd_name" -o json 2>/dev/null | jq -e --slurpfile desired <(jq .spec <<<$obj) '.spec as $existing | ($existing * $desired[0]) == $existing' &>/dev/null; then
             echo "  CRD $crd_name already exists and is up to date, skipping"
         else
             echo "  CRD $crd_name needs updating"
-            kubectl apply --server-side -f - <<<"$obj"
+            kubectl apply --server-side -f - <<<$obj
             kubectl wait crd "$crd_name" --for condition=Established
         fi
     done
