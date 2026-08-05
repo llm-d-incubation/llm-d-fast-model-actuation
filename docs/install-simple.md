@@ -26,7 +26,7 @@ carefully. See the [document about cluster
 sharing](cluster-sharing.md).
 
 Scripted installation is done by invoking one script. You can invoke
-it in curl-to-bash style.
+it in curl-to-bash style (example below).
 
 FMA has [a Helm chart](../charts/fma-controllers) that covers all of
 the namespace-scoped objects involved in deploying FMA. Instantiation
@@ -108,7 +108,10 @@ are as follows; each one has the form `$resourcename.$apigroup`.
 - `launcherpopulationpolicies.fma.llm-d.ai`
 
 The YAML for the `CustomResourceDefinition` objects that define FMA's
-custom resources is in [config/crds.yaml](../config/crds.yaml), AKA `https://raw.githubusercontent.com/llm-d-incubation/llm-d-fast-model-actuation/refs/tags/v$release/config/crds.yaml`.
+custom resources is in [config/crds.yaml](../config/crds.yaml) and can
+be referenced directly at GitHub. For example: for release
+"0.6.4-alpha.1", this YAML will be available at
+`https://raw.githubusercontent.com/llm-d-incubation/llm-d-fast-model-actuation/refs/tags/v0.6.4-alpha.1/config/crds.yaml`.
 
 In case you ask to become authorized to create those objects, there is
 a handy YAML file for a `ClusterRole` object that grants this
@@ -126,8 +129,9 @@ an administrator to install them for you. In the last case the
 administrator will want to know the following. YAML for all four is
 found in
 [config/validating-admission-policies.yaml](../config/validating-admission-policies.yaml)
-AKA
-`https://raw.githubusercontent.com/llm-d-incubation/llm-d-fast-model-actuation/refs/tags/v$release/config/validating-admission-policies.yaml`.
+and can be referenced directly at GitHub. For example: for release
+"0.6.4-alpha.1" this YAML will be at
+`https://raw.githubusercontent.com/llm-d-incubation/llm-d-fast-model-actuation/refs/tags/v0.6.4-alpha.1/config/validating-admission-policies.yaml`.
 
 In case you ask to become authorized to create those objects, there is
 a handy YAML file for a `ClusterRole` object that grants this
@@ -159,10 +163,10 @@ bash <(curl https://raw.githubusercontent.com/llm-d-incubation/llm-d-fast-model-
 
 You must use exactly one of the following two cases.
 
-1. Specify a release to install, identified by [semantic
-   version](https://semver.org) without leading "v". In this case you
-   may also specify `--oci-registry` if you have staged the release's
-   OCI images there.
+1. Specify a release to install (using the option `--release`),
+   identified by [semantic version](https://semver.org) without
+   leading "v". In this case you may also specify `--oci-registry` if
+   you have staged the release's OCI images there.
 
 2. Specify both `--image-tag` and `--oci-registry`, which means to
    install from the Git local working tree under the assumption that
@@ -202,7 +206,7 @@ The `OPTIONS` are as follows.
 
 - `--install-admission-policies $trueorfalse` tells the installer
   whether to install the admission policy objects. The default is
-  "false".
+  `false`.
 
 - `--oci-registry $reg` defines the OCI registry and namespace to use
   in place of "ghcr.io/llm-d-incubation/llm-d-fast-model-actuation".
