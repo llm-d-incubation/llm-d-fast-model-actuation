@@ -12,8 +12,8 @@ There is an llm-d "well-lit path" document [in the llm-d repo](https://github.co
 
 # Install
 
-- [Step-by-step general installation instructions](install.md)
-- [Installing by script](install-simple.md)
+- [Step-by-step general installation instructions](install-step-by-step.md)
+- [Installing by script](install-scripted.md)
 
 # Dev/test
 
