@@ -113,7 +113,7 @@ while (( $# > 0 )); do
                     fi;;
 
         (--chart-set=*)
-            chart_set+=(${1#--chart-set=});;
+            chart_set+=("${1#--chart-set=}");;
         (--chart-set) if (( $# > 1 ))
                     then chart_set+=("$2"); shift
                     else usage missing value for --chart-set; exit 1
@@ -140,7 +140,7 @@ esac
 
 case "$install_aps" in
     (true|false) ;;
-    (*) usage "--install-aps must be given 'true' or 'false'";
+    (*) usage "--install-admission-policies must be given 'true' or 'false'";
         exit 1;;
 esac
 
@@ -149,10 +149,9 @@ if [ -n "$existing_nvcr" ] && [ -n "$ensure_nvcr" ]; then
     exit 1
 fi
 
-oci_reg="${oci_reg:-ghcr.io/llm-d-incubation/llm-d-fast-model-actuation}"
-
 if [ -n "$release" ] && [ -z "$img_tag" ]; then
    echo "Installing FMA release $release with" >&2
+   oci_reg="${oci_reg:-ghcr.io/llm-d-incubation/llm-d-fast-model-actuation}"
 elif [ -n "$img_tag" ] && [ -n "$oci_reg" ] && [ -z "$release" ]; then
     config_dir="${config_dir:-config}"
     echo "Installing FMA from local tree and images in $oci_reg tagged $img_tag, with" >&2
@@ -211,7 +210,7 @@ if [[ "$install_crds" == "true" ]]; then
     if [ -n "$config_dir" ]; then
         ysrc=$(cat "${config_dir}/crds.yaml")
     else
-        ysrc=$(curl "https://raw.githubusercontent.com/llm-d-incubation/llm-d-fast-model-actuation/refs/tags/v$release/config/crds.yaml")
+        ysrc=$(curl -fsSL "https://raw.githubusercontent.com/llm-d-incubation/llm-d-fast-model-actuation/refs/tags/v$release/config/crds.yaml")
     fi
     yq -o json eval . <<<$ysrc | jq -c . | while read -r obj; do
         crd_name=$(jq -r .metadata.name <<<$obj)
