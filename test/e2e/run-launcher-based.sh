@@ -262,8 +262,8 @@ done
 : Deploy FMA controllers
 
 ./scripts/install-fma.sh \
-    --image-tag $(make echo-var VAR=IMAGE_TAG) \
-    --oci-registry $(make echo-var VAR=CONTAINER_IMG_REG) \
+    --image-tag "$(make echo-var VAR=IMAGE_TAG)" \
+    --oci-registry "$(make echo-var VAR=CONTAINER_IMG_REG)" \
     --ensure-node-view-cluster-role node-viewer \
     --install-crds true \
     --install-admission-policies true \
