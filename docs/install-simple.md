@@ -42,7 +42,7 @@ administrator to create it for them.
 Because of those difficulties, installation of the cluster-scoped
 objects is deliberately optional. The script takes a command-line
 option for each of the categories of cluster-scoped object. These
-categores are discussed [below](#cluster-scoped-objects).
+categories are discussed [below](#cluster-scoped-objects).
 
 ## Prerequisites
 

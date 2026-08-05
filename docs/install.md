@@ -1,6 +1,6 @@
 # Step-by-step installation of a release of FMA
 
-This document is about step-by-step installation a given release of
+This document is about step-by-step installation of a given release of
 FMA. For dev/test of a general commit of the repo, see
 [README.md#devtest](README.md#devtest).
 
@@ -62,10 +62,6 @@ the cluster-scoped objects. To get the available sources (YAML files),
 you need to `git clone` this repo and `git checkout` the desired
 release.
 
-(Some of these individual YAML files will disappear after release
-0.6.4, by which time you should be using [the simpler install
-instructions](install-simple.md).)
-
 The following subsections describe the various categories of
 cluster-scoped objects that you will need to create or find already
 existing when installing FMA.
@@ -82,13 +78,14 @@ instantiating the FMA Helm chart.
 ### FMA CRDs
 
 The YAML for the `CustomResourceDefinition` objects that define FMA's
-custom resources are in (a) files in [config/crd](../config/crd), up
-to and including release 0.6.4, and (b) one file
-[config/crds.yaml](../config/crds.yaml), from release 0.6.4-alpha.1
-onward. Those objects need to get created in the cluster. For example,
-by `kubectl apply`. If you are not authorized to do that then ask a
-cluster administrator to do it for you or to grant you authorization
-to do it yourself; there is an example `ClusterRole` for the latter in
+custom resources are in (a) files in [config/crd](../config/crd), in
+releases up to and including 0.6.4, and (b) one file
+[config/crds.yaml](../config/crds.yaml), in releases from
+0.6.4-alpha.1 onward. Those objects need to get created in the
+cluster. For example, by `kubectl apply`. If you are not authorized to
+do that then ask a cluster administrator to do it for you or to grant
+you authorization to do it yourself; there is an example `ClusterRole`
+for the latter in
 [config/fma-cluster-admin/fma-crd-admin-clusterrole.yaml](config/fma-cluster-admin/fma-crd-admin-clusterrole.yaml).
 
 If you are automating creation of these `CustomResourceDefinition`
@@ -109,7 +106,7 @@ FMA uses two `ValidatingAdmissionPolicy` objects and two corresponding
 `ValidatingAdmissionPolicyBinding` objects to prevent undesired object
 modifications. YAML for all four is found in (a) files in
 [config/validating-admission-policies](../config/validating-admission-policies),
-up to and including release 0.6.4, and (b) one file
+in releases up to and including 0.6.4, and (b) one file
 [config/validating-admission-policies.yaml](../config/validating-admission-policies.yaml),
 from release 0.6.4-alpha.1 onward.  Those objects need to get created
 in the cluster. For example, by `kubectl apply`. If you are not
