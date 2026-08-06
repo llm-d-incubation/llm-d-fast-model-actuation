@@ -226,12 +226,12 @@ if [[ "$install_crds" == "true" ]]; then
         if ! kubectl get crd "$crd_name" &>/dev/null; then
             kubectl create -f - <<<$obj
         elif kubectl get crd "$crd_name" -o json 2>/dev/null | jq -e --slurpfile desired <(jq .spec <<<$obj) '.spec as $existing | ($existing * $desired[0]) == $existing' &>/dev/null; then
-            echo "  CRD $crd_name already exists and is up to date, skipping"
+            echo "  CRD $crd_name already exists with adequate rules"
         else
             echo "  CRD $crd_name needs updating"
             kubectl apply --server-side -f - <<<$obj
-            kubectl wait crd "$crd_name" --for condition=Established
         fi
+        kubectl wait crd "$crd_name" --for condition=Established
     done
 fi
 
