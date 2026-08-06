@@ -37,7 +37,7 @@ spec:
       containers:
       - name: controller
         image: "{{ .Values.global.imageRegistry }}/dual-pods-controller:{{ .Values.global.imageTag }}"
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: {{ include "fma-controllers.dpc.imagePullPolicy" . }}
         command:
         - /ko-app/dual-pods-controller
         - "-v=5"
