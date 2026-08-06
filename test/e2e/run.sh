@@ -155,7 +155,8 @@ scripts/install-fma.sh --image-tag "$img_tag" --oci-registry "$img_reg" \
     --ensure-node-view-cluster-role node-viewer \
     --install-crds true \
     --install-admission-policies true \
-    --enable-launcher-populator false
+    --enable-launcher-populator false \
+    --chart-set global.local=true
 
 : Test Pod creation
 
