@@ -536,6 +536,7 @@ jobs:
             --image-tag "$IMAGE_TAG" \
             --oci-registry "${CONTAINER_IMG_REG,,}" \
             --config-dir config \
+            --chart-set global.local=false \
             --namespace "$FMA_NAMESPACE" \
             --ensure-node-view-cluster-role "${FMA_CHART_INSTANCE_NAME}-node-view" \
             --install-crds true \
