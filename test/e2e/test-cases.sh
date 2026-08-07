@@ -174,6 +174,8 @@ echo "GPU probe Pod $probe_pod scheduled on Node $testnode — using it for the 
 
 kubectl delete pod "$probe_pod" -n "$NS" --wait=true
 
+echo "$testnode" > testnode
+
 cheer "GPU probe complete — test node is $testnode"
 
 # ---------------------------------------------------------------------------
@@ -252,6 +254,8 @@ kubectl wait --for condition=Ready pod/$launcher1 -n "$NS" --timeout=0s
 expect '[ -n "$(kubectl get pod -n '"$NS"' $req1 -o jsonpath={.metadata.annotations.dual-pods\\.llm-d\\.ai/accelerators})" ]'
 assigned_gpu_uuids=$(kubectl get pod "$req1" -n "$NS" -o jsonpath='{.metadata.annotations.dual-pods\.llm-d\.ai/accelerators}')
 echo "Assigned GPU UUID(s): $assigned_gpu_uuids"
+
+kubectl get -n "$NS" pod "$req1" -o yaml
 
 cheer Successful launcher-based pod creation
 
@@ -409,6 +413,8 @@ expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$inst | wc -l
 
 # Pin the GPU so the next scale-up reuses the same GPU on every platform.
 pin_gpu $rs
+
+kubectl get rs "$rs" -n "$NS" -o yaml
 
 # Patch requester ReplicaSet to stick to testnode
 kubectl patch rs $rs -n "$NS" -p '{"spec": {"template": {"spec": {"nodeSelector": {"kubernetes.io/hostname": "'$testnode'"} }} }}'
