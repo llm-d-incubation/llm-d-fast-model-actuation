@@ -97,7 +97,8 @@ func (ni nodeItem) process(ctx context.Context, ctl *controller) (error, bool) {
 	readyItems := nodeDat.takeReadyItems(now)
 	var retries int
 	logger.V(4).Info("Processing items for node", "readyCount", len(readyItems))
-	for item, si := range readyItems {
+	for _, entry := range readyItems {
+		item, si := entry.item, entry.scheduled
 		logger.V(4).Info("Processing node-local item", "item", item, "enqueuedAt", si.addTime)
 		processStart := time.Now()
 		queueDurationHists.WithLabelValues(ni.NodeName).Observe(processStart.Sub(si.addTime).Seconds())
