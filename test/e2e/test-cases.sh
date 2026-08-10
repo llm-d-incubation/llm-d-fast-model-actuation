@@ -678,8 +678,10 @@ pfpid=""
 
 # Restart the dual-pods controller to test state recovery
 echo "Restarting dual-pods controller..."
-kubectl rollout restart deployment "${FMA_CHART_INSTANCE_NAME}-dual-pods-controller" -n "$NS"
-kubectl rollout status deployment "${FMA_CHART_INSTANCE_NAME}-dual-pods-controller" -n "$NS" --timeout=60s
+kubectl scale  -n "$NS" deployment "${FMA_CHART_INSTANCE_NAME}-dual-pods-controller" --replicas=0
+expect 'kubectl get -n "$NS" pods -l app.kubernetes.io/component=dual-pods-controller -o name | wc -l | grep -w 0'
+kubectl scale  -n "$NS" deployment "${FMA_CHART_INSTANCE_NAME}-dual-pods-controller" --replicas=1
+kubectl wait -n "$NS" --for=condition=available --timeout=100s deployment "${FMA_CHART_INSTANCE_NAME}-dual-pods-controller"
 
 # Wait for controller to be ready for ongoing checks
 # In detail: allow some time for the dual-pods controller to do something unexpected in the case
