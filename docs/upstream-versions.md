@@ -14,7 +14,7 @@
 | **k8s.io/component-base** | `v0.34.10` | tag | `go.mod` line 11 | [kubernetes/component-base](https://github.com/kubernetes/component-base) |
 | **sigs.k8s.io/controller-runtime** | `v0.22.5` | tag | `go.mod` line 14 | [kubernetes-sigs/controller-runtime](https://github.com/kubernetes-sigs/controller-runtime) |
 | **github.com/prometheus/client_golang** | `v1.24.1` | tag | `go.mod` line 6 | [prometheus/client_golang](https://github.com/prometheus/client_golang) |
-| **vllm/vllm-openai** | `v0.23.0` | tag | `cmd/requester/README.md`; `dockerfiles/Dockerfile.launcher.benchmark` line 1 (`BASE_IMAGE`) | [vllm-project/vllm](https://github.com/vllm-project/vllm) |
-| **vllm (CPU build)** | `v0.23.0` | tag | `dockerfiles/Dockerfile.launcher.cpu` line 5 (`VLLM_VERSION`) | [vllm-project/vllm](https://github.com/vllm-project/vllm) |
+| **vllm/vllm-openai** | `v0.26.0` | tag | `cmd/requester/README.md`; `dockerfiles/Dockerfile.launcher.benchmark` line 1 (`BASE_IMAGE`) | [vllm-project/vllm](https://github.com/vllm-project/vllm) |
+| **vllm (CPU build)** | `v0.26.0` | tag | `dockerfiles/Dockerfile.launcher.cpu` line 5 (`VLLM_VERSION`) | [vllm-project/vllm](https://github.com/vllm-project/vllm) |
 | **nvidia/cuda** | `12.8.0-base-ubuntu22.04` | tag | `dockerfiles/Dockerfile.requester` line 31 | [NVIDIA CUDA](https://hub.docker.com/r/nvidia/cuda) |
 | **projectquay/golang (builder image)** | `1.26` | tag | `dockerfiles/Dockerfile.requester` line 2 | [projectquay/golang](https://quay.io/repository/projectquay/golang) |
