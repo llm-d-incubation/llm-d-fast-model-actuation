@@ -265,7 +265,7 @@ metadata:
       spec:
         containers:
         - name: inference-server
-          image: docker.io/vllm/vllm-openai:v0.23.0
+          image: docker.io/vllm/vllm-openai:v0.26.0
           command:
           - vllm
           - serve
@@ -381,7 +381,7 @@ spec:
   nodeSelector: { "kubernetes.io/hostname": "somenode" }
   containers:
   - name: inference-server
-    image: docker.io/vllm/vllm-openai:v0.23.0
+    image: docker.io/vllm/vllm-openai:v0.26.0
     command:
     - vllm
     - serve
