@@ -355,7 +355,7 @@ jobs:
 
   # Run e2e tests on OpenShift self-hosted runner
   e2e-openshift:
-    runs-on: [self-hosted, openshift, vllm-d]
+    runs-on: [self-hosted, openshift, pok-prod]
     needs: [gate, build-image]
     if: needs.gate.outputs.should_run == 'true'
     env:
@@ -426,7 +426,7 @@ jobs:
           echo "Cluster domain: $CLUSTER_DOMAIN"
           if echo "$CLUSTER_DOMAIN" | grep -q "pokprod"; then
             echo "Detected pokprod cluster"
-            echo "RUNTIME_CLASS_NAME=nvidia" >> $GITHUB_ENV
+            echo "RUNTIME_CLASS_NAME=nvidia-legacy" >> $GITHUB_ENV
           fi
 
       - name: Clean up resources for this PR
@@ -589,6 +589,19 @@ jobs:
       - name: List objects of category all
         if: always()
         run: kubectl get all -n "$FMA_NAMESPACE"
+
+      - name: Dump DCGM_FI_DEV_FB_USED on testnode
+        if: always()
+        run: |
+          if [ -r testnode ]
+          then
+            curl -sSkG \
+              -H "Authorization: Bearer $(oc whoami -t)" \
+              --data-urlencode "query=DCGM_FI_DEV_FB_USED{Hostname=\"$(cat testnode)\"}" \
+              https://prometheus-k8s-openshift-monitoring.apps.pokprod001.ete14.res.ibm.com/api/v1/query \
+            | jq '.data.result[]'
+          else echo there is no readable testnode file
+          fi
 
       - name: Dump select node info after test
         if: always()
