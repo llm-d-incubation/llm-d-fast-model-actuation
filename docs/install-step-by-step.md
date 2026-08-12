@@ -79,9 +79,9 @@ instantiating the FMA Helm chart.
 
 The YAML for the `CustomResourceDefinition` objects that define FMA's
 custom resources are in (a) files in [config/crd](../config/crd), in
-releases up to and including 0.6.4, and (b) one file
+releases up to and including 0.6.5, and (b) one file
 [config/crds.yaml](../config/crds.yaml), in releases from
-0.6.4-alpha.1 onward. Those objects need to get created in the
+0.6.5-alpha.1 onward. Those objects need to get created in the
 cluster. For example, by `kubectl apply`. If you are not authorized to
 do that then ask a cluster administrator to do it for you or to grant
 you authorization to do it yourself; there is an example `ClusterRole`
@@ -106,9 +106,9 @@ FMA uses two `ValidatingAdmissionPolicy` objects and two corresponding
 `ValidatingAdmissionPolicyBinding` objects to prevent undesired object
 modifications. YAML for all four is found in (a) files in
 [config/validating-admission-policies](../config/validating-admission-policies),
-in releases up to and including 0.6.4, and (b) one file
+in releases up to and including 0.6.5, and (b) one file
 [config/validating-admission-policies.yaml](../config/validating-admission-policies.yaml),
-from release 0.6.4-alpha.1 onward.  Those objects need to get created
+from release 0.6.5-alpha.1 onward.  Those objects need to get created
 in the cluster. For example, by `kubectl apply`. If you are not
 authorized to do that then ask a cluster administrator to do it for
 you or to grant you authorization to do it yourself; there is an

@@ -5,7 +5,7 @@ script can install either (a) a given release without requiring a `git
 clone` or (b) whatever version is in the local Git working tree of
 this repo. Regardless of (a) vs. (b), the version of FMA being
 installed must include PR 700; the first release of sufficient vintage
-will be 0.6.4-alpha.1.  For case (b), you must have already built the
+will be 0.6.5-alpha.1.  For case (b), you must have already built the
 container images and made them available to the target Kubernetes
 cluster. For more on dev/test of a general commit of the repo, see
 [README.md#devtest](README.md#devtest).
@@ -110,8 +110,8 @@ are as follows; each one has the form `$resourcename.$apigroup`.
 The YAML for the `CustomResourceDefinition` objects that define FMA's
 custom resources is in [config/crds.yaml](../config/crds.yaml) and can
 be referenced directly at GitHub. For example: for release
-"0.6.4-alpha.1", this YAML will be available at
-`https://raw.githubusercontent.com/llm-d-incubation/llm-d-fast-model-actuation/refs/tags/v0.6.4-alpha.1/config/crds.yaml`.
+"0.6.5-alpha.1", this YAML will be available at
+`https://raw.githubusercontent.com/llm-d-incubation/llm-d-fast-model-actuation/refs/tags/v0.6.5-alpha.1/config/crds.yaml`.
 
 In case you ask to become authorized to create those objects, there is
 a handy YAML file for a `ClusterRole` object that grants this
@@ -130,8 +130,8 @@ administrator will want to know the following. YAML for all four is
 found in
 [config/validating-admission-policies.yaml](../config/validating-admission-policies.yaml)
 and can be referenced directly at GitHub. For example: for release
-"0.6.4-alpha.1" this YAML will be at
-`https://raw.githubusercontent.com/llm-d-incubation/llm-d-fast-model-actuation/refs/tags/v0.6.4-alpha.1/config/validating-admission-policies.yaml`.
+"0.6.5-alpha.1" this YAML will be at
+`https://raw.githubusercontent.com/llm-d-incubation/llm-d-fast-model-actuation/refs/tags/v0.6.5-alpha.1/config/validating-admission-policies.yaml`.
 
 In case you ask to become authorized to create those objects, there is
 a handy YAML file for a `ClusterRole` object that grants this
