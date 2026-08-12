@@ -137,14 +137,14 @@ func (pc *phaseCounts) increment(phase launcherPhase) {
 	}
 }
 
-// forEach calls yield once for every supported metric phase, including phases
-// whose count is zero.
-func (pc phaseCounts) forEach(yield func(launcherPhase, int)) {
-	yield(phaseBound, pc.bound)
-	yield(phaseUnbound, pc.unbound)
-	yield(phaseStuckScheduling, pc.stuckScheduling)
-	yield(phaseStuckStarting, pc.stuckStarting)
-	yield(phaseStale, pc.stale)
+// forEach is an iterator (in the range-over-function sense) over every
+// supported metric phase and its count, including phases whose count is zero.
+func (pc phaseCounts) forEach(yield func(launcherPhase, int) bool) {
+	_ = yield(phaseBound, pc.bound) &&
+		yield(phaseUnbound, pc.unbound) &&
+		yield(phaseStuckScheduling, pc.stuckScheduling) &&
+		yield(phaseStuckStarting, pc.stuckStarting) &&
+		yield(phaseStale, pc.stale)
 }
 
 // metricsState is the source of truth backing launcherPodCountGauge: it holds
@@ -222,15 +222,15 @@ func (ms *metricsState) setLCExists(lcfg string, exists bool) {
 func (ms *metricsState) republishLocked(lcfg string) {
 	if !ms.lcExists.Has(lcfg) && len(ms.perLCFG[lcfg]) == 0 {
 		delete(ms.agg, lcfg)
-		phaseCounts{}.forEach(func(phase launcherPhase, _ int) {
+		for phase := range (phaseCounts{}).forEach {
 			launcherPodCountGauge.DeleteLabelValues(lcfg, string(phase))
-		})
+		}
 		return
 	}
 	agg := ms.agg[lcfg] // zero value when the LC exists but has no launchers
-	agg.forEach(func(phase launcherPhase, count int) {
+	for phase, count := range agg.forEach {
 		launcherPodCountGauge.WithLabelValues(lcfg, string(phase)).Set(float64(count))
-	})
+	}
 }
 
 // launcherPhaseOf classifies a launcher Pod into a phase (see the launcherPhase

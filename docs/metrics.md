@@ -71,14 +71,6 @@ Labels are as follows.
 
 - `isc_name`: Name of the relevant InferenceServerConfig
 
-### fma_isc_count
-
-Vector of gauges: Number of InferenceServerConfig objects.
-
-Labels are as follows.
-
-- `launcher_config_name`: Name of the relevant LauncherConfig
-
 ### fma_launcher_pod_count
 
 Vector of gauges: Number of launcher Pods for each LauncherConfig and
@@ -102,21 +94,19 @@ Labels are as follows.
 
 The launcher-populator's `--stuck-scheduling-threshold` and
 `--stuck-starting-threshold` flags configure the two stuck thresholds.
-When the controller observes a retained launcher in either stuck phase without
-the stuck label, it publishes a `LauncherStuck` Warning Event and sets the
-`dual-pods.llm-d.ai/launcher-stuck=true` label. The label makes the current
-condition discoverable after the Event expires and suppresses further Events
-while the Pod remains stuck. If the launcher recovers, the controller removes
-the label.
+The same classification also drives the
+`dual-pods.llm-d.ai/launcher-stuck` label and the `LauncherStuck`
+Warning Event; see [the observability section of the dual-pods
+documentation](dual-pods.md#observability) for those and for how the
+controller treats a stuck launcher.
 
-The Event is emitted before the label Patch is attempted. Because they are
-separate Kubernetes API transactions, a controller failure between them or a
-failed Patch can produce a duplicate Event on a later reconcile. This ordering
-deliberately favors a possible duplicate over losing the Event entirely.
+### fma_isc_count
 
-A stuck launcher remains in place and continues to count toward the desired
-launcher population. The controller does not automatically replace or retry
-it; users decide how to respond using the metric, Event, and label.
+Vector of gauges: Number of InferenceServerConfig objects.
+
+Labels are as follows.
+
+- `launcher_config_name`: Name of the relevant LauncherConfig
 
 ## FMA requester-provider binding
 

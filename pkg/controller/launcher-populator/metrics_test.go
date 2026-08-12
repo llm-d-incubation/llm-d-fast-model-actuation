@@ -650,7 +650,7 @@ func TestComputeKeyPhases(t *testing.T) {
 			t.Errorf("total=%d want %d (every pod must be counted)", counts.total(), len(pods))
 		}
 		wantCounts := phaseCounts{bound: 1, unbound: 2, stuckStarting: 1, stale: 1}
-		if !reflect.DeepEqual(counts, wantCounts) {
+		if counts != wantCounts {
 			t.Errorf("counts=%+v want %+v", counts, wantCounts)
 		}
 		// Only the not-Ready, counting-down unbound pod drives earliestTransition.

@@ -545,9 +545,9 @@ func (ctl *controller) reconcileKey(ctx context.Context, key NodeLauncherKey, de
 	// Report stuck launchers among only the Pods not targeted for excess
 	// deletion in this reconcile. Skipped in orphan cleanup (nil template).
 	if nodeIndependentLauncherTemplate != nil {
-		retained := utils.SliceFilter(liveUnboundCurrentPods, utils.Not1(func(pod *corev1.Pod) bool {
-			return excessDeletionTargets.Has(pod.UID)
-		}))
+		retained := utils.SliceFilter(liveUnboundCurrentPods, func(pod *corev1.Pod) bool {
+			return !excessDeletionTargets.Has(pod.UID)
+		})
 		if err := ctl.reportStuckLaunchers(ctx, retained, templateHash); err != nil {
 			return err, true
 		}
@@ -596,11 +596,7 @@ func (ctl *controller) reportStuckLaunchers(ctx context.Context, retained []*cor
 		if err := ctl.setStuckLabel(ctx, pod, stuck); err != nil {
 			return err
 		}
-		if stuck {
-			logger.Info("Reported stuck launcher", "pod", pod.Name, "uid", pod.UID, "phase", phase)
-		} else {
-			logger.Info("Cleared stuck label from recovered launcher", "pod", pod.Name, "uid", pod.UID)
-		}
+		logger.Info("Updated launcher stuck condition", "pod", pod.Name, "uid", pod.UID, "phase", phase, "stuck", stuck)
 	}
 
 	return nil
