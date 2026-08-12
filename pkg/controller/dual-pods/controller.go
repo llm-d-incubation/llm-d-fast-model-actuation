@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -417,12 +418,10 @@ type nodeData struct {
 	// LocalQueue holds the set of object references of this node that need to be synced,
 	// and for each the time at which it was first injected into this set.
 	// Hold ItemsMutex while accessing this.
-	LocalQueue localQueue
+	LocalQueue map[itemOnNode]*scheduledItem
 
 	rateLimiter workqueue.TypedRateLimiter[itemOnNode]
 }
-
-type localQueue map[itemOnNode]*scheduledItem
 
 type itemOnNode interface {
 	// process returns (err error, retry bool).
@@ -433,6 +432,12 @@ type itemOnNode interface {
 type scheduledItem struct {
 	addTime      time.Time // when first enqueued (for queue duration metrics)
 	processAfter time.Time // earliest time to process this item
+}
+
+// scheduledEntry pairs an item with its scheduling data.
+type scheduledEntry struct {
+	item      itemOnNode
+	scheduled *scheduledItem
 }
 
 // processResult is returned by itemOnNode.process to signal outcome and retry intent.
@@ -1019,7 +1024,7 @@ func (ctl *controller) getNodeData(nodeName string) *nodeData {
 	if ans == nil {
 		ans = &nodeData{
 			NodeName:         nodeName,
-			LocalQueue:       localQueue{},
+			LocalQueue:       make(map[itemOnNode]*scheduledItem),
 			InferenceServers: make(map[apitypes.UID]*serverData),
 			Launchers:        make(map[string]*launcherData),
 			rateLimiter: workqueue.NewTypedWithMaxWaitRateLimiter(
@@ -1056,19 +1061,24 @@ func (nodeDat *nodeData) addAfter(item itemOnNode, after time.Time) {
 	queueDepthGauges.WithLabelValues(nodeDat.NodeName).Set(float64(len(nodeDat.LocalQueue)))
 }
 
-// takeReadyItems removes and returns items whose processAfter <= now.
+// takeReadyItems removes and returns items whose processAfter <= now,
+// ordered oldest-first by enqueue time (addTime).
 // Items not yet ready remain in the queue.
-func (nodeDat *nodeData) takeReadyItems(now time.Time) localQueue {
+func (nodeDat *nodeData) takeReadyItems(now time.Time) []scheduledEntry {
 	nodeDat.ItemsMutex.Lock()
-	defer nodeDat.ItemsMutex.Unlock()
-	ready := make(localQueue)
-	for item, scheduledItem := range nodeDat.LocalQueue {
-		if !scheduledItem.processAfter.After(now) {
-			ready[item] = scheduledItem
+	var ready []scheduledEntry
+	for item, si := range nodeDat.LocalQueue {
+		if !si.processAfter.After(now) {
+			ready = append(ready, scheduledEntry{item: item, scheduled: si})
 			delete(nodeDat.LocalQueue, item)
 		}
 	}
 	queueDepthGauges.WithLabelValues(nodeDat.NodeName).Set(float64(len(nodeDat.LocalQueue)))
+	nodeDat.ItemsMutex.Unlock()
+
+	sort.Slice(ready, func(i, j int) bool {
+		return ready[i].scheduled.addTime.Before(ready[j].scheduled.addTime)
+	})
 	return ready
 }
 
