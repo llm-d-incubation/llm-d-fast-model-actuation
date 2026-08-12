@@ -649,8 +649,7 @@ that from 0.9.
 ### FYI labels and annotations
 
 The FMA controllers put some labels and annotations on Pods primarily
-for observability. Except where noted below, the controllers do not
-consume them. They are as follows.
+for observability. They are as follows.
 
 - annotation **dual-pods.llm-d.ai/accelerators**. Put on both
   requester and provider Pods. Value is a comma-separated list of GPU
@@ -676,9 +675,10 @@ consume them. They are as follows.
   unbound launcher Pod when the launcher has remained unscheduled or
   not Ready for at least the corresponding configured stuck
   threshold. Its value is "true". The launcher population controller
-  consumes this label to avoid publishing a duplicate `LauncherStuck`
-  Event on every reconciliation, and removes it if the launcher
-  recovers. To list currently stuck launchers, use:
+  maintains this label, publishing a `LauncherStuck` Warning Event
+  when it marks a launcher as stuck and removing the label if the
+  launcher recovers. The label keeps the condition discoverable after
+  the Event expires. To list currently stuck launchers, use:
 
   ```shell
   kubectl get pods -l dual-pods.llm-d.ai/launcher-stuck=true
@@ -695,6 +695,12 @@ Such an `Event` is associated with a launcher Pod, is a `Warning`, has
 reason `LauncherStuck`, and its message is "Launcher is stuck (phase);
 leaving it in place for investigation". Here `(phase)` is either
 `(stuck_scheduling)` or `(stuck_starting)`.
+
+A stuck launcher remains in place and continues to count toward the
+desired launcher population. The controller does not automatically
+replace or retry it; users decide how to respond using the
+`fma_launcher_pod_count` metric, the Event, and the
+`dual-pods.llm-d.ai/launcher-stuck` label.
 
 #### OutdatedRoutingMetadata events
 

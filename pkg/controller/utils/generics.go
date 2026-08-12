@@ -70,13 +70,6 @@ func SliceFilter[Elt any](slice []Elt, keep func(Elt) bool) []Elt {
 	return filtered
 }
 
-// Not1 negates a single-argument predicate.
-func Not1[Arg any](predicate func(Arg) bool) func(Arg) bool {
-	return func(arg Arg) bool {
-		return !predicate(arg)
-	}
-}
-
 // SliceRemoveOnce removes the first occurrence of the given element from the given slice.
 // This returns a new slice rather than side-effecting the given one.
 func SliceRemoveOnce[Elt comparable](slice []Elt, goner Elt) ([]Elt, bool) {

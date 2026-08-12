@@ -30,15 +30,3 @@ func TestSliceFilterKeepsMatchingElementsInOrder(t *testing.T) {
 		t.Errorf("SliceFilter result = %v, want %v", got, want)
 	}
 }
-
-func TestNot1NegatesPredicate(t *testing.T) {
-	isOdd := Not1(func(value int) bool {
-		return value%2 == 0
-	})
-	if isOdd(2) {
-		t.Error("negated predicate accepted a value accepted by the original")
-	}
-	if !isOdd(3) {
-		t.Error("negated predicate rejected a value rejected by the original")
-	}
-}
