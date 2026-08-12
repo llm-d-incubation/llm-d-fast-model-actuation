@@ -161,9 +161,6 @@ EOF
 
 # back to non-Prometheus stuff
 
-kubectl create clusterrole node-viewer --verb=get,list,watch --resource=nodes
-
-
 kubectl apply -f - <<EOF
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -264,14 +261,13 @@ done
 
 : Deploy FMA controllers
 
-FMA_NAMESPACE=default \
-FMA_CHART_INSTANCE_NAME=fma \
-CONTAINER_IMG_REG=$(make echo-var VAR=CONTAINER_IMG_REG) \
-IMAGE_TAG=$(make echo-var VAR=IMAGE_TAG) \
-NODE_VIEW_CLUSTER_ROLE=node-viewer \
-HELM_EXTRA_ARGS="--set global.local=true" \
-POLICIES_ENABLED=true \
-./test/e2e/deploy_fma.sh
+./scripts/install-fma.sh \
+    --image-tag "$(make echo-var VAR=IMAGE_TAG)" \
+    --oci-registry "$(make echo-var VAR=CONTAINER_IMG_REG)" \
+    --ensure-node-view-cluster-role node-viewer \
+    --install-crds true \
+    --install-admission-policies true \
+    --chart-set global.local=true
 
 : Run launcher-based E2E tests
 

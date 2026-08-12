@@ -155,7 +155,7 @@ fi
 
 if [ "$POLICIES_ENABLED" = "true" ]; then
     echo "Applying ValidatingAdmissionPolicy resources..."
-    kubectl apply -f config/validating-admission-policies/
+    kubectl apply -f config/validating-admission-policies.yaml
 else
     echo "ValidatingAdmissionPolicy not supported or disabled, skipping"
 fi

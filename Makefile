@@ -130,6 +130,10 @@ $(CODE_GEN_DIR):
 .PHONY: manifests
 manifests: $(CONTROLLER_GEN_VERSION) ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
 	$(CONTROLLER_GEN_VERSION) crd paths=./api/...
+	cd config; ( for single in crd/*.yaml; do cat "$$single"; echo ...; done ) > crds.yaml
+	# The following is a temporary, for transition;
+	# after the next release, delete the individual files.
+	cd config; ( for single in validating-admission-policies/*.yaml; do echo ---; cat "$$single"; echo ...; done ) > validating-admission-policies.yaml
 
 .PHONY: generate
 generate: $(CONTROLLER_GEN_VERSION) ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.

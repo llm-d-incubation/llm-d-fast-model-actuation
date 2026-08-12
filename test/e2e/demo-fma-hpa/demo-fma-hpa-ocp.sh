@@ -121,7 +121,7 @@ else
     kubectl apply -k "https://github.com/kubernetes-sigs/gateway-api-inference-extension/config/crd?ref=${GAIE_VERSION}"
 fi
 
-echo "  FMA CRDs: installed by deploy_fma.sh in Step 4"
+echo "  FMA CRDs: installed by install-fma.sh in Step 4"
 
 # =========================================================================
 # Step 3: EPP + Gateway
@@ -245,7 +245,7 @@ EOF
 fi
 
 # =========================================================================
-# Step 4: FMA controllers (via deploy_fma.sh)
+# Step 4: FMA controllers (via install-fma.sh)
 # =========================================================================
 
 step "FMA controllers"
@@ -254,17 +254,18 @@ FMA_CHART="fma"
 if kubectl get deployment "${FMA_CHART}-dual-pods-controller" -n "$NAMESPACE" &>/dev/null; then
     echo "  FMA controllers already deployed"
 else
-    echo "  Deploying FMA controllers via deploy_fma.sh..."
+    echo "  Deploying FMA controllers via install-fma.sh..."
     (
         cd "$REPO_ROOT"
-        FMA_NAMESPACE="$NAMESPACE" \
-        FMA_CHART_INSTANCE_NAME="$FMA_CHART" \
-        CONTAINER_IMG_REG="$CONTAINER_IMG_REG" \
-        IMAGE_TAG="$IMAGE_TAG" \
-        NODE_VIEW_CLUSTER_ROLE=create/please \
-        RUNTIME_CLASS_NAME=nvidia \
-        HELM_EXTRA_ARGS="--set launcherPopulator.enabled=true" \
-        "$SCRIPT_DIR/../deploy_fma.sh"
+        scripts/install-fma.sh \
+            --namespace "$NAMESPACE" \
+            --chart-instance-name "$FMA_CHART" \
+            --oci-registry "$CONTAINER_IMG_REG" \
+            --image-tag "$IMAGE_TAG" \
+            --config-dir config \
+            --ensure-node-view-cluster-role "${FMA_CHART}-node-view" \
+            --install-crds true \
+            --install-admission-policies true \
     )
 fi
 

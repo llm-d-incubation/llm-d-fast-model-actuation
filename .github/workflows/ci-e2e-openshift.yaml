@@ -394,7 +394,7 @@ jobs:
           rm -f openshift-client-linux.tar.gz kubectl README.md
           # Install helm
           curl -fsSL --retry 3 --retry-delay 5 https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-          # Install yq if not already present (for YAML-to-JSON conversion in deploy_fma.sh)
+          # Install yq if not already present (for use by install script)
           if ! command -v yq &>/dev/null; then
             YQ_VERSION="v4.53.2"
             curl -fsSL --retry 3 --retry-delay 5 -o yq "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
@@ -528,13 +528,20 @@ jobs:
               matchLabels: {"scrape": "true"}
           EOF
 
-      - name: Deploy FMA
+      - name: Install FMA
         env:
           CONTAINER_IMG_REG: ghcr.io/${{ github.repository }}
-          NODE_VIEW_CLUSTER_ROLE: "create/please"
         run: |
-          export CONTAINER_IMG_REG="${CONTAINER_IMG_REG,,}"
-          ./test/e2e/deploy_fma.sh
+          scripts/install-fma.sh \
+            --image-tag "$IMAGE_TAG" \
+            --oci-registry "${CONTAINER_IMG_REG,,}" \
+            --config-dir config \
+            --chart-set global.local=false \
+            --namespace "$FMA_NAMESPACE" \
+            --ensure-node-view-cluster-role "${FMA_CHART_INSTANCE_NAME}-node-view" \
+            --install-crds true \
+            --install-admission-policies true \
+            --chart-instance-name "$FMA_CHART_INSTANCE_NAME"
 
       - name: Dump InferenceServerConfig CRD
         if: always()

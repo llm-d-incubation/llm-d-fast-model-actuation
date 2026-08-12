@@ -8,6 +8,7 @@ repos:
       - id: end-of-file-fixer
         exclude: '(\.lock\.yml$|\.svg$)'
       - id: check-yaml
+        args: ["--allow-multiple-documents"]
         exclude: ^charts/.*/templates/.*\.yaml$
       - id: check-json
       - id: check-merge-conflict
