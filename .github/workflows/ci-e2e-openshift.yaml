@@ -695,7 +695,6 @@ jobs:
           go-version: '1.26'
 
       - name: extract coverage data from dual pods controller
-        if: always()
         run: |
           kubectl scale -n "$FMA_NAMESPACE" "deploy/${FMA_CHART_INSTANCE_NAME}-dual-pods-controller" --replicas=0
           let try=1
@@ -716,7 +715,6 @@ jobs:
           kubectl scale -n "$FMA_NAMESPACE" "deploy/${FMA_CHART_INSTANCE_NAME}-dual-pods-controller" --replicas=1
 
       - name: upload coverage data from dual pods controller
-        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dpc-cover-data
@@ -724,7 +722,6 @@ jobs:
           retention-days: 14
 
       - name: upload coverage summary from dual pods controller
-        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dpc-cover-func.txt
