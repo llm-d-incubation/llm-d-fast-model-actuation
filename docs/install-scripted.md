@@ -71,6 +71,7 @@ repositories to stage (if you are doing that).
 
 - `ghcr.io/llm-d-incubation/llm-d-fast-model-actuation/charts/fma-controllers`
 - `ghcr.io/llm-d-incubation/llm-d-fast-model-actuation/requester`
+- `ghcr.io/llm-d-incubation/llm-d-fast-model-actuation/launcher`
 - `ghcr.io/llm-d-incubation/llm-d-fast-model-actuation/dual-pods-controller`
 - `ghcr.io/llm-d-incubation/llm-d-fast-model-actuation/launcher-populator`
 
