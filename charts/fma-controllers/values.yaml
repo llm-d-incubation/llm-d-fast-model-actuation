@@ -19,7 +19,7 @@ global:
   # This suppresses image pulls for the dual-pods controller.
   local: false
 
-  # Set this to true to make the controllers produce coverage data
+  # Set this to true to make the controller(s) produce coverage data
   produceCoverdata: false
 
   # Defines the image used to create coverdata inspector Pods

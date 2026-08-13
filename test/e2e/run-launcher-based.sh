@@ -267,6 +267,7 @@ done
     --ensure-node-view-cluster-role node-viewer \
     --install-crds true \
     --install-admission-policies true \
+    --chart-set global.produceCoverdata=true \
     --chart-set global.local=true
 
 : Run launcher-based E2E tests
