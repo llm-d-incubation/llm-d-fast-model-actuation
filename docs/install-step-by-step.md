@@ -2,7 +2,10 @@
 
 This document is about step-by-step installation of a given release of
 FMA. For dev/test of a general commit of the repo, see
-[README.md#devtest](README.md#devtest).
+[README.md#devtest](README.md#devtest). There is a [companion document
+about step-by-step removal of FMA](uninstall-step-by-step.md). There
+is also a companion document about [scripted
+installation](install-scripted.md).
 
 FMA, like llm-d, is primarily confined to operate in one Kubernetes
 API object namespace. However, installing FMA _does_ involve _some_
