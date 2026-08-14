@@ -479,7 +479,7 @@ spec:
     options: >-
       --model TinyLlama/TinyLlama-1.1B-Chat-v1.0
       --enable-sleep-mode
-      --gpu-memory-utilization 0.85
+      --gpu-memory-utilization 0.825
     env_vars:
       VLLM_SERVER_DEV_MODE: "1"
       VLLM_LOGGING_LEVEL: "DEBUG"
@@ -492,7 +492,7 @@ spec:
 ```
 
 For an explanation of the principles that led to the
-`--gpu-memory-utilization 0.85` setting, see [GPU memory
+`--gpu-memory-utilization 0.825` setting, see [GPU memory
 planning](#gpu-memory-planning) below.
 
 The configuration objects exhibited here and the FMA container images
