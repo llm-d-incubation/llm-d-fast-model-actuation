@@ -32,6 +32,12 @@ import (
 	stubapi "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/spi"
 )
 
+// noProxyConfig stands in for the proxy's Configure handler in the tests here,
+// none of which exercise the proxy.
+func noProxyConfig(w http.ResponseWriter, _ *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
 func FuzzServer(f *testing.F) {
 	f.Add(true)
 	f.Add(false)
@@ -39,7 +45,7 @@ func FuzzServer(f *testing.F) {
 	var ready atomic.Bool
 	ctx, cancel := context.WithCancel(f.Context())
 	port := "28083"
-	serveSPI, err := StartWithGPUUUIDs(ctx, port, &ready, nil, gpuIDs)
+	serveSPI, err := StartWithGPUUUIDs(ctx, port, &ready, nil, gpuIDs, noProxyConfig)
 	if err != nil {
 		f.Fatalf("Server start failed: %s", err.Error())
 	}
@@ -92,7 +98,7 @@ func TestLogChunking(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	var ready atomic.Bool
 	port := "28084"
-	serveSPI, err := StartWithGPUUUIDs(ctx, port, &ready, &logBuilder, []string{"x"})
+	serveSPI, err := StartWithGPUUUIDs(ctx, port, &ready, &logBuilder, []string{"x"}, noProxyConfig)
 	if err != nil {
 		t.Fatalf("Server start failed: %s", err.Error())
 	}
@@ -159,7 +165,7 @@ func TestRequestBeforeServe(t *testing.T) {
 	var ready atomic.Bool
 	var logBuilder strings.Builder
 	port := "28085"
-	serveSPI, err := StartWithGPUUUIDs(ctx, port, &ready, &logBuilder, []string{"x"})
+	serveSPI, err := StartWithGPUUUIDs(ctx, port, &ready, &logBuilder, []string{"x"}, noProxyConfig)
 	if err != nil {
 		t.Fatalf("Server start failed: %s", err.Error())
 	}
@@ -202,7 +208,7 @@ func TestShutdown(t *testing.T) {
 	var logBuilder strings.Builder
 	port := "28086"
 	shutdownCh := make(chan struct{})
-	serveSPI, err := StartWithGPUUUIDs(ctx, port, &ready, &logBuilder, []string{"x"})
+	serveSPI, err := StartWithGPUUUIDs(ctx, port, &ready, &logBuilder, []string{"x"}, noProxyConfig)
 	if err != nil {
 		t.Fatalf("Server start failed: %s", err.Error())
 	}

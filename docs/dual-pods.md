@@ -828,6 +828,47 @@ The relay of readiness goes as follows.
   controller tells the requester that the inference server is not
   ready (if the controller has not already done so).
 
+### Requester TCP Proxy
+
+The requester container includes a TCP proxy server that forwards
+inference requests to the actual vLLM instance running in the
+server-providing Pod (typically managed by the launcher). This lets
+clients send requests to the server-requesting Pod without needing to
+know the port that vLLM is listening on.
+
+The proxy operates as a simple TCP-level forwarder: each incoming
+client connection results in a new outbound connection to the
+configured vLLM target. Because this operates at the TCP layer, it
+supports any protocol over TCP (HTTP/1.x, HTTP/2, HTTPS, gRPC, etc.),
+which includes the OpenAI-compatible API endpoints such as
+`/v1/chat/completions`.
+
+The proxy is configured through a resource at `/v1/proxy/config` (see
+[the SPI](../pkg/spi/interface.go)) that supports PUT and GET.
+
+- **Configuration** (PUT): when the dual-pods controller binds a
+  server-requesting Pod to a server-providing Pod, it PUTs the target
+  address (the server-providing Pod's IP) and the port vLLM listens
+  on:
+
+  ```json
+  {"address": "10.244.1.5", "port": 8005}
+  ```
+
+  The response does not arrive until the proxy is listening, so HTTP
+  200 means the proxy is ready to carry traffic. Because a TCP
+  connection can break after the server handled the request but before
+  the client read the response, a client that repeats a PUT of the
+  target already in effect gets 200 again rather than an error; the
+  controller relies on this after a restart, when it no longer knows
+  whether it ever configured this requester. A PUT naming any *other*
+  target returns HTTP 409, because the proxy has one target for the
+  life of the Pod.
+
+- **Status checking** (GET): returns HTTP 200 with the current target
+  as a JSON body, or HTTP 404 if the proxy has not been configured
+  yet.
+
 ### GPU UUID vs. Index
 
 The GPU assignment query from the dual-pods controller to the

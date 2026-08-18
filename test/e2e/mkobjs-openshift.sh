@@ -260,6 +260,11 @@ spec:
             containerPort: 8080
           - name: spi
             containerPort: 8081
+          - name: proxy
+            containerPort: 8082
+          # Deliberately not probing through the proxy, unlike
+          # config/examples/requester.yaml: the e2e cases below exercise the
+          # readiness relay, which needs this Pod's readiness to follow it.
           readinessProbe:
             httpGet:
               path: /ready

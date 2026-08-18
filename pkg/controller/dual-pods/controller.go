@@ -503,6 +503,11 @@ type serverData struct {
 	// Set of InstanceID deleted to make room for this instance
 	InstancesDeleted sets.Set[string]
 
+	// ProxyConfigured is true iff this controller has pointed the requester's
+	// TCP proxy at the bound provider. It only suppresses redundant calls; the
+	// PUT is idempotent, so losing this bit to a restart costs one extra call.
+	ProxyConfigured bool
+
 	ReadinessRelayed *bool
 
 	Sleeping *bool

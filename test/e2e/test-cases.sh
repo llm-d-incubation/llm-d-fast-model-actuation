@@ -564,6 +564,49 @@ cheer Successful switching instances in one launcher
 # Qwen2.5-0.5B-Instruct sleeping on $launcher1 (AKA $launcher2 ... $launcher4)
 
 # ---------------------------------------------------------------------------
+# Reverse Proxy Initialization and Forwarding
+# ---------------------------------------------------------------------------
+
+intro_case Reverse Proxy Initialization and Forwarding
+
+# This test verifies that the dual-pods controller points the requester Pod's
+# TCP proxy at the bound launcher Pod, and that traffic sent to the proxy port
+# arrives at the inference server.
+#
+# Assumed starting state: $req4 is bound to $launcher1, both Ready. Also
+# assumed: the InferenceServerConfig of $req4 is $isc, which is where the
+# inference server's port is read from below. That holds because the
+# ReplicaSet was patched back to $isc before $req4 was created.
+
+launcher1_ip=$(kubectl get pod "$launcher1" -n "$NS" -o jsonpath='{.status.podIP}')
+launcher1_port=$(kubectl get inferenceserverconfig "$isc" -n "$NS" -o jsonpath='{.spec.modelServerConfig.port}')
+expected_target=$(printf '{"address":"%s","port":%d}' "$launcher1_ip" "$launcher1_port")
+
+note "Checking proxy config on requester Pod $req4; expect port-forward and curl noise"
+kubectl port-forward -n "$NS" pod/"$req4" 28091:8081 &
+pfpid=$!
+sleep 5
+
+# The controller configures the proxy while binding, so this already holds;
+# retrying only rides out port-forward startup.
+expect "curl -sf http://localhost:28091/v1/proxy/config | jq -e --argjson want '$expected_target' '. == \$want' &> /dev/null"
+
+kill $pfpid || true
+pfpid=""
+
+note "Checking that the proxy port forwards to the inference server; expect port-forward and curl noise"
+kubectl port-forward -n "$NS" pod/"$req4" 28092:8082 &
+pfpid=$!
+sleep 5
+
+expect "curl -sf http://localhost:28092/health &> /dev/null"
+
+kill $pfpid || true
+pfpid=""
+
+cheer Successful reverse proxy initialization and forwarding
+
+# ---------------------------------------------------------------------------
 # Per-launcher Instance Cap Enforcement
 # ---------------------------------------------------------------------------
 

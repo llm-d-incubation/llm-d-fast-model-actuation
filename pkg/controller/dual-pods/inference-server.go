@@ -537,6 +537,15 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		if out.err != nil {
 			return processResult{err: out.err, retry: true}
 		}
+		// Point the proxy at the provider once the provider has an address to
+		// name. A bound provider that is still starting has none yet, and this
+		// controller is notified again when it gets one. ProxyConfigured is
+		// false here after a restart too, having never been persisted.
+		if !serverDat.ProxyConfigured && providingPod.Status.PodIP != "" {
+			if err = ctl.configureProxy(ctx, serverDat, requestingPod, providingPod, serverPort); err != nil {
+				return processResult{err: err, retry: true}
+			}
+		}
 		// Relay readiness if not already done.
 		// For launcher-based providers, readiness follows the bound instance's
 		// sleeping state rather than the launcher's Pod readiness.
@@ -1501,6 +1510,26 @@ func (ctl *controller) wakeUp(ctx context.Context, serverDat *serverData, reques
 	}
 	klog.FromContext(ctx).V(2).Info("Woke inference server", "endpoint", endpoint, "description", description)
 	serverDat.Sleeping = ptr.To(false)
+	return nil
+}
+
+// configureProxy points the requester's TCP proxy at the inference server behind
+// providingPod, so that clients can reach it at a port of the requester without
+// knowing which port vLLM listens on. Repeating the PUT is harmless, so this
+// need not distinguish "never configured" from "configured, response lost".
+func (ctl *controller) configureProxy(ctx context.Context, serverDat *serverData, requestingPod, providingPod *corev1.Pod, serverPort int32) error {
+	adminPort := requestingPod.Annotations[api.AdminPortAnnotationName]
+	if adminPort == "" {
+		adminPort = api.AdminPortDefaultValue
+	}
+	target := stubapi.ProxyTargetConfig{Address: providingPod.Status.PodIP, Port: uint16(serverPort)}
+	proxyURL := fmt.Sprintf("http://%s:%s%s", requestingPod.Status.PodIP, adminPort, stubapi.ProxyConfigPath)
+	_, err := doHTTP(ctx, "configure_proxy", "PUT", proxyURL, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": requestingPod.Annotations[api.InferenceServerConfigAnnotationName]}), target, nil)
+	if err != nil {
+		return fmt.Errorf("failed to configure proxy of %s to reach %s: %w", requestingPod.Name, target.String(), err)
+	}
+	klog.FromContext(ctx).V(2).Info("Configured requester proxy", "requester", requestingPod.Name, "target", target.String())
+	serverDat.ProxyConfigured = true
 	return nil
 }
 
