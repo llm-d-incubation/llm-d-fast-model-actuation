@@ -830,11 +830,18 @@ The relay of readiness goes as follows.
 
 ### Requester TCP Proxy
 
-The requester container includes a TCP proxy server that forwards
+The requester container includes a TCP proxy server that can forward
 inference requests to the actual vLLM instance running in the
 server-providing Pod (typically managed by the launcher). This lets
 clients send requests to the server-requesting Pod without needing to
 know the port that vLLM is listening on.
+
+Using it is optional. A server-requesting Pod asks for it by naming the
+port in the `dual-pods.llm-d.ai/proxy-port` annotation; the dual-pods
+controller configures the proxy only for such a Pod. Without the
+annotation the proxy is never configured, so it never opens a listener,
+and clients reach the inference server however they did before this
+proxy existed.
 
 The proxy operates as a simple TCP-level forwarder: each incoming
 client connection results in a new outbound connection to the
@@ -846,10 +853,10 @@ which includes the OpenAI-compatible API endpoints such as
 The proxy is configured through a resource at `/v1/proxy/config` (see
 [the SPI](../pkg/spi/interface.go)) that supports PUT and GET.
 
-- **Configuration** (PUT): when the dual-pods controller binds a
-  server-requesting Pod to a server-providing Pod, it PUTs the target
-  address (the server-providing Pod's IP) and the port vLLM listens
-  on:
+- **Configuration** (PUT): when the dual-pods controller has bound a
+  server-requesting Pod that asked for the proxy to a server-providing
+  Pod, it PUTs the target address (the server-providing Pod's IP) and
+  the port vLLM listens on:
 
   ```json
   {"address": "10.244.1.5", "port": 8005}

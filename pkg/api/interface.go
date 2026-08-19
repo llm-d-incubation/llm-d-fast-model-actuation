@@ -77,6 +77,15 @@ const AdminPortAnnotationName = "dual-pods.llm-d.ai/admin-port"
 // to be queried to get the set of associated accelerators.
 const AdminPortDefaultValue = "8081"
 
+// ProxyPortAnnotationName is the name of an annotation on the
+// server-requesting Pod whose value is the port on which that Pod's requester
+// forwards traffic to the bound inference server. Its presence is what asks
+// the dual-pods controller to configure that forwarding; without it the
+// controller leaves the requester's proxy alone, and clients reach the
+// inference server however they did before the proxy existed. There is no
+// default: a Pod that does not name a port is not asking for one.
+const ProxyPortAnnotationName = "dual-pods.llm-d.ai/proxy-port"
+
 // ProviderData is the data made available to the server patch.
 type ProviderData struct {
 	// NodeName is the name of the Node to which the Pod is bound

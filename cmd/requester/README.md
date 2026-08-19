@@ -8,13 +8,13 @@ The requester executable runs in the requester container of a server-requesting
 Pod. Its purpose is two-fold:
 
 1. **Look to the rest of llm-d like an inference server.** The requester listens
-   on the same set of ports an inference server would and forwards client traffic
-   to the bound vLLM instance via a built-in TCP reverse proxy.
+   on the same set of ports an inference server would and can forward client
+   traffic to the bound vLLM instance via a built-in TCP reverse proxy.
 2. **Relay controller-bound state to and from the dual-pods controller.** The
    requester exposes a small SPI surface so that the dual-pods controller can
    read GPU IDs, push the bound server's address, and update readiness state.
 
-Adding the reverse TCP proxy makes the requester look *more* like an inference
+The reverse TCP proxy can make the requester look *more* like an inference
 server than it otherwise would: client requests can be sent directly to the
 requester Pod's IP and the proxy forwards them to the actual server-providing
 Pod after binding.
@@ -29,10 +29,18 @@ The server-requesting Pod runs three servers:
 
 ### TCP Proxy
 
-The requester includes a **TCP proxy** that forwards traffic to the bound inference
-server. After the dual-pods controller binds the requester to a server-providing Pod,
-it configures the proxy target via a `PUT` to the SPI endpoint at `/v1/proxy/config`.
-You can query the current proxy configuration with `GET /v1/proxy/config`.
+The requester carries a **TCP proxy** that can forward traffic to the bound
+inference server, and using it is optional.
+
+A server-requesting Pod asks for it by naming the port in the
+`dual-pods.llm-d.ai/proxy-port` annotation. The dual-pods controller then PUTs
+the bound server's address to the SPI endpoint at `/v1/proxy/config`, and the
+proxy starts accepting connections on that port. You can query the current
+configuration with `GET /v1/proxy/config`.
+
+Without that annotation the controller never configures the proxy, so it never
+opens a listener, and clients reach the inference server the way they did before
+the proxy existed. Nothing else about the requester changes.
 
 ## Command-line flags
 
@@ -118,6 +126,9 @@ spec:
         app: dp-example
       annotations:
         dual-pods.llm-d.ai/admin-port: "8081"
+        # Asks the controller to point this Pod's proxy at the bound server.
+        # Omit it and the proxy stays idle.
+        dual-pods.llm-d.ai/proxy-port: "8082"
         dual-pods.llm-d.ai/server-patch: |
           metadata:
             labels: {
@@ -163,8 +174,8 @@ spec:
             containerPort: 8082
           readinessProbe:
             httpGet:
-              path: /health
-              port: 8082
+              path: /ready
+              port: 8080
             initialDelaySeconds: 2
             periodSeconds: 5
           resources:
@@ -194,6 +205,9 @@ spec:
         app: dp-example
       annotations:
         dual-pods.llm-d.ai/admin-port: "8081"
+        # Asks the controller to point this Pod's proxy at the bound server.
+        # Omit it and the proxy stays idle.
+        dual-pods.llm-d.ai/proxy-port: "8082"
         dual-pods.llm-d.ai/server-patch: |
           metadata:
             labels: {
@@ -249,8 +263,8 @@ spec:
             containerPort: 8082
           readinessProbe:
             httpGet:
-              path: /health
-              port: 8082
+              path: /ready
+              port: 8080
             initialDelaySeconds: 2
             periodSeconds: 5
           resources:

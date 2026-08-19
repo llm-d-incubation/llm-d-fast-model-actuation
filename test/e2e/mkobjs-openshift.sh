@@ -247,6 +247,7 @@ spec:
         instance: "$inst"
       annotations:
         dual-pods.llm-d.ai/admin-port: "8081"
+        dual-pods.llm-d.ai/proxy-port: "8082"
         dual-pods.llm-d.ai/inference-server-config: "inference-server-config-smol-$inst"
     spec:
       ${runtime_class}
@@ -262,9 +263,6 @@ spec:
             containerPort: 8081
           - name: proxy
             containerPort: 8082
-          # Deliberately not probing through the proxy, unlike
-          # config/examples/requester.yaml: the e2e cases below exercise the
-          # readiness relay, which needs this Pod's readiness to follow it.
           readinessProbe:
             httpGet:
               path: /ready
