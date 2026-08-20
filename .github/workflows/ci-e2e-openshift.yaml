@@ -537,6 +537,7 @@ jobs:
             --oci-registry "${CONTAINER_IMG_REG,,}" \
             --config-dir config \
             --chart-set global.local=false \
+            --chart-set global.produceCoverdata=true \
             --namespace "$FMA_NAMESPACE" \
             --ensure-node-view-cluster-role "${FMA_CHART_INSTANCE_NAME}-node-view" \
             --install-crds true \
