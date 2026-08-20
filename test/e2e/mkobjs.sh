@@ -180,6 +180,7 @@ spec:
         instance: "$inst"
       annotations:
         dual-pods.llm-d.ai/admin-port: "8081"
+        dual-pods.llm-d.ai/proxy-port: "8082"
         dual-pods.llm-d.ai/inference-server-config: "inference-server-config-smol-$inst"
     spec:
       containers:
@@ -207,6 +208,8 @@ spec:
             containerPort: 8080
           - name: spi
             containerPort: 8081
+          - name: proxy
+            containerPort: 8082
           readinessProbe:
             httpGet:
               path: /ready

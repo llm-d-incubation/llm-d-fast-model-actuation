@@ -2,18 +2,24 @@ apiVersion: v1
 kind: Pod
 metadata:
   name: requester-example
+  annotations:
+    # Naming a proxy port is what asks the dual-pods controller to point this
+    # Pod's proxy at the bound inference server. Drop this annotation and the
+    # proxy stays idle; everything else here still works.
+    dual-pods.llm-d.ai/proxy-port: "8082"
 spec:
   containers:
     - name: requester-container
       image: ghcr.io/llm-d-incubation/llm-d-fast-model-actuation/requester:latest
+      command:
+        - /app/requester
+        - --probes-port=8080
+        - --spi-port=8081
+        - --proxy-port=8082
       ports:
         - containerPort: 8080
         - containerPort: 8081
-      env:
-        - name: PROBES_PORT
-          value: "8080"
-        - name: SPI_PORT
-          value: "8081"
+        - containerPort: 8082
       readinessProbe:
         httpGet:
           path: /ready

@@ -19,6 +19,7 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -62,10 +63,11 @@ type Server struct {
 
 	// configCh carries the target from Configure to Run; sent on at most once.
 	configCh chan stubapi.ProxyTargetConfig
-	// startedCh carries the result of starting the listener (nil on success).
-	// Run sends exactly one value then closes: nil on success, an error on
-	// Start failure or shutdown-before-configuration.
-	startedCh chan error
+	// startedCh is closed once Run has settled the listener's fate, which it
+	// records in startErr beforehand (nil on success). A channel carrying the
+	// error would be readable only once, and every PUT has to learn the outcome.
+	startedCh chan struct{}
+	startErr  error
 
 	// target is the delivered backend target; guarded by stateMu because GET
 	// and the duplicate-PUT check race with the first PUT writer.
@@ -78,7 +80,7 @@ func New(cfg ProxyConfig) *Server {
 	return &Server{
 		cfg:       cfg,
 		configCh:  make(chan stubapi.ProxyTargetConfig, 1),
-		startedCh: make(chan error, 1),
+		startedCh: make(chan struct{}),
 	}
 }
 
@@ -97,7 +99,7 @@ func (s *Server) Run(ctx context.Context) error {
 		logger.V(2).Info("Received proxy target from Configure", "target", tgt)
 	case <-ctx.Done():
 		logger.V(2).Info("Context cancelled before proxy was configured")
-		s.startedCh <- fmt.Errorf("proxy shut down before configuration")
+		s.startErr = errors.New("proxy shut down before configuration")
 		close(s.startedCh)
 		return nil
 	}
@@ -110,13 +112,11 @@ func (s *Server) Run(ctx context.Context) error {
 	})
 
 	if err := p.Start(); err != nil {
-		startErr := fmt.Errorf("failed to start proxy listener on port %d: %w", s.cfg.Port, err)
-		s.startedCh <- startErr
+		s.startErr = fmt.Errorf("failed to start proxy listener on port %d: %w", s.cfg.Port, err)
 		close(s.startedCh)
 		logger.Error(err, "Failed to start TCP proxy listener", "port", s.cfg.Port)
-		return startErr
+		return s.startErr
 	}
-	s.startedCh <- nil
 	close(s.startedCh)
 	logger.Info("TCP proxy server listening", "port", s.cfg.Port, "target", targetAddr)
 
@@ -142,10 +142,12 @@ func (s *Server) Run(ctx context.Context) error {
 // Configure handles the proxy configuration HTTP endpoint at ProxyConfigPath.
 //
 // GET returns the configured target (200) or 404 if not yet configured.
-// PUT delivers the backend target. PUT may succeed only once; subsequent PUTs
-// return 409. PUT does not return until the proxy is actively listening, so
-// callers can rely on a 200 response to mean the proxy is ready to accept
-// connections.
+// PUT delivers the backend target. Repeating a PUT of the target already in
+// effect is accepted (200), because a client whose connection broke before the
+// response arrived cannot tell whether its request was handled; a PUT of any
+// other target returns 409. PUT does not return until the proxy is actively
+// listening, so callers can rely on a 200 response to mean the proxy is ready
+// to accept connections.
 func (s *Server) Configure(w http.ResponseWriter, r *http.Request) {
 	logger := klog.FromContext(r.Context()).WithName("proxy-server")
 
@@ -184,27 +186,32 @@ func (s *Server) Configure(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.stateMu.Lock()
-	if s.target != nil {
-		s.stateMu.Unlock()
-		http.Error(w, "proxy already configured", http.StatusConflict)
-		return
+	cur := s.target
+	if cur == nil {
+		s.target = &cfg
 	}
-	s.target = &cfg
 	s.stateMu.Unlock()
 
-	logger.V(2).Info("Delivering proxy target to Run", "target", cfg)
+	switch {
+	case cur == nil:
+		logger.V(2).Info("Delivering proxy target to Run", "target", cfg)
+		// configCh has cap=1 and is reached at most once per process lifetime,
+		// so the send never blocks.
+		s.configCh <- cfg
+	case *cur != cfg:
+		http.Error(w, fmt.Sprintf("proxy already configured to %s", cur.String()), http.StatusConflict)
+		return
+	default:
+		logger.V(2).Info("Proxy already configured to this target", "target", cfg)
+	}
 
-	// configCh has cap=1 and is reachable at most once per process lifetime,
-	// so the send never blocks.
-	s.configCh <- cfg
-
-	// Wait for Run to confirm the listener is up. Abort if the request
-	// is cancelled; Run always sends on startedCh (nil, start error, or
-	// shutdown error), so this select is guaranteed to unblock.
+	// Wait for Run to report the listener's fate. Abort if the request is
+	// cancelled; Run always closes startedCh, so this select always unblocks.
+	// Reading startErr after that receive is ordered after Run's write to it.
 	select {
-	case startErr := <-s.startedCh:
-		if startErr != nil {
-			http.Error(w, fmt.Sprintf("proxy failed to start: %v", startErr), http.StatusInternalServerError)
+	case <-s.startedCh:
+		if s.startErr != nil {
+			http.Error(w, fmt.Sprintf("proxy failed to start: %v", s.startErr), http.StatusInternalServerError)
 			return
 		}
 	case <-r.Context().Done():
