@@ -29,7 +29,7 @@
 #   FMA_DEBUG            - "true" to enable shell tracing (set -x)
 #   HELM_EXTRA_ARGS     - additional Helm arguments appended to the
 #                         `helm upgrade --install` invocation
-#                         (e.g. "--set global.local=true --set dualPodsController.sleeperLimit=4")
+#                         (e.g. "--set dualPodsController.sleeperLimit=4")
 
 set -euo pipefail
 if [ "${FMA_DEBUG:-false}" = "true" ]; then
@@ -171,7 +171,7 @@ HELM_ARGS=(
     --set global.imageTag="${IMAGE_TAG}"
 )
 
-# Append any caller-supplied Helm arguments (e.g. --set global.local=true)
+# Append any caller-supplied Helm arguments
 if [ -n "${HELM_EXTRA_ARGS:-}" ]; then
     read -ra _extra <<< "$HELM_EXTRA_ARGS"
     HELM_ARGS+=("${_extra[@]}")

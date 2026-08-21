@@ -15,10 +15,6 @@ global:
   # Empty string means no new binding is needed.
   nodeViewClusterRole: ""
 
-  # Set this to true when deploying in a local cluster.
-  # This suppresses image pulls for the dual-pods controller.
-  local: false
-
   # Set this to true to make the controller(s) produce coverage data
   produceCoverdata: false
 

@@ -8,15 +8,3 @@ app.kubernetes.io/name: fma-controllers
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
-
-{{/*
-Image pull policy for dual-pods-controller.
-When global.local is true, use Never; otherwise Always.
-*/}}
-{{- define "fma-controllers.dpc.imagePullPolicy" -}}
-{{- if .Values.global.local -}}
-Never
-{{- else -}}
-Always
-{{- end -}}
-{{- end }}

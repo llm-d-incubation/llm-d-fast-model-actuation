@@ -399,8 +399,6 @@ class KindKubernetesOps(KubernetesOps):
                     "--set",
                     "dualPodsController.sleeperLimit=2",
                     "--set",
-                    "global.local=true",
-                    "--set",
                     "launcherPopulator.enabled=false",
                 ]
             )
