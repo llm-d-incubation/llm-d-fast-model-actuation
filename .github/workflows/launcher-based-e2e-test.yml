@@ -65,6 +65,9 @@ jobs:
           echo "GITHUB_ACTION_REF=$GITHUB_ACTION_REF"
 
   run-launcher-test:
+    strategy:
+      matrix:
+        release: [ "", "0.6.5-alpha.1" ]
     runs-on: ubuntu-22.04-arm
     steps:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -83,7 +86,7 @@ jobs:
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Run launcher-based E2E test
-        run: test/e2e/run-launcher-based.sh
+        run: test/e2e/run-launcher-based.sh --release "${{ matrix.release }}"
 
       - name: list all pods
         if: always()
