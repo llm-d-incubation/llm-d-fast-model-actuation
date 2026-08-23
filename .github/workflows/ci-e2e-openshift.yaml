@@ -546,6 +546,7 @@ jobs:
             subject=(--image-tag "$IMAGE_TAG"
                      --oci-registry "${CONTAINER_IMG_REG,,}"
                      --config-dir config
+                     --chart-set global.local=false
                     )
           else
             subject=(--release "$FMA_RELEASE")
