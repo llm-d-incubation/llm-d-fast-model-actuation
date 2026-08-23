@@ -60,7 +60,14 @@ on:
       fma_release:
         description: 'FMA release to test, sans leading v; empty string tests local copy'
         required: false
+        type: string
         default: ''
+      run_cluster:
+        description: 'the cluster to run the test'
+        required: false
+        type: choice
+        options: [ vllm-d, pok-prod ]
+        default: 'pok-prod'
 
 jobs:
   # Gate: Check permissions and handle /ok-to-test for fork PRs
@@ -364,7 +371,7 @@ jobs:
 
   # Run e2e tests on OpenShift self-hosted runner
   e2e-openshift:
-    runs-on: [self-hosted, openshift, pok-prod]
+    runs-on: [self-hosted, openshift, "${{ github.event.inputs.run_cluster || 'pok-prod' }}"]
     needs: [gate, build-image]
     if: needs.gate.outputs.should_run == 'true'
     env:
@@ -619,10 +626,16 @@ jobs:
         run: |
           if [ -r testnode ]
           then
+            case "${{ github.event.inputs.run_cluster || 'pok-prod' }}" in
+              (vllm-d)   ingdom=fmaas-vllm-d.fmaas.res.ibm.com;;
+              (pok-prod) ingdom=pokprod001.ete14.res.ibm.com;;
+              (*) echo "Impossible run_cluster '${{ github.event.inputs.run_cluster }}'"
+                  exit 1;;
+            esac
             curl -sSkG \
               -H "Authorization: Bearer $(oc whoami -t)" \
               --data-urlencode "query=DCGM_FI_DEV_FB_USED{Hostname=\"$(cat testnode)\"}" \
-              https://prometheus-k8s-openshift-monitoring.apps.pokprod001.ete14.res.ibm.com/api/v1/query \
+              https://prometheus-k8s-openshift-monitoring.apps.${ingdom}/api/v1/query \
             | jq '.data.result[]'
           else echo there is no readable testnode file
           fi
