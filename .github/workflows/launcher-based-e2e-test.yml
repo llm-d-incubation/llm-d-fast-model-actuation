@@ -15,7 +15,6 @@ on:
       - cmd/launcher-populator/**
       - cmd/test-requester/**
       - config/**
-      - '!config/examples/**'
       - dockerfiles/Dockerfile.launcher.cpu
       - go.*
       - inference_server/launcher/**
@@ -37,7 +36,6 @@ on:
       - cmd/launcher-populator/**
       - cmd/test-requester/**
       - config/**
-      - '!config/examples/**'
       - dockerfiles/Dockerfile.launcher.cpu
       - go.*
       - inference_server/launcher/**
