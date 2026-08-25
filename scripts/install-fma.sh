@@ -245,7 +245,7 @@ fi
 if [ -n "$release" ]; then
     helm_args=("oci://${oci_reg}/charts/fma-controllers" --version "$release")
 else
-    helm_args=(charts/fma-controllers --set global.local=true)
+    helm_args=(charts/fma-controllers)
 fi
 
 

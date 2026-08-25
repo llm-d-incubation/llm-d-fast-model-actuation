@@ -314,7 +314,6 @@ done
 if [ -z "$release" ]; then
     what=(--image-tag "$(make echo-var VAR=IMAGE_TAG)"
           --oci-registry "$(make echo-var VAR=CONTAINER_IMG_REG)"
-          --chart-set global.local=true
          )
 else
     what=(--release "$release")

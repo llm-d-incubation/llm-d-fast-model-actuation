@@ -65,7 +65,6 @@ helm upgrade --install fma charts/fma-controllers \
   --set global.imageTag="$tag" \
   --set global.nodeViewClusterRole=node-viewer \
   --set dualPodsController.sleeperLimit=1 \
-  --set global.local=true \
   --set launcherPopulator.enabled=false
 
 function mkrs() {
