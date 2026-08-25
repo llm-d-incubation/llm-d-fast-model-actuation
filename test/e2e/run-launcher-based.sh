@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 
-# Usage: $0
+# Usage: $0 [--local | --release $semver]
 # Current working directory must be the root of the Git repository.
-# This script tests launcher-based server-providing pods independently.
+#
+# This script creates a `kind` cluster and uses it to test
+# launcher-based server-providing pods independently.
 #
 # Required tools: kubectl, helm, curl, jq, yq (https://github.com/mikefarah/yq),
 # kind (defaulting to Kubernetes 1.30 or higher).
@@ -24,12 +26,55 @@ set -euo pipefail
 
 set -x
 
+release=""
+
+function usage() {
+    (
+        (( $# > 0 )) && echo "$*" || true
+        cat <<EOF
+$0 usage: OPTIONS
+
+where OPTIONS are any of the following.
+
+    --release[=]\$semver
+    --local
+EOF
+    ) >& 2
+}
+
+while (( $# > 0 )); do
+    case "$1" in
+        (--release=*)
+            release=${1#--release=};;
+        (--release) if (( $# > 1 ))
+                    then release="$2"; shift
+                    else usage missing value for --release; exit 1
+                    fi;;
+
+        (--local) release="";;
+
+        (*) usage "Unknown argument $1"
+            exit 1;;
+    esac
+    shift
+done
+
+if [[ "$release" == v* ]]; then
+    echo "$0: do not include the leading 'v' in a release string" >&2
+    exit 1
+fi
+
+if [ -n "$release" ] && ! wc -w <<<"$release" | grep -w 1; then
+    echo "$0: the release must be a single shell 'word'" >&2
+    exit 1
+fi
+
 nl=$'\n'
 
 function clear_img_repo() (
     set +o pipefail
     docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.CreatedAt}}" $1 | fgrep -v '<none>' | grep -vw REPOSITORY | while read name tag rest; do
-	docker rmi $name:$tag
+        docker rmi $name:$tag
     done
 )
 
@@ -52,14 +97,17 @@ fi
 clear_img_repo ko.local/test-requester
 clear_img_repo my-registry/my-namespace/test-requester
 clear_img_repo my-registry/my-namespace/test-launcher
-clear_img_repo ko.local/dual-pods-controller
-clear_img_repo my-registry/my-namespace/dual-pods-controller
-clear_img_repo ko.local/launcher-populator
-clear_img_repo my-registry/my-namespace/launcher-populator
 make build-test-requester-local
 make build-test-launcher-local
-make build-controller-local
-make build-populator-local
+
+if [ -z "$release" ]; then
+    clear_img_repo ko.local/dual-pods-controller
+    clear_img_repo my-registry/my-namespace/dual-pods-controller
+    clear_img_repo ko.local/launcher-populator
+    clear_img_repo my-registry/my-namespace/launcher-populator
+    make build-controller-local
+    make build-populator-local
+fi
 
 : Set up the kind cluster
 
@@ -247,8 +295,10 @@ done
 
 make load-test-requester-local
 make load-test-launcher-local
-make load-controller-local
-make load-populator-local
+if [ -z "$release" ]; then
+    make load-controller-local
+    make load-populator-local
+fi
 
 : Populate GPU map for testing
 
@@ -261,14 +311,21 @@ done
 
 : Deploy FMA controllers
 
+if [ -z "$release" ]; then
+    what=(--image-tag "$(make echo-var VAR=IMAGE_TAG)"
+          --oci-registry "$(make echo-var VAR=CONTAINER_IMG_REG)"
+          --chart-set global.local=true
+         )
+else
+    what=(--release "$release")
+fi
+
 ./scripts/install-fma.sh \
-    --image-tag "$(make echo-var VAR=IMAGE_TAG)" \
-    --oci-registry "$(make echo-var VAR=CONTAINER_IMG_REG)" \
+    "${what[@]}" \
     --ensure-node-view-cluster-role node-viewer \
     --install-crds true \
     --install-admission-policies true \
     --chart-set global.produceCoverdata=true \
-    --chart-set global.local=true
 
 : Run launcher-based E2E tests
 

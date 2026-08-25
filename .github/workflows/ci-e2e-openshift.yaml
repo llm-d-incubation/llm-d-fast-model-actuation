@@ -57,6 +57,17 @@ on:
         description: 'Skip cleanup after tests'
         required: false
         default: 'false'
+      fma_release:
+        description: 'FMA release to test, sans leading v; empty string tests local copy'
+        required: false
+        type: string
+        default: ''
+      run_cluster:
+        description: 'the cluster to run the test'
+        required: false
+        type: choice
+        options: [ vllm-d, pok-prod ]
+        default: 'pok-prod'
 
 jobs:
   # Gate: Check permissions and handle /ok-to-test for fork PRs
@@ -274,7 +285,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       image_tag: ${{ steps.build.outputs.image_tag }}
-      controller_image: ${{ steps.build.outputs.controller_image }}
       requester_image: ${{ steps.build.outputs.requester_image }}
       launcher_image: ${{ steps.build.outputs.launcher_image }}
     steps:
@@ -313,6 +323,7 @@ jobs:
         id: build
         env:
           GIT_REF: ${{ needs.gate.outputs.pr_head_sha }}
+          FMA_RELEASE: ${{ github.event.inputs.fma_release || '' }}
         run: |
           # Use first 8 chars of the git ref (POSIX-compliant)
           IMAGE_TAG="ref-$(printf '%s' "$GIT_REF" | cut -c1-8)-$(date +%Y%m%d)"
@@ -321,6 +332,10 @@ jobs:
 
           echo "Building images with tag: $IMAGE_TAG"
           echo "Registry: $CONTAINER_IMG_REG"
+          echo "FMA_RELEASE=<$FMA_RELEASE>"
+
+          if [ -z "$FMA_RELEASE" ]; then
+          echo building FMA platform images
 
           # Build controller (ko)
           make build-controller \
@@ -331,6 +346,8 @@ jobs:
           make build-populator \
             CONTAINER_IMG_REG="$CONTAINER_IMG_REG" \
             IMAGE_TAG="$IMAGE_TAG"
+
+          fi
 
           # Build requester (Docker, multi-platform)
           make build-and-push-requester \
@@ -343,7 +360,6 @@ jobs:
             LAUNCHER_IMG_TAG="$IMAGE_TAG"
 
           echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
-          echo "controller_image=${CONTAINER_IMG_REG}/dual-pods-controller:${IMAGE_TAG}" >> $GITHUB_OUTPUT
           echo "requester_image=${CONTAINER_IMG_REG}/requester:${IMAGE_TAG}" >> $GITHUB_OUTPUT
           echo "launcher_image=${CONTAINER_IMG_REG}/launcher:${IMAGE_TAG}" >> $GITHUB_OUTPUT
           echo "All images built and pushed"
@@ -355,7 +371,7 @@ jobs:
 
   # Run e2e tests on OpenShift self-hosted runner
   e2e-openshift:
-    runs-on: [self-hosted, openshift, pok-prod]
+    runs-on: [self-hosted, openshift, "${{ github.event.inputs.run_cluster || 'pok-prod' }}"]
     needs: [gate, build-image]
     if: needs.gate.outputs.should_run == 'true'
     env:
@@ -531,12 +547,19 @@ jobs:
       - name: Install FMA
         env:
           CONTAINER_IMG_REG: ghcr.io/${{ github.repository }}
+          FMA_RELEASE: ${{ github.event.inputs.fma_release || '' }}
         run: |
+          if [ -z "$FMA_RELEASE" ]; then
+            subject=(--image-tag "$IMAGE_TAG"
+                     --oci-registry "${CONTAINER_IMG_REG,,}"
+                     --config-dir config
+                     --chart-set global.local=false
+                    )
+          else
+            subject=(--release "$FMA_RELEASE")
+          fi
           scripts/install-fma.sh \
-            --image-tag "$IMAGE_TAG" \
-            --oci-registry "${CONTAINER_IMG_REG,,}" \
-            --config-dir config \
-            --chart-set global.local=false \
+            "${subject[@]}" \
             --chart-set global.produceCoverdata=true \
             --namespace "$FMA_NAMESPACE" \
             --ensure-node-view-cluster-role "${FMA_CHART_INSTANCE_NAME}-node-view" \
@@ -603,10 +626,16 @@ jobs:
         run: |
           if [ -r testnode ]
           then
+            case "${{ github.event.inputs.run_cluster || 'pok-prod' }}" in
+              (vllm-d)   ingdom=fmaas-vllm-d.fmaas.res.ibm.com;;
+              (pok-prod) ingdom=pokprod001.ete14.res.ibm.com;;
+              (*) echo "Impossible run_cluster '${{ github.event.inputs.run_cluster }}'"
+                  exit 1;;
+            esac
             curl -sSkG \
               -H "Authorization: Bearer $(oc whoami -t)" \
               --data-urlencode "query=DCGM_FI_DEV_FB_USED{Hostname=\"$(cat testnode)\"}" \
-              https://prometheus-k8s-openshift-monitoring.apps.pokprod001.ete14.res.ibm.com/api/v1/query \
+              https://prometheus-k8s-openshift-monitoring.apps.${ingdom}/api/v1/query \
             | jq '.data.result[]'
           else echo there is no readable testnode file
           fi
