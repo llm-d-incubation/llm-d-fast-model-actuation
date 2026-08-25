@@ -2248,7 +2248,13 @@ func doHTTP(ctx context.Context, purpose, method, url string, latencyHistogramVe
 		}
 	}
 	logger := klog.FromContext(ctx)
-	logger.V(5).Info("HTTP call done", "purpose", purpose, "method", method, "url", url, "httpCallStartTime", httpCallStartTime.Format(time.RFC3339Nano), "latencySecs", latencySecs, "statusCode", statusCode, "err", err)
+	// method is never "HEAD"
+	if method == http.MethodGet && err == nil {
+		logger = logger.V(4)
+	} else {
+		logger = logger.V(2)
+	}
+	logger.Info("HTTP call done", "purpose", purpose, "method", method, "url", url, "httpCallStartTime", httpCallStartTime.Format(time.RFC3339Nano), "latencySecs", latencySecs, "statusCode", statusCode, "err", err)
 	latencyHistogramVec.WithLabelValues(purpose, method, strconv.FormatInt(int64(statusCode), 10)).Observe(latencySecs)
 	return statusCode, err
 }
