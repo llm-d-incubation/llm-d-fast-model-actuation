@@ -64,7 +64,7 @@ if [[ "$release" == v* ]]; then
     exit 1
 fi
 
-if [ -n "$release" ] && ! wc -w <<<"$release" | grep -w 1; then
+if [ -n "$release" ] && ! wc -w <<<"$release" | grep -qw 1; then
     echo "$0: the release must be a single shell 'word'" >&2
     exit 1
 fi
