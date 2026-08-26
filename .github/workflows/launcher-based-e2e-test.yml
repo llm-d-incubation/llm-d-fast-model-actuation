@@ -167,6 +167,8 @@ jobs:
         run: cat scrape2p.metrics || true
 
       - name: extract coverage data from dual pods controller
+        env:
+          COVERDIR: "cover-dpc-${{ matrix.release || 'local' }}"
         run: |
           kubectl scale deploy/fma-dual-pods-controller --replicas=0
           let try=1
@@ -178,25 +180,23 @@ jobs:
           kubectl scale deploy/fma-dpc-coverdata-inspector --replicas=1
           kubectl wait deploy/fma-dpc-coverdata-inspector --for condition=Available
           insp=$(kubectl get pods -l app.kubernetes.io/component=dpc-coverdata-inspector -o name | sed s:^pod/::)
-          mkdir -p dpc-cover/data
+          mkdir -p ${COVERDIR}/data
           kubectl wait pod "${insp}" --for condition=Ready
-          kubectl cp "${insp}:var/coverdata" dpc-cover/data
-          ls -l dpc-cover/data
-          go tool covdata textfmt -i=dpc-cover/data -o dpc-cover/profile.txt
-          go tool cover -func=dpc-cover/profile.txt -o dpc-cover-func.txt
+          kubectl cp "${insp}:var/coverdata" ${COVERDIR}/data
+          ls -l ${COVERDIR}/data
+          go tool covdata func -i=${COVERDIR}/data > ${COVERDIR}-func.txt
 
       - name: upload coverage data from dual pods controller
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: dpc-cover-data
-          path: dpc-cover/data
+          name: cover-dpc-${{ matrix.release || 'local' }}-data
+          path: "cover-dpc-${{ matrix.release || 'local' }}/data"
           retention-days: 14
 
       - name: upload coverage summary from dual pods controller
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: dpc-cover-func.txt
-          path: dpc-cover-func.txt
+          path: "cover-dpc-${{ matrix.release || 'local' }}-func.txt"
           archive: false
           retention-days: 14
 
