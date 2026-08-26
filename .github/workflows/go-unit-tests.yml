@@ -24,3 +24,20 @@ jobs:
 
       - name: Run Go unit tests
         run: make test
+
+      - name: analyze coverage by func
+        run: go tool cover -func=cover/unit-profile.txt -o cover/unit-func.txt
+
+      - name: upload unit test coverage profile
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          path: cover/unit-profile.txt
+          archive: false
+          retention-days: 14
+
+      - name: upload unit test func analysis
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          path: cover/unit-func.txt
+          archive: false
+          retention-days: 14
