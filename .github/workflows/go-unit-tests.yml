@@ -26,13 +26,13 @@ jobs:
         run: make test
 
       - name: analyze coverage by func
-        run: go tool cover -func=cover/unit-profile.txt -o cover/unit-func.txt
+        run: go tool covdata func -i cover/unit > cover/unit-func.txt
 
-      - name: upload unit test coverage profile
+      - name: upload unit test coverage data
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          path: cover/unit-profile.txt
-          archive: false
+          name: cover-unit-data
+          path: cover/unit
           retention-days: 14
 
       - name: upload unit test func analysis
