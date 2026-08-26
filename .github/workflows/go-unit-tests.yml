@@ -31,7 +31,6 @@ jobs:
       - name: upload unit test coverage profile
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: cover-unit-profile.txt
           path: cover/unit-profile.txt
           archive: false
           retention-days: 14
@@ -39,7 +38,6 @@ jobs:
       - name: upload unit test func analysis
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: cover-unit-func.txt
           path: cover/unit-func.txt
           archive: false
           retention-days: 14
