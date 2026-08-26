@@ -15,6 +15,15 @@ config_dir=""
 chart_set=()
 chart_instance_name=fma
 
+# compares two semver-sans-leading-v strings.
+# Both must have non-empty major.minor.patch;
+# second must not have any prerelease or build metadata.
+function version_leq() {
+    red1=${1%%-*}
+    red1=${red1%%+*}
+    (echo "$red1"; echo "$2") | sort -CV
+}
+
 function usage() {
     (
         (( $# > 0 )) && echo "$*" || true
@@ -156,6 +165,10 @@ if [ -n "$existing_nvcr" ] && [ -n "$ensure_nvcr" ]; then
 fi
 
 if [ -n "$release" ] && [ -z "$img_tag" ]; then
+   if ! [[ "$release" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-].+)?$ ]]; then
+     echo "$0: release '$release' is not a semantic version sans leading v" >&2
+     exit 1
+   fi
    echo "Installing FMA release $release with" >&2
    oci_reg="${oci_reg:-ghcr.io/llm-d-incubation/llm-d-fast-model-actuation}"
 elif [ -n "$img_tag" ] && [ -n "$oci_reg" ] && [ -z "$release" ]; then
@@ -218,6 +231,12 @@ fi
 if [[ "$install_crds" == "true" ]]; then
     if [ -n "$config_dir" ]; then
         ysrc=$(cat "${config_dir}/crds.yaml")
+    elif version_leq "$release" 0.6.4; then
+        ysrc=$(
+          curl -fsSL "https://raw.githubusercontent.com/llm-d-incubation/llm-d-fast-model-actuation/refs/tags/v$release/config/crd/fma.llm-d.ai_inferenceserverconfigs.yaml"
+          curl -fsSL "https://raw.githubusercontent.com/llm-d-incubation/llm-d-fast-model-actuation/refs/tags/v$release/config/crd/fma.llm-d.ai_launcherconfigs.yaml"
+          curl -fsSL "https://raw.githubusercontent.com/llm-d-incubation/llm-d-fast-model-actuation/refs/tags/v$release/config/crd/fma.llm-d.ai_launcherpopulationpolicies.yaml"
+        )
     else
         ysrc=$(curl -fsSL "https://raw.githubusercontent.com/llm-d-incubation/llm-d-fast-model-actuation/refs/tags/v$release/config/crds.yaml")
     fi
@@ -238,6 +257,11 @@ fi
 if [[ "$install_aps" != "true" ]]; then true
 elif [ -n "$config_dir" ]; then
     kubectl apply  -f "${config_dir}/validating-admission-policies.yaml"
+elif version_leq "$release" 0.6.4; then
+    kubectl apply  -f "https://raw.githubusercontent.com/llm-d-incubation/llm-d-fast-model-actuation/refs/tags/v$release/config/validating-admission-policies/bind-fma-bound-serverreqpod.yaml"
+    kubectl apply  -f "https://raw.githubusercontent.com/llm-d-incubation/llm-d-fast-model-actuation/refs/tags/v$release/config/validating-admission-policies/bind-fma-immutable-fields.yaml"
+    kubectl apply  -f "https://raw.githubusercontent.com/llm-d-incubation/llm-d-fast-model-actuation/refs/tags/v$release/config/validating-admission-policies/fma-bound-serverreqpod.yaml"
+    kubectl apply  -f "https://raw.githubusercontent.com/llm-d-incubation/llm-d-fast-model-actuation/refs/tags/v$release/config/validating-admission-policies/fma-immutable-fields.yaml"
 else
     kubectl apply  -f "https://raw.githubusercontent.com/llm-d-incubation/llm-d-fast-model-actuation/refs/tags/v$release/config/validating-admission-policies.yaml"
 fi
