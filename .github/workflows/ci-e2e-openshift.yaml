@@ -40,10 +40,18 @@ on:
       - '!.github/workflows/ci-e2e-openshift.yaml'
       - _typos.toml
       - AGENTS.md
-      - config/examples/**
+      - CLAUDE.md
+      - CODE_OF_CONDUCT.md
+      - CONTRIBUTING.md
+      - DCO
+      - DESIGN_RULES.md
       - docs/**
       - hack/**
       - inference_server/benchmark/**
+      - OWNERS
+      - PR_SIGNOFF.md
+      - README.md
+      - SECURITY.md
       - test/e2e/*.md
       - test/e2e/demo-fma-hpa/**
 
