@@ -96,8 +96,9 @@ build-populator:
 
 .PHONY: test
 test: ## Run unit tests.
+	mkdir -p cover
 	@echo "Running unit tests..."
-	go test $$(go list ./pkg/... | grep -Ev '/pkg/(api|generated|spi)(/|$$)') -coverprofile=cover.out
+	go test $$(go list ./pkg/... | grep -Ev '/pkg/(api|generated|spi)(/|$$)') -coverprofile=cover/unit-profile.txt
 
 .PHONY: echo-var
 echo-var:
