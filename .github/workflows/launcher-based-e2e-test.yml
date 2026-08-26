@@ -65,7 +65,7 @@ jobs:
   run-launcher-test:
     strategy:
       matrix:
-        release: [ "", "0.6.5-alpha.1" ]
+        release: [ "", "0.6.4", "0.6.5-alpha.1" ]
     env:
       coverdir: "cover-dpc-${{ matrix.release || 'local' }}"
     runs-on: ubuntu-22.04-arm
