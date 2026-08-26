@@ -66,6 +66,8 @@ jobs:
     strategy:
       matrix:
         release: [ "", "0.6.5-alpha.1" ]
+    env:
+      coverdir: "cover-dpc-${{ matrix.release || 'local' }}"
     runs-on: ubuntu-22.04-arm
     steps:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -167,8 +169,6 @@ jobs:
         run: cat scrape2p.metrics || true
 
       - name: extract coverage data from dual pods controller
-        env:
-          COVERDIR: "cover-dpc-${{ matrix.release || 'local' }}"
         run: |
           kubectl scale deploy/fma-dual-pods-controller --replicas=0
           let try=1
@@ -180,23 +180,23 @@ jobs:
           kubectl scale deploy/fma-dpc-coverdata-inspector --replicas=1
           kubectl wait deploy/fma-dpc-coverdata-inspector --for condition=Available
           insp=$(kubectl get pods -l app.kubernetes.io/component=dpc-coverdata-inspector -o name | sed s:^pod/::)
-          mkdir -p ${COVERDIR}/data
+          mkdir -p "${{ env.coverdir }}/data"
           kubectl wait pod "${insp}" --for condition=Ready
-          kubectl cp "${insp}:var/coverdata" ${COVERDIR}/data
-          ls -l ${COVERDIR}/data
-          go tool covdata func -i=${COVERDIR}/data > ${COVERDIR}-func.txt
+          kubectl cp "${insp}:var/coverdata" "${{ env.coverdir }}/data"
+          ls -l "${{ env.coverdir }}/data"
+          go tool covdata func -i "${{ env.coverdir }}/data" > "${{ env.coverdir }}-func.txt"
 
       - name: upload coverage data from dual pods controller
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: cover-dpc-${{ matrix.release || 'local' }}-data
-          path: "cover-dpc-${{ matrix.release || 'local' }}/data"
+          name: "${{ env.coverdir }}-data"
+          path: "${{ env.coverdir }}/data"
           retention-days: 14
 
       - name: upload coverage summary from dual pods controller
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          path: "cover-dpc-${{ matrix.release || 'local' }}-func.txt"
+          path: "${{ env.coverdir }}-func.txt"
           archive: false
           retention-days: 14
 
