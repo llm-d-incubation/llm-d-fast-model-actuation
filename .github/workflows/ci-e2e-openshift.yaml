@@ -401,11 +401,6 @@ jobs:
       LAUNCHER_IMAGE: ${{ needs.build-image.outputs.launcher_image }}
       REQUESTER_IMAGE: ${{ needs.build-image.outputs.requester_image }}
     steps:
-      - name: Checkout source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.gate.outputs.pr_head_sha }}
-
       - name: Install tools (kubectl, oc, helm)
         run: |
           # Install kubectl - pinned version for reproducible CI builds
@@ -558,6 +553,12 @@ jobs:
               matchLabels: {"scrape": "true"}
           EOF
 
+      - name: Checkout source
+        if: "'${{ github.event.inputs.fma_release || '' }}' == ''"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.gate.outputs.pr_head_sha }}
+
       - name: Install FMA
         env:
           CONTAINER_IMG_REG: ghcr.io/${{ github.repository }}
@@ -591,6 +592,12 @@ jobs:
       - name: Dump LauncherPopulationPolicy CRD
         if: always()
         run: kubectl get crd launcherpopulationpolicies.fma.llm-d.ai -o yaml
+
+      - name: Checkout source
+        if: "'${{ github.event.inputs.fma_release || '' }}' != ''"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.gate.outputs.pr_head_sha }}
 
       - name: Run E2E tests
         env:
