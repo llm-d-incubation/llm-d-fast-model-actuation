@@ -9,6 +9,10 @@
 #   FMA_NAMESPACE           - Kubernetes namespace to run tests in
 #   MKOBJS_SCRIPT           - path to the mkobjs script to call
 #
+# Conditionally required environment variables (if MKOBJS_SCRIPT needs them):
+#   LAUNCHER_IMAGE   - container image for the launcher pod
+#   REQUESTER_IMAGE  - container image for the requester pod
+#
 # Optional environment variables:
 #   FMA_CHART_INSTANCE_NAME - Helm release name prefix (default: fma)
 #   READY_TARGET            - minimum ready launchers before proceeding (default: 2)

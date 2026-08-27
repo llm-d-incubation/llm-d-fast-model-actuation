@@ -334,16 +334,16 @@ jobs:
           FMA_RELEASE: ${{ github.event.inputs.fma_release || '' }}
         run: |
           # Use first 8 chars of the git ref (POSIX-compliant)
-          IMAGE_TAG="ref-$(printf '%s' "$GIT_REF" | cut -c1-8)-$(date +%Y%m%d)"
           reg="${{ github.repository }}"
           CONTAINER_IMG_REG="ghcr.io/${reg@L}"
 
-          echo "Building images with tag: $IMAGE_TAG"
           echo "Registry: $CONTAINER_IMG_REG"
           echo "FMA_RELEASE=<$FMA_RELEASE>"
 
           if [ -z "$FMA_RELEASE" ]; then
-          echo building FMA platform images
+
+          IMAGE_TAG="ref-$(printf '%s' "$GIT_REF" | cut -c1-8)-$(date +%Y%m%d)"
+          echo "Building images with tag: $IMAGE_TAG"
 
           # Build controller (ko)
           make build-controller \
@@ -354,8 +354,6 @@ jobs:
           make build-populator \
             CONTAINER_IMG_REG="$CONTAINER_IMG_REG" \
             IMAGE_TAG="$IMAGE_TAG"
-
-          fi
 
           # Build requester (Docker, multi-platform)
           make build-and-push-requester \
@@ -371,6 +369,14 @@ jobs:
           echo "requester_image=${CONTAINER_IMG_REG}/requester:${IMAGE_TAG}" >> $GITHUB_OUTPUT
           echo "launcher_image=${CONTAINER_IMG_REG}/launcher:${IMAGE_TAG}" >> $GITHUB_OUTPUT
           echo "All images built and pushed"
+
+          else
+          echo Using release "'$FMA_RELEASE'"
+          echo "image_tag=v${FMA_RELEASE}" >> $GITHUB_OUTPUT
+          echo "requester_image=${CONTAINER_IMG_REG}/requester:v${FMA_RELEASE}" >> $GITHUB_OUTPUT
+          echo "launcher_image=${CONTAINER_IMG_REG}/launcher:v${FMA_RELEASE}" >> $GITHUB_OUTPUT
+
+          fi
 
       - name: Characterize filesystem space at end
         if: always()
@@ -429,7 +435,7 @@ jobs:
 
       - name: Verify cluster access
         run: |
-          echo "Verifying cluster access..."
+          echo "Verifying access to cluster ${{ github.event.inputs.run_cluster || 'pok-prod' }}..."
           kubectl cluster-info
           kubectl get nodes
 
