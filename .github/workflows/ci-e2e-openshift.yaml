@@ -554,7 +554,7 @@ jobs:
           EOF
 
       - name: Checkout source
-        if: "'${{ github.event.inputs.fma_release || '' }}' == ''"
+        if: "${{ (github.event.inputs.fma_release || '') == '' }}"
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.gate.outputs.pr_head_sha }}
@@ -594,7 +594,7 @@ jobs:
         run: kubectl get crd launcherpopulationpolicies.fma.llm-d.ai -o yaml
 
       - name: Checkout source
-        if: "'${{ github.event.inputs.fma_release || '' }}' != ''"
+        if: "${{ (github.event.inputs.fma_release || '') != '' }}"
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.gate.outputs.pr_head_sha }}
