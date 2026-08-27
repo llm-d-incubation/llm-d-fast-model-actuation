@@ -509,6 +509,10 @@ kubectl wait --for condition=Ready pod/$launcher1 -n "$NS" --timeout=0s
 
 check_gpu_pin $req3
 
+note displaying storage space in launcher /tmp
+
+kubectl exec -n "$NS" $launcher1 -- du -h /tmp
+
 cheer Successful multiple instances sharing one launcher
 
 # vllm inventory:
@@ -629,6 +633,10 @@ check_gpu_pin $req_reclaim
 launcher_instances_after_reclaim=$(kubectl exec -n "$NS" $launcher1 -- python3 -c 'import json,urllib.request; print(json.load(urllib.request.urlopen("http://127.0.0.1:8001/v2/vllm/instances"))["total_instances"])')
 echo "Launcher $launcher1 has $launcher_instances_after_reclaim instances after reclaim (expected 2)"
 [ "$launcher_instances_after_reclaim" == "2" ]
+
+note displaying storage space in launcher /tmp
+
+kubectl exec -n "$NS" $launcher1 -- du -h /tmp
 
 cheer Successful per-launcher instance cap enforcement
 
