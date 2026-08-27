@@ -630,6 +630,10 @@ launcher_instances_after_reclaim=$(kubectl exec -n "$NS" $launcher1 -- python3 -
 echo "Launcher $launcher1 has $launcher_instances_after_reclaim instances after reclaim (expected 2)"
 [ "$launcher_instances_after_reclaim" == "2" ]
 
+note displaying storage space in launcher /tmp
+
+kubectl exec -n "$NS" $launcher1 -- du -h /tmp
+
 cheer Successful per-launcher instance cap enforcement
 
 # vllm inventory:
