@@ -509,6 +509,10 @@ kubectl wait --for condition=Ready pod/$launcher1 -n "$NS" --timeout=0s
 
 check_gpu_pin $req3
 
+note displaying storage space in launcher /tmp
+
+kubectl exec -n "$NS" $launcher1 -- du -h /tmp
+
 cheer Successful multiple instances sharing one launcher
 
 # vllm inventory:
