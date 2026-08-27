@@ -6,12 +6,11 @@ documents for [step-by-step installation](install-step-by-step.md) and
 
 The install script can install either (a) a given release without
 requiring a `git clone` or (b) whatever version is in the local Git
-working tree of this repo. Regardless of (a) vs. (b), the version of
-FMA being installed must include PR 700; the first release of
-sufficient vintage will be 0.6.5-alpha.1.  For case (b), you must have
-already built the container images and made them available to the
-target Kubernetes cluster. For more on dev/test of a general commit of
-the repo, see [README.md#devtest](README.md#devtest).
+working tree of this repo. For case (a), the release should be at
+least 0.6.4.  For case (b), you must have already built the container
+images and made them available to the target Kubernetes cluster. For
+more on dev/test of a general commit of the repo, see
+[README.md#devtest](README.md#devtest).
 
 FMA, like llm-d, is primarily confined to operate in one Kubernetes
 API object namespace. However, installing FMA _does_ involve _some_
