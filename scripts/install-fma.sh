@@ -198,6 +198,9 @@ EOF
     done
 )
 
+echo "Kubectl version:" >&2
+kubectl version >&2
+
 nvcr="${existing_nvcr}${ensure_nvcr}"
 
 if [ -z "$ensure_nvcr" ]; then true
@@ -250,6 +253,7 @@ if [[ "$install_crds" == "true" ]]; then
             echo "  CRD $crd_name needs updating"
             kubectl apply --server-side -f - <<<$obj
         fi
+        sleep 1
         kubectl wait crd "$crd_name" --for condition=Established
     done
 fi
