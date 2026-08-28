@@ -14,11 +14,12 @@
 #   REQUESTER_IMAGE  - container image for the requester pod
 #
 # Optional environment variables:
-#   FMA_CHART_INSTANCE_NAME - Helm release name prefix (default: fma)
-#   READY_TARGET            - minimum ready launchers before proceeding (default: 2)
-#   POLICIES_ENABLED        - "true"/"false"; auto-detected if unset
-#   POLL_LIMIT_SECS         - polling timeout seconds (default: 600)
-#   FMA_DEBUG               - "true" to enable shell tracing (set -x)
+#   FMA_CHART_INSTANCE_NAME  - Helm release name prefix (default: fma)
+#   READY_TARGET             - minimum ready launchers before proceeding (default: 2)
+#   REQUESTER_PRIORITY_CLASS - name of PriorityClass for requester Pods (if MKOBJS_SCRIPT reads this)
+#   POLICIES_ENABLED         - "true"/"false"; auto-detected if unset
+#   POLL_LIMIT_SECS          - polling timeout seconds (default: 600)
+#   FMA_DEBUG                - "true" to enable shell tracing (set -x)
 
 set -euo pipefail
 if [ "${FMA_DEBUG:-false}" = "true" ]; then
@@ -163,12 +164,18 @@ spec:
       limits:
         nvidia.com/gpu: "2"
         ephemeral-storage: "9Gi"
+$(if [ -n "${REQUESTER_PRIORITY_CLASS:-}" ]; then echo "
+  priorityClassName: $REQUESTER_PRIORITY_CLASS"
+fi)
   terminationGracePeriodSeconds: 0
 PROBE
 
 if ! expect '[ "$(kubectl get pod '"$probe_pod"' -n '"$NS"' -o jsonpath={.status.phase})" = "Running" ]'; then
     echo "FAIL: GPU probe Pod $probe_pod did not reach Running." >&2
     echo "This probably means no node in the cluster has 2 GPUs available right now." >&2
+    echo "But, for full disclosure, a dump of the probe pod follows" >&2
+    kubectl get -n "$NS" pod $probe_pod -o yaml >&2
+    kubectl events -n "$NS" --for "pod/$probe_pod" >&2
     kubectl delete pod "$probe_pod" -n "$NS" --wait=false 2>/dev/null || true
     exit 1
 fi

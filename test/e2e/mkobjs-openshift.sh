@@ -9,8 +9,9 @@
 #   REQUESTER_IMAGE  - container image for the requester pod
 #
 # Optional environment variables:
-#   RUNTIME_CLASS_NAME - if set, injects runtimeClassName into pod specs
-#   IMAGE_PULL_POLICY  - image pull policy (default: Always)
+#   RUNTIME_CLASS_NAME       - if set, injects runtimeClassName into pod specs
+#   IMAGE_PULL_POLICY        - image pull policy (default: Always)
+#   REQUESTER_PRIORITY_CLASS - name of PriorityClass for requester Pods
 #
 # Outputs (one per line, to be parsed by caller):
 #   isc_smol lc rs isc_qwen isc_tinyllama lpp
@@ -56,6 +57,10 @@ inst=$(date +%d-%H-%M-%S)
 runtime_class=""
 if [ -n "${RUNTIME_CLASS_NAME:-}" ]; then
     runtime_class="runtimeClassName: ${RUNTIME_CLASS_NAME}"
+fi
+
+if [ -n "${REQUESTER_PRIORITY_CLASS:-}" ]
+then echo "Requester pods will have PriorityClass $REQUESTER_PRIORITY_CLASS" >&2
 fi
 
 # When a node is specified, pin the ReplicaSet's pods to it.
@@ -250,6 +255,9 @@ spec:
         dual-pods.llm-d.ai/inference-server-config: "inference-server-config-smol-$inst"
     spec:
       ${runtime_class}
+$(if [ -n "${REQUESTER_PRIORITY_CLASS:-}" ]; then echo "
+      priorityClassName: $REQUESTER_PRIORITY_CLASS"
+fi)
       ${node_selector}
       containers:
         - name: inference-server
