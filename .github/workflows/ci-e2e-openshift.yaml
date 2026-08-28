@@ -489,7 +489,7 @@ jobs:
           # Clean up cluster-scoped resources from previous runs
           echo "Cleaning up cluster-scoped resources..."
           kubectl delete clusterrole        "${FMA_CHART_INSTANCE_NAME}-node-view" --ignore-not-found || true
-          kubectl delete clusterrolebinding "${FMA_CHART_INSTANCE_NAME}-node-view" --ignore-not-found || true
+          kubectl delete clusterrolebinding "${FMA_CHART_INSTANCE_NAME}-node-view-${FMA_NAMESPACE}" --ignore-not-found || true
 
           echo "Cleanup complete"
 
@@ -824,7 +824,7 @@ jobs:
 
           # Delete cluster-scoped stuff for reading Node objects
           kubectl delete clusterrole        "${FMA_CHART_INSTANCE_NAME}-node-view" --ignore-not-found || true
-          kubectl delete clusterrolebinding "${FMA_CHART_INSTANCE_NAME}-node-view" --ignore-not-found || true
+          kubectl delete clusterrolebinding "${FMA_CHART_INSTANCE_NAME}-node-view-${FMA_NAMESPACE}" --ignore-not-found || true
 
           echo "Cleanup complete"
 
