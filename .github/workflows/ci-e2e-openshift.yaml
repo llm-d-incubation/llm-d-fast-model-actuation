@@ -584,7 +584,7 @@ jobs:
           FMA_RELEASE: ${{ github.event.inputs.fma_release || '' }}
         run: |
           echo "github.repository='${{ github.repository }}'"
-          echo "$GITHUB_HEAD_REF='$GITHUB_HEAD_REF'"
+          echo "GITHUB_HEAD_REF='$GITHUB_HEAD_REF'"
           echo "github.event_name='${{ github.event_name }}'"
           echo "github.ref_type='${{ github.ref_type }}'"
           echo "github.ref_name='${{ github.ref_name }}'"
