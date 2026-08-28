@@ -120,7 +120,7 @@ spec:
     options: >-
       --model HuggingFaceTB/SmolLM2-360M-Instruct
       --enable-sleep-mode
-      --gpu-memory-utilization 0.825
+      --gpu-memory-utilization 0.8
     env_vars:
       VLLM_SERVER_DEV_MODE: "1"
       VLLM_LOGGING_LEVEL: "DEBUG"
@@ -142,7 +142,7 @@ spec:
     options: >-
       --model Qwen/Qwen2.5-0.5B-Instruct
       --enable-sleep-mode
-      --gpu-memory-utilization 0.825
+      --gpu-memory-utilization 0.8
     env_vars:
       VLLM_SERVER_DEV_MODE: "1"
       VLLM_LOGGING_LEVEL: "DEBUG"
@@ -164,7 +164,7 @@ spec:
     options: >-
       --model TinyLlama/TinyLlama-1.1B-Chat-v1.0
       --enable-sleep-mode
-      --gpu-memory-utilization 0.825
+      --gpu-memory-utilization 0.8
     env_vars:
       VLLM_SERVER_DEV_MODE: "1"
       VLLM_LOGGING_LEVEL: "DEBUG"
