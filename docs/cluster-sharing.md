@@ -145,6 +145,16 @@ object.
 - The Helm chart can optionally create a ClusterRoleBinding for a
   ClusterRole with a given name.
 
+- That ClusterRoleBinding is itself cluster-scoped, so the chart names
+  it after both the Helm release *and its namespace*
+  (`<release name>-node-view-<namespace>`). A name derived from the
+  release name alone would collide across concurrent installs that
+  share a release name but live in different namespaces: the binding is
+  a single cluster object, and Helm's `release-namespace` ownership
+  annotation lets only one release own it, so the second install fails
+  to adopt it. Including the namespace gives each install its own
+  binding, independently owned and removed by its own `helm uninstall`.
+
 - The Helm chart does nothing about creating the ClusterRole for
   reading Node objects.
 

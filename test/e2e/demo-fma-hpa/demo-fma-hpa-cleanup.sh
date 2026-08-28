@@ -100,7 +100,7 @@ fi
 
 # 10. Cluster-scoped FMA resources
 echo "--- Deleting cluster-scoped FMA resources ---"
-kubectl delete clusterrolebinding fma-node-view --ignore-not-found 2>/dev/null
+kubectl delete clusterrolebinding "fma-node-view-${NAMESPACE}" --ignore-not-found 2>/dev/null
 kubectl delete clusterrole fma-node-view --ignore-not-found 2>/dev/null
 kubectl delete clusterrolebinding "${NAMESPACE}-${NAMESPACE}-epp" --ignore-not-found 2>/dev/null
 kubectl delete clusterrole "${NAMESPACE}-${NAMESPACE}-epp" --ignore-not-found 2>/dev/null
