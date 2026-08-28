@@ -19,7 +19,13 @@ kind: ClusterRoleBinding
 metadata:
   labels:
     {{- include "fma-controllers.labels" . | nindent 4 }}
-  name: "{{ .Release.Name }}-node-view"
+  # Cluster-scoped, so the name must be unique per install. Qualify it with the
+  # release namespace: without this, two releases that share a release name but
+  # live in different namespaces resolve to the same cluster object, and Helm's
+  # release-namespace ownership annotation lets only one own it -- the second
+  # install fails to adopt it. (The bound ClusterRole itself is intentionally
+  # shared across namespaces; only this binding must be per-install.)
+  name: "{{ .Release.Name }}-node-view-{{ .Release.Namespace }}"
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
