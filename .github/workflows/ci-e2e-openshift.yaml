@@ -583,11 +583,14 @@ jobs:
           CONTAINER_IMG_REG: ghcr.io/${{ github.repository }}
           FMA_RELEASE: ${{ github.event.inputs.fma_release || '' }}
         run: |
-          echo "github.repository=<${{ github.repository }}>"
-          echo "$GITHUB_HEAD_REF=<$GITHUB_HEAD_REF>"
-          echo "Invoking https://raw.githubusercontent.com/${{ github.repository }}/$GITHUB_HEAD_REF/scripts/install-fma.sh"
+          echo "github.repository='${{ github.repository }}'"
+          echo "$GITHUB_HEAD_REF='$GITHUB_HEAD_REF'"
+          echo "github.event_name='${{ github.event_name }}'"
+          echo "github.ref_type='${{ github.ref_type }}'"
+          echo "github.ref_name='${{ github.ref_name }}'"
+          echo "github.ref='${{ github.ref }}'"
           subject=(--release "$FMA_RELEASE")
-          bash <(curl https://raw.githubusercontent.com/${{ github.repository }}/$GITHUB_HEAD_REF/scripts/install-fma.sh) \
+          bash <(curl https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/scripts/install-fma.sh) \
             "${subject[@]}" \
             --chart-set global.produceCoverdata=true \
             --namespace "$FMA_NAMESPACE" \
