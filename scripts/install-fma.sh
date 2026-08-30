@@ -299,7 +299,7 @@ helm upgrade --install "$chart_instance_name" \
     --set global.imageRegistry="${oci_reg}" \
     --set global.imageTag="${img_tag:-v${release}}"
 
-kubectl wait -n "$ns" --for=condition=available --timeout=180s \
+kubectl wait -n "$ns" --for=condition=available --timeout=240s \
     deployment "${chart_instance_name}-dual-pods-controller"
 
 if [ "$enable_lp" != "false" ]; then
