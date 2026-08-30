@@ -61,6 +61,7 @@ fi
 
 if [ -n "${REQUESTER_PRIORITY_CLASS:-}" ]
 then echo "Requester pods will have PriorityClass $REQUESTER_PRIORITY_CLASS" >&2
+else echo "Requester pods will have no PriorityClass" >&2
 fi
 
 # When a node is specified, pin the ReplicaSet's pods to it.

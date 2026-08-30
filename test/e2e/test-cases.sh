@@ -123,8 +123,11 @@ get_launcher_total_instances() {
 
 echo "FMA_NAMESPACE=${FMA_NAMESPACE:-«unset»}"
 echo "MKOBJS_SCRIPT=${MKOBJS_SCRIPT:-«unset»}"
+echo "LAUNCHER_IMAGE=${LAUNCHER_IMAGE:-«unset»}"
+echo "REQUESTER_IMAGE=${REQUESTER_IMAGE:-«unset»}"
 echo "FMA_CHART_INSTANCE_NAME=${FMA_CHART_INSTANCE_NAME:-«unset»}"
 echo "READY_TARGET=${READY_TARGET:-«unset»}"
+echo "REQUESTER_PRIORITY_CLASS=${REQUESTER_PRIORITY_CLASS:-«unset»}"
 echo "POLICIES_ENABLED=${POLICIES_ENABLED:-«unset»}"
 echo "POLL_LIMIT_SECS=${POLL_LIMIT_SECS:-«unset»}"
 echo "FMA_DEBUG=${FMA_DEBUG:-«unset»}"
