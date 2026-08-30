@@ -622,7 +622,7 @@ jobs:
           MKOBJS_SCRIPT: ./test/e2e/mkobjs-openshift.sh
           POLL_LIMIT_SECS: "720"
         run: |
-          if [ "${{ github.event.inputs.run_cluster || 'pod-prod' }}" = "pok-prod" ]
+          if [ "${{ github.event.inputs.run_cluster || 'pok-prod' }}" = "pok-prod" ]
           then export REQUESTER_PRIORITY_CLASS=nightly-llm-d-cicd-critical
                echo Setting REQUESTER_PRIORITY_CLASS
           else echo Not setting REQUESTER_PRIORITY_CLASS
