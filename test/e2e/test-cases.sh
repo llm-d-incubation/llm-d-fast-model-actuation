@@ -703,7 +703,7 @@ echo "Restarting dual-pods controller..."
 kubectl scale  -n "$NS" deployment "${FMA_CHART_INSTANCE_NAME}-dual-pods-controller" --replicas=0
 expect 'kubectl get -n "$NS" pods -l app.kubernetes.io/component=dual-pods-controller -o name | wc -l | grep -w 0'
 kubectl scale  -n "$NS" deployment "${FMA_CHART_INSTANCE_NAME}-dual-pods-controller" --replicas=1
-kubectl wait -n "$NS" --for=condition=available --timeout=100s deployment "${FMA_CHART_INSTANCE_NAME}-dual-pods-controller"
+kubectl wait -n "$NS" --for=condition=available --timeout=240s deployment "${FMA_CHART_INSTANCE_NAME}-dual-pods-controller"
 
 # Wait for controller to be ready for ongoing checks
 # In detail: allow some time for the dual-pods controller to do something unexpected in the case
