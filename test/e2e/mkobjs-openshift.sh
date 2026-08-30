@@ -72,6 +72,9 @@ else
     node_selector=""
 fi
 
+# GPU utilization is temporarily hacked below 0.825 because we have
+# mysteries still to chase.
+
 if out=$(kubectl apply "${ns_flag[@]}" -f - 2>&1 <<EOF
 apiVersion: v1
 kind: ServiceAccount

@@ -590,7 +590,7 @@ jobs:
           echo "github.ref_name='${{ github.ref_name }}'"
           echo "github.ref='${{ github.ref }}'"
           subject=(--release "$FMA_RELEASE")
-          bash <(curl https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/scripts/install-fma.sh) \
+          bash <(curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/scripts/install-fma.sh) \
             "${subject[@]}" \
             --chart-set global.produceCoverdata=true \
             --namespace "$FMA_NAMESPACE" \
@@ -612,7 +612,7 @@ jobs:
         run: kubectl get crd launcherpopulationpolicies.fma.llm-d.ai -o yaml
 
       - name: Checkout source before run
-        if: "${{ (github.event.inputs.fma_release || '') != '' }}"
+        if: always() && (github.event.inputs.fma_release || '') != ''
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.gate.outputs.pr_head_sha }}
@@ -624,8 +624,6 @@ jobs:
         run: |
           if [ "${{ github.event.inputs.run_cluster || 'pok-prod' }}" = "pok-prod" ]
           then export REQUESTER_PRIORITY_CLASS=nightly-llm-d-cicd-critical
-               echo Setting REQUESTER_PRIORITY_CLASS
-          else echo Not setting REQUESTER_PRIORITY_CLASS
           fi
           ./test/e2e/test-cases.sh
 

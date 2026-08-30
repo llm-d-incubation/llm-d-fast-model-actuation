@@ -166,7 +166,7 @@ spec:
     resources:
       limits:
         nvidia.com/gpu: "2"
-        ephemeral-storage: "9Gi"
+        ephemeral-storage: "10Gi"
 $(if [ -n "${REQUESTER_PRIORITY_CLASS:-}" ]; then echo "
   priorityClassName: $REQUESTER_PRIORITY_CLASS"
 fi)
@@ -177,7 +177,7 @@ if ! expect '[ "$(kubectl get pod '"$probe_pod"' -n '"$NS"' -o jsonpath={.status
     echo "FAIL: GPU probe Pod $probe_pod did not reach Running." >&2
     echo "This probably means no node in the cluster has 2 GPUs available right now." >&2
     echo "But, for full disclosure, a dump of the probe pod follows" >&2
-    kubectl get -n "$NS" pod $probe_pod -o yaml >&2
+    kubectl get -n "$NS" pod "$probe_pod" -o yaml >&2
     kubectl events -n "$NS" --for "pod/$probe_pod" >&2
     kubectl delete pod "$probe_pod" -n "$NS" --wait=false 2>/dev/null || true
     exit 1
