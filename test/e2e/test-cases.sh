@@ -9,12 +9,17 @@
 #   FMA_NAMESPACE           - Kubernetes namespace to run tests in
 #   MKOBJS_SCRIPT           - path to the mkobjs script to call
 #
+# Conditionally required environment variables (if MKOBJS_SCRIPT needs them):
+#   LAUNCHER_IMAGE   - container image for the launcher pod
+#   REQUESTER_IMAGE  - container image for the requester pod
+#
 # Optional environment variables:
-#   FMA_CHART_INSTANCE_NAME - Helm release name prefix (default: fma)
-#   READY_TARGET            - minimum ready launchers before proceeding (default: 2)
-#   POLICIES_ENABLED        - "true"/"false"; auto-detected if unset
-#   POLL_LIMIT_SECS         - polling timeout seconds (default: 600)
-#   FMA_DEBUG               - "true" to enable shell tracing (set -x)
+#   FMA_CHART_INSTANCE_NAME  - Helm release name prefix (default: fma)
+#   READY_TARGET             - minimum ready launchers before proceeding (default: 2)
+#   REQUESTER_PRIORITY_CLASS - name of PriorityClass for requester Pods (if MKOBJS_SCRIPT reads this)
+#   POLICIES_ENABLED         - "true"/"false"; auto-detected if unset
+#   POLL_LIMIT_SECS          - polling timeout seconds (default: 600)
+#   FMA_DEBUG                - "true" to enable shell tracing (set -x)
 
 set -euo pipefail
 if [ "${FMA_DEBUG:-false}" = "true" ]; then
@@ -118,8 +123,11 @@ get_launcher_total_instances() {
 
 echo "FMA_NAMESPACE=${FMA_NAMESPACE:-«unset»}"
 echo "MKOBJS_SCRIPT=${MKOBJS_SCRIPT:-«unset»}"
+echo "LAUNCHER_IMAGE=${LAUNCHER_IMAGE:-«unset»}"
+echo "REQUESTER_IMAGE=${REQUESTER_IMAGE:-«unset»}"
 echo "FMA_CHART_INSTANCE_NAME=${FMA_CHART_INSTANCE_NAME:-«unset»}"
 echo "READY_TARGET=${READY_TARGET:-«unset»}"
+echo "REQUESTER_PRIORITY_CLASS=${REQUESTER_PRIORITY_CLASS:-«unset»}"
 echo "POLICIES_ENABLED=${POLICIES_ENABLED:-«unset»}"
 echo "POLL_LIMIT_SECS=${POLL_LIMIT_SECS:-«unset»}"
 echo "FMA_DEBUG=${FMA_DEBUG:-«unset»}"
@@ -158,13 +166,19 @@ spec:
     resources:
       limits:
         nvidia.com/gpu: "2"
-        ephemeral-storage: "9Gi"
+        ephemeral-storage: "10Gi"
+$(if [ -n "${REQUESTER_PRIORITY_CLASS:-}" ]; then echo "
+  priorityClassName: $REQUESTER_PRIORITY_CLASS"
+fi)
   terminationGracePeriodSeconds: 0
 PROBE
 
 if ! expect '[ "$(kubectl get pod '"$probe_pod"' -n '"$NS"' -o jsonpath={.status.phase})" = "Running" ]'; then
     echo "FAIL: GPU probe Pod $probe_pod did not reach Running." >&2
     echo "This probably means no node in the cluster has 2 GPUs available right now." >&2
+    echo "But, for full disclosure, a dump of the probe pod follows" >&2
+    kubectl get -n "$NS" pod "$probe_pod" -o yaml >&2
+    kubectl events -n "$NS" --for "pod/$probe_pod" >&2
     kubectl delete pod "$probe_pod" -n "$NS" --wait=false 2>/dev/null || true
     exit 1
 fi
@@ -689,7 +703,7 @@ echo "Restarting dual-pods controller..."
 kubectl scale  -n "$NS" deployment "${FMA_CHART_INSTANCE_NAME}-dual-pods-controller" --replicas=0
 expect 'kubectl get -n "$NS" pods -l app.kubernetes.io/component=dual-pods-controller -o name | wc -l | grep -w 0'
 kubectl scale  -n "$NS" deployment "${FMA_CHART_INSTANCE_NAME}-dual-pods-controller" --replicas=1
-kubectl wait -n "$NS" --for=condition=available --timeout=100s deployment "${FMA_CHART_INSTANCE_NAME}-dual-pods-controller"
+kubectl wait -n "$NS" --for=condition=available --timeout=240s deployment "${FMA_CHART_INSTANCE_NAME}-dual-pods-controller"
 
 # Wait for controller to be ready for ongoing checks
 # In detail: allow some time for the dual-pods controller to do something unexpected in the case

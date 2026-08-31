@@ -334,16 +334,16 @@ jobs:
           FMA_RELEASE: ${{ github.event.inputs.fma_release || '' }}
         run: |
           # Use first 8 chars of the git ref (POSIX-compliant)
-          IMAGE_TAG="ref-$(printf '%s' "$GIT_REF" | cut -c1-8)-$(date +%Y%m%d)"
           reg="${{ github.repository }}"
           CONTAINER_IMG_REG="ghcr.io/${reg@L}"
 
-          echo "Building images with tag: $IMAGE_TAG"
           echo "Registry: $CONTAINER_IMG_REG"
           echo "FMA_RELEASE=<$FMA_RELEASE>"
 
           if [ -z "$FMA_RELEASE" ]; then
-          echo building FMA platform images
+
+          IMAGE_TAG="ref-$(printf '%s' "$GIT_REF" | cut -c1-8)-$(date +%Y%m%d)"
+          echo "Building images with tag: $IMAGE_TAG"
 
           # Build controller (ko)
           make build-controller \
@@ -354,8 +354,6 @@ jobs:
           make build-populator \
             CONTAINER_IMG_REG="$CONTAINER_IMG_REG" \
             IMAGE_TAG="$IMAGE_TAG"
-
-          fi
 
           # Build requester (Docker, multi-platform)
           make build-and-push-requester \
@@ -371,6 +369,14 @@ jobs:
           echo "requester_image=${CONTAINER_IMG_REG}/requester:${IMAGE_TAG}" >> $GITHUB_OUTPUT
           echo "launcher_image=${CONTAINER_IMG_REG}/launcher:${IMAGE_TAG}" >> $GITHUB_OUTPUT
           echo "All images built and pushed"
+
+          else
+          echo Using release "'$FMA_RELEASE'"
+          echo "image_tag=v${FMA_RELEASE}" >> $GITHUB_OUTPUT
+          echo "requester_image=${CONTAINER_IMG_REG}/requester:v${FMA_RELEASE}" >> $GITHUB_OUTPUT
+          echo "launcher_image=${CONTAINER_IMG_REG}/launcher:v${FMA_RELEASE}" >> $GITHUB_OUTPUT
+
+          fi
 
       - name: Characterize filesystem space at end
         if: always()
@@ -395,11 +401,6 @@ jobs:
       LAUNCHER_IMAGE: ${{ needs.build-image.outputs.launcher_image }}
       REQUESTER_IMAGE: ${{ needs.build-image.outputs.requester_image }}
     steps:
-      - name: Checkout source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.gate.outputs.pr_head_sha }}
-
       - name: Install tools (kubectl, oc, helm)
         run: |
           # Install kubectl - pinned version for reproducible CI builds
@@ -429,7 +430,7 @@ jobs:
 
       - name: Verify cluster access
         run: |
-          echo "Verifying cluster access..."
+          echo "Verifying access to cluster ${{ github.event.inputs.run_cluster || 'pok-prod' }}..."
           kubectl cluster-info
           kubectl get nodes
 
@@ -552,20 +553,44 @@ jobs:
               matchLabels: {"scrape": "true"}
           EOF
 
-      - name: Install FMA
+      - name: Checkout source before build
+        if: "${{ (github.event.inputs.fma_release || '') == '' }}"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.gate.outputs.pr_head_sha }}
+
+      - name: Install FMA using local checkout
+        if: "${{ (github.event.inputs.fma_release || '') == '' }}"
+        env:
+          CONTAINER_IMG_REG: ghcr.io/${{ github.repository }}
+        run: |
+          subject=(--image-tag "$IMAGE_TAG"
+                   --oci-registry "${CONTAINER_IMG_REG,,}"
+                   --config-dir config
+                  )
+          scripts/install-fma.sh \
+            "${subject[@]}" \
+            --chart-set global.produceCoverdata=true \
+            --namespace "$FMA_NAMESPACE" \
+            --ensure-node-view-cluster-role "${FMA_CHART_INSTANCE_NAME}-node-view" \
+            --install-crds true \
+            --install-admission-policies true \
+            --chart-instance-name "$FMA_CHART_INSTANCE_NAME"
+
+      - name: Install FMA using curl-to-bash
+        if: "${{ (github.event.inputs.fma_release || '') != '' }}"
         env:
           CONTAINER_IMG_REG: ghcr.io/${{ github.repository }}
           FMA_RELEASE: ${{ github.event.inputs.fma_release || '' }}
         run: |
-          if [ -z "$FMA_RELEASE" ]; then
-            subject=(--image-tag "$IMAGE_TAG"
-                     --oci-registry "${CONTAINER_IMG_REG,,}"
-                     --config-dir config
-                    )
-          else
-            subject=(--release "$FMA_RELEASE")
-          fi
-          scripts/install-fma.sh \
+          echo "github.repository='${{ github.repository }}'"
+          echo "GITHUB_HEAD_REF='$GITHUB_HEAD_REF'"
+          echo "github.event_name='${{ github.event_name }}'"
+          echo "github.ref_type='${{ github.ref_type }}'"
+          echo "github.ref_name='${{ github.ref_name }}'"
+          echo "github.ref='${{ github.ref }}'"
+          subject=(--release "$FMA_RELEASE")
+          bash <(curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/scripts/install-fma.sh) \
             "${subject[@]}" \
             --chart-set global.produceCoverdata=true \
             --namespace "$FMA_NAMESPACE" \
@@ -586,11 +611,21 @@ jobs:
         if: always()
         run: kubectl get crd launcherpopulationpolicies.fma.llm-d.ai -o yaml
 
+      - name: Checkout source before run
+        if: always() && (github.event.inputs.fma_release || '') != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.gate.outputs.pr_head_sha }}
+
       - name: Run E2E tests
         env:
           MKOBJS_SCRIPT: ./test/e2e/mkobjs-openshift.sh
           POLL_LIMIT_SECS: "720"
-        run: ./test/e2e/test-cases.sh
+        run: |
+          if [ "${{ github.event.inputs.run_cluster || 'pok-prod' }}" = "pok-prod" ]
+          then export REQUESTER_PRIORITY_CLASS=nightly-llm-d-cicd-critical
+          fi
+          ./test/e2e/test-cases.sh
 
       - name: Dump Role objects
         if: always()
@@ -699,7 +734,7 @@ jobs:
         if: always()
         run: |
           for pod in $(kubectl get pods -n "$FMA_NAMESPACE" -o 'jsonpath={.items[*].metadata.name} ') ; do
-            containers=$(kubectl get pod -n "$FMA_NAMESPACE" "$pod" -o 'jsonpath={.spec.containers[*].name}')
+            containers=$(kubectl get pod -n "$FMA_NAMESPACE" "$pod" -o 'jsonpath={.spec.containers[*].name}' || true)
             for container in $containers ; do
               echo ""
               echo "=== Previous log of $pod (container: $container) ==="

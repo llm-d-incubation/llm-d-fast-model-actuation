@@ -9,8 +9,9 @@
 #   REQUESTER_IMAGE  - container image for the requester pod
 #
 # Optional environment variables:
-#   RUNTIME_CLASS_NAME - if set, injects runtimeClassName into pod specs
-#   IMAGE_PULL_POLICY  - image pull policy (default: Always)
+#   RUNTIME_CLASS_NAME       - if set, injects runtimeClassName into pod specs
+#   IMAGE_PULL_POLICY        - image pull policy (default: Always)
+#   REQUESTER_PRIORITY_CLASS - name of PriorityClass for requester Pods
 #
 # Outputs (one per line, to be parsed by caller):
 #   isc_smol lc rs isc_qwen isc_tinyllama lpp
@@ -58,6 +59,11 @@ if [ -n "${RUNTIME_CLASS_NAME:-}" ]; then
     runtime_class="runtimeClassName: ${RUNTIME_CLASS_NAME}"
 fi
 
+if [ -n "${REQUESTER_PRIORITY_CLASS:-}" ]
+then echo "Requester pods will have PriorityClass $REQUESTER_PRIORITY_CLASS" >&2
+else echo "Requester pods will have no PriorityClass" >&2
+fi
+
 # When a node is specified, pin the ReplicaSet's pods to it.
 if [ -n "$node_name" ]; then
     node_selector="nodeSelector:
@@ -65,6 +71,9 @@ if [ -n "$node_name" ]; then
 else
     node_selector=""
 fi
+
+# GPU utilization is temporarily hacked below 0.825 because we have
+# mysteries still to chase.
 
 if out=$(kubectl apply "${ns_flag[@]}" -f - 2>&1 <<EOF
 apiVersion: v1
@@ -115,7 +124,7 @@ spec:
     options: >-
       --model HuggingFaceTB/SmolLM2-360M-Instruct
       --enable-sleep-mode
-      --gpu-memory-utilization 0.825
+      --gpu-memory-utilization 0.8
     env_vars:
       VLLM_SERVER_DEV_MODE: "1"
       VLLM_LOGGING_LEVEL: "DEBUG"
@@ -137,7 +146,7 @@ spec:
     options: >-
       --model Qwen/Qwen2.5-0.5B-Instruct
       --enable-sleep-mode
-      --gpu-memory-utilization 0.825
+      --gpu-memory-utilization 0.8
     env_vars:
       VLLM_SERVER_DEV_MODE: "1"
       VLLM_LOGGING_LEVEL: "DEBUG"
@@ -159,7 +168,7 @@ spec:
     options: >-
       --model TinyLlama/TinyLlama-1.1B-Chat-v1.0
       --enable-sleep-mode
-      --gpu-memory-utilization 0.825
+      --gpu-memory-utilization 0.8
     env_vars:
       VLLM_SERVER_DEV_MODE: "1"
       VLLM_LOGGING_LEVEL: "DEBUG"
@@ -210,7 +219,7 @@ spec:
             value: "/tmp"
           resources:
             limits:
-              ephemeral-storage: "4.5Gi"
+              ephemeral-storage: "5Gi"
 ---
 apiVersion: fma.llm-d.ai/v1alpha1
 kind: LauncherPopulationPolicy
@@ -250,6 +259,9 @@ spec:
         dual-pods.llm-d.ai/inference-server-config: "inference-server-config-smol-$inst"
     spec:
       ${runtime_class}
+$(if [ -n "${REQUESTER_PRIORITY_CLASS:-}" ]; then echo "
+      priorityClassName: $REQUESTER_PRIORITY_CLASS"
+fi)
       ${node_selector}
       containers:
         - name: inference-server
