@@ -401,6 +401,7 @@ type GpuLocation struct {
 	Index uint
 }
 
+// nodeData is the root of data specific to a node.
 type nodeData struct {
 	NodeName string
 
@@ -412,6 +413,8 @@ type nodeData struct {
 	// Access only inside the calling hierarchy that `nodeItem.process()` is the root caller.
 	Launchers map[string]*launcherData
 
+	rateLimiter workqueue.TypedRateLimiter[itemOnNode]
+
 	// ItemsMutex may be acquired while holding controller mutex, not vice-versa.
 	ItemsMutex sync.Mutex
 
@@ -419,8 +422,6 @@ type nodeData struct {
 	// and for each the time at which it was first injected into this set.
 	// Hold ItemsMutex while accessing this.
 	LocalQueue map[itemOnNode]*scheduledItem
-
-	rateLimiter workqueue.TypedRateLimiter[itemOnNode]
 }
 
 type itemOnNode interface {
@@ -517,18 +518,35 @@ type serverData struct {
 	RequesterDeleteRequested bool
 }
 
+// Access only within `nodeItem.process`.
 type launcherData struct {
 	// Instances is a map,
 	// where key is an instance's ID which is the instance' nominal hash,
-	// and value is the last used time of the instance.
-	Instances map[string]time.Time
+	// and value is a non-nil `*instanceData`.
+	Instances instanceTable
 
 	// Accurate indicates whether the set of nominal hash in Instances is accurate.
+	// TODO: make this field useful.
 	Accurate bool
 }
+
+// instanceTable is a map,
+// where key is an instance's ID which is the instance' nominal hash,
+// and value is a non-nil `*instanceData`.
+type instanceTable map[string]*instanceData
+
+// instanceData is what the controller tracks per vLLM instance.
+// Access only within `nodeItem.process`.
+type instanceData struct {
+	LastUsed      time.Time
+	Stopped       bool
+	LogTailLogged bool
+}
+
 type queueItem interface {
 	// process returns (err error, retry bool).
 	// There will be a retry iff `retry`, error logged if `err != nil`.
+	// Only called within `nodeItem.process`.
 	process(ctx context.Context, ctl *controller) (error, bool)
 }
 
@@ -1017,6 +1035,10 @@ func (ctl *controller) enqueueUnboundInfSvrItemsOnNode(ctx context.Context, node
 	ctl.Queue.Add(nodeItem{nodeName})
 }
 
+// creates the `*nodeData` if it does not already exist.
+// Call while controller is NOT locked.
+// TODO: someday define a way for `*nodeData` objects to be removed;
+// today is not that day.
 func (ctl *controller) getNodeData(nodeName string) *nodeData {
 	ctl.mutex.Lock()
 	defer ctl.mutex.Unlock()
@@ -1111,7 +1133,7 @@ func (ctl *controller) getLauncherData(nodeDat *nodeData, launcherPodName string
 	ans := nodeDat.Launchers[launcherPodName]
 	if ans == nil {
 		ans = &launcherData{
-			Instances: make(map[string]time.Time),
+			Instances: make(map[string]*instanceData),
 		}
 		nodeDat.Launchers[launcherPodName] = ans
 	}

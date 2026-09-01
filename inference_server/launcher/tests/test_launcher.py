@@ -566,8 +566,9 @@ class TestVllmMultiProcessManager:
         with open(instance._log_file_path, "wb") as f:
             f.write(b"Log line 1Log line 2Log line 3")
 
-        data, total = manager.get_instance_log_bytes("test-id", start=0)
+        read_start, data, total = manager.get_instance_log_bytes("test-id", start=0)
 
+        assert read_start == 0
         assert isinstance(data, bytes)
         assert b"Log line 1" in data
         assert b"Log line 2" in data
@@ -595,8 +596,11 @@ class TestVllmMultiProcessManager:
         with open(instance._log_file_path, "wb") as f:
             f.write(b"A" * 60 + b"B" * 60)
 
-        data, total = manager.get_instance_log_bytes("test-id", start=0, end=99)
+        read_start, data, total = manager.get_instance_log_bytes(
+            "test-id", start=0, end=99
+        )
 
+        assert read_start == 0
         assert isinstance(data, bytes)
         assert len(data) == 100
         assert total == 120
@@ -766,6 +770,7 @@ class TestAPIEndpoints:
     def test_get_instance_logs_endpoint(self, mock_manager, client):
         """Test getting instance logs without Range header returns 200"""
         mock_manager.get_instance_log_bytes.return_value = (
+            0,
             b"Log line 1Log line 2Log line 3",
             30,
         )
@@ -781,7 +786,7 @@ class TestAPIEndpoints:
     @patch("launcher.vllm_manager")
     def test_get_instance_logs_with_range_header(self, mock_manager, client):
         """Test getting instance logs with Range header"""
-        mock_manager.get_instance_log_bytes.return_value = (b"A" * 5000, 10000)
+        mock_manager.get_instance_log_bytes.return_value = (0, b"A" * 5000, 10000)
 
         response = client.get(
             "/v2/vllm/instances/test-id/log",
@@ -818,7 +823,7 @@ class TestAPIEndpoints:
     @patch("launcher.vllm_manager")
     def test_get_instance_logs_partial_content_206(self, mock_manager, client):
         """Test 206 Partial Content with correct Content-Range header"""
-        mock_manager.get_instance_log_bytes.return_value = (b"ABCDE", 100)
+        mock_manager.get_instance_log_bytes.return_value = (10, b"ABCDE", 100)
 
         response = client.get(
             "/v2/vllm/instances/test-id/log",
@@ -832,7 +837,7 @@ class TestAPIEndpoints:
     @patch("launcher.vllm_manager")
     def test_get_instance_logs_open_ended_range(self, mock_manager, client):
         """Test open-ended Range: bytes=100-"""
-        mock_manager.get_instance_log_bytes.return_value = (b"rest of log", 200)
+        mock_manager.get_instance_log_bytes.return_value = (100, b"rest of log", 200)
 
         response = client.get(
             "/v2/vllm/instances/test-id/log",
@@ -856,14 +861,20 @@ class TestAPIEndpoints:
         assert response.status_code == 400
 
     @patch("launcher.vllm_manager")
-    def test_get_instance_logs_suffix_range_rejected(self, mock_manager, client):
-        """Test suffix range bytes=-500 returns 400"""
+    def test_get_instance_logs_suffix_range_zeroed(self, mock_manager, client):
+        """Test suffix range bytes=-500"""
+        mock_manager.get_instance_log_bytes.return_value = (0, b"rest of log", 11)
+
         response = client.get(
             "/v2/vllm/instances/test-id/log",
             headers={"Range": "bytes=-500"},
         )
 
-        assert response.status_code == 400
+        assert response.status_code == 206
+        mock_manager.get_instance_log_bytes.assert_called_once_with(
+            "test-id", None, 500
+        )
+        assert response.headers["content-range"] == "bytes 0-10/11"
 
 
 # Tests for VllmInstance log functionality
@@ -897,8 +908,8 @@ class TestVllmInstanceLogs:
         with open(instance._log_file_path, "wb") as f:
             f.write(b"Log 1Log 2")
 
-        data, total = instance.get_log_bytes()
-
+        read_start, data, total = instance.get_log_bytes()
+        assert read_start == 0
         assert isinstance(data, bytes)
         assert b"Log 1" in data
         assert b"Log 2" in data
@@ -910,8 +921,9 @@ class TestVllmInstanceLogs:
         with open(instance._log_file_path, "wb") as f:
             f.write(b"A" * 50 + b"B" * 50 + b"C" * 50)
 
-        data, total = instance.get_log_bytes(start=0, end=99)
+        read_start, data, total = instance.get_log_bytes(start=0, end=99)
 
+        assert read_start == 0
         assert isinstance(data, bytes)
         assert len(data) == 100
         assert total == 150
@@ -922,13 +934,15 @@ class TestVllmInstanceLogs:
 
         with open(instance._log_file_path, "wb") as f:
             f.write(b"Hello World")
-        data, total = instance.get_log_bytes(start=0)
+        read_start, data, total = instance.get_log_bytes(start=0)
+        assert read_start == 0
         assert data == b"Hello World"
         assert total == 11
 
         with open(instance._log_file_path, "ab") as f:
             f.write(b"!")
-        data, total = instance.get_log_bytes(start=0)
+        read_start, data, total = instance.get_log_bytes(start=0)
+        assert read_start == 0
         assert data == b"Hello World!"
         assert total == 12
 
@@ -974,7 +988,8 @@ class TestLogFile:
         with open(instance._log_file_path, "wb") as f:
             f.write(b"Test message 1Test message 2")
 
-        data, total = instance.get_log_bytes(start=0)
+        read_start, data, total = instance.get_log_bytes(start=0)
+        assert read_start == 0
         assert isinstance(data, bytes)
         assert b"Test message 1" in data
         assert b"Test message 2" in data
@@ -996,7 +1011,8 @@ class TestLogFile:
         with open(instance._log_file_path, "wb") as f:
             f.write(content.encode("utf-8"))
 
-        data, total = instance.get_log_bytes(start=0, end=49)
+        read_start, data, total = instance.get_log_bytes(start=0, end=49)
+        assert read_start == 0
         assert isinstance(data, bytes)
         assert len(data) == 50
 
@@ -1006,7 +1022,8 @@ class TestLogFile:
         with open(instance._log_file_path, "wb") as f:
             f.write(b"ShortMessage")
 
-        data, total = instance.get_log_bytes(start=0, end=9999)
+        read_start, data, total = instance.get_log_bytes(start=0, end=9999)
+        assert read_start == 0
         assert isinstance(data, bytes)
         assert b"Short" in data
         assert b"Message" in data
@@ -1019,7 +1036,8 @@ class TestLogFile:
         with open(instance._log_file_path, "wb") as f:
             f.write(raw)
 
-        data, total = instance.get_log_bytes(start=0)
+        read_start, data, total = instance.get_log_bytes(start=0)
+        assert read_start == 0
         assert isinstance(data, bytes)
         assert data == raw
         assert total == len(raw)
@@ -1030,7 +1048,8 @@ class TestLogFile:
         with open(instance._log_file_path, "wb") as f:
             f.write(b"A" * 20 + b"B" * 20 + b"C" * 20)
 
-        data, total = instance.get_log_bytes(start=0, end=44)
+        read_start, data, total = instance.get_log_bytes(start=0, end=44)
+        assert read_start == 0
         assert data == b"A" * 20 + b"B" * 20 + b"C" * 5
         assert total == 60
 
@@ -1354,7 +1373,8 @@ class TestLogStartOffset:
         with open(instance._log_file_path, "wb") as f:
             f.write(b"A" * 10 + b"B" * 10 + b"C" * 10)
 
-        data, total = instance.get_log_bytes(start=15)
+        read_start, data, total = instance.get_log_bytes(start=15)
+        assert read_start == 15
         assert data == b"B" * 5 + b"C" * 10
         assert total == 30
 
@@ -1364,7 +1384,8 @@ class TestLogStartOffset:
         with open(instance._log_file_path, "wb") as f:
             f.write(b"A" * 10 + b"B" * 10 + b"C" * 10)
 
-        data, total = instance.get_log_bytes(start=10)
+        read_start, data, total = instance.get_log_bytes(start=10)
+        assert read_start == 10
         assert data == b"B" * 10 + b"C" * 10
         assert total == 30
 
@@ -1448,10 +1469,9 @@ class TestParseRangeHeader:
         """Test parsing large byte values"""
         assert parse_range_header("bytes=1048576-2097151") == (1048576, 2097151)
 
-    def test_suffix_range_rejected(self):
-        """Test that suffix range bytes=-500 raises ValueError"""
-        with pytest.raises(ValueError, match="Unsupported or malformed"):
-            parse_range_header("bytes=-500")
+    def test_suffix_range(self):
+        """Test parsing suffix range bytes=-500"""
+        assert parse_range_header("bytes=-500") == (None, 500)
 
     def test_invalid_unit(self):
         """Test that non-bytes unit raises ValueError"""

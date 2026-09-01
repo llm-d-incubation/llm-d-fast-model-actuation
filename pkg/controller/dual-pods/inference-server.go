@@ -501,7 +501,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				}
 				serverDat.InstanceKnownToExist = true
 				launcherDat := ctl.getLauncherData(nodeDat, providingPod.Name)
-				launcherDat.Instances[serverDat.InstanceID] = time.Now()
+				launcherDat.Instances.setLastUsed(serverDat.InstanceID, time.Now())
 				logger.V(2).Info("Created vLLM instance", "instance_id", result.InstanceID, "status", result.Status)
 			}
 			serverDat.InstanceKnownToExist = true
@@ -565,7 +565,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 					url += stubapi.BecomeUnreadyPath
 					readiness = "unready"
 				}
-				_, err = doHTTP(ctx, "relay_"+readiness, "POST", url, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": iscName}), nil, nil)
+				_, err = doHTTP(ctx, "relay_"+readiness, "POST", url, nil, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": iscName}), nil, httpResultConsumer{})
 				if err != nil {
 					logger.Error(err, "Failed to relay the readiness", "name", providingPod.Name, "readiness", readiness, "url", url)
 					return processResult{err: err, retry: true}
@@ -909,8 +909,8 @@ func (ctl *controller) selectOrReclaimLauncherPod(
 		toDelete := max(insts.TotalInstances-maxOthers, 1)
 		// Any conflicting vLLM instance must be deleted; deleting only other
 		// vLLM instances would leave the desired port unavailable.
-		victims := append(portConflictVictims, pickInstanceVictims(otherVictims, launcherDat.Instances, toDelete-len(portConflictVictims))...)
-		lruID, lruTime := reclaimPlanLRU(victims, launcherDat.Instances)
+		victims := append(portConflictVictims, pickInstanceVictims(otherVictims, launcherDat.Instances.getLastUsedIfNotStopped, toDelete-len(portConflictVictims))...)
+		lruID, lruTime := reclaimPlanLRU(victims, launcherDat.Instances.getLastUsedIfNotStopped)
 		plan := &launcherReclaimPlan{
 			launcherPod: launcherPod,
 			launcherDat: launcherDat,
@@ -963,7 +963,7 @@ func (ctl *controller) selectOrReclaimLauncherPod(
 // pickInstanceVictims chooses up to limit instance IDs to delete.
 func pickInstanceVictims(
 	candidates []string,
-	knownLastUsed map[string]time.Time,
+	knownLastUsed Getter[string, time.Time],
 	limit int,
 ) []string {
 	if limit <= 0 {
@@ -976,11 +976,11 @@ func pickInstanceVictims(
 	return candidates[:min(limit, len(candidates))]
 }
 
-func reclaimPlanLRU(victims []string, knownLastUsed map[string]time.Time) (string, time.Time) {
+func reclaimPlanLRU(victims []string, knownLastUsed Getter[string, time.Time]) (string, time.Time) {
 	lruID := victims[0]
-	lruTime := knownLastUsed[lruID]
+	lruTime, _ := knownLastUsed(lruID)
 	for _, victim := range victims[1:] {
-		victimTime := knownLastUsed[victim]
+		victimTime, _ := knownLastUsed(victim)
 		if compareLastUsed(victim, victimTime, lruID, lruTime) < 0 {
 			lruID = victim
 			lruTime = victimTime
@@ -996,8 +996,8 @@ func compareReclaimPlans(a, b *launcherReclaimPlan) int {
 	return compareLastUsed(a.lruID, a.lruTime, b.lruID, b.lruTime)
 }
 
-func compareInstanceLastUsed(a, b string, knownLastUsed map[string]time.Time) int {
-	return compareLastUsed(a, knownLastUsed[a], b, knownLastUsed[b])
+func compareInstanceLastUsed(a, b string, knownLastUsed Getter[string, time.Time]) int {
+	return compareLastUsed(a, dropHave(knownLastUsed(a)), b, dropHave(knownLastUsed(b)))
 }
 
 func compareLastUsed(a string, aTime time.Time, b string, bTime time.Time) int {
@@ -1495,7 +1495,7 @@ func (ctl *controller) wakeUp(ctx context.Context, serverDat *serverData, reques
 	}
 	endpoint := fmt.Sprintf("%s:%d", providingPod.Status.PodIP, serverPort)
 	wakeURL := "http://" + endpoint + "/wake_up"
-	_, err := doHTTP(ctx, "wake", "POST", wakeURL, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": requestingPod.Annotations[api.InferenceServerConfigAnnotationName]}), nil, nil)
+	_, err := doHTTP(ctx, "wake", "POST", wakeURL, nil, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": requestingPod.Annotations[api.InferenceServerConfigAnnotationName]}), nil, httpResultConsumer{})
 	if err != nil {
 		return fmt.Errorf("failed to wake inference server at %s: %w", endpoint, err)
 	}
@@ -1710,7 +1710,7 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 			}
 			endpoint := fmt.Sprintf("%s:%d", providingPod.Status.PodIP, serverPort)
 			sleepURL := "http://" + endpoint + "/sleep"
-			_, err := doHTTP(ctx, "sleep", "POST", sleepURL, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": iscName}), nil, nil)
+			_, err := doHTTP(ctx, "sleep", "POST", sleepURL, nil, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": iscName}), nil, httpResultConsumer{})
 			if err != nil {
 				return fmt.Errorf("failed to put provider %q to sleep, POST %s: %w", serverDat.ProvidingPodName, sleepURL, err)
 			}
@@ -1984,7 +1984,7 @@ func getReducedInferenceContainerState(from *corev1.Pod) *reducedContainerState 
 func (ctl *controller) querySleeping(ctx context.Context, iscName string, providingPod *corev1.Pod, serverPort int32) (bool, error) {
 	queryURL := fmt.Sprintf("http://%s:%d/is_sleeping", providingPod.Status.PodIP, serverPort)
 	var sleepState api.SleepState
-	_, err := doHTTP(ctx, "query_sleeping", "GET", queryURL, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": iscName}), nil, &sleepState)
+	_, err := doHTTP(ctx, "query_sleeping", "GET", queryURL, nil, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": iscName}), nil, httpResultConsumer{json: &sleepState})
 	return sleepState.IsSleeping, err
 }
 
@@ -1995,7 +1995,7 @@ func (ctl *controller) accelMemoryIsLowEnough(ctx context.Context, requestingPod
 	}
 	url := fmt.Sprintf("http://%s:%s%s", requestingPod.Status.PodIP, adminPort, stubapi.AcceleratorMemoryQueryPath)
 	usageMap := map[string]int64{}
-	_, err := doHTTP(ctx, "get_accel_memory_usage", "GET", url, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": requestingPod.Annotations[api.InferenceServerConfigAnnotationName]}), nil, &usageMap)
+	_, err := doHTTP(ctx, "get_accel_memory_usage", "GET", url, nil, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": requestingPod.Annotations[api.InferenceServerConfigAnnotationName]}), nil, httpResultConsumer{json: &usageMap})
 	if err != nil {
 		return err
 	}
@@ -2122,16 +2122,23 @@ func (ctl *controller) syncLauncherInstances(ctx context.Context, nodeDat *nodeD
 		}
 	}
 
-	newInstances := make(map[string]time.Time)
+	newInstances := make(instanceTable)
 	remainingInstances := make([]InstanceState, 0, len(insts.Instances))
 	stoppedInstanceIDs := sets.New[string]()
 	runningCount := 0
 	for _, inst := range insts.Instances {
+		if instDat, exists := launcherDat.Instances[inst.InstanceID]; exists {
+			newInstances[inst.InstanceID] = instDat
+		} else {
+			newInstances[inst.InstanceID] = &instanceData{LastUsed: time.Now()}
+		}
 		if inst.Status == InstanceStatusStopped {
+			ctl.ensureLogTailLogged(ctx, newInstances, launcherPod.Name, inst.InstanceID, lClient)
 			if boundInstanceIDs.Has(inst.InstanceID) {
 				// Bound stopped instance — defer deletion so the caller can
 				// delete the requesting Pod first (resolves create/delete ambiguity).
 				stoppedInstanceIDs.Insert(inst.InstanceID)
+				newInstances.setStopped(inst.InstanceID, true)
 				logger.V(2).Info("Found stopped bound instance, deferring cleanup",
 					"instanceID", inst.InstanceID)
 			} else {
@@ -2146,17 +2153,13 @@ func (ctl *controller) syncLauncherInstances(ctx context.Context, nodeDat *nodeD
 					logger.V(2).Info("Deleted stopped instance from launcher during sync",
 						"instanceID", inst.InstanceID)
 				}
+				delete(newInstances, inst.InstanceID)
 			}
 			continue
 		}
 		remainingInstances = append(remainingInstances, inst)
 		if inst.Status == "running" {
 			runningCount++
-		}
-		if lastUsed, exists := launcherDat.Instances[inst.InstanceID]; exists {
-			newInstances[inst.InstanceID] = lastUsed
-		} else {
-			newInstances[inst.InstanceID] = time.Now()
 		}
 	}
 
@@ -2204,9 +2207,15 @@ type ObserverCube interface {
 	WithLabelValues(values ...string) prometheus.Observer
 }
 
+// This is a union type; at most one member should be non-nil
+type httpResultConsumer struct {
+	json   any
+	octets io.Writer
+}
+
 // Do an HTTP call.
 // latencyHistogramVec needs values for labels purpose, method, status_code
-func doHTTP(ctx context.Context, purpose, method, url string, latencyHistogramVec ObserverCube, requestData, resultData any) (int, error) {
+func doHTTP(ctx context.Context, purpose, method, url string, reqHeaders http.Header, latencyHistogramVec ObserverCube, requestData any, resultConsumer httpResultConsumer) (int, error) {
 	var reqBody io.Reader
 	if requestData != nil {
 		b, err := json.Marshal(requestData)
@@ -2222,8 +2231,16 @@ func doHTTP(ctx context.Context, purpose, method, url string, latencyHistogramVe
 	if requestData != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if resultData != nil {
+	switch {
+	case resultConsumer.json != nil:
 		req.Header.Set("Accept", "application/json")
+	case resultConsumer.octets != nil:
+		req.Header.Set("Accept", "application/octet-stream")
+	}
+	for key, values := range reqHeaders {
+		for _, value := range values {
+			req.Header.Add(key, value)
+		}
 	}
 	httpCallStartTime := time.Now()
 	resp, err := myHTTPClient.Do(req)
@@ -2239,11 +2256,19 @@ func doHTTP(ctx context.Context, purpose, method, url string, latencyHistogramVe
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			body, bodyReadErr := io.ReadAll(resp.Body)
 			err = fmt.Errorf("HTTP %s %q returned unexpected status %d; bodyReadErr=%v; responseBody=%s", method, url, resp.StatusCode, bodyReadErr, string(body))
-		} else if resultData != nil {
-			decoder := json.NewDecoder(resp.Body)
-			bodyErr := decoder.Decode(resultData)
-			if bodyErr != nil {
-				err = fmt.Errorf("failed to decode response to %s %q: %w", method, url, bodyErr)
+		} else {
+			switch {
+			case resultConsumer.json != nil:
+				decoder := json.NewDecoder(resp.Body)
+				bodyErr := decoder.Decode(resultConsumer.json)
+				if bodyErr != nil {
+					err = fmt.Errorf("failed to decode response to %s %q: %w", method, url, bodyErr)
+				}
+			case resultConsumer.octets != nil:
+				_, copyErr := io.Copy(resultConsumer.octets, resp.Body)
+				if copyErr != nil {
+					err = fmt.Errorf("failed to read body of response to %s %q: %w", method, url, copyErr)
+				}
 			}
 		}
 	}
@@ -2262,7 +2287,7 @@ func doHTTP(ctx context.Context, purpose, method, url string, latencyHistogramVe
 // getGPUUUIDs does the HTTP GET on the given URL to fetch the assigned GPU UUIDs.
 func getGPUUUIDs(ctx context.Context, httpLatencySecsHistograms ObserverCube, url string) ([]string, error) {
 	var uuids []string
-	_, err := doHTTP(ctx, "get_gpu_uuids", "GET", url, httpLatencySecsHistograms, nil, &uuids)
+	_, err := doHTTP(ctx, "get_gpu_uuids", "GET", url, nil, httpLatencySecsHistograms, nil, httpResultConsumer{json: &uuids})
 	return uuids, err
 }
 

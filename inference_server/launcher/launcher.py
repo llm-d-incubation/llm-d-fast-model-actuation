@@ -309,35 +309,43 @@ class VllmInstance:
         return self._make_state("running" if self.process.is_alive() else "stopped")
 
     def get_log_bytes(
-        self, start: int = 0, end: int | None = None
-    ) -> tuple[bytes, int]:
+        self, start: int | None = 0, end: int | None = None
+    ) -> tuple[int, bytes, int]:
         """
         Retrieve log bytes from the child process.
-        :param start: First byte to read (inclusive, 0-based).
-        :param end: Last byte to read (inclusive, must be >= start).
+        :param start: First byte to read (inclusive, 0-based) or None for suffix.
+        :param end: if start is None then suffix length otherwise
+                    Last byte to read (inclusive, must be >= start).
                     None means up to start + MAX_LOG_RESPONSE_BYTES - 1
-                    or EOF, whichever comes first.
-        :return: (content_bytes, current_total_log_length)
+                    or EOF, whichever comes first; may not be None if start is None.
+        :return: (read_start, content_bytes, current_total_log_length)
         :raises LogRangeNotAvailable: If start is beyond available content
         """
         try:
             total = os.path.getsize(self._log_file_path)
         except FileNotFoundError:
-            total = 0
+            raise LogRangeNotAvailable(start, 0)
 
-        if start >= total:
+        if start is not None and start >= total:
             raise LogRangeNotAvailable(start, total)
 
-        if end is None:
+        if start is None:
+            if end is None:
+                raise LogRangeNotAvailable(None, total)
+            read_start = max(total - end, 0)
+            read_end = total - 1
+        elif end is None:
+            read_start = start
             read_end = min(start + MAX_LOG_RESPONSE_BYTES - 1, total - 1)
         else:
+            read_start = start
             read_end = min(end, total - 1)
 
-        nbytes = read_end - start + 1
+        nbytes = read_end - read_start + 1
         with open(self._log_file_path, "rb") as f:
-            f.seek(start)
+            f.seek(read_start)
             data = f.read(nbytes)
-        return (data, total)
+        return (read_start, data, total)
 
 
 # Multi-instance vLLM process manager
@@ -499,15 +507,16 @@ class VllmMultiProcessManager:
     def get_instance_log_bytes(
         self,
         instance_id: str,
-        start: int = 0,
+        start: int | None = 0,
         end: int | None = None,
-    ) -> tuple[bytes, int]:
+    ) -> tuple[int, bytes, int]:
         """
         Get log bytes from a specific instance.
         :param instance_id: ID of the instance
-        :param start: First byte to read (inclusive, 0-based)
-        :param end: Last byte to read (inclusive), or None for default limit
-        :return: (content_bytes, total_file_size)
+        :param start: First byte to read (inclusive, 0-based), or None for suffix
+        :param end: if start is None then suffix length otherwise
+                    Last byte to read (inclusive) or None for default limit
+        :return: (read_start, content_bytes, total_file_size)
         :raises LogRangeNotAvailable: If start is beyond available content
         """
         if instance_id not in self.instances:
@@ -539,26 +548,33 @@ app = FastAPI(
 )
 
 
-_RANGE_RE = re.compile(r"^bytes=(\d+)-(\d+)?$")
+_RANGE_RE = re.compile(r"^bytes=(\d+)?-(\d+)?$")
 
 
-def parse_range_header(range_header: str) -> tuple[int, int | None]:
+def parse_range_header(range_header: str) -> tuple[int | None, int | None]:
     """Parse an HTTP Range header value.
 
-    Accepts ``bytes=START-END`` (both inclusive) or ``bytes=START-``
-    (open-ended).  Returns ``(start, end)`` where *end* may be ``None``.
+    Accepts ``bytes=START-END`` (both inclusive) or ``bytes=START-`` (open-ended)
+    or ``bytes=-SUFFIX``.
+    Returns ``(start, end_or_suffix)`` where either may be ``None``.
 
     Raises :class:`ValueError` for unsupported or malformed values
-    (e.g. suffix ranges like ``bytes=-500``).
+    (e.g. suffix ranges like ``bytes=-0``).
     """
     m = _RANGE_RE.match(range_header)
     if m is None:
         raise ValueError(f"Unsupported or malformed Range header: {range_header}")
-    start = int(m.group(1))
+    start = int(m.group(1)) if m.group(1) else None
     # group(2) is the end value; absent in open-ended ranges like "bytes=100-"
     end = int(m.group(2)) if m.group(2) else None
-    if end is not None and end < start:
-        raise ValueError(f"Range end ({end}) must be >= start ({start})")
+    if start is None:
+        if end is None:
+            raise ValueError("Range must specify start or end_or_suffix")
+        if end <= 0:
+            raise ValueError(f"Range suffix must be positive, not {end}")
+    else:
+        if end is not None and end < start:
+            raise ValueError(f"Range end ({end}) must be >= start ({start})")
     return (start, end)
 
 
@@ -740,7 +756,7 @@ async def get_vllm_instance_status(
 
 
 @app.get("/v2/vllm/instances/{instance_id}/log")
-async def get_vllm_instance_logs(
+async def get_vllm_instance_log(
     instance_id: str = Path(..., description="Instance ID"),
     range: str | None = Header(None, alias="Range"),
 ):
@@ -751,9 +767,11 @@ async def get_vllm_instance_logs(
 
     Without a Range header the full log (up to 1 MB) is returned with
     200 OK.  With ``Range: bytes=START-END`` or ``Range: bytes=START-``
+    or ``Range: bytes=-SUFFIX``
     the requested slice is returned with 206 Partial Content.  In both
     cases the response includes a ``Content-Range`` header indicating the byte range
-    and current total log length.
+    and current total log length
+    --- except in the case of empty log, when no ``Content-Range`` header is returned.
     """
     try:
         if range is None:
@@ -766,13 +784,17 @@ async def get_vllm_instance_logs(
                 raise HTTPException(status_code=400, detail=str(exc))
             partial = True
 
-        data, total = vllm_manager.get_instance_log_bytes(instance_id, start, end)
+        read_start, data, total = vllm_manager.get_instance_log_bytes(
+            instance_id, start, end
+        )
 
-        actual_end = start + len(data) - 1
+        actual_end = read_start + len(data) - 1
         headers = {
             "Accept-Ranges": "bytes",
-            "Content-Range": f"bytes {start}-{actual_end}/{total}",
         }
+        if actual_end >= 0:
+            headers["Content-Range"] = f"bytes {read_start}-{actual_end}/{total}"
+        # There is no valid Content-Range when the file's length is zero
         if partial:
             status_code = HTTPStatus.PARTIAL_CONTENT
         else:
