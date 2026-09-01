@@ -522,7 +522,7 @@ type serverData struct {
 type launcherData struct {
 	// Instances is a map,
 	// where key is an instance's ID which is the instance' nominal hash,
-	// and value is the a non-nil `*instanceData`.
+	// and value is a non-nil `*instanceData`.
 	Instances instanceTable
 
 	// Accurate indicates whether the set of nominal hash in Instances is accurate.
@@ -532,7 +532,7 @@ type launcherData struct {
 
 // instanceTable is a map,
 // where key is an instance's ID which is the instance' nominal hash,
-// and value is the a non-nil `*instanceData`.
+// and value is a non-nil `*instanceData`.
 type instanceTable map[string]*instanceData
 
 // instanceData is what the controller tracks per vLLM instance.

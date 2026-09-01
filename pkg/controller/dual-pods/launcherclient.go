@@ -138,7 +138,7 @@ func (c *LauncherClient) GetInstanceState(
 ) (*InstanceState, error) {
 	path := fmt.Sprintf("/v2/vllm/instances/%s", instanceID)
 	var out InstanceState
-	if err := c.fullDo(ctx, "get_instance_state", http.MethodGet, path, nil, httpResultConsumer{json: &out}, func() {
+	if err := c.fullDo(ctx, "get_instance_state", http.MethodGet, path, nil, nil, httpResultConsumer{json: &out}, func() {
 		iscName := out.Annotations[VllmConfigISCNameAnnotationKey]
 		c.latencyHistograms = c.isclessLatencyHistograms.MustCurryWith(prometheus.Labels{"isc_name": iscName})
 	}); err != nil {
@@ -176,10 +176,25 @@ func (c *LauncherClient) ListInstanceIDs(
 
 func (c *LauncherClient) GetLog(ctx context.Context,
 	instanceID string,
+	start, end *int,
 ) (string, error) {
 	path := fmt.Sprintf("/v2/vllm/instances/%s/log", instanceID)
 	var logBuilder strings.Builder
-	err := c.fullDo(ctx, "get_log_tail", http.MethodGet, path, nil, httpResultConsumer{octets: &logBuilder}, nil)
+	var headers http.Header
+	if start != nil || end != nil {
+		headers = make(http.Header)
+		var valBuilder strings.Builder
+		valBuilder.WriteString("bytes=")
+		if start != nil {
+			fmt.Fprintf(&valBuilder, "%d", *start)
+		}
+		valBuilder.WriteRune('-')
+		if end != nil {
+			fmt.Fprintf(&valBuilder, "%d", *end)
+		}
+		headers.Add("Range", valBuilder.String())
+	}
+	err := c.fullDo(ctx, "get_log_tail", http.MethodGet, path, headers, nil, httpResultConsumer{octets: &logBuilder}, nil)
 	return logBuilder.String(), err
 }
 
@@ -241,7 +256,7 @@ func (c *LauncherClient) do(
 	body any,
 	outData any,
 ) error {
-	return c.fullDo(ctx, purpose, method, path, body, httpResultConsumer{json: outData}, nil)
+	return c.fullDo(ctx, purpose, method, path, nil, body, httpResultConsumer{json: outData}, nil)
 }
 
 // complete is called after attempted HTTP call and response parse and,
@@ -252,6 +267,7 @@ func (c *LauncherClient) fullDo(
 	purpose string,
 	method string,
 	path string,
+	reqHeaders http.Header,
 	body any,
 	out httpResultConsumer,
 	complete func(),
@@ -271,7 +287,7 @@ func (c *LauncherClient) fullDo(
 		c.latencyHistograms = c.isclessLatencyHistograms.MustCurryWith(prometheus.Labels{"isc_name": ""})
 		oc = c.latencyHistograms
 	}
-	statusCode, err := doHTTP(ctx, purpose, method, u.String(), oc, body, out)
+	statusCode, err := doHTTP(ctx, purpose, method, u.String(), reqHeaders, oc, body, out)
 
 	if err != nil || statusCode >= 300 {
 		return &launcherError{StatusCode: statusCode, Err: err}

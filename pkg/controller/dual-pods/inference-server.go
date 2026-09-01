@@ -565,7 +565,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 					url += stubapi.BecomeUnreadyPath
 					readiness = "unready"
 				}
-				_, err = doHTTP(ctx, "relay_"+readiness, "POST", url, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": iscName}), nil, httpResultConsumer{})
+				_, err = doHTTP(ctx, "relay_"+readiness, "POST", url, nil, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": iscName}), nil, httpResultConsumer{})
 				if err != nil {
 					logger.Error(err, "Failed to relay the readiness", "name", providingPod.Name, "readiness", readiness, "url", url)
 					return processResult{err: err, retry: true}
@@ -1495,7 +1495,7 @@ func (ctl *controller) wakeUp(ctx context.Context, serverDat *serverData, reques
 	}
 	endpoint := fmt.Sprintf("%s:%d", providingPod.Status.PodIP, serverPort)
 	wakeURL := "http://" + endpoint + "/wake_up"
-	_, err := doHTTP(ctx, "wake", "POST", wakeURL, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": requestingPod.Annotations[api.InferenceServerConfigAnnotationName]}), nil, httpResultConsumer{})
+	_, err := doHTTP(ctx, "wake", "POST", wakeURL, nil, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": requestingPod.Annotations[api.InferenceServerConfigAnnotationName]}), nil, httpResultConsumer{})
 	if err != nil {
 		return fmt.Errorf("failed to wake inference server at %s: %w", endpoint, err)
 	}
@@ -1710,7 +1710,7 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 			}
 			endpoint := fmt.Sprintf("%s:%d", providingPod.Status.PodIP, serverPort)
 			sleepURL := "http://" + endpoint + "/sleep"
-			_, err := doHTTP(ctx, "sleep", "POST", sleepURL, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": iscName}), nil, httpResultConsumer{})
+			_, err := doHTTP(ctx, "sleep", "POST", sleepURL, nil, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": iscName}), nil, httpResultConsumer{})
 			if err != nil {
 				return fmt.Errorf("failed to put provider %q to sleep, POST %s: %w", serverDat.ProvidingPodName, sleepURL, err)
 			}
@@ -1984,7 +1984,7 @@ func getReducedInferenceContainerState(from *corev1.Pod) *reducedContainerState 
 func (ctl *controller) querySleeping(ctx context.Context, iscName string, providingPod *corev1.Pod, serverPort int32) (bool, error) {
 	queryURL := fmt.Sprintf("http://%s:%d/is_sleeping", providingPod.Status.PodIP, serverPort)
 	var sleepState api.SleepState
-	_, err := doHTTP(ctx, "query_sleeping", "GET", queryURL, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": iscName}), nil, httpResultConsumer{json: &sleepState})
+	_, err := doHTTP(ctx, "query_sleeping", "GET", queryURL, nil, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": iscName}), nil, httpResultConsumer{json: &sleepState})
 	return sleepState.IsSleeping, err
 }
 
@@ -1995,7 +1995,7 @@ func (ctl *controller) accelMemoryIsLowEnough(ctx context.Context, requestingPod
 	}
 	url := fmt.Sprintf("http://%s:%s%s", requestingPod.Status.PodIP, adminPort, stubapi.AcceleratorMemoryQueryPath)
 	usageMap := map[string]int64{}
-	_, err := doHTTP(ctx, "get_accel_memory_usage", "GET", url, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": requestingPod.Annotations[api.InferenceServerConfigAnnotationName]}), nil, httpResultConsumer{json: &usageMap})
+	_, err := doHTTP(ctx, "get_accel_memory_usage", "GET", url, nil, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": requestingPod.Annotations[api.InferenceServerConfigAnnotationName]}), nil, httpResultConsumer{json: &usageMap})
 	if err != nil {
 		return err
 	}
@@ -2215,7 +2215,7 @@ type httpResultConsumer struct {
 
 // Do an HTTP call.
 // latencyHistogramVec needs values for labels purpose, method, status_code
-func doHTTP(ctx context.Context, purpose, method, url string, latencyHistogramVec ObserverCube, requestData any, resultConsumer httpResultConsumer) (int, error) {
+func doHTTP(ctx context.Context, purpose, method, url string, reqHeaders http.Header, latencyHistogramVec ObserverCube, requestData any, resultConsumer httpResultConsumer) (int, error) {
 	var reqBody io.Reader
 	if requestData != nil {
 		b, err := json.Marshal(requestData)
@@ -2236,6 +2236,11 @@ func doHTTP(ctx context.Context, purpose, method, url string, latencyHistogramVe
 		req.Header.Set("Accept", "application/json")
 	case resultConsumer.octets != nil:
 		req.Header.Set("Accept", "application/octet-stream")
+	}
+	for key, values := range reqHeaders {
+		for _, value := range values {
+			req.Header.Add(key, value)
+		}
 	}
 	httpCallStartTime := time.Now()
 	resp, err := myHTTPClient.Do(req)
@@ -2282,7 +2287,7 @@ func doHTTP(ctx context.Context, purpose, method, url string, latencyHistogramVe
 // getGPUUUIDs does the HTTP GET on the given URL to fetch the assigned GPU UUIDs.
 func getGPUUUIDs(ctx context.Context, httpLatencySecsHistograms ObserverCube, url string) ([]string, error) {
 	var uuids []string
-	_, err := doHTTP(ctx, "get_gpu_uuids", "GET", url, httpLatencySecsHistograms, nil, httpResultConsumer{json: &uuids})
+	_, err := doHTTP(ctx, "get_gpu_uuids", "GET", url, nil, httpLatencySecsHistograms, nil, httpResultConsumer{json: &uuids})
 	return uuids, err
 }
 

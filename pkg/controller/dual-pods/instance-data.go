@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"k8s.io/klog/v2"
+	"k8s.io/utils/ptr"
 )
 
 // ensureLogTailLogged will, if it has not already been done, read the tail of the log
@@ -30,7 +31,7 @@ func (ctl *controller) ensureLogTailLogged(ctx context.Context, instab instanceT
 		return
 	}
 	logger := klog.FromContext(ctx)
-	tail, err := lClient.GetLog(ctx, instanceID)
+	tail, err := lClient.GetLog(ctx, instanceID, nil, ptr.To(int(100*1000)))
 	if err != nil {
 		logger.V(3).Info("Failed to fetch log tail of instance", "launcherName", launcherName, "instanceID", instanceID, "err", err)
 		return

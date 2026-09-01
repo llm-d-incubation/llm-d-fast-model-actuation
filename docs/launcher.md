@@ -741,7 +741,7 @@ Represents a single vLLM instance with its process and configuration.
 - `start()`: Start the vLLM process
 - `stop(timeout=10)`: Stop the vLLM process gracefully (or force kill after timeout)
 - `get_status()`: Get detailed status information
-- `get_log_bytes(start=0, end=None)`: Retrieve log bytes from the instance (start and end are both inclusive), returns `(bytes, total_size)`
+- `get_log_bytes(start=0, end=None)`: Retrieve log bytes from the instance (start and end are both inclusive, either --- but not both --- may be `None`), returns `(read_start, bytes, total_size)`
 
 #### `VllmMultiProcessManager`
 
@@ -754,7 +754,7 @@ Manages multiple VllmInstance objects.
 - `stop_all_instances(timeout=10)`: Stop all running instances
 - `get_instance_status(instance_id)`: Get status of a specific instance
 - `get_all_instances_status()`: Get status of all instances
-- `get_instance_log_bytes(instance_id, start=0, end=None)`: Retrieve log bytes from a specific instance, returns `(bytes, total_size)`
+- `get_instance_log_bytes(instance_id, start=0, end=None)`: Retrieve log bytes from a specific instance, returns `(read_start, bytes, total_size)`
 
 ## Best Practices
 
