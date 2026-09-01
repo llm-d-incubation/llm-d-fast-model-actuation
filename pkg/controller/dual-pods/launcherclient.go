@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -137,7 +138,7 @@ func (c *LauncherClient) GetInstanceState(
 ) (*InstanceState, error) {
 	path := fmt.Sprintf("/v2/vllm/instances/%s", instanceID)
 	var out InstanceState
-	if err := c.fullDo(ctx, "get_instance_state", http.MethodGet, path, nil, &out, func() {
+	if err := c.fullDo(ctx, "get_instance_state", http.MethodGet, path, nil, httpResultConsumer{json: &out}, func() {
 		iscName := out.Annotations[VllmConfigISCNameAnnotationKey]
 		c.latencyHistograms = c.isclessLatencyHistograms.MustCurryWith(prometheus.Labels{"isc_name": iscName})
 	}); err != nil {
@@ -171,6 +172,15 @@ func (c *LauncherClient) ListInstanceIDs(
 		return nil, err
 	}
 	return out.InstanceIDs, nil
+}
+
+func (c *LauncherClient) GetLog(ctx context.Context,
+	instanceID string,
+) (string, error) {
+	path := fmt.Sprintf("/v2/vllm/instances/%s/log", instanceID)
+	var logBuilder strings.Builder
+	err := c.fullDo(ctx, "get_log_tail", http.MethodGet, path, nil, httpResultConsumer{octets: &logBuilder}, nil)
+	return logBuilder.String(), err
 }
 
 // DeleteInstance removes a specific instance.
@@ -229,9 +239,9 @@ func (c *LauncherClient) do(
 	method string,
 	path string,
 	body any,
-	out any,
+	outData any,
 ) error {
-	return c.fullDo(ctx, purpose, method, path, body, out, nil)
+	return c.fullDo(ctx, purpose, method, path, body, httpResultConsumer{json: outData}, nil)
 }
 
 // complete is called after attempted HTTP call and response parse and,
@@ -243,7 +253,7 @@ func (c *LauncherClient) fullDo(
 	method string,
 	path string,
 	body any,
-	out any,
+	out httpResultConsumer,
 	complete func(),
 ) error {
 	parsed, err := url.Parse(path)
