@@ -25,6 +25,7 @@ import os
 import re
 import signal
 import stat
+import subprocess
 import sys
 import uuid
 from contextlib import asynccontextmanager
@@ -163,6 +164,7 @@ class VllmInstance:
         config: VllmConfig,
         gpu_translator: GpuTranslator,
         log_dir: str = "",
+        debug_gpu_memory: bool = False,
     ):
         """
         Initialize VllmInstance object
@@ -186,7 +188,7 @@ class VllmInstance:
                 config.env_vars = {}
             config.env_vars["CUDA_VISIBLE_DEVICES"] = ",".join(cuda_indices)
             logger.info(
-                "Set CUDA_VISIBLE_DEVICES to %s based on UUIDs.",
+                "Set CUDA_VISIBLE_DEVICES to '%s' based on UUIDs.",
                 config.env_vars["CUDA_VISIBLE_DEVICES"],
             )
 
@@ -200,6 +202,7 @@ class VllmInstance:
             log_dir or "/tmp",
             f"launcher-{os.getpid()}-vllm-{instance_id}.log",
         )
+        self.debug_gpu_memory = debug_gpu_memory
 
     def _make_state(self, status: str) -> dict:
         return {
@@ -221,7 +224,8 @@ class VllmInstance:
         open(self._log_file_path, "wb").close()
 
         self.process = multiprocessing.Process(
-            target=vllm_kickoff, args=(self.config, self._log_file_path)
+            target=vllm_kickoff,
+            args=(self.config, self._log_file_path, self.debug_gpu_memory),
         )
         self.process.start()
 
@@ -357,6 +361,7 @@ class VllmMultiProcessManager:
         node_name: Optional[str] = None,
         namespace: Optional[str] = None,
         log_dir: str = "",
+        debug_gpu_memory: bool = False,
     ):
         self.instances: Dict[str, VllmInstance] = {}
         self.broadcaster = EventBroadcaster()
@@ -372,6 +377,7 @@ class VllmMultiProcessManager:
             mock_gpu_count=mock_gpu_count,
         )
         self.log_dir = log_dir
+        self.debug_gpu_memory = debug_gpu_memory
 
     @property
     def revision(self) -> int:
@@ -410,7 +416,11 @@ class VllmMultiProcessManager:
         logger.info("Accepted request to create vLLM instance with id=%s", instance_id)
 
         instance = VllmInstance(
-            instance_id, vllm_config, self.gpu_translator, self.log_dir
+            instance_id,
+            vllm_config,
+            self.gpu_translator,
+            self.log_dir,
+            self.debug_gpu_memory,
         )
         self.instances[instance_id] = instance
 
@@ -855,11 +865,13 @@ def _close_inherited_sockets():
 
 
 # Function to be executed by the child process
-def vllm_kickoff(vllm_config: VllmConfig, log_file_path: str):
+def vllm_kickoff(vllm_config: VllmConfig, log_file_path: str, debug_gpu_memory: bool):
     """
     Child function to kickoff vllm instance
     :param vllm_config: vLLM configuration parameters and env variables
     :param log_file_path: Path to the log file for capturing stdout/stderr
+    :param debug_gpu_memory: bool indicating whether to first give evidence of
+                             GPU memory usage
     """
 
     # Isolate this process tree into its own process group so that
@@ -888,10 +900,29 @@ def vllm_kickoff(vllm_config: VllmConfig, log_file_path: str):
     sys.stdout = os.fdopen(1, "w")
     sys.stderr = os.fdopen(2, "w")
 
-    logger.info(f"VLLM process (PID: {os.getpid()}) started.")
     # Set env vars in the current process
     if vllm_config.env_vars:
         set_env_vars(vllm_config.env_vars)
+
+    if debug_gpu_memory:
+        try:
+            cp = subprocess.run("nvidia-smi", timeout=20)
+        except FileNotFoundError:
+            logger.warning("nvidia-smi not found")
+        except subprocess.TimeoutExpired:
+            logger.warning("nvidia-smi timed out")
+        except Exception as exn:
+            logger.warning(f"Running nvidia-smi threw exception {exn}")
+        else:
+            logger.info(
+                f"Ran nvidia-smi; got returncode={cp.returncode}"
+                f", stdout={cp.stdout}, stderr={cp.stderr}"
+            )
+
+    cvd = os.getenv("CUDA_VISIBLE_DEVICES", "<unset>")
+    logger.info(
+        f"VLLM process (PID: {os.getpid()}, CUDA_VISIBLE_DEVICES: {cvd}) starting."
+    )
 
     # prepare args
     receive_args = vllm_config.options.split()
@@ -955,6 +986,13 @@ if __name__ == "__main__":
         choices=["critical", "error", "warning", "info", "debug"],
         help="Logging level (default: info)",
     )
+    parser.add_argument(
+        "--debug-gpu-memory",
+        type=bool,
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Log info on accelerator memory usage",
+    )
 
     args = parser.parse_args()
 
@@ -965,8 +1003,10 @@ if __name__ == "__main__":
     namespace = os.getenv("NAMESPACE")
 
     logger.info(
-        "Launcher starting with args: mock_gpus=%s, mock_gpu_count=%d, "
-        "host=%s, port=%d, log_level=%s, node_name=%s, namespace=%s",
+        "Launcher starting with args: mock_gpus=%s, mock_gpu_count=%d"
+        ", host=%s, port=%d, log_level=%s, node_name=%s, namespace=%s"
+        ", debug_gpu_memory=%s"
+        "",
         args.mock_gpus,
         args.mock_gpu_count,
         args.host,
@@ -974,6 +1014,7 @@ if __name__ == "__main__":
         args.log_level,
         node_name,
         namespace,
+        args.debug_gpu_memory,
     )
 
     # Reinitialize the global manager with mock mode settings
@@ -982,6 +1023,7 @@ if __name__ == "__main__":
         mock_gpu_count=args.mock_gpu_count,
         node_name=node_name,
         namespace=namespace,
+        debug_gpu_memory=args.debug_gpu_memory,
     )
 
     uvicorn.run(
