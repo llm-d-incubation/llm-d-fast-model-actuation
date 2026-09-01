@@ -72,9 +72,6 @@ else
     node_selector=""
 fi
 
-# GPU utilization is temporarily hacked below 0.825 because we have
-# mysteries still to chase.
-
 if out=$(kubectl apply "${ns_flag[@]}" -f - 2>&1 <<EOF
 apiVersion: v1
 kind: ServiceAccount
@@ -124,7 +121,7 @@ spec:
     options: >-
       --model HuggingFaceTB/SmolLM2-360M-Instruct
       --enable-sleep-mode
-      --gpu-memory-utilization 0.8
+      --gpu-memory-utilization 0.825
     env_vars:
       VLLM_SERVER_DEV_MODE: "1"
       VLLM_LOGGING_LEVEL: "DEBUG"
@@ -146,7 +143,7 @@ spec:
     options: >-
       --model Qwen/Qwen2.5-0.5B-Instruct
       --enable-sleep-mode
-      --gpu-memory-utilization 0.8
+      --gpu-memory-utilization 0.825
     env_vars:
       VLLM_SERVER_DEV_MODE: "1"
       VLLM_LOGGING_LEVEL: "DEBUG"
@@ -168,7 +165,7 @@ spec:
     options: >-
       --model TinyLlama/TinyLlama-1.1B-Chat-v1.0
       --enable-sleep-mode
-      --gpu-memory-utilization 0.8
+      --gpu-memory-utilization 0.825
     env_vars:
       VLLM_SERVER_DEV_MODE: "1"
       VLLM_LOGGING_LEVEL: "DEBUG"
@@ -219,7 +216,7 @@ spec:
             value: "/tmp"
           resources:
             limits:
-              ephemeral-storage: "5Gi"
+              ephemeral-storage: "4.5Gi"
 ---
 apiVersion: fma.llm-d.ai/v1alpha1
 kind: LauncherPopulationPolicy
