@@ -34,7 +34,12 @@ from typing import Dict, List, Optional
 
 import uvloop
 from fastapi import FastAPI, Header, HTTPException, Path, Query
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import (
+    JSONResponse,
+    PlainTextResponse,
+    Response,
+    StreamingResponse,
+)
 from gputranslator import GpuTranslator
 from pydantic import BaseModel
 from vllm.entrypoints.openai.api_server import run_server
@@ -686,7 +691,9 @@ async def create_vllm_instance(vllm_config: VllmConfig):
         return JSONResponse(content=result, status_code=HTTPStatus.CREATED)
     except Exception as e:
         logger.error(f"Failed to create vLLM instance: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return PlainTextResponse(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR, content=str(e)
+        )
 
 
 @app.put("/v2/vllm/instances/{instance_id}")
@@ -699,10 +706,12 @@ async def create_id_vllm_instance(
         result = vllm_manager.create_instance(vllm_config, instance_id)
         return JSONResponse(content=result, status_code=HTTPStatus.CREATED)
     except ValueError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=str(e))
     except Exception as e:
         logger.error(f"Failed to create vLLM instance {instance_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return PlainTextResponse(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR, content=str(e)
+        )
 
 
 @app.delete("/v2/vllm/instances/{instance_id}")
@@ -714,10 +723,14 @@ async def delete_vllm_instance(
         result = vllm_manager.stop_instance(instance_id)
         return JSONResponse(content=result, status_code=HTTPStatus.OK)
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"Instance {instance_id} not found")
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND, detail=f"Instance {instance_id} not found"
+        )
     except Exception as e:
         logger.error(f"Failed to delete vLLM instance {instance_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return PlainTextResponse(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR, content=str(e)
+        )
 
 
 @app.delete("/v2/vllm/instances")
@@ -728,7 +741,9 @@ async def delete_all_vllm_instances():
         return JSONResponse(content=result, status_code=HTTPStatus.OK)
     except Exception as e:
         logger.error(f"Failed to delete all vLLM instances: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return PlainTextResponse(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR, content=str(e)
+        )
 
 
 @app.get("/v2/gpu-debug")
@@ -742,11 +757,15 @@ async def get_gpu_debug():
         )
     except subprocess.TimeoutExpired:
         logger.error("Timeout trying to use nvidia-smi")
-        raise HTTPException(status_code=500, detail="debugging commands timed out")
+        return PlainTextResponse(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+            content="debugging commands timed out",
+        )
     except Exception as exn:
         logger.error(f"Failed to use nvidia-smi, exception {exn}")
-        raise HTTPException(
-            status_code=500, detail=f"Running debug commands threw exception {exn}"
+        return PlainTextResponse(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+            content=f"Running debug commands threw exception {exn}",
         )
     else:
         return JSONResponse(
@@ -790,7 +809,9 @@ async def get_vllm_instance_status(
         result = vllm_manager.get_instance_status(instance_id)
         return JSONResponse(content=result, status_code=HTTPStatus.OK)
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"Instance {instance_id} not found")
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND, detail=f"Instance {instance_id} not found"
+        )
 
 
 @app.get("/v2/vllm/instances/{instance_id}/log")
@@ -819,7 +840,7 @@ async def get_vllm_instance_log(
             try:
                 start, end = parse_range_header(range)
             except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc))
+                raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail=str(exc))
             partial = True
 
         read_start, data, total = vllm_manager.get_instance_log_bytes(
@@ -845,7 +866,9 @@ async def get_vllm_instance_log(
             headers=headers,
         )
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"Instance {instance_id} not found")
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND, detail=f"Instance {instance_id} not found"
+        )
     except LogRangeNotAvailable as e:
         return Response(
             content=b"",
@@ -857,7 +880,9 @@ async def get_vllm_instance_log(
         raise
     except Exception as e:
         logger.error(f"Failed to get logs for instance {instance_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return PlainTextResponse(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR, content=str(e)
+        )
 
 
 ######################################################################
