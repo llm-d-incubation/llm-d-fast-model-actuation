@@ -669,6 +669,7 @@ jobs:
           set -x
           if [ -r testnode ]
           then
+            set -x
             case "${{ github.event.inputs.run_cluster || 'pok-prod' }}" in
               (vllm-d)   ingdom=fmaas-vllm-d.fmaas.res.ibm.com;;
               (pok-prod) ingdom=pokprod001.ete14.res.ibm.com;;

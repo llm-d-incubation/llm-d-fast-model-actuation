@@ -758,13 +758,13 @@ async def get_gpu_debug():
     except subprocess.TimeoutExpired:
         logger.error("Timeout trying to use nvidia-smi")
         return PlainTextResponse(
-            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+            status_code=HTTPStatus.GATEWAY_TIMEOUT,
             content="debugging commands timed out",
         )
     except Exception as exn:
         logger.error(f"Failed to use nvidia-smi, exception {exn}")
         return PlainTextResponse(
-            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
+            status_code=HTTPStatus.NOT_IMPLEMENTED,
             content=f"Running debug commands threw exception {exn}",
         )
     else:
