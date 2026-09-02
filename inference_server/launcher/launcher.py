@@ -753,6 +753,7 @@ async def get_gpu_debug():
             "nvidia-smi --query-gpu=index,uuid,memory.used --format=csv; nvidia-smi",
             shell=True,
             capture_output=True,
+            text=True,
             timeout=20,
         )
     except subprocess.TimeoutExpired:

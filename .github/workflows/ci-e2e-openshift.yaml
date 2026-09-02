@@ -666,7 +666,7 @@ jobs:
       - name: Dump DCGM_FI_DEV_FB_USED on testnode
         if: always()
         run: |
-          set -x
+          echo Dump DCGM_FI_DEV_FB_USED on testnode
           if [ -r testnode ]
           then
             case "${{ github.event.inputs.run_cluster || 'pok-prod' }}" in
@@ -675,6 +675,7 @@ jobs:
               (*) echo "Impossible run_cluster '${{ github.event.inputs.run_cluster }}'"
                   exit 1;;
             esac
+            echo querying "https://prometheus-k8s-openshift-monitoring.apps.${ingdom}/api/v1/query" about node "$(cat testnode)"
             curl -sSkG \
               -H "Authorization: Bearer $(oc whoami -t)" \
               --data-urlencode "query=DCGM_FI_DEV_FB_USED{Hostname=\"$(cat testnode)\"}" \

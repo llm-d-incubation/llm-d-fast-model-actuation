@@ -1491,7 +1491,7 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 // only) and records it as awake in serverDat. It does not touch the Pod's
 // sleeping label; callers reconcile that separately (folding it into another
 // Pod update where possible).
-// The `lClient` arg may be `nil`, if not is used to do GPU memory debugging
+// The `lClient` arg may be `nil`, if not then is used to do GPU memory debugging
 func (ctl *controller) wakeUp(ctx context.Context, serverDat *serverData, requestingPod, providingPod *corev1.Pod, serverPort int32, description string, lClient *LauncherClient) error {
 	if ctl.debugAccelMemory {
 		if err := ctl.accelMemoryIsLowEnough(ctx, requestingPod, serverDat); err != nil {
@@ -1501,7 +1501,7 @@ func (ctl *controller) wakeUp(ctx context.Context, serverDat *serverData, reques
 	logger := klog.FromContext(ctx)
 	if lClient != nil {
 		debugData := make(map[string]any)
-		debugErr := lClient.do(ctx, "gpu-debug", http.MethodGet, "/v2/gpu-debug", nil, debugData)
+		debugErr := lClient.do(ctx, "gpu-debug", http.MethodGet, "/v2/gpu-debug", nil, &debugData)
 		if debugErr != nil {
 			logger.V(2).Info("Launcher gpu-debug failed", "err", debugErr)
 		} else {
