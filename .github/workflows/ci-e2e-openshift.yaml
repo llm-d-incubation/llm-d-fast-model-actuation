@@ -666,6 +666,7 @@ jobs:
       - name: Dump DCGM_FI_DEV_FB_USED on testnode
         if: always()
         run: |
+          set -x
           if [ -r testnode ]
           then
             case "${{ github.event.inputs.run_cluster || 'pok-prod' }}" in
