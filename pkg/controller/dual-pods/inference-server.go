@@ -498,6 +498,13 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				// not yet created (bind-first path) or controller restarted and lost tracking.
 				// We just synced, so we know the instance is not on the launcher — create directly.
 				serverDat.NeededNewInstance = true
+				debugData := make(map[string]any)
+				debugErr := lClient.do(ctx, "gpu-debug-at-create", "GET", "/v2/gpu-debug", nil, &debugData)
+				if debugErr != nil {
+					logger.V(2).Info("Launcher gpu-debug at create failed", "err", debugErr)
+				} else {
+					logger.V(2).Info("Launcher did gpu-debug at create", "debugData", debugData)
+				}
 				result, err := lClient.CreateNamedInstance(ctx, serverDat.InstanceID, *serverDat.InstanceConfig)
 				if err != nil {
 					return processResult{err: fmt.Errorf("failed to create vLLM instance %q: %w", serverDat.InstanceID, err), retry: true}
@@ -1501,11 +1508,11 @@ func (ctl *controller) wakeUp(ctx context.Context, serverDat *serverData, reques
 	logger := klog.FromContext(ctx)
 	if lClient != nil {
 		debugData := make(map[string]any)
-		debugErr := lClient.do(ctx, "gpu-debug", http.MethodGet, "/v2/gpu-debug", nil, &debugData)
+		debugErr := lClient.do(ctx, "gpu-debug-at-wake", http.MethodGet, "/v2/gpu-debug", nil, &debugData)
 		if debugErr != nil {
-			logger.V(2).Info("Launcher gpu-debug failed", "err", debugErr)
+			logger.V(2).Info("Launcher gpu-debug at-wake failed", "err", debugErr)
 		} else {
-			logger.V(2).Info("Launcher did gpu-debug", "debugData", debugData)
+			logger.V(2).Info("Launcher did gpu-debug at wake", "debugData", debugData)
 		}
 	}
 	endpoint := fmt.Sprintf("%s:%d", providingPod.Status.PodIP, serverPort)

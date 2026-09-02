@@ -611,6 +611,40 @@ jobs:
         if: always()
         run: kubectl get crd launcherpopulationpolicies.fma.llm-d.ai -o yaml
 
+      - name: Dump DCGM_FI_DEV_FB_USED for every node
+        if: always()
+        run: |
+          case "${{ github.event.inputs.run_cluster || 'pok-prod' }}" in
+            (vllm-d)   ingdom=fmaas-vllm-d.fmaas.res.ibm.com;;
+            (pok-prod) ingdom=pokprod001.ete14.res.ibm.com;;
+            (*) echo "Impossible run_cluster '${{ github.event.inputs.run_cluster }}'"
+                exit 1;;
+          esac
+          for node in $(kubectl get node -l nvidia.com/gpu.present=true -o jsonpath='{.items[*].metadata.name}'); do
+            echo querying "https://prometheus-k8s-openshift-monitoring.apps.${ingdom}/api/v1/query" about DCGM_FI_DEV_FB_USED on node "$node"
+            curl -sSkG \
+              -H "Authorization: Bearer $(oc whoami -t)" \
+              --data-urlencode "query=DCGM_FI_DEV_FB_USED{Hostname=\"$node\"}" \
+              https://prometheus-k8s-openshift-monitoring.apps.${ingdom}/api/v1/query \
+            | jq '.data.result[]' > "DCGM_FI_DEV_FB_USED-$node.json"
+          done
+
+      - name: Dump GPU-using Pods by node
+        if: always()
+        run: |
+            rm pods-* || true
+            kubectl get pods -A -o json \
+              | jq -r '.items[]
+                  | select(.status.phase != "Succeeded" and .status.phase != "Failed")
+                  | ([.spec.containers[]?.resources.limits["nvidia.com/gpu"] // "0" | tonumber] | add) as $gpu_total
+                  | select($gpu_total > 0)
+                  | "\(.spec.nodeName) \(.metadata.namespace)/\(.metadata.name) gpu=\($gpu_total) \(.status.phase)"' \
+              | sort \
+              | while read node rest; do
+                touch "pods-$node"
+                echo "$rest" >> "pods-$node"
+              done
+
       - name: Checkout source before run
         if: always() && (github.event.inputs.fma_release || '') != ''
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -666,21 +700,44 @@ jobs:
       - name: Dump DCGM_FI_DEV_FB_USED on testnode
         if: always()
         run: |
-          echo Dump DCGM_FI_DEV_FB_USED on testnode
+          case "${{ github.event.inputs.run_cluster || 'pok-prod' }}" in
+            (vllm-d)   ingdom=fmaas-vllm-d.fmaas.res.ibm.com;;
+            (pok-prod) ingdom=pokprod001.ete14.res.ibm.com;;
+            (*) echo "Impossible run_cluster '${{ github.event.inputs.run_cluster }}'"
+                exit 1;;
+          esac
           if [ -r testnode ]
           then
-            case "${{ github.event.inputs.run_cluster || 'pok-prod' }}" in
-              (vllm-d)   ingdom=fmaas-vllm-d.fmaas.res.ibm.com;;
-              (pok-prod) ingdom=pokprod001.ete14.res.ibm.com;;
-              (*) echo "Impossible run_cluster '${{ github.event.inputs.run_cluster }}'"
-                  exit 1;;
-            esac
-            echo querying "https://prometheus-k8s-openshift-monitoring.apps.${ingdom}/api/v1/query" about node "$(cat testnode)"
+            echo querying "https://prometheus-k8s-openshift-monitoring.apps.${ingdom}/api/v1/query" about DCGM_FI_DEV_FB_USED on node "$(cat testnode)"
             curl -sSkG \
               -H "Authorization: Bearer $(oc whoami -t)" \
               --data-urlencode "query=DCGM_FI_DEV_FB_USED{Hostname=\"$(cat testnode)\"}" \
               https://prometheus-k8s-openshift-monitoring.apps.${ingdom}/api/v1/query \
             | jq '.data.result[]'
+            echo Data points from start of run follow
+            cat "DCGM_FI_DEV_FB_USED-$(cat testnode).json" || true
+          else echo there is no readable testnode file
+          fi
+
+      - name: Dump GPU-using Pods on test node at start
+        if: always()
+        run: cat "pods-$(cat testnode)" || true
+
+      - name: Dump GPU-using Pods that were not scheduled at start
+        if: always()
+        run: cat pods-null || true
+
+      - name: Dump GPU-using Pods on test node now
+        if: always()
+        run: |
+          if [ -r testnode ]; then
+            kubectl get pods -A -o json \
+              | jq -r '.items[]
+                  | select(.status.phase != "Succeeded" and .status.phase != "Failed")
+                  | select(.spec.nodeName == "'$(cat testnode)'")
+                  | ([.spec.containers[]?.resources.limits["nvidia.com/gpu"] // "0" | tonumber] | add) as $gpu_total
+                  | select($gpu_total > 0)
+                  | "\(.spec.nodeName) \(.metadata.namespace)/\(.metadata.name) gpu=\($gpu_total) \(.status.phase)"' | sort
           else echo there is no readable testnode file
           fi
 
