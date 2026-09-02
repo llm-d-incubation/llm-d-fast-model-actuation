@@ -62,17 +62,17 @@ func startProxy(t *testing.T, srv *Server) (stop func()) {
 }
 
 // startTestEchoServer starts a TCP server that echoes back any data it
-// receives. The returned closer shuts the listener AND any accepted
-// connections so tests do not leak goroutines.
-func startTestEchoServer(t *testing.T) (addr string, port uint16, closer func()) {
+// receives, and returns the target a proxy needs in order to reach it. The
+// returned closer shuts the listener AND any accepted connections so tests do
+// not leak goroutines.
+func startTestEchoServer(t *testing.T) (target stubapi.ProxyTargetConfig, closer func()) {
 	t.Helper()
 	ln, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		t.Fatalf("failed to start echo server: %v", err)
 	}
 	tcpAddr := ln.Addr().(*net.TCPAddr) // ListenTCP guarantees *TCPAddr
-	addr = tcpAddr.String()
-	port = uint16(tcpAddr.Port)
+	target = stubapi.ProxyTargetConfig{Address: tcpAddr.IP.String(), Port: uint16(tcpAddr.Port)}
 
 	var (
 		connsMu sync.Mutex
@@ -87,14 +87,14 @@ func startTestEchoServer(t *testing.T) (addr string, port uint16, closer func())
 			connsMu.Lock()
 			conns = append(conns, conn)
 			connsMu.Unlock()
-			go func(c net.Conn) {
-				_, _ = io.Copy(c, c)
-				_ = c.Close()
-			}(conn)
+			go func() {
+				_, _ = io.Copy(conn, conn)
+				_ = conn.Close()
+			}()
 		}
 	}()
 
-	return addr, port, func() {
+	return target, func() {
 		_ = ln.Close()
 		connsMu.Lock()
 		defer connsMu.Unlock()
@@ -119,7 +119,7 @@ func findFreePort(t *testing.T) uint16 {
 func TestProxy_EchoRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	_, backendPort, backendCloser := startTestEchoServer(t)
+	backend, backendCloser := startTestEchoServer(t)
 	defer backendCloser()
 
 	proxyPort := findFreePort(t)
@@ -127,8 +127,7 @@ func TestProxy_EchoRoundTrip(t *testing.T) {
 	stop := startProxy(t, srv)
 	defer stop()
 
-	body := stubapi.ProxyTargetConfig{Address: "127.0.0.1", Port: backendPort}
-	jsonBody, _ := json.Marshal(body)
+	jsonBody, _ := json.Marshal(backend)
 	req := httptest.NewRequest(http.MethodPut, stubapi.ProxyConfigPath, bytes.NewReader(jsonBody))
 	w := httptest.NewRecorder()
 	srv.Configure(w, req)
@@ -179,9 +178,10 @@ func TestProxy_NoListenerBeforeConfigure(t *testing.T) {
 	}
 }
 
-// TestConfigure_Lifecycle walks the /v1/proxy/config resource through its
-// whole state sequence: unconfigured GET, the one PUT that takes effect, the
-// GET that reports it, and a second PUT that is refused.
+// TestConfigure_Lifecycle walks the /v1/proxy/config resource through its whole
+// state sequence: unconfigured GET, the PUT that takes effect, the GET that
+// reports it, a redundant PUT that is accepted, and a conflicting PUT that is
+// refused.
 func TestConfigure_Lifecycle(t *testing.T) {
 	t.Parallel()
 
@@ -199,11 +199,10 @@ func TestConfigure_Lifecycle(t *testing.T) {
 	stop := startProxy(t, srv)
 	defer stop()
 
-	_, backendPort, backendCloser := startTestEchoServer(t)
+	backend, backendCloser := startTestEchoServer(t)
 	defer backendCloser()
 
-	body := stubapi.ProxyTargetConfig{Address: "127.0.0.1", Port: backendPort}
-	jsonBody, _ := json.Marshal(body)
+	jsonBody, _ := json.Marshal(backend)
 	req2 := httptest.NewRequest(http.MethodPut, stubapi.ProxyConfigPath, bytes.NewReader(jsonBody))
 	w2 := httptest.NewRecorder()
 	srv.Configure(w2, req2)
@@ -222,20 +221,60 @@ func TestConfigure_Lifecycle(t *testing.T) {
 	if err := json.Unmarshal(w3.Body.Bytes(), &got); err != nil {
 		t.Fatalf("failed to parse response JSON: %v", err)
 	}
-	if got != body {
-		t.Errorf("GET returned %+v, want %+v", got, body)
+	if got != backend {
+		t.Errorf("GET returned %+v, want %+v", got, backend)
+	}
+
+	// Repeat the PUT verbatim: a client that lost the first response must be
+	// able to retry without being told it lost a race with itself.
+	req4 := httptest.NewRequest(http.MethodPut, stubapi.ProxyConfigPath, bytes.NewReader(jsonBody))
+	w4 := httptest.NewRecorder()
+	srv.Configure(w4, req4)
+	if w4.Code != http.StatusOK {
+		t.Errorf("redundant PUT of the same config should return 200, got %d — body: %s", w4.Code, w4.Body.String())
 	}
 
 	// Reconfigure with a DIFFERENT config — should be rejected, so the 409
-	// actually proves "reconfigure is blocked" rather than "duplicate write
-	// is a no-op".
-	differentBody := stubapi.ProxyTargetConfig{Address: "10.0.0.1", Port: backendPort + 1}
-	diffJSON, _ := json.Marshal(differentBody)
-	req4 := httptest.NewRequest(http.MethodPut, stubapi.ProxyConfigPath, bytes.NewReader(diffJSON))
-	w4 := httptest.NewRecorder()
-	srv.Configure(w4, req4)
-	if w4.Code != http.StatusConflict {
-		t.Errorf("reconfigure with different config should return 409, got %d — body: %s", w4.Code, w4.Body.String())
+	// actually proves "reconfigure is blocked" rather than "any second write
+	// is refused".
+	differentBackend := stubapi.ProxyTargetConfig{Address: "10.0.0.1", Port: backend.Port}
+	diffJSON, _ := json.Marshal(differentBackend)
+	req5 := httptest.NewRequest(http.MethodPut, stubapi.ProxyConfigPath, bytes.NewReader(diffJSON))
+	w5 := httptest.NewRecorder()
+	srv.Configure(w5, req5)
+	if w5.Code != http.StatusConflict {
+		t.Errorf("reconfigure with different config should return 409, got %d — body: %s", w5.Code, w5.Body.String())
+	}
+}
+
+// TestConfigure_StartFailureReportedToEveryPUT covers the interaction between a
+// listener that failed to start and the redundant PUTs that are now accepted:
+// every PUT must see the failure, not just whichever one got there first.
+func TestConfigure_StartFailureReportedToEveryPUT(t *testing.T) {
+	t.Parallel()
+
+	// Hold the proxy's port so that Run's Start cannot have it.
+	blocker, err := net.ListenTCP("tcp", &net.TCPAddr{})
+	if err != nil {
+		t.Fatalf("failed to occupy a port: %v", err)
+	}
+	defer func() { _ = blocker.Close() }()
+
+	backend, backendCloser := startTestEchoServer(t)
+	defer backendCloser()
+
+	srv := New(ProxyConfig{Port: uint16(blocker.Addr().(*net.TCPAddr).Port), DialTimeout: testDialTimeout})
+	stop := startProxy(t, srv)
+	defer stop()
+
+	jsonBody, _ := json.Marshal(backend)
+	for attempt := 1; attempt <= 2; attempt++ {
+		req := httptest.NewRequest(http.MethodPut, stubapi.ProxyConfigPath, bytes.NewReader(jsonBody))
+		w := httptest.NewRecorder()
+		srv.Configure(w, req)
+		if w.Code != http.StatusInternalServerError {
+			t.Errorf("PUT attempt %d should report the start failure with 500, got %d — body: %s", attempt, w.Code, w.Body.String())
+		}
 	}
 }
 

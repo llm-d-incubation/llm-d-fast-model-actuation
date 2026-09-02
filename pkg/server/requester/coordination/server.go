@@ -77,7 +77,7 @@ func getGpuUUIDs() ([]string, error) {
 // Returns two values.
 // The second is the error, if any, that arose from trying to start the network listener.
 // The first is the func that will do the serving and return any error that arose (nil for clean shutdown).
-func Start(ctx context.Context, port string, ready *atomic.Bool, logWriter io.Writer) (func() error, error) {
+func Start(ctx context.Context, port string, ready *atomic.Bool, logWriter io.Writer, proxyConfigHandler http.HandlerFunc) (func() error, error) {
 	logger := klog.FromContext(ctx).WithName("spi-server")
 
 	gpuUUIDs, err := getGpuUUIDs()
@@ -89,7 +89,7 @@ func Start(ctx context.Context, port string, ready *atomic.Bool, logWriter io.Wr
 	} else {
 		logger.Info("Got GPU UUIDs", "uuids", gpuUUIDs)
 	}
-	return StartWithGPUUUIDs(ctx, port, ready, logWriter, gpuUUIDs)
+	return StartWithGPUUUIDs(ctx, port, ready, logWriter, gpuUUIDs, proxyConfigHandler)
 }
 
 func gpuMemoryHandler(logger klog.Logger) func(w http.ResponseWriter, r *http.Request) {
@@ -211,7 +211,7 @@ func newSetLogHandler(logger klog.Logger, logWriter io.Writer) func(w http.Respo
 // StartWithGPUUUIDs returns two values.
 // The second is the error, if any, that arose from trying to start the network listener.
 // The first is the func that will do the serving and return any error that arose (nil for clean shutdown).
-func StartWithGPUUUIDs(ctx context.Context, port string, ready *atomic.Bool, logWriter io.Writer, gpuUUIDs []string) (func() error, error) {
+func StartWithGPUUUIDs(ctx context.Context, port string, ready *atomic.Bool, logWriter io.Writer, gpuUUIDs []string, proxyConfigHandler http.HandlerFunc) (func() error, error) {
 	logger := klog.FromContext(ctx).WithName("spi-server")
 	mux := http.NewServeMux()
 	mux.HandleFunc(strings.Join([]string{"GET", stubapi.AcceleratorQueryPath}, " "), gpuHandler(gpuUUIDs))
@@ -219,6 +219,9 @@ func StartWithGPUUUIDs(ctx context.Context, port string, ready *atomic.Bool, log
 	mux.HandleFunc("POST "+stubapi.BecomeReadyPath, newSetReadyHandler(logger, ready, true))
 	mux.HandleFunc("POST "+stubapi.BecomeUnreadyPath, newSetReadyHandler(logger, ready, false))
 	mux.HandleFunc("POST "+stubapi.SetLogPath, newSetLogHandler(logger, logWriter))
+	// Registered without a method, unlike the handlers above: this one serves
+	// both GET and PUT and rejects the rest itself.
+	mux.HandleFunc(stubapi.ProxyConfigPath, proxyConfigHandler)
 
 	server := &http.Server{
 		Addr:        ":" + port,
