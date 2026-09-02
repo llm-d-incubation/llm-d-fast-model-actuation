@@ -70,8 +70,10 @@ const LogStartPosParam = "startPos"
 //   - GET: retrieves the configuration status of the proxy.
 //     Returns 200 if configured, 404 if not.
 //   - PUT: configures the proxy with a target address and port.
-//     After successful configuration, the proxy will forward TCP
-//     connections to the configured target.
+//     Returns 200 once the proxy is listening and forwarding TCP connections
+//     to that target. Repeating the PUT of the target already in effect also
+//     returns 200, so a client that lost the first response may simply retry;
+//     a PUT of any other target returns 409.
 const ProxyConfigPath = "/v1/proxy/config"
 
 // ProxyTargetConfig is the request and response body for configuring the proxy

@@ -269,6 +269,8 @@ fi)
             containerPort: 8080
           - name: spi
             containerPort: 8081
+          - name: proxy
+            containerPort: 8082
           readinessProbe:
             httpGet:
               path: /ready

@@ -1,6 +1,56 @@
-This document shows the steps to exercise the requester and dual-pods controller
-in a local k8s environment with model `ibm-granite/granite-3.3-2b-instruct`
-cached on local PV in the cluster.
+This document describes the requester and shows how to exercise it with the
+dual-pods controller in a local k8s environment, using model
+`ibm-granite/granite-3.3-2b-instruct` cached on local PV in the cluster.
+
+## Requester Overview
+
+The requester executable runs in the requester container of a server-requesting
+Pod. Its purpose is two-fold:
+
+1. **Look to the rest of llm-d like an inference server.** The requester listens
+   on the same set of ports an inference server would and can forward client
+   traffic to the bound vLLM instance via a built-in TCP reverse proxy.
+2. **Relay controller-bound state to and from the dual-pods controller.** The
+   requester exposes a small SPI surface so that the dual-pods controller can
+   read GPU IDs, push the bound server's address, and update readiness state.
+
+The reverse TCP proxy can make the requester look *more* like an inference
+server than it otherwise would: client requests can be sent directly to the
+requester Pod's IP and the proxy forwards them to the actual server-providing
+Pod after binding.
+
+The server-requesting Pod runs three servers:
+
+| Server | Default Port | Purpose |
+|--------|-------------|---------|
+| Probes | 8080 | Readiness relay (`/ready` endpoint) — reflects the health status of the bound inference server |
+| SPI | 8081 | Dual-pods controller interface — exposes GPU info, accepts proxy configuration at `/v1/proxy/config`, and relays readiness through `/v1/become-ready` and `/v1/become-unready` |
+| Proxy | 8082 | TCP reverse proxy listen port — accepts client connections and forwards them to the bound vLLM instance; has no listener at all until configured |
+
+### TCP Proxy
+
+The requester carries a **TCP proxy** that can forward traffic to the bound
+inference server. The dual-pods controller always PUTs the bound server's
+address to the SPI endpoint at `/v1/proxy/config`, and the proxy starts accepting
+connections on its `--proxy-port`. You can query the current configuration with
+`GET /v1/proxy/config`.
+
+Using the proxy remains optional for clients: they can send traffic to the
+requester Pod's proxy port, or continue to reach the inference server through
+another data path.
+
+## Command-line flags
+
+Besides the klog flags, which `--help` lists:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--probes-port` | `8080` | Port number for readiness/liveness probes |
+| `--spi-port` | `8081` | Port for dual-pods SPI requests |
+| `--proxy-port` | `8082` | TCP proxy listen port for forwarding client connections |
+| `--proxy-dial-timeout` | `10s` | Timeout for dialing the backend inference server |
+
+## Local Testing
 
 Build and push the requester container image (use your favorate
 `CONTAINER_IMG_REG`) with a command like the following. You can omit
@@ -114,6 +164,8 @@ spec:
             containerPort: 8080
           - name: spi
             containerPort: 8081
+          - name: proxy
+            containerPort: 8082
           readinessProbe:
             httpGet:
               path: /ready
@@ -198,6 +250,8 @@ spec:
             containerPort: 8080
           - name: spi
             containerPort: 8081
+          - name: proxy
+            containerPort: 8082
           readinessProbe:
             httpGet:
               path: /ready
@@ -268,6 +322,9 @@ ports:
   - containerPort: 8081
     name: spi
     protocol: TCP
+  - containerPort: 8082
+    name: proxy
+    protocol: TCP
 readinessProbe:
   failureThreshold: 3
   httpGet:
@@ -304,6 +361,8 @@ OK
 ```
 
 Make an inference request.
+
+### Direct to inference server
 ```console
 $ kubectl get po -owide
 NAME                          READY   STATUS    RESTARTS   AGE     IP           NODE               NOMINATED NODE   READINESS GATES
@@ -318,6 +377,24 @@ $ curl -s http://10.0.0.145:8000/v1/completions \
     "max_tokens": 30
   }'
 {"id":"cmpl-cfe04f79eb904748891561c76ae29986","object":"text_completion","created":1763768447,"model":"ibm-granite/granite-3.3-2b-instruct","choices":[{"index":0,"text":" Paris, which is known for its rich history, cultural landmarks, and iconic architecture like the Eiffel Tower and Notre","logprobs":null,"finish_reason":"length","stop_reason":null,"token_ids":null,"prompt_logprobs":null,"prompt_token_ids":null}],"service_tier":null,"system_fingerprint":null,"usage":{"prompt_tokens":5,"total_tokens":35,"completion_tokens":30,"prompt_tokens_details":null},"kv_transfer_params":null}
+```
+
+### Via the TCP proxy
+
+The dual-pods controller configured the proxy while binding the pair, so the
+same request works against the server-requesting Pod. The reply is byte for byte
+the one above, since the proxy forwards the connection rather than the request.
+
+```console
+$ curl -s http://10.0.0.134:8081/v1/proxy/config
+{"address":"10.0.0.145","port":8000}
+$ curl -s http://10.0.0.134:8082/v1/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "ibm-granite/granite-3.3-2b-instruct",
+    "prompt": "The capital of France is",
+    "max_tokens": 30
+  }'
 ```
 
 Check the log of the server-requesting pod.
