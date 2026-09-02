@@ -331,6 +331,7 @@ fi
 FMA_NAMESPACE=default \
 MKOBJS_SCRIPT=./test/e2e/mkobjs.sh \
 FMA_CHART_INSTANCE_NAME=fma \
+FMA_RELEASE="$release" \
 READY_TARGET=1 \
 POLICIES_ENABLED=true \
 ./test/e2e/test-cases.sh
