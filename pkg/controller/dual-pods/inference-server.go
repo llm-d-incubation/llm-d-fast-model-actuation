@@ -420,6 +420,8 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		}
 	}
 
+	var lClient *LauncherClient
+
 	// If there is already a bound server-providing Pod then ensure that it is awake,
 	// ensure status reported, and relay readiness if needed.
 	if providingPod != nil {
@@ -440,6 +442,12 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 			if providingPod.Status.PodIP == "" || !utils.IsPodReady(providingPod) {
 				logger.V(5).Info("Bound launcher pod not yet reachable, waiting", "podIP", providingPod.Status.PodIP, "ready", utils.IsPodReady(providingPod))
 				return processResult{}
+			}
+
+			launcherBaseURL := fmt.Sprintf("http://%s:%d", providingPod.Status.PodIP, ctlrcommon.LauncherServicePort)
+			lClient, err = NewLauncherClient(launcherBaseURL, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": iscName}))
+			if err != nil {
+				return processResult{err: err, retry: true}
 			}
 
 			syncResult, err, retry := ctl.syncLauncherInstances(ctx, nodeDat, serverDat.InstancesDeleted, providingPod)
@@ -490,11 +498,6 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				// not yet created (bind-first path) or controller restarted and lost tracking.
 				// We just synced, so we know the instance is not on the launcher — create directly.
 				serverDat.NeededNewInstance = true
-				launcherBaseURL := fmt.Sprintf("http://%s:%d", providingPod.Status.PodIP, ctlrcommon.LauncherServicePort)
-				lClient, err := NewLauncherClient(launcherBaseURL, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": iscName}))
-				if err != nil {
-					return processResult{err: err, retry: true}
-				}
 				result, err := lClient.CreateNamedInstance(ctx, serverDat.InstanceID, *serverDat.InstanceConfig)
 				if err != nil {
 					return processResult{err: fmt.Errorf("failed to create vLLM instance %q: %w", serverDat.InstanceID, err), retry: true}
@@ -515,7 +518,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 			serverDat.Sleeping = &sleeping
 		}
 		if *(serverDat.Sleeping) {
-			if err = ctl.wakeUp(ctx, serverDat, requestingPod, providingPod, serverPort, "discovered-bound"); err != nil {
+			if err = ctl.wakeUp(ctx, serverDat, requestingPod, providingPod, serverPort, "discovered-bound", lClient); err != nil {
 				return processResult{err: err, retry: true}
 			}
 		}
@@ -1428,6 +1431,7 @@ func (ctl *controller) enforceSleeperBudget(ctx context.Context, serverDat *serv
 }
 
 // launcherState is non-nil iff launcher-based.
+// Call only within `nodeItem.process`.
 func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requestingPod, providingPod *corev1.Pod, launcherState *vllmInstanceState, skipWake bool) processResult {
 	logger := klog.FromContext(ctx)
 	providingPod = providingPod.DeepCopy()
@@ -1473,7 +1477,7 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 	if !skipWake {
 		// Reached only for direct providers (launcher binds skip the wake); wake
 		// and clear the sleeping label in a separate update.
-		if err = ctl.wakeUp(ctx, serverDat, requestingPod, providingPod, serverPort, "freshly-bound"); err != nil {
+		if err = ctl.wakeUp(ctx, serverDat, requestingPod, providingPod, serverPort, "freshly-bound", nil); err != nil {
 			return processResult{err: err, retry: true}
 		}
 		if _, err = ctl.ensureSleepingLabel(ctx, providingPod, false); err != nil {
@@ -1487,19 +1491,31 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 // only) and records it as awake in serverDat. It does not touch the Pod's
 // sleeping label; callers reconcile that separately (folding it into another
 // Pod update where possible).
-func (ctl *controller) wakeUp(ctx context.Context, serverDat *serverData, requestingPod, providingPod *corev1.Pod, serverPort int32, description string) error {
+// The `lClient` arg may be `nil`, if not is used to do GPU memory debugging
+func (ctl *controller) wakeUp(ctx context.Context, serverDat *serverData, requestingPod, providingPod *corev1.Pod, serverPort int32, description string, lClient *LauncherClient) error {
 	if ctl.debugAccelMemory {
 		if err := ctl.accelMemoryIsLowEnough(ctx, requestingPod, serverDat); err != nil {
 			return err
 		}
 	}
+	logger := klog.FromContext(ctx)
+	if lClient != nil {
+		debugData := make(map[string]any)
+		debugErr := lClient.do(ctx, "gpu-debug", http.MethodGet, "/v2/gpu-debug", nil, debugData)
+		if debugErr != nil {
+			logger.V(2).Info("Launcher gpu-debug failed", "err", debugErr)
+		} else {
+			logger.V(2).Info("Launcher did gpu-debug", "debugData", debugData)
+		}
+	}
 	endpoint := fmt.Sprintf("%s:%d", providingPod.Status.PodIP, serverPort)
 	wakeURL := "http://" + endpoint + "/wake_up"
-	_, err := doHTTP(ctx, "wake", "POST", wakeURL, nil, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": requestingPod.Annotations[api.InferenceServerConfigAnnotationName]}), nil, httpResultConsumer{})
+	obsCube := ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": requestingPod.Annotations[api.InferenceServerConfigAnnotationName]})
+	_, err := doHTTP(ctx, "wake", "POST", wakeURL, nil, obsCube, nil, httpResultConsumer{})
 	if err != nil {
 		return fmt.Errorf("failed to wake inference server at %s: %w", endpoint, err)
 	}
-	klog.FromContext(ctx).V(2).Info("Woke inference server", "endpoint", endpoint, "description", description)
+	logger.V(2).Info("Woke inference server", "endpoint", endpoint, "description", description)
 	serverDat.Sleeping = ptr.To(false)
 	return nil
 }

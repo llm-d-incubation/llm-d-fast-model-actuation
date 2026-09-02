@@ -731,6 +731,32 @@ async def delete_all_vllm_instances():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/v2/gpu-debug")
+async def get_gpu_debug():
+    try:
+        cp = subprocess.run(
+            "nvidia-smi --query-gpu=index,uuid,memory.used --format=csv; nvidia-smi",
+            shell=True,
+            capture_output=True,
+            timeout=20,
+        )
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=500, detail="debugging commands timed out")
+    except Exception as exn:
+        raise HTTPException(
+            status_code=500, detail=f"Running debug commands threw exception {exn}"
+        )
+    else:
+        return JSONResponse(
+            status_code=HTTPStatus.OK,
+            content=dict(
+                stdout=cp.stdout,
+                stderr=cp.stderr,
+                returncode=cp.returncode,
+            ),
+        )
+
+
 @app.get("/v2/vllm/instances")
 async def get_all_vllm_instances(detail: bool = True):
     """
@@ -906,7 +932,12 @@ def vllm_kickoff(vllm_config: VllmConfig, log_file_path: str, debug_gpu_memory: 
 
     if debug_gpu_memory:
         try:
-            cp = subprocess.run("nvidia-smi", timeout=20)
+            cp = subprocess.run(
+                "nvidia-smi --query-gpu=index,uuid,memory.used --format=csv"
+                "; nvidia-smi",
+                shell=True,
+                timeout=20,
+            )
         except FileNotFoundError:
             logger.warning("nvidia-smi not found")
         except subprocess.TimeoutExpired:
