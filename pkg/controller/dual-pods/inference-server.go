@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"regexp"
@@ -498,12 +499,14 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				// not yet created (bind-first path) or controller restarted and lost tracking.
 				// We just synced, so we know the instance is not on the launcher — create directly.
 				serverDat.NeededNewInstance = true
-				debugData := make(map[string]any)
-				debugErr := lClient.do(ctx, "gpu-debug-at-create", "GET", "/v2/gpu-debug", nil, &debugData)
-				if debugErr != nil {
-					logger.V(2).Info("Launcher gpu-debug at create failed", "err", debugErr)
-				} else {
-					logger.V(2).Info("Launcher did gpu-debug at create", "gpuUUIDs", serverDat.GPUIDs, "debugData", debugData)
+				if ctl.debugAccelMemory {
+					debugData := make(map[string]any)
+					debugErr := lClient.do(ctx, "gpu-debug-at-create", "GET", "/v2/gpu-debug", nil, &debugData)
+					if debugErr != nil {
+						logger.V(2).Info("Launcher gpu-debug at create failed", "err", debugErr)
+					} else {
+						logger.V(2).Info("Launcher did gpu-debug at create", "gpuUUIDs", serverDat.GPUIDs, "debugData", debugData)
+					}
 				}
 				result, err := lClient.CreateNamedInstance(ctx, serverDat.InstanceID, *serverDat.InstanceConfig)
 				if err != nil {
@@ -1506,7 +1509,7 @@ func (ctl *controller) wakeUp(ctx context.Context, serverDat *serverData, reques
 		}
 	}
 	logger := klog.FromContext(ctx)
-	if lClient != nil {
+	if lClient != nil && ctl.debugAccelMemory && false { // false because it is redundant with ctl.accelMemoryIsLowEnough
 		debugData := make(map[string]any)
 		debugErr := lClient.do(ctx, "gpu-debug-at-wake", http.MethodGet, "/v2/gpu-debug", nil, &debugData)
 		if debugErr != nil {
@@ -2011,6 +2014,8 @@ func (ctl *controller) querySleeping(ctx context.Context, iscName string, provid
 	return sleepState.IsSleeping, err
 }
 
+// Called if debugging accelerator memory usage.
+// Enforcing a global limit is done only when debugging.
 func (ctl *controller) accelMemoryIsLowEnough(ctx context.Context, requestingPod *corev1.Pod, serverDat *serverData) error {
 	adminPort := requestingPod.Annotations[api.AdminPortAnnotationName]
 	if adminPort == "" {
@@ -2025,14 +2030,17 @@ func (ctl *controller) accelMemoryIsLowEnough(ctx context.Context, requestingPod
 	logger := klog.FromContext(ctx)
 	for _, gpuID := range serverDat.GPUIDs {
 		if used, have := usageMap[gpuID]; !have {
-			return fmt.Errorf("no GPU usage information for GPU %s", gpuID)
+			if ctl.accelMemoryLimitMiB < math.MaxInt64 {
+				return fmt.Errorf("no GPU usage information for GPU %s", gpuID)
+			}
+			logger.V(3).Info("Requester report of accelerator memory usage does not mention an assigned one", "accelerator", gpuID)
 		} else if used > ctl.accelMemoryLimitMiB {
-			return fmt.Errorf("accelerator %s is currently using %d MiB of memory, limit for sleeping total is %d MiB", gpuID, used, ctl.accelMemoryLimitMiB)
+			return fmt.Errorf("accelerator memory usage of %s is currently %d MiB, limit for sleeping total is %d MiB", gpuID, used, ctl.accelMemoryLimitMiB)
 		} else {
 			logger.V(4).Info("OK accelerator memory usage", "node", requestingPod.Spec.NodeName, "accelerator", gpuID, "usageMiB", used, "limitMiB", ctl.accelMemoryLimitMiB)
 		}
 	}
-	logger.V(4).Info("AOK accelerator memory usage", "node", requestingPod.Spec.NodeName, "gpuIDs", serverDat.GPUIDs)
+	logger.V(4).Info("AOK accelerator memory usage", "node", requestingPod.Spec.NodeName, "accelerators", serverDat.GPUIDs)
 	return nil
 }
 

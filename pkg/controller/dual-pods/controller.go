@@ -159,9 +159,10 @@ func nominalHashIndexFunc(obj any) ([]string, error) {
 }
 
 type ControllerConfig struct {
-	SleeperLimit                      int
-	NumWorkers                        int
-	AcceleratorSleepingMemoryLimitMiB int64
+	SleeperLimit                            int
+	NumWorkers                              int
+	DebugAcceleratorMemory                  bool
+	GlobalAcceleratorSleepingMemoryLimitMiB int64
 }
 
 type Controller interface {
@@ -309,8 +310,8 @@ func (config ControllerConfig) NewController(
 		lcLister:                  fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Lister(),
 		httpLatencySecsHistograms: httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"exported_namespace": namespace}),
 		sleeperLimit:              config.SleeperLimit,
-		debugAccelMemory:          config.AcceleratorSleepingMemoryLimitMiB < math.MaxInt32,
-		accelMemoryLimitMiB:       config.AcceleratorSleepingMemoryLimitMiB,
+		debugAccelMemory:          config.DebugAcceleratorMemory || config.GlobalAcceleratorSleepingMemoryLimitMiB < math.MaxInt64,
+		accelMemoryLimitMiB:       config.GlobalAcceleratorSleepingMemoryLimitMiB,
 		nodeNameToData:            map[string]*nodeData{},
 	}
 	ctl.eventBroadcaster = record.NewBroadcaster()

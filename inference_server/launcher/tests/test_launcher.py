@@ -622,7 +622,7 @@ class TestAPIEndpoints:
         assert data["name"] == "Multi-Instance vLLM Management API"
         assert data["version"] == "2.0"
         assert "endpoints" in data
-        assert len(data["endpoints"]) == 10
+        assert len(data["endpoints"]) == 11
 
     @patch("launcher.vllm_manager")
     def test_create_vllm_instance(self, mock_manager, client, vllm_config):

@@ -199,7 +199,8 @@ spec:
           command:
           - /app/launcher.py
           - --host=0.0.0.0
-          - --log-level=info
+          - --log-level=debug
+          - --debug-gpu-memory
           - --port=8001
           env:
           - name: HF_HOME

@@ -30,6 +30,7 @@ dualPodsController:
   # Whether to debug the accelerator memory usage.
   # This involves querying the requester;
   # the test-requester does not support the query.
+  # This also involves querying the launcher.
   debugAcceleratorMemory: false
 
 # Launcher populator controller configuration

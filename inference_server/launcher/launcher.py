@@ -260,7 +260,7 @@ class VllmInstance:
             the_pid = self.process.pid
             try:
                 os.killpg(the_pid, signal.SIGKILL)
-                logger.warning(
+                logger.debug(
                     f"In stop({self.instance_id}), os.killpg({the_pid}) "
                     f"because the first process.join was not enough"
                 )
@@ -275,11 +275,11 @@ class VllmInstance:
                     f"but that threw an unexpected Exception"
                 )
             self.process.join()
-            logger.info(
+            logger.debug(
                 f"In stop({self.instance_id}), finished the second process.join"
             )
         else:
-            logger.info(
+            logger.debug(
                 f"In stop({self.instance_id}), the first process.join was enough"
             )
 
@@ -643,6 +643,7 @@ async def index():
                 "get_all_instances": "GET /v2/vllm/instances",
                 "get_instance_logs": "GET /v2/vllm/instances/{instance_id}/log",
                 "watch_instances": "GET /v2/vllm/instances/watch",
+                "get_gpu_debug": "GET /v2/gpu-debug",
             },
         },
         status_code=HTTPStatus.OK,
@@ -1068,7 +1069,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--debug-gpu-memory",
         type=bool,
-        default=True,
+        default=False,
         action=argparse.BooleanOptionalAction,
         help="Log info on accelerator memory usage",
     )
