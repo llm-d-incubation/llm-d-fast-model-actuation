@@ -503,7 +503,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				if debugErr != nil {
 					logger.V(2).Info("Launcher gpu-debug at create failed", "err", debugErr)
 				} else {
-					logger.V(2).Info("Launcher did gpu-debug at create", "debugData", debugData)
+					logger.V(2).Info("Launcher did gpu-debug at create", "gpuUUIDs", serverDat.GPUIDs, "debugData", debugData)
 				}
 				result, err := lClient.CreateNamedInstance(ctx, serverDat.InstanceID, *serverDat.InstanceConfig)
 				if err != nil {
@@ -1512,7 +1512,7 @@ func (ctl *controller) wakeUp(ctx context.Context, serverDat *serverData, reques
 		if debugErr != nil {
 			logger.V(2).Info("Launcher gpu-debug at-wake failed", "err", debugErr)
 		} else {
-			logger.V(2).Info("Launcher did gpu-debug at wake", "debugData", debugData)
+			logger.V(2).Info("Launcher did gpu-debug at wake", "gpuUUIDs", serverDat.GPUIDs, "debugData", debugData)
 		}
 	}
 	endpoint := fmt.Sprintf("%s:%d", providingPod.Status.PodIP, serverPort)
@@ -2156,7 +2156,7 @@ func (ctl *controller) syncLauncherInstances(ctx context.Context, nodeDat *nodeD
 			newInstances[inst.InstanceID] = &instanceData{LastUsed: time.Now()}
 		}
 		if inst.Status == InstanceStatusStopped {
-			ctl.ensureLogTailLogged(ctx, newInstances, launcherPod.Name, inst.InstanceID, lClient)
+			ctl.ensureLogTailLogged(ctx, newInstances, launcherPod.Name, inst.InstanceID, inst.GpuUUIDs, lClient)
 			if boundInstanceIDs.Has(inst.InstanceID) {
 				// Bound stopped instance — defer deletion so the caller can
 				// delete the requesting Pod first (resolves create/delete ambiguity).

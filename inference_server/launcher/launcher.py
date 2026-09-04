@@ -257,11 +257,31 @@ class VllmInstance:
         # Force kill the entire process group (vLLM server + EngineCore)
         # if graceful shutdown did not complete in time.
         if self.process.is_alive():
+            the_pid = self.process.pid
             try:
-                os.killpg(self.process.pid, signal.SIGKILL)
+                os.killpg(the_pid, signal.SIGKILL)
+                logger.warning(
+                    f"In stop({self.instance_id}), os.killpg({the_pid}) "
+                    f"because the first process.join was not enough"
+                )
             except ProcessLookupError:
-                pass
+                logger.error(
+                    f"In stop({self.instance_id}), tried to os.killpg({the_pid}) "
+                    f"but that threw ProcessLookupError"
+                )
+            except Exception:
+                logger.error(
+                    f"In stop({self.instance_id}), tried to os.killpg({the_pid}) "
+                    f"but that threw an unexpected Exception"
+                )
             self.process.join()
+            logger.info(
+                f"In stop({self.instance_id}), finished the second process.join"
+            )
+        else:
+            logger.info(
+                f"In stop({self.instance_id}), the first process.join was enough"
+            )
 
         self._cleanup_log_file()
         return self._make_state("terminated")
