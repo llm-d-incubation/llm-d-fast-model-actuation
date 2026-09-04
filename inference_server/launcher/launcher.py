@@ -32,6 +32,7 @@ from contextlib import asynccontextmanager
 from http import HTTPStatus  # HTTP Status Codes
 from typing import Dict, List, Optional
 
+import psutil
 import uvloop
 from fastapi import FastAPI, Header, HTTPException, Path, Query
 from fastapi.responses import (
@@ -160,6 +161,28 @@ class HalfMade(Exception):
         self.instance_id = instance_id
 
 
+def dump_process_group(subject: str, pgpid: int, when: str) -> None:
+    pids = []
+    for proc in psutil.process_iter(attrs=["pid", "name"]):
+        pid = proc.pid
+        pname = proc.name
+        try:
+            proc_pg = os.getpgid(pid)
+            if proc_pg == pgpid:
+                pids.append([pid, pname])
+        except OSError as exn:
+            logger.debug(f"Failed to os.getpgid({pid} {pname}), errno={exn.errno}")
+        except Exception as exn:
+            logger.debug(f"Failed to os.getpgid({pid} {pname}), exn={exn}")
+    logger.debug(
+        "Members of process group for "
+        + subject
+        + f" ({pgpid}) "
+        + when
+        + f" are: {pids}"
+    )
+
+
 class VllmInstance:
     """Represents a single vLLM instance"""
 
@@ -248,6 +271,12 @@ class VllmInstance:
             self._cleanup_log_file()
             return self._make_state("not_running")
 
+        vllm_pid = self.process.pid
+        assert vllm_pid is not None
+
+        if logger.getEffectiveLevel() <= logging.DEBUG:
+            dump_process_group(self.instance_id, vllm_pid, "before process.terminate")
+
         # Graceful termination — send SIGTERM to the vLLM process,
         # which will propagate shutdown to the EngineCore via vLLM's
         # own cleanup logic.
@@ -257,22 +286,29 @@ class VllmInstance:
         # Force kill the entire process group (vLLM server + EngineCore)
         # if graceful shutdown did not complete in time.
         if self.process.is_alive():
-            the_pid = self.process.pid
+            if logger.getEffectiveLevel() <= logging.DEBUG:
+                dump_process_group(
+                    self.instance_id, vllm_pid, "between terminate and killpg"
+                )
             try:
-                os.killpg(the_pid, signal.SIGKILL)
+                os.killpg(vllm_pid, signal.SIGKILL)
                 logger.debug(
-                    f"In stop({self.instance_id}), os.killpg({the_pid}) "
+                    f"In stop({self.instance_id}), os.killpg({vllm_pid}) "
                     f"because the first process.join was not enough"
                 )
             except ProcessLookupError:
                 logger.error(
-                    f"In stop({self.instance_id}), tried to os.killpg({the_pid}) "
+                    f"In stop({self.instance_id}), tried to os.killpg({vllm_pid}) "
                     f"but that threw ProcessLookupError"
                 )
             except Exception:
                 logger.error(
-                    f"In stop({self.instance_id}), tried to os.killpg({the_pid}) "
+                    f"In stop({self.instance_id}), tried to os.killpg({vllm_pid}) "
                     f"but that threw an unexpected Exception"
+                )
+            if logger.getEffectiveLevel() <= logging.DEBUG:
+                dump_process_group(
+                    self.instance_id, vllm_pid, "between killpg and join"
                 )
             self.process.join()
             logger.debug(
@@ -283,6 +319,8 @@ class VllmInstance:
                 f"In stop({self.instance_id}), the first process.join was enough"
             )
 
+        if logger.getEffectiveLevel() <= logging.DEBUG:
+            dump_process_group(self.instance_id, vllm_pid, "at end of stop")
         self._cleanup_log_file()
         return self._make_state("terminated")
 
