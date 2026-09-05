@@ -17,12 +17,17 @@ limitations under the License.
 package utils
 
 import (
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	machtypes "k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 
 	v1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/api"
@@ -249,5 +254,59 @@ func TestConfigureRequiredEnvVars(t *testing.T) {
 		if tail[i] != want[i] {
 			t.Errorf("appended[%d] = %+v, want %+v (declaration order)", i, tail[i], want[i])
 		}
+	}
+}
+
+func TestGetInferenceServerContainerIndexAndPort(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	address := server.Listener.Addr().(*net.TCPAddr)
+	for _, tc := range []struct {
+		name      string
+		probePort intstr.IntOrString
+		portName  string
+		wantError bool
+	}{
+		{name: "numeric", probePort: intstr.FromInt(address.Port)},
+		{name: "http name", probePort: intstr.FromString("http"), portName: "http"},
+		{name: "custom name", probePort: intstr.FromString("inference"), portName: "inference"},
+		{name: "missing http name", probePort: intstr.FromString("http"), wantError: true},
+		{name: "name only in another container", probePort: intstr.FromString("other"), wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{
+				{Name: "sidecar", Ports: []corev1.ContainerPort{{Name: "other", ContainerPort: 12345}, {Name: tc.portName, ContainerPort: 23456}}},
+				{Name: api.InferenceServerContainerName,
+					Ports:          []corev1.ContainerPort{{Name: tc.portName, ContainerPort: int32(address.Port)}},
+					ReadinessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Port: tc.probePort}}}},
+			}}}
+			index, port, err := GetInferenceServerContainerIndexAndPort(pod)
+			if tc.wantError {
+				if err == nil {
+					t.Fatal("expected an unresolved named port error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if index != 1 || port != int32(address.Port) {
+				t.Fatalf("container index and port = (%d, %d), want (1, %d)", index, port, address.Port)
+			}
+			response, err := server.Client().Get("http://" + net.JoinHostPort(address.IP.String(), strconv.Itoa(int(port))) + "/health")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := response.Body.Close(); err != nil {
+					t.Error(err)
+				}
+			}()
+			if response.StatusCode != http.StatusNoContent {
+				t.Errorf("HTTP status = %d", response.StatusCode)
+			}
+		})
 	}
 }

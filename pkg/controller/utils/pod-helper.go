@@ -103,11 +103,12 @@ func GetInferenceServerContainerIndexAndPort(pod *corev1.Pod) (int, int32, error
 	case intstr.Int:
 		return cIdx, portIOS.IntVal, nil
 	case intstr.String:
-		if portIOS.StrVal == "http" || portIOS.StrVal == "HTTP" {
-			return cIdx, 80, nil
-		} else {
-			return 0, 0, fmt.Errorf("unsupported readinessProbe port %q", portIOS.StrVal)
+		for _, port := range isCtr.Ports {
+			if port.Name == portIOS.StrVal {
+				return cIdx, port.ContainerPort, nil
+			}
 		}
+		return 0, 0, fmt.Errorf("readinessProbe port %q not found in container %q", portIOS.StrVal, isCtr.Name)
 	default:
 		return 0, 0, fmt.Errorf("the readinessProbe port has unexpected type %q", portIOS.Type)
 	}
