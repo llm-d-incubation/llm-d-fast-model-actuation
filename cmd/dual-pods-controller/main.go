@@ -41,12 +41,12 @@ import (
 
 func main() {
 	config := dpctlr.ControllerConfig{
-		SleeperLimit:                      1,
-		NumWorkers:                        2,
-		AcceleratorSleepingMemoryLimitMiB: math.MaxInt64,
+		SleeperLimit:                            1,
+		NumWorkers:                              2,
+		DebugAcceleratorMemory:                  false,
+		GlobalAcceleratorSleepingMemoryLimitMiB: math.MaxInt64,
 	}
 	obsOpts := fmaobs.DefaultOptions()
-	debugAccelMemory := true
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 	overrides := &clientcmd.ConfigOverrides{}
 
@@ -54,7 +54,8 @@ func main() {
 	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
 	pflag.CommandLine.IntVar(&config.SleeperLimit, "sleeper-limit", config.SleeperLimit, "limit on number of sleeping inference servers per GPU")
 	pflag.CommandLine.IntVar(&config.NumWorkers, "num-workers", config.NumWorkers, "number of queue worker goroutines")
-	pflag.CommandLine.BoolVar(&debugAccelMemory, "debug-accelerator-memory", debugAccelMemory, "whether to check accelerator memory usage before wake-up")
+	pflag.CommandLine.BoolVar(&config.DebugAcceleratorMemory, "debug-accelerator-memory", config.DebugAcceleratorMemory, "whether to check accelerator memory usage before wake-up")
+	pflag.CommandLine.Int64Var(&config.GlobalAcceleratorSleepingMemoryLimitMiB, "global-accelerator-sleeping-memory-limit", config.GlobalAcceleratorSleepingMemoryLimitMiB, "limit on memory usage allowed at /wake_up, for each GPU regardless of workload")
 	AddFlags(*pflag.CommandLine, loadingRules, overrides)
 	obsOpts.AddToFlagSet(pflag.CommandLine)
 	pflag.Parse()
@@ -74,10 +75,6 @@ func main() {
 		os.Exit(1)
 	} else {
 		logger.Info("Focusing on one namespace", "name", overrides.Context.Namespace)
-	}
-
-	if debugAccelMemory {
-		config.AcceleratorSleepingMemoryLimitMiB = int64(config.SleeperLimit) * 4096
 	}
 
 	restConfig, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, overrides).ClientConfig()

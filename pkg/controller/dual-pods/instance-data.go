@@ -26,7 +26,7 @@ import (
 
 // ensureLogTailLogged will, if it has not already been done, read the tail of the log
 // of the given instance and log it in a huge log message of this controller.
-func (ctl *controller) ensureLogTailLogged(ctx context.Context, instab instanceTable, launcherName, instanceID string, lClient *LauncherClient) {
+func (ctl *controller) ensureLogTailLogged(ctx context.Context, instab instanceTable, launcherName, instanceID string, gpuUUIDs []string, lClient *LauncherClient) {
 	if alreadyLogged, _ := instab.getLogTailLogged(instanceID); alreadyLogged {
 		return
 	}
@@ -36,7 +36,7 @@ func (ctl *controller) ensureLogTailLogged(ctx context.Context, instab instanceT
 		logger.V(3).Info("Failed to fetch log tail of instance", "launcherName", launcherName, "instanceID", instanceID, "err", err)
 		return
 	}
-	logger.V(2).Info("Fetched tail of log of instance", "launcherName", launcherName, "instanceID", instanceID, "tail", tail)
+	logger.V(2).Info("Fetched tail of log of instance", "launcherName", launcherName, "instanceID", instanceID, "gpuUUIDs", gpuUUIDs, "tail", tail)
 	instab.setLogTailLogged(instanceID, true)
 }
 

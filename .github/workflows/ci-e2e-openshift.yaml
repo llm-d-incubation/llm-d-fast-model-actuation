@@ -567,6 +567,7 @@ jobs:
           subject=(--image-tag "$IMAGE_TAG"
                    --oci-registry "${CONTAINER_IMG_REG,,}"
                    --config-dir config
+                   --chart-set dualPodsController.debugAcceleratorMemory=true
                   )
           scripts/install-fma.sh \
             "${subject[@]}" \
@@ -666,14 +667,15 @@ jobs:
       - name: Dump DCGM_FI_DEV_FB_USED on testnode
         if: always()
         run: |
+          case "${{ github.event.inputs.run_cluster || 'pok-prod' }}" in
+            (vllm-d)   ingdom=fmaas-vllm-d.fmaas.res.ibm.com;;
+            (pok-prod) ingdom=pokprod001.ete14.res.ibm.com;;
+            (*) echo "Impossible run_cluster '${{ github.event.inputs.run_cluster }}'"
+                exit 1;;
+          esac
           if [ -r testnode ]
           then
-            case "${{ github.event.inputs.run_cluster || 'pok-prod' }}" in
-              (vllm-d)   ingdom=fmaas-vllm-d.fmaas.res.ibm.com;;
-              (pok-prod) ingdom=pokprod001.ete14.res.ibm.com;;
-              (*) echo "Impossible run_cluster '${{ github.event.inputs.run_cluster }}'"
-                  exit 1;;
-            esac
+            echo querying "https://prometheus-k8s-openshift-monitoring.apps.${ingdom}/api/v1/query" about DCGM_FI_DEV_FB_USED on node "$(cat testnode)"
             curl -sSkG \
               -H "Authorization: Bearer $(oc whoami -t)" \
               --data-urlencode "query=DCGM_FI_DEV_FB_USED{Hostname=\"$(cat testnode)\"}" \

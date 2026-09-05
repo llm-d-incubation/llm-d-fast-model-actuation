@@ -25,15 +25,22 @@ import os
 import re
 import signal
 import stat
+import subprocess
 import sys
 import uuid
 from contextlib import asynccontextmanager
 from http import HTTPStatus  # HTTP Status Codes
 from typing import Dict, List, Optional
 
+import psutil
 import uvloop
 from fastapi import FastAPI, Header, HTTPException, Path, Query
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import (
+    JSONResponse,
+    PlainTextResponse,
+    Response,
+    StreamingResponse,
+)
 from gputranslator import GpuTranslator
 from pydantic import BaseModel
 from vllm.entrypoints.openai.api_server import run_server
@@ -154,6 +161,28 @@ class HalfMade(Exception):
         self.instance_id = instance_id
 
 
+def dump_process_group(subject: str, pgpid: int, when: str) -> None:
+    pids = []
+    for proc in psutil.process_iter(attrs=["pid", "name"]):
+        pid = proc.pid
+        pname = proc.name
+        try:
+            proc_pg = os.getpgid(pid)
+            if proc_pg == pgpid:
+                pids.append([pid, pname])
+        except OSError as exn:
+            logger.debug(f"Failed to os.getpgid({pid} {pname}), errno={exn.errno}")
+        except Exception as exn:
+            logger.debug(f"Failed to os.getpgid({pid} {pname}), exn={exn}")
+    logger.debug(
+        "Members of process group for "
+        + subject
+        + f" ({pgpid}) "
+        + when
+        + f" are: {pids}"
+    )
+
+
 class VllmInstance:
     """Represents a single vLLM instance"""
 
@@ -163,6 +192,7 @@ class VllmInstance:
         config: VllmConfig,
         gpu_translator: GpuTranslator,
         log_dir: str = "",
+        debug_gpu_memory: bool = False,
     ):
         """
         Initialize VllmInstance object
@@ -186,7 +216,7 @@ class VllmInstance:
                 config.env_vars = {}
             config.env_vars["CUDA_VISIBLE_DEVICES"] = ",".join(cuda_indices)
             logger.info(
-                "Set CUDA_VISIBLE_DEVICES to %s based on UUIDs.",
+                "Set CUDA_VISIBLE_DEVICES to '%s' based on UUIDs.",
                 config.env_vars["CUDA_VISIBLE_DEVICES"],
             )
 
@@ -200,6 +230,7 @@ class VllmInstance:
             log_dir or "/tmp",
             f"launcher-{os.getpid()}-vllm-{instance_id}.log",
         )
+        self.debug_gpu_memory = debug_gpu_memory
 
     def _make_state(self, status: str) -> dict:
         return {
@@ -221,7 +252,8 @@ class VllmInstance:
         open(self._log_file_path, "wb").close()
 
         self.process = multiprocessing.Process(
-            target=vllm_kickoff, args=(self.config, self._log_file_path)
+            target=vllm_kickoff,
+            args=(self.config, self._log_file_path, self.debug_gpu_memory),
         )
         self.process.start()
 
@@ -239,6 +271,12 @@ class VllmInstance:
             self._cleanup_log_file()
             return self._make_state("not_running")
 
+        vllm_pid = self.process.pid
+        assert vllm_pid is not None
+
+        if logger.getEffectiveLevel() <= logging.DEBUG:
+            dump_process_group(self.instance_id, vllm_pid, "before process.terminate")
+
         # Graceful termination — send SIGTERM to the vLLM process,
         # which will propagate shutdown to the EngineCore via vLLM's
         # own cleanup logic.
@@ -248,12 +286,41 @@ class VllmInstance:
         # Force kill the entire process group (vLLM server + EngineCore)
         # if graceful shutdown did not complete in time.
         if self.process.is_alive():
+            if logger.getEffectiveLevel() <= logging.DEBUG:
+                dump_process_group(
+                    self.instance_id, vllm_pid, "between terminate and killpg"
+                )
             try:
-                os.killpg(self.process.pid, signal.SIGKILL)
+                os.killpg(vllm_pid, signal.SIGKILL)
+                logger.debug(
+                    f"In stop({self.instance_id}), os.killpg({vllm_pid}) "
+                    f"because the first process.join was not enough"
+                )
             except ProcessLookupError:
-                pass
+                logger.error(
+                    f"In stop({self.instance_id}), tried to os.killpg({vllm_pid}) "
+                    f"but that threw ProcessLookupError"
+                )
+            except Exception:
+                logger.error(
+                    f"In stop({self.instance_id}), tried to os.killpg({vllm_pid}) "
+                    f"but that threw an unexpected Exception"
+                )
+            if logger.getEffectiveLevel() <= logging.DEBUG:
+                dump_process_group(
+                    self.instance_id, vllm_pid, "between killpg and join"
+                )
             self.process.join()
+            logger.debug(
+                f"In stop({self.instance_id}), finished the second process.join"
+            )
+        else:
+            logger.debug(
+                f"In stop({self.instance_id}), the first process.join was enough"
+            )
 
+        if logger.getEffectiveLevel() <= logging.DEBUG:
+            dump_process_group(self.instance_id, vllm_pid, "at end of stop")
         self._cleanup_log_file()
         return self._make_state("terminated")
 
@@ -357,6 +424,7 @@ class VllmMultiProcessManager:
         node_name: Optional[str] = None,
         namespace: Optional[str] = None,
         log_dir: str = "",
+        debug_gpu_memory: bool = False,
     ):
         self.instances: Dict[str, VllmInstance] = {}
         self.broadcaster = EventBroadcaster()
@@ -372,6 +440,7 @@ class VllmMultiProcessManager:
             mock_gpu_count=mock_gpu_count,
         )
         self.log_dir = log_dir
+        self.debug_gpu_memory = debug_gpu_memory
 
     @property
     def revision(self) -> int:
@@ -410,7 +479,11 @@ class VllmMultiProcessManager:
         logger.info("Accepted request to create vLLM instance with id=%s", instance_id)
 
         instance = VllmInstance(
-            instance_id, vllm_config, self.gpu_translator, self.log_dir
+            instance_id,
+            vllm_config,
+            self.gpu_translator,
+            self.log_dir,
+            self.debug_gpu_memory,
         )
         self.instances[instance_id] = instance
 
@@ -608,6 +681,7 @@ async def index():
                 "get_all_instances": "GET /v2/vllm/instances",
                 "get_instance_logs": "GET /v2/vllm/instances/{instance_id}/log",
                 "watch_instances": "GET /v2/vllm/instances/watch",
+                "get_gpu_debug": "GET /v2/gpu-debug",
             },
         },
         status_code=HTTPStatus.OK,
@@ -676,7 +750,9 @@ async def create_vllm_instance(vllm_config: VllmConfig):
         return JSONResponse(content=result, status_code=HTTPStatus.CREATED)
     except Exception as e:
         logger.error(f"Failed to create vLLM instance: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return PlainTextResponse(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR, content=str(e)
+        )
 
 
 @app.put("/v2/vllm/instances/{instance_id}")
@@ -689,10 +765,12 @@ async def create_id_vllm_instance(
         result = vllm_manager.create_instance(vllm_config, instance_id)
         return JSONResponse(content=result, status_code=HTTPStatus.CREATED)
     except ValueError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=str(e))
     except Exception as e:
         logger.error(f"Failed to create vLLM instance {instance_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return PlainTextResponse(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR, content=str(e)
+        )
 
 
 @app.delete("/v2/vllm/instances/{instance_id}")
@@ -704,10 +782,14 @@ async def delete_vllm_instance(
         result = vllm_manager.stop_instance(instance_id)
         return JSONResponse(content=result, status_code=HTTPStatus.OK)
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"Instance {instance_id} not found")
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND, detail=f"Instance {instance_id} not found"
+        )
     except Exception as e:
         logger.error(f"Failed to delete vLLM instance {instance_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return PlainTextResponse(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR, content=str(e)
+        )
 
 
 @app.delete("/v2/vllm/instances")
@@ -718,7 +800,42 @@ async def delete_all_vllm_instances():
         return JSONResponse(content=result, status_code=HTTPStatus.OK)
     except Exception as e:
         logger.error(f"Failed to delete all vLLM instances: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return PlainTextResponse(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR, content=str(e)
+        )
+
+
+@app.get("/v2/gpu-debug")
+async def get_gpu_debug():
+    try:
+        cp = subprocess.run(
+            "nvidia-smi --query-gpu=index,uuid,memory.used --format=csv; nvidia-smi",
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    except subprocess.TimeoutExpired:
+        logger.error("Timeout trying to use nvidia-smi")
+        return PlainTextResponse(
+            status_code=HTTPStatus.GATEWAY_TIMEOUT,
+            content="debugging commands timed out",
+        )
+    except Exception as exn:
+        logger.error(f"Failed to use nvidia-smi, exception {exn}")
+        return PlainTextResponse(
+            status_code=HTTPStatus.NOT_IMPLEMENTED,
+            content=f"Running debug commands threw exception {exn}",
+        )
+    else:
+        return JSONResponse(
+            status_code=HTTPStatus.OK,
+            content=dict(
+                stdout=cp.stdout,
+                stderr=cp.stderr,
+                returncode=cp.returncode,
+            ),
+        )
 
 
 @app.get("/v2/vllm/instances")
@@ -752,7 +869,9 @@ async def get_vllm_instance_status(
         result = vllm_manager.get_instance_status(instance_id)
         return JSONResponse(content=result, status_code=HTTPStatus.OK)
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"Instance {instance_id} not found")
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND, detail=f"Instance {instance_id} not found"
+        )
 
 
 @app.get("/v2/vllm/instances/{instance_id}/log")
@@ -781,7 +900,7 @@ async def get_vllm_instance_log(
             try:
                 start, end = parse_range_header(range)
             except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc))
+                raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail=str(exc))
             partial = True
 
         read_start, data, total = vllm_manager.get_instance_log_bytes(
@@ -807,7 +926,9 @@ async def get_vllm_instance_log(
             headers=headers,
         )
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"Instance {instance_id} not found")
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND, detail=f"Instance {instance_id} not found"
+        )
     except LogRangeNotAvailable as e:
         return Response(
             content=b"",
@@ -819,7 +940,9 @@ async def get_vllm_instance_log(
         raise
     except Exception as e:
         logger.error(f"Failed to get logs for instance {instance_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return PlainTextResponse(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR, content=str(e)
+        )
 
 
 ######################################################################
@@ -855,11 +978,13 @@ def _close_inherited_sockets():
 
 
 # Function to be executed by the child process
-def vllm_kickoff(vllm_config: VllmConfig, log_file_path: str):
+def vllm_kickoff(vllm_config: VllmConfig, log_file_path: str, debug_gpu_memory: bool):
     """
     Child function to kickoff vllm instance
     :param vllm_config: vLLM configuration parameters and env variables
     :param log_file_path: Path to the log file for capturing stdout/stderr
+    :param debug_gpu_memory: bool indicating whether to first give evidence of
+                             GPU memory usage
     """
 
     # Isolate this process tree into its own process group so that
@@ -888,10 +1013,34 @@ def vllm_kickoff(vllm_config: VllmConfig, log_file_path: str):
     sys.stdout = os.fdopen(1, "w")
     sys.stderr = os.fdopen(2, "w")
 
-    logger.info(f"VLLM process (PID: {os.getpid()}) started.")
     # Set env vars in the current process
     if vllm_config.env_vars:
         set_env_vars(vllm_config.env_vars)
+
+    if debug_gpu_memory:
+        try:
+            cp = subprocess.run(
+                "nvidia-smi --query-gpu=index,uuid,memory.used --format=csv"
+                "; nvidia-smi",
+                shell=True,
+                timeout=20,
+            )
+        except FileNotFoundError:
+            logger.warning("nvidia-smi not found")
+        except subprocess.TimeoutExpired:
+            logger.warning("nvidia-smi timed out")
+        except Exception as exn:
+            logger.warning(f"Running nvidia-smi threw exception {exn}")
+        else:
+            logger.info(
+                f"Ran nvidia-smi; got returncode={cp.returncode}"
+                f", stdout={cp.stdout}, stderr={cp.stderr}"
+            )
+
+    cvd = os.getenv("CUDA_VISIBLE_DEVICES", "<unset>")
+    logger.info(
+        f"VLLM process (PID: {os.getpid()}, CUDA_VISIBLE_DEVICES: {cvd}) starting."
+    )
 
     # prepare args
     receive_args = vllm_config.options.split()
@@ -955,6 +1104,13 @@ if __name__ == "__main__":
         choices=["critical", "error", "warning", "info", "debug"],
         help="Logging level (default: info)",
     )
+    parser.add_argument(
+        "--debug-gpu-memory",
+        type=bool,
+        default=False,
+        action=argparse.BooleanOptionalAction,
+        help="Log info on accelerator memory usage",
+    )
 
     args = parser.parse_args()
 
@@ -965,8 +1121,10 @@ if __name__ == "__main__":
     namespace = os.getenv("NAMESPACE")
 
     logger.info(
-        "Launcher starting with args: mock_gpus=%s, mock_gpu_count=%d, "
-        "host=%s, port=%d, log_level=%s, node_name=%s, namespace=%s",
+        "Launcher starting with args: mock_gpus=%s, mock_gpu_count=%d"
+        ", host=%s, port=%d, log_level=%s, node_name=%s, namespace=%s"
+        ", debug_gpu_memory=%s"
+        "",
         args.mock_gpus,
         args.mock_gpu_count,
         args.host,
@@ -974,6 +1132,7 @@ if __name__ == "__main__":
         args.log_level,
         node_name,
         namespace,
+        args.debug_gpu_memory,
     )
 
     # Reinitialize the global manager with mock mode settings
@@ -982,6 +1141,7 @@ if __name__ == "__main__":
         mock_gpu_count=args.mock_gpu_count,
         node_name=node_name,
         namespace=namespace,
+        debug_gpu_memory=args.debug_gpu_memory,
     )
 
     uvicorn.run(

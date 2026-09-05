@@ -199,7 +199,8 @@ spec:
           command:
           - /app/launcher.py
           - --host=0.0.0.0
-          - --log-level=info
+          - --log-level=debug
+          - --debug-gpu-memory
           - --port=8001
           env:
           - name: HF_HOME
@@ -216,7 +217,7 @@ spec:
             value: "/tmp"
           resources:
             limits:
-              ephemeral-storage: "4.5Gi"
+              ephemeral-storage: "5Gi"
 ---
 apiVersion: fma.llm-d.ai/v1alpha1
 kind: LauncherPopulationPolicy

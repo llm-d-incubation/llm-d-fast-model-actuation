@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"regexp"
@@ -420,6 +421,8 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		}
 	}
 
+	var lClient *LauncherClient
+
 	// If there is already a bound server-providing Pod then ensure that it is awake,
 	// ensure status reported, and relay readiness if needed.
 	if providingPod != nil {
@@ -440,6 +443,12 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 			if providingPod.Status.PodIP == "" || !utils.IsPodReady(providingPod) {
 				logger.V(5).Info("Bound launcher pod not yet reachable, waiting", "podIP", providingPod.Status.PodIP, "ready", utils.IsPodReady(providingPod))
 				return processResult{}
+			}
+
+			launcherBaseURL := fmt.Sprintf("http://%s:%d", providingPod.Status.PodIP, ctlrcommon.LauncherServicePort)
+			lClient, err = NewLauncherClient(launcherBaseURL, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": iscName}))
+			if err != nil {
+				return processResult{err: err, retry: true}
 			}
 
 			syncResult, err, retry := ctl.syncLauncherInstances(ctx, nodeDat, serverDat.InstancesDeleted, providingPod)
@@ -490,10 +499,14 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				// not yet created (bind-first path) or controller restarted and lost tracking.
 				// We just synced, so we know the instance is not on the launcher — create directly.
 				serverDat.NeededNewInstance = true
-				launcherBaseURL := fmt.Sprintf("http://%s:%d", providingPod.Status.PodIP, ctlrcommon.LauncherServicePort)
-				lClient, err := NewLauncherClient(launcherBaseURL, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": iscName}))
-				if err != nil {
-					return processResult{err: err, retry: true}
+				if ctl.debugAccelMemory {
+					debugData := make(map[string]any)
+					debugErr := lClient.do(ctx, "gpu-debug-at-create", "GET", "/v2/gpu-debug", nil, &debugData)
+					if debugErr != nil {
+						logger.V(2).Info("Launcher gpu-debug at create failed", "err", debugErr)
+					} else {
+						logger.V(2).Info("Launcher did gpu-debug at create", "gpuUUIDs", serverDat.GPUIDs, "debugData", debugData)
+					}
 				}
 				result, err := lClient.CreateNamedInstance(ctx, serverDat.InstanceID, *serverDat.InstanceConfig)
 				if err != nil {
@@ -515,7 +528,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 			serverDat.Sleeping = &sleeping
 		}
 		if *(serverDat.Sleeping) {
-			if err = ctl.wakeUp(ctx, serverDat, requestingPod, providingPod, serverPort, "discovered-bound"); err != nil {
+			if err = ctl.wakeUp(ctx, serverDat, requestingPod, providingPod, serverPort, "discovered-bound", lClient); err != nil {
 				return processResult{err: err, retry: true}
 			}
 		}
@@ -1428,6 +1441,7 @@ func (ctl *controller) enforceSleeperBudget(ctx context.Context, serverDat *serv
 }
 
 // launcherState is non-nil iff launcher-based.
+// Call only within `nodeItem.process`.
 func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requestingPod, providingPod *corev1.Pod, launcherState *vllmInstanceState, skipWake bool) processResult {
 	logger := klog.FromContext(ctx)
 	providingPod = providingPod.DeepCopy()
@@ -1473,7 +1487,7 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 	if !skipWake {
 		// Reached only for direct providers (launcher binds skip the wake); wake
 		// and clear the sleeping label in a separate update.
-		if err = ctl.wakeUp(ctx, serverDat, requestingPod, providingPod, serverPort, "freshly-bound"); err != nil {
+		if err = ctl.wakeUp(ctx, serverDat, requestingPod, providingPod, serverPort, "freshly-bound", nil); err != nil {
 			return processResult{err: err, retry: true}
 		}
 		if _, err = ctl.ensureSleepingLabel(ctx, providingPod, false); err != nil {
@@ -1487,19 +1501,31 @@ func (ctl *controller) bind(ctx context.Context, serverDat *serverData, requesti
 // only) and records it as awake in serverDat. It does not touch the Pod's
 // sleeping label; callers reconcile that separately (folding it into another
 // Pod update where possible).
-func (ctl *controller) wakeUp(ctx context.Context, serverDat *serverData, requestingPod, providingPod *corev1.Pod, serverPort int32, description string) error {
+// The `lClient` arg may be `nil`, if not then is used to do GPU memory debugging
+func (ctl *controller) wakeUp(ctx context.Context, serverDat *serverData, requestingPod, providingPod *corev1.Pod, serverPort int32, description string, lClient *LauncherClient) error {
 	if ctl.debugAccelMemory {
 		if err := ctl.accelMemoryIsLowEnough(ctx, requestingPod, serverDat); err != nil {
 			return err
 		}
 	}
+	logger := klog.FromContext(ctx)
+	if lClient != nil && ctl.debugAccelMemory && false { // false because it is redundant with ctl.accelMemoryIsLowEnough
+		debugData := make(map[string]any)
+		debugErr := lClient.do(ctx, "gpu-debug-at-wake", http.MethodGet, "/v2/gpu-debug", nil, &debugData)
+		if debugErr != nil {
+			logger.V(2).Info("Launcher gpu-debug at-wake failed", "err", debugErr)
+		} else {
+			logger.V(2).Info("Launcher did gpu-debug at wake", "gpuUUIDs", serverDat.GPUIDs, "debugData", debugData)
+		}
+	}
 	endpoint := fmt.Sprintf("%s:%d", providingPod.Status.PodIP, serverPort)
 	wakeURL := "http://" + endpoint + "/wake_up"
-	_, err := doHTTP(ctx, "wake", "POST", wakeURL, nil, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": requestingPod.Annotations[api.InferenceServerConfigAnnotationName]}), nil, httpResultConsumer{})
+	obsCube := ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": requestingPod.Annotations[api.InferenceServerConfigAnnotationName]})
+	_, err := doHTTP(ctx, "wake", "POST", wakeURL, nil, obsCube, nil, httpResultConsumer{})
 	if err != nil {
 		return fmt.Errorf("failed to wake inference server at %s: %w", endpoint, err)
 	}
-	klog.FromContext(ctx).V(2).Info("Woke inference server", "endpoint", endpoint, "description", description)
+	logger.V(2).Info("Woke inference server", "endpoint", endpoint, "description", description)
 	serverDat.Sleeping = ptr.To(false)
 	return nil
 }
@@ -1988,6 +2014,8 @@ func (ctl *controller) querySleeping(ctx context.Context, iscName string, provid
 	return sleepState.IsSleeping, err
 }
 
+// Called if debugging accelerator memory usage.
+// Enforcing a global limit is done only when debugging.
 func (ctl *controller) accelMemoryIsLowEnough(ctx context.Context, requestingPod *corev1.Pod, serverDat *serverData) error {
 	adminPort := requestingPod.Annotations[api.AdminPortAnnotationName]
 	if adminPort == "" {
@@ -2002,14 +2030,17 @@ func (ctl *controller) accelMemoryIsLowEnough(ctx context.Context, requestingPod
 	logger := klog.FromContext(ctx)
 	for _, gpuID := range serverDat.GPUIDs {
 		if used, have := usageMap[gpuID]; !have {
-			return fmt.Errorf("no GPU usage information for GPU %s", gpuID)
+			if ctl.accelMemoryLimitMiB < math.MaxInt64 {
+				return fmt.Errorf("no GPU usage information for GPU %s", gpuID)
+			}
+			logger.V(3).Info("Requester report of accelerator memory usage does not mention an assigned one", "accelerator", gpuID)
 		} else if used > ctl.accelMemoryLimitMiB {
-			return fmt.Errorf("accelerator %s is currently using %d MiB of memory, limit for sleeping total is %d MiB", gpuID, used, ctl.accelMemoryLimitMiB)
+			return fmt.Errorf("accelerator memory usage of %s is currently %d MiB, limit for sleeping total is %d MiB", gpuID, used, ctl.accelMemoryLimitMiB)
 		} else {
 			logger.V(4).Info("OK accelerator memory usage", "node", requestingPod.Spec.NodeName, "accelerator", gpuID, "usageMiB", used, "limitMiB", ctl.accelMemoryLimitMiB)
 		}
 	}
-	logger.V(4).Info("AOK accelerator memory usage", "node", requestingPod.Spec.NodeName, "gpuIDs", serverDat.GPUIDs)
+	logger.V(4).Info("AOK accelerator memory usage", "node", requestingPod.Spec.NodeName, "accelerators", serverDat.GPUIDs)
 	return nil
 }
 
@@ -2133,7 +2164,7 @@ func (ctl *controller) syncLauncherInstances(ctx context.Context, nodeDat *nodeD
 			newInstances[inst.InstanceID] = &instanceData{LastUsed: time.Now()}
 		}
 		if inst.Status == InstanceStatusStopped {
-			ctl.ensureLogTailLogged(ctx, newInstances, launcherPod.Name, inst.InstanceID, lClient)
+			ctl.ensureLogTailLogged(ctx, newInstances, launcherPod.Name, inst.InstanceID, inst.GpuUUIDs, lClient)
 			if boundInstanceIDs.Has(inst.InstanceID) {
 				// Bound stopped instance — defer deletion so the caller can
 				// delete the requesting Pod first (resolves create/delete ambiguity).
