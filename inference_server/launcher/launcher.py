@@ -164,9 +164,9 @@ class HalfMade(Exception):
 def dump_process_group(subject: str, pgpid: int, when: str) -> None:
     members = []
     for proc in psutil.process_iter(attrs=["pid", "ppid", "name"]):
-        pid = proc.pid
-        pname = proc.name()
-        ppid = proc.ppid()
+        pid = proc.info["pid"]
+        ppid = proc.info["ppid"]
+        pname = proc.info["name"]
         try:
             proc_pg = os.getpgid(pid)
             if proc_pg == pgpid:
@@ -299,15 +299,15 @@ class VllmInstance:
                     f"In stop({self.instance_id}), os.killpg({vllm_pid}) "
                     f"because the first process.join was not enough"
                 )
-            except ProcessLookupError:
+            except ProcessLookupError as exn:
                 logger.error(
                     f"In stop({self.instance_id}), tried to os.killpg({vllm_pid}) "
-                    f"but that threw ProcessLookupError"
+                    f"but that threw ProcessLookupError ({exn})"
                 )
-            except Exception:
+            except Exception as exn:
                 logger.error(
                     f"In stop({self.instance_id}), tried to os.killpg({vllm_pid}) "
-                    f"but that threw an unexpected Exception"
+                    f"but that threw an unexpected Exception ({exn})"
                 )
             if logger.getEffectiveLevel() <= logging.DEBUG:
                 dump_process_group(
@@ -821,13 +821,13 @@ async def get_gpu_debug():
     except subprocess.TimeoutExpired:
         logger.error("Timeout trying to use nvidia-smi")
         return PlainTextResponse(
-            status_code=HTTPStatus.GATEWAY_TIMEOUT,
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
             content="debugging commands timed out",
         )
     except Exception as exn:
         logger.error(f"Failed to use nvidia-smi, exception {exn}")
         return PlainTextResponse(
-            status_code=HTTPStatus.NOT_IMPLEMENTED,
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
             content=f"Running debug commands threw exception {exn}",
         )
     else:
@@ -1028,8 +1028,6 @@ def vllm_kickoff(vllm_config: VllmConfig, log_file_path: str, debug_gpu_memory: 
                 shell=True,
                 timeout=20,
             )
-        except FileNotFoundError:
-            logger.warning("nvidia-smi not found")
         except subprocess.TimeoutExpired:
             logger.warning("nvidia-smi timed out")
         except Exception as exn:

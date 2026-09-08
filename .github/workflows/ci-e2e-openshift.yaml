@@ -669,18 +669,18 @@ jobs:
         if: always()
         run: |
           case "${{ github.event.inputs.run_cluster || 'pok-prod' }}" in
-            (vllm-d)   ingdom=fmaas-vllm-d.fmaas.res.ibm.com;;
-            (pok-prod) ingdom=pokprod001.ete14.res.ibm.com;;
+            (vllm-d)   ing_dom=fmaas-vllm-d.fmaas.res.ibm.com;;
+            (pok-prod) ing_dom=pokprod001.ete14.res.ibm.com;;
             (*) echo "Impossible run_cluster '${{ github.event.inputs.run_cluster }}'"
                 exit 1;;
           esac
           if [ -r testnode ]
           then
-            echo querying "https://prometheus-k8s-openshift-monitoring.apps.${ingdom}/api/v1/query" about DCGM_FI_DEV_FB_USED on node "$(cat testnode)"
+            echo querying "https://prometheus-k8s-openshift-monitoring.apps.${ing_dom}/api/v1/query" about DCGM_FI_DEV_FB_USED on node "$(cat testnode)"
             curl -sSkG \
               -H "Authorization: Bearer $(oc whoami -t)" \
               --data-urlencode "query=DCGM_FI_DEV_FB_USED{Hostname=\"$(cat testnode)\"}" \
-              https://prometheus-k8s-openshift-monitoring.apps.${ingdom}/api/v1/query \
+              https://prometheus-k8s-openshift-monitoring.apps.${ing_dom}/api/v1/query \
             | jq '.data.result[]'
           else echo there is no readable testnode file
           fi

@@ -1517,7 +1517,7 @@ func (ctl *controller) wakeUp(ctx context.Context, serverDat *serverData, reques
 		}
 	}
 	logger := klog.FromContext(ctx)
-	if lClient != nil && ctl.debugAccelMemory && false { // false because it is redundant with ctl.accelMemoryIsLowEnough
+	if lClient != nil && ctl.debugAccelMemory && false { // false because the following is redundant with ctl.accelMemoryIsLowEnough
 		debugData := make(map[string]any)
 		debugErr := lClient.do(ctx, "gpu-debug-at-wake", http.MethodGet, "/v2/gpu-debug", nil, &debugData)
 		if debugErr != nil {
