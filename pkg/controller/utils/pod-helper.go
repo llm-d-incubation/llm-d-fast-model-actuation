@@ -255,6 +255,22 @@ func BuildNodeIndependentLauncherTemplate(lc *v1alpha1.LauncherConfig) (*corev1.
 	// Configure required environment variables
 	configureRequiredEnvVars(container)
 
+	// Set startup probe.
+	container.StartupProbe = &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{
+				Path:   "/health",
+				Port:   intstr.FromInt(common.LauncherServicePort),
+				Scheme: corev1.URISchemeHTTP,
+			},
+		},
+		InitialDelaySeconds: 5,
+		PeriodSeconds:       3,
+		TimeoutSeconds:      2,
+		SuccessThreshold:    1,
+		FailureThreshold:    30,
+	}
+
 	// Set fixed liveness probe
 	container.LivenessProbe = &corev1.Probe{
 		ProbeHandler: corev1.ProbeHandler{
@@ -266,7 +282,7 @@ func BuildNodeIndependentLauncherTemplate(lc *v1alpha1.LauncherConfig) (*corev1.
 		},
 		InitialDelaySeconds: 10,
 		PeriodSeconds:       20,
-		TimeoutSeconds:      1,
+		TimeoutSeconds:      7,
 		SuccessThreshold:    1,
 		FailureThreshold:    3,
 	}

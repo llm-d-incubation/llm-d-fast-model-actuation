@@ -218,6 +218,8 @@ spec:
           resources:
             limits:
               ephemeral-storage: "5Gi"
+              memory: "6Gi"
+              cpu: 4
 ---
 apiVersion: fma.llm-d.ai/v1alpha1
 kind: LauncherPopulationPolicy
