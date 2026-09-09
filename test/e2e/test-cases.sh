@@ -168,6 +168,8 @@ spec:
       limits:
         nvidia.com/gpu: "2"
         ephemeral-storage: "10Gi"
+        memory: "8Gi"
+        cpu: 6
 $(if [ -n "${REQUESTER_PRIORITY_CLASS:-}" ]; then echo "
   priorityClassName: $REQUESTER_PRIORITY_CLASS"
 fi)
