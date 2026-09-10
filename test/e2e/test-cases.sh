@@ -170,7 +170,7 @@ spec:
         ephemeral-storage: "10Gi"
       requests:
         memory: "11Gi"
-        cpu: 4
+        cpu: 2
 $(if [ -n "${REQUESTER_PRIORITY_CLASS:-}" ]; then echo "
   priorityClassName: $REQUESTER_PRIORITY_CLASS"
 fi)
