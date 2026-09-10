@@ -133,6 +133,9 @@ kubectl wait --for=create sa default
 kubectl wait --for condition=Ready node fmatest-control-plane
 kubectl wait --for condition=Ready node fmatest-worker
 
+# Display nodes to confirm capacity
+kubectl get nodes -o yaml
+
 # Display health, prove we don't have https://kind.sigs.k8s.io/docs/user/known-issues/#pod-errors-due-to-too-many-open-files
 kubectl get pods -A -o wide
 

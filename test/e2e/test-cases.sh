@@ -168,6 +168,9 @@ spec:
       limits:
         nvidia.com/gpu: "2"
         ephemeral-storage: "10Gi"
+      requests:
+        memory: "11Gi"
+        cpu: 2
 $(if [ -n "${REQUESTER_PRIORITY_CLASS:-}" ]; then echo "
   priorityClassName: $REQUESTER_PRIORITY_CLASS"
 fi)
@@ -550,6 +553,9 @@ kubectl get pod $launcher1 -n "$NS"
 
 # Verify launcher is unbound
 expect '[ "$(kubectl get pod -n '"$NS"' $launcher1 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "" ]'
+
+# Launcher should still remain
+kubectl get pod $launcher1 -n "$NS"
 
 # Patch ReplicaSet back to use original isc
 kubectl patch rs $rs -n "$NS" -p='{"spec":{"template":{"metadata":{"annotations":{"dual-pods.llm-d.ai/inference-server-config":"'$isc'"}}}}}'
