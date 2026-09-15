@@ -8,7 +8,7 @@
 # (a) has a tag that does not start with "ref-" nor end with ".sbom";
 # (b) has a tag and was created less than a week ago;
 # (c) is referenced by one in category (a) or (b);
-# of (d) has a tag that is "${name/:/-}.sbom" where `name`
+# or (d) has a tag that is "${name/:/-}.sbom" where `name`
 #        is the "algo:hex" of id of something in (a) or (b) or (c).
 
 # Required environment variables:
