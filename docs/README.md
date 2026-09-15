@@ -4,6 +4,7 @@
 - [Launcher](launcher.md)
 - [Cluster Sharing](cluster-sharing.md)
 - [Prometheus Metrics](metrics.md)
+- [Grafana Dashboard](grafana-dashboard.md)
 - [Design Rules](../DESIGN_RULES.md)
 
 # Well-Lit Path
