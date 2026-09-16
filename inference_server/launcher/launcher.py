@@ -168,6 +168,8 @@ def dump_process_group(subject: str, pgpid: int, when: str) -> None:
         ppid = proc.info["ppid"]
         pname = proc.info["name"]
         cmdline = proc.info["cmdline"]
+        if isinstance(cmdline, list) and len(cmdline) > 4:
+            cmdline = cmdline[:4] + ["..."]
         try:
             proc_pg = os.getpgid(pid)
             if proc_pg == pgpid:
