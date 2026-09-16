@@ -23,7 +23,6 @@ import logging
 import multiprocessing
 import os
 import re
-import signal
 import stat
 import subprocess
 import sys
@@ -161,8 +160,9 @@ class HalfMade(Exception):
         self.instance_id = instance_id
 
 
-def dump_process_group(subject: str, pgpid: int, when: str) -> None:
+def dump_process_group(subject: str, pgpid: int, when: str) -> set[psutil.Process]:
     members = []
+    ans: set[psutil.Process] = set()
     for proc in psutil.process_iter(attrs=["pid", "ppid", "name", "cmdline"]):
         pid = proc.info["pid"]
         ppid = proc.info["ppid"]
@@ -174,6 +174,7 @@ def dump_process_group(subject: str, pgpid: int, when: str) -> None:
             proc_pg = os.getpgid(pid)
             if proc_pg == pgpid:
                 members.append([pid, ppid, pname, cmdline])
+                ans.add(proc)
         except OSError as exn:
             logger.debug(
                 f"Failed to os.getpgid({pid} {ppid} {pname}), errno={exn.errno}"
@@ -187,6 +188,7 @@ def dump_process_group(subject: str, pgpid: int, when: str) -> None:
         + when
         + f" are: {members}"
     )
+    return ans
 
 
 class VllmInstance:
@@ -280,53 +282,54 @@ class VllmInstance:
         vllm_pid = self.process.pid
         assert vllm_pid is not None
 
-        if logger.getEffectiveLevel() <= logging.DEBUG:
-            dump_process_group(self.instance_id, vllm_pid, "before process.terminate")
+        dump_process_group(self.instance_id, vllm_pid, "before process.terminate")
+        # psutil.Process hashes according to (PID, create time)
+        termd: set[psutil.Process] = {psutil.Process(vllm_pid)}
+        killd: set[psutil.Process] = set()
 
         # Graceful termination — send SIGTERM to the vLLM process,
         # which will propagate shutdown to the EngineCore via vLLM's
         # own cleanup logic.
         self.process.terminate()
         self.process.join(timeout=timeout)
-
-        # Force kill the entire process group (vLLM server + EngineCore)
-        # if graceful shutdown did not complete in time.
-        if self.process.is_alive():
-            if logger.getEffectiveLevel() <= logging.DEBUG:
-                dump_process_group(
-                    self.instance_id, vllm_pid, "between terminate and killpg"
-                )
-            try:
-                os.killpg(vllm_pid, signal.SIGKILL)
-                logger.debug(
-                    f"In stop({self.instance_id}), os.killpg({vllm_pid}) "
-                    f"because the first process.join was not enough"
-                )
-            except ProcessLookupError as exn:
-                logger.error(
-                    f"In stop({self.instance_id}), tried to os.killpg({vllm_pid}) "
-                    f"but that threw ProcessLookupError ({exn})"
-                )
-            except Exception as exn:
-                logger.error(
-                    f"In stop({self.instance_id}), tried to os.killpg({vllm_pid}) "
-                    f"but that threw an unexpected Exception ({exn})"
-                )
-            if logger.getEffectiveLevel() <= logging.DEBUG:
-                dump_process_group(
-                    self.instance_id, vllm_pid, "between killpg and join"
-                )
-            self.process.join()
-            logger.debug(
-                f"In stop({self.instance_id}), finished the second process.join"
+        rounds = 1
+        while rounds < 3:
+            remains = dump_process_group(
+                self.instance_id, vllm_pid, f"after {rounds} rounds of stopping"
             )
-        else:
-            logger.debug(
-                f"In stop({self.instance_id}), the first process.join was enough"
+            for proc in remains:
+                if proc.pid == 1:
+                    logger.error(
+                        f"Somehow PID 1 got into the process group ({vllm_pid}) of"
+                        f" instance {self.instance_id}, excepting it from stopping"
+                    )
+                elif proc in killd:
+                    logger.info(
+                        f"Stopping pid {proc.pid} with SIGKILL AGAIN because"
+                        " once was not enough"
+                    )
+                    proc.kill()
+                elif proc in termd:
+                    logger.info(
+                        f"Stopping pid {proc.pid} with SIGKILL because"
+                        " SIGTERM was not enough"
+                    )
+                    killd.add(proc)
+                    proc.kill()
+                else:
+                    logger.info(
+                        f"Stopping pid {proc.pid} with SIGTERM because it remains"
+                    )
+                    termd.add(proc)
+                    proc.terminate()
+            psutil.wait_procs(remains, timeout=timeout)
+            rounds = rounds + 1
+        finals = dump_process_group(self.instance_id, vllm_pid, "at end of stopping")
+        if len(finals) > 0:
+            logger.error(
+                f"Giving up on stopping processes for instance {self.instance_id},"
+                f" {finals} remain"
             )
-
-        if logger.getEffectiveLevel() <= logging.DEBUG:
-            dump_process_group(self.instance_id, vllm_pid, "at end of stop")
         self._cleanup_log_file()
         return self._make_state("terminated")
 
