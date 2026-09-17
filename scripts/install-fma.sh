@@ -243,7 +243,7 @@ if [[ "$install_crds" == "true" ]]; then
     else
         ysrc=$(curl -fsSL "https://raw.githubusercontent.com/llm-d-incubation/llm-d-fast-model-actuation/refs/tags/v$release/config/crds.yaml")
     fi
-    yq -o json eval . <<<$ysrc | jq -c . | while read -r obj; do
+    yq -o json eval . <<<"$ysrc" | jq -c . | while read -r obj; do
         crd_name=$(jq -r .metadata.name <<<$obj)
         if ! kubectl get crd "$crd_name" &>/dev/null; then
             kubectl create -f - <<<$obj
