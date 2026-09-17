@@ -19,10 +19,15 @@ function cheer() {
     echo
 }
 
+note() {
+    echo "$(date "+%F %T")| $*"
+}
+
 function expect() {
     local elapsed=0
     local start=$(date)
     local limit=${LIMIT:-45}
+    note "Expecting $1"
     while true; do
         kubectl get pods -L dual-pods.llm-d.ai/dual,dual-pods.llm-d.ai/sleeping
         if eval "$1"; then return; fi
@@ -200,9 +205,10 @@ doomed=$(kubectl get pods $req -o jsonpath={.spec.nodeName})
 keeper=$(kubectl get nodes -o name | sed s%node/%% | grep -vw $doomed | grep -v control-plane)
 
 kubectl delete node $doomed
+expect "! kubectl get node $doomed"
 LIMIT=100 expect '[ $(kubectl get ds -n kube-system kube-proxy -o jsonpath={.status.currentNumberScheduled}) == "2" ]'
-expect '! kubectl get pod $req'
-expect '! kubectl get pod $prv'
+expect "! kubectl get pod $req"
+expect "! kubectl get pod $prv"
 
 
 expect "kubectl get pods -o name | grep -c '^pod/$rs' | grep -vw 0 | grep -vw 1"
