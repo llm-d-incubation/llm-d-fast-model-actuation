@@ -23,6 +23,11 @@ on:
       - test/e2e/**
       - '!test/e2e/*.md'
       - '!test/e2e/demo-fma-hpa/**'
+      - '!test/e2e/deploy_fma.sh'
+      - '!test/e2e/deploy-wva-stack.sh'
+      - '!test/e2e/kind-config.yaml'
+      - '!test/e2e/mkrs.sh'
+      - '!test/e2e/run.sh'
 
   pull_request:
     branches:
@@ -44,6 +49,11 @@ on:
       - test/e2e/**
       - '!test/e2e/*.md'
       - '!test/e2e/demo-fma-hpa/**'
+      - '!test/e2e/deploy_fma.sh'
+      - '!test/e2e/deploy-wva-stack.sh'
+      - '!test/e2e/kind-config.yaml'
+      - '!test/e2e/mkrs.sh'
+      - '!test/e2e/run.sh'
 
 jobs:
   debug:
