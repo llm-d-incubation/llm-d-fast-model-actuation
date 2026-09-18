@@ -135,7 +135,7 @@ spec:
             --mock-gpus \
             --host 0.0.0.0 \
             --port 8001 \
-            --log-level info
+            --log-level debug
           env:
             - name: NODE_NAME
               valueFrom:

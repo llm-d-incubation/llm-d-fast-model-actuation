@@ -163,14 +163,17 @@ class HalfMade(Exception):
 
 def dump_process_group(subject: str, pgpid: int, when: str) -> None:
     members = []
-    for proc in psutil.process_iter(attrs=["pid", "ppid", "name"]):
+    for proc in psutil.process_iter(attrs=["pid", "ppid", "name", "cmdline"]):
         pid = proc.info["pid"]
         ppid = proc.info["ppid"]
         pname = proc.info["name"]
+        cmdline = proc.info["cmdline"]
+        if isinstance(cmdline, list) and len(cmdline) > 4:
+            cmdline = cmdline[:4] + ["..."]
         try:
             proc_pg = os.getpgid(pid)
             if proc_pg == pgpid:
-                members.append([pid, ppid, pname])
+                members.append([pid, ppid, pname, cmdline])
         except OSError as exn:
             logger.debug(
                 f"Failed to os.getpgid({pid} {ppid} {pname}), errno={exn.errno}"
