@@ -207,7 +207,7 @@ keeper=$(kubectl get nodes -o name | sed s%node/%% | grep -vw $doomed | grep -v 
 kubectl delete node $doomed
 expect "! kubectl get node $doomed"
 LIMIT=100 expect '[ $(kubectl get ds -n kube-system kube-proxy -o jsonpath={.status.currentNumberScheduled}) == "2" ]'
-expect "! kubectl get pod $req"
+LIMIT=100 expect "! kubectl get pod $req"
 expect "! kubectl get pod $prv"
 
 
