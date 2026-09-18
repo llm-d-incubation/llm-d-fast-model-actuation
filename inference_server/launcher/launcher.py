@@ -290,7 +290,10 @@ class VllmInstance:
         # Graceful termination — send SIGTERM to the vLLM process,
         # which will propagate shutdown to the EngineCore via vLLM's
         # own cleanup logic.
-        self.process.terminate()
+        try:
+            self.process.terminate()
+        except psutil.Error as exn:
+            logger.error(f"For instance {self.instance_id}, terminate threw {exn}")
         self.process.join(timeout=timeout)
         rounds = 1
         while rounds < 3:
@@ -298,30 +301,36 @@ class VllmInstance:
                 self.instance_id, vllm_pid, f"after {rounds} rounds of stopping"
             )
             for proc in remains:
-                if proc.pid == 1:
+                try:
+                    if proc.pid == 1:
+                        logger.error(
+                            f"Somehow PID 1 got into the process group ({vllm_pid}) of"
+                            f" instance {self.instance_id}, excepting it from stopping"
+                        )
+                    elif proc in killd:
+                        logger.info(
+                            f"Stopping pid {proc.pid} with SIGKILL AGAIN because"
+                            " once was not enough"
+                        )
+                        proc.kill()
+                    elif proc in termd:
+                        logger.info(
+                            f"Stopping pid {proc.pid} with SIGKILL because"
+                            " SIGTERM was not enough"
+                        )
+                        killd.add(proc)
+                        proc.kill()
+                    else:
+                        logger.info(
+                            f"Stopping pid {proc.pid} with SIGTERM because it remains"
+                        )
+                        termd.add(proc)
+                        proc.terminate()
+                except psutil.Error as exn:
                     logger.error(
-                        f"Somehow PID 1 got into the process group ({vllm_pid}) of"
-                        f" instance {self.instance_id}, excepting it from stopping"
+                        f"For instance {self.instance_id},"
+                        f" terminate/kill({proc.pid} threw {exn})"
                     )
-                elif proc in killd:
-                    logger.info(
-                        f"Stopping pid {proc.pid} with SIGKILL AGAIN because"
-                        " once was not enough"
-                    )
-                    proc.kill()
-                elif proc in termd:
-                    logger.info(
-                        f"Stopping pid {proc.pid} with SIGKILL because"
-                        " SIGTERM was not enough"
-                    )
-                    killd.add(proc)
-                    proc.kill()
-                else:
-                    logger.info(
-                        f"Stopping pid {proc.pid} with SIGTERM because it remains"
-                    )
-                    termd.add(proc)
-                    proc.terminate()
             psutil.wait_procs(remains, timeout=timeout)
             rounds = rounds + 1
         finals = dump_process_group(self.instance_id, vllm_pid, "at end of stopping")
