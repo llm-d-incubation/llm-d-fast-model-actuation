@@ -19,9 +19,12 @@ python -m pytest tests/test_launcher.py -v
 """
 
 import asyncio
+import errno
 import os
 import signal
 import sys
+from dataclasses import dataclass
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -94,14 +97,230 @@ def tmp_log_dir(tmp_path):
     return str(tmp_path)
 
 
+class FakeNoSuchProcess(Exception):
+    """Stand-in for psutil.NoSuchProcess."""
+
+    def __init__(self, pid: int) -> None:
+        super().__init__(f"process no longer exists (pid={pid})")
+        self.pid = pid
+
+
+@dataclass
+class FakeProcEntry:
+    """One process in a FakeProcTable.
+
+    `dies_on` is the set of signals that are fatal to this process; see
+    FakeProcTable for the three cases that matter here.
+    """
+
+    pid: int
+    ppid: int
+    pgid: int
+    name: str
+    cmdline: list[str]
+    dies_on: frozenset[int]
+    create_time: float
+
+
+class FakeProcess:
+    """Stand-in for psutil.Process, delegating to the FakeProcTable it came from.
+
+    Like a real psutil.Process this is a handle on a process that may since
+    have exited, and `info` is a snapshot taken when the handle was made.
+    Hashes and compares by (pid, create time), just as psutil.Process does:
+    VllmInstance.stop() relies on that to recognize, in a later round, a
+    process it has already signalled.
+    """
+
+    def __init__(
+        self,
+        table: "FakeProcTable",
+        pid: int,
+        pgid: int,
+        create_time: float,
+        info: dict[str, object],
+    ) -> None:
+        self._table = table
+        self.pid = pid
+        self.pgid = pgid
+        self.create_time = create_time
+        self.info = info
+
+    def __hash__(self) -> int:
+        return hash((self.pid, self.create_time))
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, FakeProcess) and (self.pid, self.create_time) == (
+            other.pid,
+            other.create_time,
+        )
+
+    def __repr__(self) -> str:
+        # The launcher logs sets of these when giving up on stopping an
+        # instance, and a set formats its elements with repr, so say
+        # everything a reader of that log line would want to know.
+        return (
+            f"FakeProcess(pid={self.pid}, pgid={self.pgid},"
+            f" ppid={self.info['ppid']}, name={self.info['name']!r},"
+            f" cmdline={self.info['cmdline']!r},"
+            f" create_time={self.create_time},"
+            f" signals={self._table.signals.get(self.pid)},"
+            f" {'alive' if self._table.is_alive(self.pid) else 'gone'})"
+        )
+
+    def terminate(self) -> None:
+        self._table.deliver(self.pid, signal.SIGTERM)
+
+    def kill(self) -> None:
+        self._table.deliver(self.pid, signal.SIGKILL)
+
+
+class FakeProcTable:
+    """A fake process table: as much of one as VllmInstance.stop() looks at.
+
+    Each entry has a pid, a process group, and the set of signals that are
+    fatal to it — DIES_ON_SIGTERM for a well-behaved process,
+    DIES_ON_SIGKILL for one that ignores SIGTERM, and UNKILLABLE for one
+    that ignores both. Signals delivered to each pid are recorded in
+    `signals`, so a test can assert on the escalation that stop() performed.
+
+    An instance supplies the `psutil.Process`, `psutil.process_iter`,
+    `psutil.wait_procs` and `os.getpgid` that launcher.py calls; the
+    `fake_procs` fixture patches them in place of the real ones.
+    """
+
+    DIES_ON_SIGTERM = frozenset({signal.SIGTERM, signal.SIGKILL})
+    DIES_ON_SIGKILL = frozenset({signal.SIGKILL})
+    UNKILLABLE: frozenset[int] = frozenset()
+
+    def __init__(self) -> None:
+        self._alive: dict[int, FakeProcEntry] = {}
+        self.signals: dict[int, list[int]] = {}
+        self._last_create_time = 1000.0
+
+    def add(
+        self,
+        pid: int,
+        *,
+        pgid: int | None = None,
+        ppid: int = 1,
+        name: str = "vllm",
+        cmdline: list[str] | None = None,
+        dies_on: frozenset[int] = DIES_ON_SIGTERM,
+    ) -> None:
+        """Add a live process, by default leading a process group of its own."""
+        self._last_create_time += 1
+        self._alive[pid] = FakeProcEntry(
+            pid=pid,
+            ppid=ppid,
+            pgid=pid if pgid is None else pgid,
+            name=name,
+            cmdline=["vllm", "serve"] if cmdline is None else cmdline,
+            dies_on=dies_on,
+            create_time=self._last_create_time,
+        )
+        self.signals.setdefault(pid, [])
+
+    def is_alive(self, pid: int) -> bool:
+        return pid in self._alive
+
+    def deliver(self, pid: int, sig: int) -> None:
+        """Deliver `sig` to `pid`, reaping it if that signal is fatal to it."""
+        entry = self._alive.get(pid)
+        if entry is None:
+            return
+        self.signals[pid].append(sig)
+        if sig in entry.dies_on:
+            del self._alive[pid]
+
+    def _handle(self, entry: FakeProcEntry) -> FakeProcess:
+        return FakeProcess(
+            self,
+            entry.pid,
+            entry.pgid,
+            entry.create_time,
+            {
+                "pid": entry.pid,
+                "ppid": entry.ppid,
+                "name": entry.name,
+                "cmdline": list(entry.cmdline),
+            },
+        )
+
+    # The psutil and os surface that launcher.py uses.
+
+    def Process(self, pid: int) -> FakeProcess:
+        """Stand in for psutil.Process; named to match it."""
+        if pid not in self._alive:
+            raise FakeNoSuchProcess(pid)
+        return self._handle(self._alive[pid])
+
+    def process_iter(self, attrs: list[str] | None = None) -> list[FakeProcess]:
+        return [self._handle(entry) for entry in list(self._alive.values())]
+
+    def wait_procs(
+        self, procs, timeout: float | None = None
+    ) -> tuple[list[FakeProcess], list[FakeProcess]]:
+        gone = [proc for proc in procs if proc.pid not in self._alive]
+        alive = [proc for proc in procs if proc.pid in self._alive]
+        return gone, alive
+
+    def getpgid(self, pid: int) -> int:
+        entry = self._alive.get(pid)
+        if entry is None:
+            raise ProcessLookupError(errno.ESRCH, os.strerror(errno.ESRCH))
+        return entry.pgid
+
+
+@pytest.fixture
+def fake_procs():
+    """Replace the process-table calls that VllmInstance.stop() makes.
+
+    Yields the FakeProcTable that stop() will see, so that stopping an
+    instance neither depends on nor touches this machine's real processes.
+    """
+    table = FakeProcTable()
+    fake_psutil = SimpleNamespace(
+        Process=table.Process,
+        process_iter=table.process_iter,
+        wait_procs=table.wait_procs,
+        NoSuchProcess=FakeNoSuchProcess,
+    )
+    with (
+        patch("launcher.psutil", fake_psutil),
+        patch("launcher.os.getpgid", table.getpgid),
+    ):
+        yield table
+
+
 # Mock process for testing without actually starting vLLM
 class MockProcess:
-    def __init__(self):
+    def __init__(
+        self,
+        proc_table: FakeProcTable | None = None,
+        pid: int = 12345,
+        dies_on: frozenset[int] = FakeProcTable.DIES_ON_SIGTERM,
+    ):
+        """Stand in for the multiprocessing.Process that runs vllm_kickoff.
+
+        VllmInstance.stop() consults both this handle and the process table
+        (through psutil and os.getpgid), so a test that exercises stop()
+        passes the FakeProcTable standing in for the latter. This mock then
+        keeps the two views consistent: it enters itself in that table,
+        leading a process group of its own — the state that vllm_kickoff's
+        os.setpgrp() would have established, had this mock not replaced the
+        process that runs it — and terminate()/kill() deliver their signal
+        there rather than only to this mock's own state. `dies_on` says which
+        signals are fatal to that entry.
+        """
         self._is_alive = True
         self.terminated = False
         self.killed = False
-        self.pid = 12345
+        self.pid = pid
         self.exitcode = None
+        self._proc_table = proc_table
+        if proc_table is not None:
+            proc_table.add(pid, dies_on=dies_on)
         # sentinel is a readable fd when the process exits
         self._sentinel_r, self._sentinel_w = os.pipe()
         self.sentinel = self._sentinel_r
@@ -114,16 +333,24 @@ class MockProcess:
 
     def terminate(self):
         self.terminated = True
-        self._is_alive = False
-        self.exitcode = -15
+        self._deliver(signal.SIGTERM, -15)
 
     def join(self, timeout=None):
         pass
 
     def kill(self):
         self.killed = True
+        self._deliver(signal.SIGKILL, -9)
+
+    def _deliver(self, sig, exitcode):
+        """Deliver `sig` the way the OS would: to the process table if this
+        mock is wired to one, else straight to this mock's own state."""
+        if self._proc_table is not None:
+            self._proc_table.deliver(self.pid, sig)
+            if self._proc_table.is_alive(self.pid):
+                return  # the process ignored the signal
         self._is_alive = False
-        self.exitcode = -9
+        self.exitcode = exitcode
 
     def simulate_exit(self, exitcode=0):
         """Simulate process termination by making sentinel fd readable."""
@@ -213,10 +440,15 @@ class TestVllmInstance:
 
     @patch("launcher.multiprocessing.Process")
     def test_instance_stop(
-        self, mock_process_class, vllm_config: VllmConfig, gpu_translator, tmp_log_dir
+        self,
+        mock_process_class,
+        vllm_config: VllmConfig,
+        gpu_translator,
+        tmp_log_dir,
+        fake_procs,
     ):
         """Test stopping a running instance"""
-        mock_process = MockProcess()
+        mock_process = MockProcess(fake_procs)
         mock_process_class.return_value = mock_process
 
         instance = VllmInstance(
@@ -230,6 +462,9 @@ class TestVllmInstance:
         for key, val in vllm_config.model_dump(exclude_none=True).items():
             assert result[key] == val
         assert mock_process.terminated is True
+        # SIGTERM sufficed, so no SIGKILL followed
+        assert fake_procs.signals[mock_process.pid] == [signal.SIGTERM]
+        assert not fake_procs.is_alive(mock_process.pid)
 
     @patch("launcher.multiprocessing.Process")
     def test_instance_stop_not_running(self, vllm_config, gpu_translator, tmp_log_dir):
@@ -240,39 +475,40 @@ class TestVllmInstance:
         with pytest.raises(HalfMade):
             _ = instance.stop()
 
-    @patch("launcher.os.killpg")
     @patch("launcher.multiprocessing.Process")
     def test_instance_force_kill(
-        self, mock_process_class, mock_killpg, vllm_config, gpu_translator, tmp_log_dir
+        self, mock_process_class, vllm_config, gpu_translator, tmp_log_dir, fake_procs
     ):
         """Test force killing an instance that won't terminate"""
-        mock_process = MockProcess()
-
-        # Simulate process that won't die on terminate
-        def stay_alive_on_terminate():
-            pass  # Don't change _is_alive
-
-        mock_process.terminate = stay_alive_on_terminate
-
-        # Make join after killpg finally stop the process
-        call_count = 0
-
-        def join_side_effect(timeout=None):
-            nonlocal call_count
-            call_count += 1
-            if call_count > 1:
-                mock_process._is_alive = False
-
-        mock_process.join = join_side_effect
+        # The vLLM process ignores SIGTERM, and its process group holds
+        # another process (an EngineCore, say) that the launcher has not
+        # signalled at all yet.
+        mock_process = MockProcess(fake_procs, dies_on=FakeProcTable.DIES_ON_SIGKILL)
+        engine_pid = mock_process.pid + 1
+        fake_procs.add(
+            engine_pid,
+            pgid=mock_process.pid,
+            ppid=mock_process.pid,
+            name="VLLM::EngineCore",
+        )
         mock_process_class.return_value = mock_process
 
         instance = VllmInstance(
             "test-id", vllm_config, gpu_translator, log_dir=tmp_log_dir
         )
         instance.start()
-        _ = instance.stop(timeout=0.1)
+        result = instance.stop()
 
-        mock_killpg.assert_called_once_with(mock_process.pid, signal.SIGKILL)
+        assert result["status"] == "terminated"
+        # The vLLM process got SIGKILL because SIGTERM was not enough, and
+        # the rest of the group got the SIGTERM it had not yet received.
+        assert fake_procs.signals[mock_process.pid] == [
+            signal.SIGTERM,
+            signal.SIGKILL,
+        ]
+        assert fake_procs.signals[engine_pid] == [signal.SIGTERM]
+        assert not fake_procs.is_alive(mock_process.pid)
+        assert not fake_procs.is_alive(engine_pid)
 
     @patch("launcher.multiprocessing.Process")
     def test_instance_get_status(
@@ -462,9 +698,9 @@ class TestVllmMultiProcessManager:
             manager.create_instance(vllm_config, "duplicate-id")
 
     @patch("launcher.multiprocessing.Process")
-    def test_stop_instance(self, mock_process_class, manager, vllm_config):
+    def test_stop_instance(self, mock_process_class, manager, vllm_config, fake_procs):
         """Test stopping a specific instance"""
-        mock_process = MockProcess()
+        mock_process = MockProcess(fake_procs)
         mock_process_class.return_value = mock_process
 
         result = manager.create_instance(vllm_config, "test-id")
@@ -482,9 +718,11 @@ class TestVllmMultiProcessManager:
             manager.stop_instance("nonexistent-id")
 
     @patch("launcher.multiprocessing.Process")
-    def test_stop_all_instances(self, mock_process_class, manager, vllm_config):
+    def test_stop_all_instances(
+        self, mock_process_class, manager, vllm_config, fake_procs
+    ):
         """Test stopping all instances"""
-        mock_process = MockProcess()
+        mock_process = MockProcess(fake_procs)
         mock_process_class.return_value = mock_process
 
         # Create multiple instances
@@ -1434,10 +1672,10 @@ class TestLogFileCleanup:
 
     @patch("launcher.multiprocessing.Process")
     def test_stop_terminated_cleans_up_log_file(
-        self, mock_process_class, gpu_translator, tmp_log_dir
+        self, mock_process_class, gpu_translator, tmp_log_dir, fake_procs
     ):
         """Test that stop() removes the log file after terminating"""
-        mock_process = MockProcess()
+        mock_process = MockProcess(fake_procs)
         mock_process_class.return_value = mock_process
 
         instance = self._make_instance(gpu_translator, tmp_log_dir)
