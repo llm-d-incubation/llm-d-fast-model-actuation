@@ -6,6 +6,7 @@
 # Current working directory must be the root of the Git repository.
 #
 # Required environment variables:
+#   FMA_RELEASE             - FMA release under test, empty for local code
 #   FMA_NAMESPACE           - Kubernetes namespace to run tests in
 #   MKOBJS_SCRIPT           - path to the mkobjs script to call
 #
@@ -15,7 +16,6 @@
 #
 # Optional environment variables:
 #   FMA_CHART_INSTANCE_NAME  - Helm release name prefix (default: fma)
-#   FMA_RELEASE              - FMA release under test, empty for local code
 #   READY_TARGET             - minimum ready launchers before proceeding (default: 2)
 #   REQUESTER_PRIORITY_CLASS - name of PriorityClass for requester Pods (if MKOBJS_SCRIPT reads this)
 #   POLICIES_ENABLED         - "true"/"false"; auto-detected if unset
@@ -27,6 +27,7 @@ if [ "${FMA_DEBUG:-false}" = "true" ]; then
     set -x
 fi
 
+: "${FMA_RELEASE?FMA_RELEASE is required}"
 : "${FMA_NAMESPACE:?FMA_NAMESPACE is required}"
 : "${MKOBJS_SCRIPT:?MKOBJS_SCRIPT is required}"
 
@@ -595,7 +596,7 @@ cheer Successful switching instances in one launcher
 # No published release configures the requester's TCP proxy yet, so this case
 # can only pass against local code. Remove this guard once the feature is in a
 # release.
-if [ -z "${FMA_RELEASE:-}" ]; then
+if [ -z "${FMA_RELEASE}" ]; then
     intro_case Reverse Proxy Initialization and Forwarding
 
     # This test verifies that the dual-pods controller points the requester Pod's
