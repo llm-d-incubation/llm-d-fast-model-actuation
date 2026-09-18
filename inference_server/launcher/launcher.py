@@ -169,6 +169,7 @@ def dump_process_group(subject: str, pgpid: int, when: str) -> set[psutil.Proces
         pname = proc.info["name"]
         cmdline = proc.info["cmdline"]
         if isinstance(cmdline, list) and len(cmdline) > 4:
+            # 4 is enough to resolve the mysteries that we have had
             cmdline = cmdline[:4] + ["..."]
         try:
             proc_pg = os.getpgid(pid)
