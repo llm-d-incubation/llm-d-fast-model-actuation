@@ -5,6 +5,7 @@
 # Usage: mkobjs-openshift.sh [-n <namespace>] [--node <node-name>]
 #
 # Required environment variables:
+#   FMA_RELEASE      - FMA release under test, empty for local code
 #   LAUNCHER_IMAGE   - container image for the launcher pod
 #   REQUESTER_IMAGE  - container image for the requester pod
 #
@@ -200,7 +201,9 @@ spec:
           - /app/launcher.py
           - --host=0.0.0.0
           - --log-level=debug
-          - --debug-gpu-memory
+$(if [ -z "$FMA_RELEASE" ]; then echo "
+          - --debug-gpu-memory"
+fi)
           - --port=8001
           env:
           - name: HF_HOME
