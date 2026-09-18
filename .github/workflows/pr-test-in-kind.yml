@@ -10,10 +10,13 @@ on:
       - cmd/test-requester/**
       - cmd/test-server/**
       - pkg/**
-      - test/e2e/**
+      - test/e2e/kind-config.yaml
+      - test/e2e/mkrs.sh
+      - test/e2e/run.sh
   pull_request:
     branches:
       - main
+  workflow_dispatch:
 
 jobs:
   debug:
