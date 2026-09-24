@@ -122,9 +122,9 @@ Tests are **not** part of pre-commit and should be run separately — see
 
 ### Reviewing dependency bumps
 
-When reviewing PRs that bump a dependency (e.g., Dependabot PRs) — a GitHub Action
-is one kind of dependency, whose desired state is design rule DR-10 in
-[DESIGN_RULES.md](DESIGN_RULES.md):
+When reviewing PRs (e.g., Dependabot PRs) that bump a dependency
+(e.g., a Go or Python dependency, or a GitHub Action) do the
+following:
 
 * **Search [github.com/advisories](https://github.com/advisories)** for the
   dependency.
@@ -142,8 +142,9 @@ is one kind of dependency, whose desired state is design rule DR-10 in
   have had little time for vulnerabilities or supply-chain compromises to
   be discovered and reported.
 
-At the **end** of the review, re-display this checklist and, for each item,
-state what was done and the result found.
+At the **end** of the review, re-display this checklist and, for each
+item, state what was done and the result found. Make sure that what
+was done is what was asked or explain why not.
 
 ## Commit and Pull Request Style
 
