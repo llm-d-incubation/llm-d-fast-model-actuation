@@ -122,18 +122,33 @@ Tests are **not** part of pre-commit and should be run separately — see
 
 ### Reviewing dependency bumps
 
-When reviewing PRs that bump a dependency (e.g., Dependabot PRs) — a GitHub Action
-is one kind of dependency, whose desired state is design rule DR-10 in
-[DESIGN_RULES.md](DESIGN_RULES.md):
+When reviewing PRs (e.g., Dependabot PRs) that bump a dependency
+(e.g., a Go or Python dependency, or a GitHub Action) do the following
+things. Report on each of these in your review, including the reason
+why for any that you did not do; name only sources you actually
+consulted. These instructions _augment_, rather than _replace_, any
+other applicable instructions — such as applicable [Design
+Rules](DESIGN_RULES.md).
 
-* **Search [github.com/advisories](https://github.com/advisories)** for the
-  dependency.
-* **Search the web for CVEs** in the version being adopted and in every version
-  between the old and new ones.
-* **Search the web for vulnerabilities described more broadly** — security
-  issues, supply-chain compromises, exploits, or advisories that may not (yet)
-  carry a CVE identifier — over the same version range.
+* **Search the web for vulnerabilities introduced by the PR.**
+  Naturally, these could be reported for any version of the dependency
+  between the old one (exclusive) and the new one (inclusive).
+  Pre-existing vulnerabilities, whether removed by this PR or not, do
+  not gate acceptance of the PR — though they are worth mentioning if
+  they happen to be noticed. This search should include at least the
+  following.
+
+  * [github.com/advisories](https://github.com/advisories)
+
+  * CVE database(s)
+
+  * a general web search rather than looking for database entries —
+    public discussion of a vulnerability can precede its appearance in
+    any database by a long while, and only an open-ended search will
+    reach it
+
 * **Read the upstream release notes** for security-relevant changes.
+
 * **Check the release age.** If the upstream release's publish timestamp
   is less than 7 days ago (use the release's `published` field — for GitHub
   releases, `gh release view <tag> --repo <owner>/<repo>`; not the PR's
@@ -141,9 +156,6 @@ is one kind of dependency, whose desired state is design rule DR-10 in
   7-day soak period has elapsed before merging. Newly published versions
   have had little time for vulnerabilities or supply-chain compromises to
   be discovered and reported.
-
-At the **end** of the review, re-display this checklist and, for each item,
-state what was done and the result found.
 
 ## Commit and Pull Request Style
 
