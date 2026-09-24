@@ -125,8 +125,10 @@ Tests are **not** part of pre-commit and should be run separately — see
 When reviewing PRs (e.g., Dependabot PRs) that bump a dependency
 (e.g., a Go or Python dependency, or a GitHub Action) do the following
 things. Report on each of these in your review, including the reason
-why for any that you did not do. Name only sources you actually
-consulted.
+why for any that you did not do; name only sources you actually
+consulted. These instructions _augment_, rather than _replace_, any
+other applicable instructions — such as applicable [Design
+Rules](DESIGN_RULES.md).
 
 * **Search the web for vulnerabilities introduced by the PR.**
   Naturally, these could be reported for any version of the dependency
