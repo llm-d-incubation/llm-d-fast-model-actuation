@@ -600,8 +600,8 @@ if [ -z "${FMA_RELEASE}" ]; then
     intro_case Reverse Proxy Initialization and Forwarding
 
     # This test verifies that the dual-pods controller points the requester Pod's
-    # TCP proxy at the bound launcher Pod, and that traffic sent to the proxy port
-    # arrives at the inference server.
+    # TCP proxy at the bound launcher Pod, and that an inference request sent to
+    # the proxy port is served by the bound instance.
     #
     # Assumed starting state: $req4 is bound to $launcher1, both Ready. Also
     # assumed: the InferenceServerConfig of $req4 is $isc, which is where the
@@ -628,7 +628,8 @@ if [ -z "${FMA_RELEASE}" ]; then
     pfpid=$!
     sleep 5
 
-    expect "curl -sf http://localhost:28092/health &> /dev/null"
+    # Both mkobjs scripts configure $isc to serve this model.
+    expect "curl -fsS --max-time 60 http://localhost:28092/v1/completions -H 'Content-Type: application/json' -d '{\"model\":\"HuggingFaceTB/SmolLM2-360M-Instruct\",\"prompt\":\"The capital of France is\",\"max_tokens\":16,\"temperature\":0}' | jq -e '.object == \"text_completion\" and .model == \"HuggingFaceTB/SmolLM2-360M-Instruct\" and (.choices[0].text | type == \"string\" and length > 0)' &> /dev/null"
 
     kill $pfpid || true
     pfpid=""

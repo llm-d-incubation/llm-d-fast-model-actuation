@@ -836,11 +836,19 @@ server-providing Pod (typically managed by the launcher). This lets
 clients send requests to the server-requesting Pod without needing to
 know the port that vLLM is listening on.
 
-The dual-pods controller always configures the proxy after binding the
-server-requesting Pod to a server-providing Pod. Using it remains
-optional for clients: they can send traffic to the requester's proxy
-port, or continue to reach the inference server through another data
-path.
+After binding the Pods, the dual-pods controller configures the proxy
+when the server-providing Pod has an IP address. The requester then starts
+listening on its proxy port before the PUT returns successfully.
+Using the proxy remains optional for clients: they can send traffic to
+the requester's proxy port, or continue to reach the inference server
+through another data path.
+
+For a launcher-based provider, the controller applies the
+InferenceServerConfig routing labels queried by the EPP to the launcher
+Pod once its bound instance is serving. It then configures the
+requester's proxy and relays readiness to the requester. The launcher
+can therefore match the EPP's labels before the requester's proxy is
+listening; clients using the proxy should wait for requester readiness.
 
 The proxy operates as a simple TCP-level forwarder: each incoming
 client connection results in a new outbound connection to the

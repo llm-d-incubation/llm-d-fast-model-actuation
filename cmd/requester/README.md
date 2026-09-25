@@ -1,6 +1,9 @@
 This document describes the requester and shows how to exercise it with the
 dual-pods controller in a local k8s environment, using model
 `ibm-granite/granite-3.3-2b-instruct` cached on local PV in the cluster.
+The example here uses a direct provider, and this functionality is planned to
+eventually be deprecated because using launchers is now the focus of our
+attention.
 
 ## Requester Overview
 
@@ -30,9 +33,10 @@ The server-requesting Pod runs three servers:
 ### TCP Proxy
 
 The requester carries a **TCP proxy** that can forward traffic to the bound
-inference server. The dual-pods controller always PUTs the bound server's
-address to the SPI endpoint at `/v1/proxy/config`, and the proxy starts accepting
-connections on its `--proxy-port`. You can query the current configuration with
+inference server. After binding, once the provider has a Pod IP, the dual-pods
+controller PUTs its address to the SPI endpoint at `/v1/proxy/config`. The
+proxy then starts listening on its `--proxy-port`; the PUT succeeds only after
+the listener starts. Control clients can query the current configuration with
 `GET /v1/proxy/config`.
 
 Using the proxy remains optional for clients: they can send traffic to the
@@ -381,9 +385,10 @@ $ curl -s http://10.0.0.145:8000/v1/completions \
 
 ### Via the TCP proxy
 
-The dual-pods controller configured the proxy while binding the pair, so the
-same request works against the server-requesting Pod. The reply is byte for byte
-the one above, since the proxy forwards the connection rather than the request.
+Once the bound provider had a Pod IP, the dual-pods controller configured the
+proxy, so an inference request to the server-requesting Pod reaches the same
+model. The proxy forwards the TCP connection without interpreting the API
+request.
 
 ```console
 $ curl -s http://10.0.0.134:8081/v1/proxy/config
