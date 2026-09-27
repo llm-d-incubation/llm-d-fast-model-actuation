@@ -534,21 +534,21 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum by (le, path) (rate(fma_actuation_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.50, sum by (le, path) ((fma_actuation_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\"} unless fma_actuation_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\"} offset $__rate_interval) or increase(fma_actuation_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\"}[$__rate_interval])))",
           "legendFormat": "{{path}} P50",
           "range": true,
           "refId": "A"
         },
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, path) (rate(fma_actuation_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, path) ((fma_actuation_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\"} unless fma_actuation_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\"} offset $__rate_interval) or increase(fma_actuation_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\"}[$__rate_interval])))",
           "legendFormat": "{{path}} P95",
           "range": true,
           "refId": "B"
         },
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum by (le, path) (rate(fma_actuation_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.99, sum by (le, path) ((fma_actuation_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\"} unless fma_actuation_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\"} offset $__rate_interval) or increase(fma_actuation_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\"}[$__rate_interval])))",
           "legendFormat": "{{path}} P99",
           "range": true,
           "refId": "C"
@@ -712,7 +712,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum by (path) (increase(fma_actuation_seconds_count{namespace=~\"$namespace\", isc_name=~\"$isc\"}[$__range]))",
+          "expr": "sum by (path) ((fma_actuation_seconds_count{namespace=~\"$namespace\", isc_name=~\"$isc\"} unless fma_actuation_seconds_count{namespace=~\"$namespace\", isc_name=~\"$isc\"} offset $__range) or increase(fma_actuation_seconds_count{namespace=~\"$namespace\", isc_name=~\"$isc\"}[$__range]))",
           "instant": true,
           "legendFormat": "{{path}}",
           "range": false,
@@ -1007,7 +1007,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, lcfg_name, success) (rate(fma_launcher_create_seconds_bucket{namespace=~\"$namespace\", lcfg_name=~\"$lcfg\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, lcfg_name, success) ((fma_launcher_create_seconds_bucket{namespace=~\"$namespace\", lcfg_name=~\"$lcfg\"} unless fma_launcher_create_seconds_bucket{namespace=~\"$namespace\", lcfg_name=~\"$lcfg\"} offset $__rate_interval) or increase(fma_launcher_create_seconds_bucket{namespace=~\"$namespace\", lcfg_name=~\"$lcfg\"}[$__rate_interval])))",
           "legendFormat": "{{lcfg_name}} · success={{success}}",
           "range": true,
           "refId": "A"
