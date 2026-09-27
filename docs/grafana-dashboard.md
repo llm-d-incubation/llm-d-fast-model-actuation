@@ -58,14 +58,85 @@ Both controller targets should return `1`.
 
 ## Import
 
-In Grafana, open **Dashboards > New > Import**, upload
-`config/grafana/dashboards/fma-operations.json`, select the Prometheus data
-source, and select **Import**. The dashboard uses the classic Grafana JSON
-model and does not require a Grafana plugin.
+All three paths below use the same
+`config/grafana/dashboards/fma-operations.json`. The dashboard uses the classic
+Grafana JSON model and does not require a plugin.
+
+### Existing Grafana
+
+In Grafana, open **Dashboards > New > Import**, upload the dashboard JSON, and
+select **Import**. Select the Prometheus data source in the dashboard's
+**Prometheus** variable.
+
+### Grafana Operator
+
+If the cluster already has a `Grafana` instance managed by the
+[Grafana Operator](https://grafana.github.io/grafana-operator/docs/examples/dashboard/),
+create a `GrafanaDashboard` in the same namespace or in a separate namespace.
+Set the selector key and value to a label on that `Grafana` object, and set the
+data source to the UID or name of an existing Prometheus data source in that
+instance:
+
+```sh
+GRAFANA_NAMESPACE=monitoring
+DASHBOARD_NAMESPACE=monitoring
+GRAFANA_LABEL_KEY=dashboards
+GRAFANA_LABEL_VALUE=grafana
+PROMETHEUS_DATASOURCE=prometheus
+
+# Match these values to `kubectl -n "$GRAFANA_NAMESPACE" get grafana --show-labels`
+# and the Prometheus data source configured in that Grafana instance.
+jq -n \
+  --arg namespace "$DASHBOARD_NAMESPACE" \
+  --arg grafanaNamespace "$GRAFANA_NAMESPACE" \
+  --arg labelKey "$GRAFANA_LABEL_KEY" \
+  --arg labelValue "$GRAFANA_LABEL_VALUE" \
+  --arg datasource "$PROMETHEUS_DATASOURCE" \
+  --rawfile dashboard config/grafana/dashboards/fma-operations.json \
+  '{apiVersion:"grafana.integreatly.org/v1beta1", kind:"GrafanaDashboard",
+    metadata:{name:"fma-operations", namespace:$namespace},
+    spec:{instanceSelector:{matchLabels:{($labelKey):$labelValue}},
+      allowCrossNamespaceImport:($namespace != $grafanaNamespace),
+      variables:[{name:"DS_PROMETHEUS", value:$datasource}],
+      json:$dashboard}}' | kubectl apply -f -
+```
+
+Set `DASHBOARD_NAMESPACE` to the namespace where you can create dashboard
+resources. When it differs from `GRAFANA_NAMESPACE`, the command enables
+`allowCrossNamespaceImport` so the operator can import the dashboard into the
+selected `Grafana` instance.
+
+The operator's `spec.variables` selects the default value of the dashboard's
+Prometheus data source variable. Check the `GrafanaDashboard` status and open
+**FMA Operations** in Grafana after it syncs.
+
+### Grafana on a laptop
+
+For a local trial without a Kubernetes-hosted Grafana, run
+[Grafana in Docker](https://grafana.com/docs/grafana/latest/setup-grafana/installation/docker/):
+
+```sh
+docker run --rm -d --name fma-grafana -p 3000:3000 \
+  --add-host=host.docker.internal:host-gateway grafana/grafana:13.2.1
+```
+
+Open <http://localhost:3000>, add a Prometheus data source under
+**Connections > Data sources**, then follow **Existing Grafana** above. Use a
+Prometheus URL reachable from inside the container, not `localhost` on the
+laptop. If Prometheus is reachable on the laptop, use
+`http://host.docker.internal:9090`; adjust the port if needed. The panels need
+FMA metrics in that Prometheus instance;
+importing the JSON alone does not create metrics. Stop the trial with
+`docker stop fma-grafana`.
 
 After import, select the target namespace. The InferenceServerConfig,
 LauncherConfig, and Node variables can narrow an investigation without editing
 PromQL.
+
+The actuation and launcher latency panels include the first observation for a
+new label set, before `increase()` has enough samples. The path mix also includes
+that first observation when the label set did not exist at the start of the
+selected time range.
 
 ## Reading the dashboard
 
