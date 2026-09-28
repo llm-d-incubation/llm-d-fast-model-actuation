@@ -73,6 +73,15 @@ else
     node_selector=""
 fi
 
+# compares two semver-sans-leading-v strings.
+# Both must have non-empty major.minor.patch;
+# second must not have any prerelease or build metadata.
+function version_leq() {
+    red1=${1%%-*}
+    red1=${red1%%+*}
+    (echo "$red1"; echo "$2") | sort -CV
+}
+
 if out=$(kubectl apply "${ns_flag[@]}" -f - 2>&1 <<EOF
 apiVersion: v1
 kind: ServiceAccount
@@ -201,7 +210,7 @@ spec:
           - /app/launcher.py
           - --host=0.0.0.0
           - --log-level=debug
-$(if [ -z "$FMA_RELEASE" ]; then echo "
+$(if [ -z "$FMA_RELEASE" ] || ! version_leq "$FMA_RELEASE" 0.6.5; then echo "
           - --debug-gpu-memory"
 fi)
           - --port=8001
