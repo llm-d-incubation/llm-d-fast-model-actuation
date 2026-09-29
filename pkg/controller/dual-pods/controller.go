@@ -221,7 +221,7 @@ func (config ControllerConfig) NewController(
 			Namespace:      "fma",
 			Subsystem:      "dpc_innerqueue",
 			Name:           "queue_duration_seconds",
-			Help:           "Time from unique enqueue to the dequeue",
+			Help:           "Time an item waited past its eligibility (processAfter) before being dequeued, excluding any intentional retry/backoff delay",
 			Buckets:        kubemetrics.ExponentialBuckets(1.0/64, 4, 7),
 			StabilityLevel: kubemetrics.ALPHA,
 		}, []string{nodeNameLabel})
