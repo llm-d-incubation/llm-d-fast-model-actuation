@@ -32,21 +32,19 @@ metadata:
   labels:
     release: REPLACE_WITH_PROMETHEUS_RELEASE
 spec:
-  namespaceSelector:
-    matchNames:
-      - REPLACE_WITH_FMA_NAMESPACE
   selector:
     matchLabels:
       scrape: "true"
   podMetricsEndpoints:
     - port: metrics
-      interval: 15s
-      honorLabels: false
 ```
 
 The `release` label must match the PodMonitor selector of your Prometheus
 installation. Some installations use another label or select all PodMonitors;
 adjust only that label to match the local Prometheus configuration.
+The PodMonitor selects Pods in its own namespace and uses Prometheus's global
+scrape interval by default. Set `podMetricsEndpoints[].interval` if you need a
+different interval.
 
 Verify the scrape before importing the dashboard:
 
@@ -73,42 +71,34 @@ select **Import**. Select the Prometheus data source in the dashboard's
 If the cluster already has a `Grafana` instance managed by the
 [Grafana Operator](https://grafana.github.io/grafana-operator/docs/examples/dashboard/),
 create a `GrafanaDashboard` in the same namespace or in a separate namespace.
-Set the selector key and value to a label on that `Grafana` object, and set the
-data source to the UID or name of an existing Prometheus data source in that
-instance:
+Set `GRAFANA_SELECTOR` to a nonempty label selector matching the intended
+`Grafana` instance or instances. It can use `matchLabels`, `matchExpressions`,
+or both:
 
 ```sh
-GRAFANA_NAMESPACE=monitoring
 DASHBOARD_NAMESPACE=monitoring
-GRAFANA_LABEL_KEY=dashboards
-GRAFANA_LABEL_VALUE=grafana
-PROMETHEUS_DATASOURCE=prometheus
+GRAFANA_SELECTOR='{"matchLabels":{"dashboards":"grafana"}}'
+ALLOW_CROSS_NAMESPACE_IMPORT=false
 
-# Match these values to `kubectl -n "$GRAFANA_NAMESPACE" get grafana --show-labels`
-# and the Prometheus data source configured in that Grafana instance.
 jq -n \
   --arg namespace "$DASHBOARD_NAMESPACE" \
-  --arg grafanaNamespace "$GRAFANA_NAMESPACE" \
-  --arg labelKey "$GRAFANA_LABEL_KEY" \
-  --arg labelValue "$GRAFANA_LABEL_VALUE" \
-  --arg datasource "$PROMETHEUS_DATASOURCE" \
+  --argjson selector "$GRAFANA_SELECTOR" \
+  --argjson crossNamespace "$ALLOW_CROSS_NAMESPACE_IMPORT" \
   --rawfile dashboard config/grafana/dashboards/fma-operations.json \
   '{apiVersion:"grafana.integreatly.org/v1beta1", kind:"GrafanaDashboard",
     metadata:{name:"fma-operations", namespace:$namespace},
-    spec:{instanceSelector:{matchLabels:{($labelKey):$labelValue}},
-      allowCrossNamespaceImport:($namespace != $grafanaNamespace),
-      variables:[{name:"DS_PROMETHEUS", value:$datasource}],
-      json:$dashboard}}' | kubectl apply -f -
+    spec:{instanceSelector:$selector, json:$dashboard}}
+    | if $crossNamespace then .spec.allowCrossNamespaceImport = true else . end' \
+  | kubectl apply -f -
 ```
 
 Set `DASHBOARD_NAMESPACE` to the namespace where you can create dashboard
-resources. When it differs from `GRAFANA_NAMESPACE`, the command enables
-`allowCrossNamespaceImport` so the operator can import the dashboard into the
-selected `Grafana` instance.
+resources. Set `ALLOW_CROSS_NAMESPACE_IMPORT=true` if any selected `Grafana`
+instance is in a different namespace.
 
-The operator's `spec.variables` selects the default value of the dashboard's
-Prometheus data source variable. Check the `GrafanaDashboard` status and open
-**FMA Operations** in Grafana after it syncs.
+Check the `GrafanaDashboard` status and open **FMA Operations** in Grafana after
+it syncs. Select the intended Prometheus data source in the dashboard's
+**Prometheus** variable if more than one is available.
 
 ### Grafana on a laptop
 
