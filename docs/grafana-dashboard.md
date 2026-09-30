@@ -12,16 +12,17 @@ operational view. It is designed to answer four questions in order:
 ## Prerequisites
 
 - Grafana with a Prometheus data source.
-- Prometheus scraping both FMA controller Pods on their named `metrics` port
-  (TCP 8002).
 - The scrape target must retain the standard `namespace` and `pod` target
   labels. Keep `honorLabels` disabled so the workload namespace exported by
   FMA remains available as `exported_namespace`.
-- Optional GPU panels require `DCGM_FI_DEV_FB_USED` and
-  `DCGM_FI_DEV_FB_FREE`, with the GPU identifier in the `UUID` label.
+- The GPU panels require the Prometheus metrics `DCGM_FI_DEV_FB_USED` and
+  `DCGM_FI_DEV_FB_FREE` from DCGM, with the GPU identifier in the `UUID` label.
+  The rest of the dashboard can be used without these metrics.
 
-If the Prometheus Operator is installed, save the following as
-`fma-podmonitor.yaml`, replace both placeholders, and apply it:
+Prometheus needs to scrape both FMA controller Pods on their named `metrics`
+port (TCP 8002). If the Prometheus Operator is installed, a `PodMonitor` is one
+way to configure this. Save the following example as `fma-podmonitor.yaml`,
+replace both placeholders, and apply it:
 
 ```yaml
 apiVersion: monitoring.coreos.com/v1
@@ -39,9 +40,9 @@ spec:
     - port: metrics
 ```
 
-The `release` label must match the PodMonitor selector of your Prometheus
-installation. Some installations use another label or select all PodMonitors;
-adjust only that label to match the local Prometheus configuration.
+Set the PodMonitor's labels so it is selected by `spec.podMonitorSelector` in
+your `Prometheus` object. The example uses a `release` label; change its key and
+value to match your selector, or omit it if the selector matches all PodMonitors.
 The PodMonitor selects Pods in its own namespace and uses Prometheus's global
 scrape interval by default. Set `podMetricsEndpoints[].interval` if you need a
 different interval.
