@@ -221,7 +221,7 @@ func (config ControllerConfig) NewController(
 			Namespace:      "fma",
 			Subsystem:      "dpc_innerqueue",
 			Name:           "queue_duration_seconds",
-			Help:           "Time from unique enqueue to the dequeue",
+			Help:           "Time an item waited past its intended processing time (processAfter) before processing started, excluding any intentional retry/backoff delay",
 			Buckets:        kubemetrics.ExponentialBuckets(1.0/64, 4, 7),
 			StabilityLevel: kubemetrics.ALPHA,
 		}, []string{nodeNameLabel})
@@ -420,9 +420,9 @@ type nodeData struct {
 	ItemsMutex sync.Mutex
 
 	// LocalQueue holds the set of object references of this node that need to be synced,
-	// and for each the time at which it was first injected into this set.
+	// and for each the earliest time at which it should be processed (processAfter).
 	// Hold ItemsMutex while accessing this.
-	LocalQueue map[itemOnNode]*scheduledItem
+	LocalQueue map[itemOnNode]time.Time
 }
 
 type itemOnNode interface {
@@ -431,15 +431,10 @@ type itemOnNode interface {
 	process(ctx context.Context, ctl *controller, nodeDat *nodeData) processResult
 }
 
-type scheduledItem struct {
-	addTime      time.Time // when first enqueued (for queue duration metrics)
-	processAfter time.Time // earliest time to process this item
-}
-
-// scheduledEntry pairs an item with its scheduling data.
+// scheduledEntry pairs an item with the time it became eligible to be processed.
 type scheduledEntry struct {
-	item      itemOnNode
-	scheduled *scheduledItem
+	item         itemOnNode
+	processAfter time.Time
 }
 
 // processResult is returned by itemOnNode.process to signal outcome and retry intent.
@@ -1052,7 +1047,7 @@ func (ctl *controller) getNodeData(nodeName string) *nodeData {
 	if ans == nil {
 		ans = &nodeData{
 			NodeName:         nodeName,
-			LocalQueue:       make(map[itemOnNode]*scheduledItem),
+			LocalQueue:       make(map[itemOnNode]time.Time),
 			InferenceServers: make(map[apitypes.UID]*serverData),
 			Launchers:        make(map[string]*launcherData),
 			rateLimiter: workqueue.NewTypedWithMaxWaitRateLimiter(
@@ -1077,27 +1072,25 @@ func (nodeDat *nodeData) addAfter(item itemOnNode, after time.Time) {
 	nodeDat.ItemsMutex.Lock()
 	defer nodeDat.ItemsMutex.Unlock()
 	if cur, exist := nodeDat.LocalQueue[item]; exist {
-		if after.Before(cur.processAfter) {
-			cur.processAfter = after
+		if after.Before(cur) {
+			nodeDat.LocalQueue[item] = after
 		}
 		return
 	}
-	nodeDat.LocalQueue[item] = &scheduledItem{
-		addTime: time.Now(), processAfter: after,
-	}
+	nodeDat.LocalQueue[item] = after
 	addsCounters.WithLabelValues(nodeDat.NodeName).Inc()
 	queueDepthGauges.WithLabelValues(nodeDat.NodeName).Set(float64(len(nodeDat.LocalQueue)))
 }
 
 // takeReadyItems removes and returns items whose processAfter <= now,
-// ordered oldest-first by enqueue time (addTime).
+// ordered oldest-first by intended processing time (processAfter).
 // Items not yet ready remain in the queue.
 func (nodeDat *nodeData) takeReadyItems(now time.Time) []scheduledEntry {
 	nodeDat.ItemsMutex.Lock()
 	var ready []scheduledEntry
-	for item, si := range nodeDat.LocalQueue {
-		if !si.processAfter.After(now) {
-			ready = append(ready, scheduledEntry{item: item, scheduled: si})
+	for item, processAfter := range nodeDat.LocalQueue {
+		if !processAfter.After(now) {
+			ready = append(ready, scheduledEntry{item: item, processAfter: processAfter})
 			delete(nodeDat.LocalQueue, item)
 		}
 	}
@@ -1105,7 +1098,7 @@ func (nodeDat *nodeData) takeReadyItems(now time.Time) []scheduledEntry {
 	nodeDat.ItemsMutex.Unlock()
 
 	sort.Slice(ready, func(i, j int) bool {
-		return ready[i].scheduled.addTime.Before(ready[j].scheduled.addTime)
+		return ready[i].processAfter.Before(ready[j].processAfter)
 	})
 	return ready
 }
@@ -1116,9 +1109,9 @@ func (nodeDat *nodeData) earliestPending() time.Time {
 	nodeDat.ItemsMutex.Lock()
 	defer nodeDat.ItemsMutex.Unlock()
 	var earliest time.Time
-	for _, si := range nodeDat.LocalQueue {
-		if earliest.IsZero() || si.processAfter.Before(earliest) {
-			earliest = si.processAfter
+	for _, processAfter := range nodeDat.LocalQueue {
+		if earliest.IsZero() || processAfter.Before(earliest) {
+			earliest = processAfter
 		}
 	}
 	return earliest

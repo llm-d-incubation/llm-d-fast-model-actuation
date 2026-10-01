@@ -31,15 +31,17 @@ Labels are as follows.
 
 ### fma_dpc_innerqueue_queue_duration_seconds
 
-Vector of classic histograms: Time from unique enqueue to the dequeue.
-Recall that a workqueue item may be enqueued multiple times before it
-is worked on. That first of _those_ enqueue actions is the one
-referenced here; the others are no-ops. Note well: the purpose of the
-qualifier here is to distinguish among the possibly-many times that an
-item is enqueued _before it is worked on_. For an item that is worked
-on multiple times, _each_ work is preceded by a "unique" enqueue of
-that item. This is **NOT** about the first time _ever_ that an item is
-enqueued.
+Vector of classic histograms: time an item waited past its intended
+processing time before processing started. Each queued item carries a
+`processAfter` time — the earliest it should be processed. For an item
+enqueued for immediate processing that is the enqueue time; for one
+deferred by a retry backoff or a fixed retry delay it is that later,
+intended time. This histogram measures from `processAfter` to when the
+controller actually starts processing the item, so it reflects only
+genuine queuing delay and **excludes** any intentional retry/backoff
+delay. A notification that arrives during a deferral advances
+`processAfter` to the earlier time, so the wait is measured from when
+the item truly became eligible.
 
 Labels are as follows.
 
