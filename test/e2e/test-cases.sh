@@ -81,6 +81,15 @@ expect() {
     done
 }
 
+# compares two semver-sans-leading-v strings.
+# Both must have non-empty major.minor.patch;
+# second must not have any prerelease or build metadata.
+function version_leq() {
+    red1=${1%%-*}
+    red1=${red1%%+*}
+    (echo "$red1"; echo "$2") | sort -CV
+}
+
 # pin_gpu patches the ReplicaSet so subsequent pods reuse the same GPU
 # UUID.  Sets nvidia.com/gpu limit/request to 0 (bypassing the NVIDIA
 # device plugin's fresh assignment) and injects
@@ -593,10 +602,8 @@ cheer Successful switching instances in one launcher
 # Reverse Proxy Initialization and Forwarding
 # ---------------------------------------------------------------------------
 
-# No published release configures the requester's TCP proxy yet, so this case
-# can only pass against local code. Remove this guard once the feature is in a
-# release.
-if [ -z "${FMA_RELEASE}" ]; then
+# Test the TCP proxy only in `main` or a release that has it.
+if [ -z "${FMA_RELEASE}" ] || ! version_leq "${FMA_RELEASE}" 0.6.5; then
     intro_case Reverse Proxy Initialization and Forwarding
 
     # This test verifies that the dual-pods controller points the requester Pod's
