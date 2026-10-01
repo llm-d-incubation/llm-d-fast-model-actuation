@@ -323,9 +323,12 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		if err != nil {
 			return processResult{err: err, retry: true}
 		}
+		ctl.ensureDualityMetric(ctx, serverDat, nodeDat.NodeName, false)
 		if requestingPod != nil {
 			return ctl.ensureReqState(ctx, requestingPod, serverDat, false, true)
 		}
+		ctl.clearServerData(nodeDat, item.UID)
+		logger.V(2).Info("End of life of inference server after unbinding provider")
 		return processResult{}
 	}
 	// Assert: requestingPod != nil
