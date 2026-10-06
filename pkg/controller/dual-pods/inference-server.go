@@ -326,6 +326,8 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		if requestingPod != nil {
 			return ctl.ensureReqState(ctx, requestingPod, serverDat, false, true)
 		}
+		ctl.clearServerData(nodeDat, item.UID)
+		logger.V(2).Info("End of life of inference server after unbinding provider")
 		return processResult{}
 	}
 	// Assert: requestingPod != nil
@@ -1724,7 +1726,7 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 		if err := recoverInstanceStateFromLauncherPod(serverDat, providingPod); err != nil {
 			return err
 		}
-		ctl.ensureDualityMetric(ctx, serverDat, nodeDat.NodeName, true)
+		ctl.ensureDualityMetric(ctx, serverDat, nodeDat.NodeName, false)
 		// De-route before sleeping: drop the launcher from the InferencePool
 		// while the instance can still serve, the mirror of deferring label
 		// application until it is serving. Only needed here, where the launcher
