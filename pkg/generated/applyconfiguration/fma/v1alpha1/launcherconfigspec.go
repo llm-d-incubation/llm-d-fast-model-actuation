@@ -21,8 +21,9 @@ package v1alpha1
 // LauncherConfigSpecApplyConfiguration represents a declarative configuration of the LauncherConfigSpec type for use
 // with apply.
 type LauncherConfigSpecApplyConfiguration struct {
-	PodTemplate  *EmbeddedPodTemplateSpecApplyConfiguration `json:"podTemplate,omitempty"`
-	MaxInstances *int32                                     `json:"maxInstances,omitempty"`
+	PodTemplate    *EmbeddedPodTemplateSpecApplyConfiguration `json:"podTemplate,omitempty"`
+	MaxInstances   *int32                                     `json:"maxInstances,omitempty"`
+	InferencePorts []int32                                    `json:"inferencePorts,omitempty"`
 }
 
 // LauncherConfigSpecApplyConfiguration constructs a declarative configuration of the LauncherConfigSpec type for use with
@@ -44,5 +45,15 @@ func (b *LauncherConfigSpecApplyConfiguration) WithPodTemplate(value *EmbeddedPo
 // If called multiple times, the MaxInstances field is set to the value of the last call.
 func (b *LauncherConfigSpecApplyConfiguration) WithMaxInstances(value int32) *LauncherConfigSpecApplyConfiguration {
 	b.MaxInstances = &value
+	return b
+}
+
+// WithInferencePorts adds the given value to the InferencePorts field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, values provided by each call will be appended to the InferencePorts field.
+func (b *LauncherConfigSpecApplyConfiguration) WithInferencePorts(values ...int32) *LauncherConfigSpecApplyConfiguration {
+	for i := range values {
+		b.InferencePorts = append(b.InferencePorts, values[i])
+	}
 	return b
 }

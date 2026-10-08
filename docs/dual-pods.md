@@ -517,6 +517,7 @@ metadata:
   name: example
 spec:
   maxInstances: 2
+  inferencePorts: [8005, 8006]
   podTemplate:
     metadata:
       labels:
@@ -549,6 +550,11 @@ spec:
             limits:
               ephemeral-storage: "4.5Gi"
 ```
+
+`inferencePorts` defines the pool of ports available to vLLM instances in
+each launcher Pod. Its values must be unique, must be valid TCP port numbers,
+and must not include the launcher's service port, 8001. The pool must contain
+at least `maxInstances` ports.
 
 The settings of various environment variables to refer to `/tmp`
 configures the locations of the various caches that vLLM maintains on

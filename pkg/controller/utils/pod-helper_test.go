@@ -43,6 +43,8 @@ func makeLC() *v1alpha1.LauncherConfig {
 			UID:       machtypes.UID("you-ID"),
 		},
 		Spec: v1alpha1.LauncherConfigSpec{
+			MaxInstances:   2,
+			InferencePorts: []int32{8005, 8006},
 			PodTemplate: v1alpha1.EmbeddedPodTemplateSpec{
 				Metadata: v1alpha1.EmbeddedObjectMeta{
 					Labels: map[string]string{

@@ -45,6 +45,7 @@ type EmbeddedPodTemplateSpec struct {
 }
 
 // LauncherConfigSpec defines the configuration to manage the nominal server-providing pod definition.
+// +kubebuilder:validation:XValidation:rule="size(self.inferencePorts) >= self.maxInstances",message="inferencePorts must contain at least maxInstances ports"
 type LauncherConfigSpec struct {
 	// PodTemplate defines the pod specification for the server-providing pod.
 	// +optional
@@ -54,6 +55,16 @@ type LauncherConfigSpec struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Minimum=1
 	MaxInstances int32 `json:"maxInstances"`
+
+	// InferencePorts is the pool of ports available to inference-engine instances
+	// in each launcher pod.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:items:Minimum=1
+	// +kubebuilder:validation:items:Maximum=65535
+	// +kubebuilder:validation:XValidation:rule="self.all(port, port != 8001)",message="inferencePorts must not contain the launcher service port 8001"
+	// +listType=set
+	InferencePorts []int32 `json:"inferencePorts"`
 }
 
 // LauncherConfigStatus represents the current status
