@@ -74,6 +74,7 @@ jobs:
 
   run-launcher-test:
     strategy:
+      fail-fast: false
       matrix:
         release: [ "", "0.6.5", "0.7.0-alpha.1" ]
     env:
