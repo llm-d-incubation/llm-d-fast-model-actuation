@@ -438,16 +438,6 @@ func (ctl *controller) processKey(ctx context.Context, key NodeLauncherKey) (err
 func (ctl *controller) reconcileKey(ctx context.Context, key NodeLauncherKey, desiredCount int, templateHash string, nodeIndependentLauncherTemplate *corev1.Pod, cachePods []*corev1.Pod) (error, bool) {
 	logger := klog.FromContext(ctx)
 
-	// Check node existence.
-	node, err := ctl.nodeLister.Get(key.NodeName)
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			logger.V(4).Info("Node no longer exists, skipping key reconciliation", "node", key.NodeName)
-			return nil, false
-		}
-		return err, true
-	}
-
 	// Get current launchers and check expectations.
 	currentLaunchers, expectStatus, err := ctl.getCurrentLaunchersOnNode(ctx, key, cachePods)
 	if err != nil {
@@ -561,6 +551,16 @@ func (ctl *controller) reconcileKey(ctx context.Context, key NodeLauncherKey, de
 
 	// Create pods if needed.
 	if diff > 0 {
+		// A Node is needed only for creation. Orphaned launcher Pods must
+		// still be cleaned up when their target Node no longer exists.
+		node, err := ctl.nodeLister.Get(key.NodeName)
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				logger.V(4).Info("Node no longer exists, skipping launcher creation", "node", key.NodeName)
+				return nil, false
+			}
+			return err, true
+		}
 		nodeSpecificLauncherTemplate := utils.SpecializeLauncherTemplateToNode(nodeIndependentLauncherTemplate, node.Name)
 		if err := ctl.createLaunchers(ctx, node, key, diff, nodeSpecificLauncherTemplate); err != nil {
 			return err, true
