@@ -41,7 +41,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Server-requesting Pods currently known to the dual-pods controller.",
+      "description": "Latest count of server-requesting Pods known to the dual-pods controller. Zero when no matching series exist.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -88,7 +88,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(fma_requester_count{namespace=~\"$namespace\", isc_name=~\"$isc\"})",
+          "expr": "sum(fma_requester_count{namespace=~\"$namespace\", isc_name=~\"$isc\"}) or vector(0)",
           "instant": false,
           "legendFormat": "requesters",
           "range": true,
@@ -103,7 +103,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Distinct requester Pods with an asserted FMA requester-provider binding. A multi-GPU binding is counted once.",
+      "description": "Latest count of distinct requester Pods with an asserted FMA requester-provider binding. A multi-GPU binding is counted once. Zero when no matching series exist.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -150,7 +150,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "count(count by (exported_namespace, requester_name) (fma_duality{namespace=~\"$namespace\"} == 1))",
+          "expr": "count(count by (exported_namespace, requester_name) (fma_duality{namespace=~\"$namespace\"} == 1)) or vector(0)",
           "instant": false,
           "legendFormat": "bindings",
           "range": true,
@@ -165,7 +165,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "All launcher Pods for the selected LauncherConfig values and phases.",
+      "description": "Latest count of launcher Pods for the selected LauncherConfig values and phases. Zero when no matching series exist.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -212,7 +212,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(fma_launcher_pod_count{namespace=~\"$namespace\", lcfg_name=~\"$lcfg\"})",
+          "expr": "sum(fma_launcher_pod_count{namespace=~\"$namespace\", lcfg_name=~\"$lcfg\"}) or vector(0)",
           "instant": false,
           "legendFormat": "launchers",
           "range": true,
@@ -227,7 +227,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Launchers that exceeded the configured scheduling or starting threshold. Any non-zero value requires investigation.",
+      "description": "Latest count of launchers that exceeded the configured scheduling or starting threshold. Any non-zero value requires investigation. Zero when no matching series exist.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -277,7 +277,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum(fma_launcher_pod_count{namespace=~\"$namespace\", lcfg_name=~\"$lcfg\", phase=~\"stuck_scheduling|stuck_starting\"})",
+          "expr": "sum(fma_launcher_pod_count{namespace=~\"$namespace\", lcfg_name=~\"$lcfg\", phase=~\"stuck_scheduling|stuck_starting\"}) or vector(0)",
           "instant": false,
           "legendFormat": "stuck",
           "range": true,
