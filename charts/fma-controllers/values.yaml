@@ -24,6 +24,8 @@ global:
 # Dual-pods controller configuration
 dualPodsController:
   enabled: true
+  # This is the value for the `-v` flag on the controller's command line.
+  verbosity: 2
   # Limit on the number of server-running Pods with a sleeping
   # inference server, per GPU.
   sleeperLimit: 2
@@ -36,6 +38,8 @@ dualPodsController:
 # Launcher populator controller configuration
 launcherPopulator:
   enabled: true
+  # This is the value for the `-v` flag on the controller's command line.
+  verbosity: 2
   pullPolicy: IfNotPresent
   replicaCount: 1
   resources:

@@ -576,6 +576,8 @@ jobs:
             --ensure-node-view-cluster-role "${FMA_CHART_INSTANCE_NAME}-node-view" \
             --install-crds true \
             --install-admission-policies true \
+            --chart-set dualPodsController.verbosity=5 \
+            --chart-set launcherPopulator.verbosity=5 \
             --chart-instance-name "$FMA_CHART_INSTANCE_NAME"
 
       - name: Install FMA using curl-to-bash
