@@ -131,6 +131,11 @@ selected time range.
 
 ## Reading the dashboard
 
+The Overview population panels show the latest count in the large number,
+with zero when no matching series remain. Their graphs show the history over
+the selected time range. Check **Controller targets** to distinguish an empty
+population from unavailable controller metrics.
+
 | Symptom | Start with | Follow with |
 | --- | --- | --- |
 | A requester takes too long to become Ready | Actuation latency by path | HTTP latency by purpose, DPC queue latency |
@@ -155,4 +160,5 @@ once per binding and must not be summed as physical GPU capacity.
 The dashboard queries only metrics listed in [Prometheus Metrics](metrics.md)
 plus the two optional DCGM metrics above. If a deployment predates one of those
 FMA metrics, the corresponding panel remains empty while the rest of the
-dashboard continues to work.
+dashboard continues to work. The Overview population counts show zero when
+their metrics are absent.
