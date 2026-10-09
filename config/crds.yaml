@@ -8609,12 +8609,11 @@ spec:
                     type: object
                 type: object
             required:
-            - inferencePorts
             - maxInstances
             type: object
             x-kubernetes-validations:
             - message: inferencePorts must contain at least maxInstances ports
-              rule: size(self.inferencePorts) >= self.maxInstances
+              rule: '!has(self.inferencePorts) || size(self.inferencePorts) >= self.maxInstances'
           status:
             description: Status represents the observed status of the LauncherConfig.
             properties:
