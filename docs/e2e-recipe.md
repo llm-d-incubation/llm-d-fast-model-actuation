@@ -542,6 +542,7 @@ metadata:
   name: my-launcher-config
 spec:
   maxInstances: 4
+  inferencePorts: [8005, 8006, 8007, 8008]
   podTemplate:
     spec:
       containers:
