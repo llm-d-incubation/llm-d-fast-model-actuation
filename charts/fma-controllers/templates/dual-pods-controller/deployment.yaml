@@ -79,7 +79,7 @@ spec:
         imagePullPolicy: IfNotPresent
         command:
         - /ko-app/dual-pods-controller
-        - "-v=5"
+        - "-v={{ .Values.dualPodsController.verbosity }}"
         - "--namespace={{ .Release.Namespace }}"
         - "--sleeper-limit={{ .Values.dualPodsController.sleeperLimit }}"
         - "--debug-accelerator-memory={{ .Values.dualPodsController.debugAcceleratorMemory }}"

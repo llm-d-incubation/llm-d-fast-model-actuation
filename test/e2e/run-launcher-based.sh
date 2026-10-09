@@ -322,12 +322,22 @@ else
     what=(--release "$release")
 fi
 
+: Set controller verbosity in releases that support it
+
+if [ -z "$release" ]; then
+    what+=( \
+    --chart-set dualPodsController.verbosity=5 \
+    --chart-set launcherPopulator.verbosity=5 \
+    )
+fi
+
 ./scripts/install-fma.sh \
     "${what[@]}" \
     --ensure-node-view-cluster-role node-viewer \
     --install-crds true \
     --install-admission-policies true \
     --chart-set global.produceCoverdata=true \
+
 
 : Run launcher-based E2E tests
 

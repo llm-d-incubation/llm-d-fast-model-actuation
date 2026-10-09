@@ -30,6 +30,7 @@ spec:
           command:
             - /ko-app/launcher-populator
             - --namespace={{ .Release.Namespace }}
+            - "-v={{ .Values.launcherPopulator.verbosity }}"
           ports:
             - containerPort: 8002
               name: metrics

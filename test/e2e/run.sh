@@ -160,6 +160,8 @@ scripts/install-fma.sh --image-tag "$img_tag" --oci-registry "$img_reg" \
     --ensure-node-view-cluster-role node-viewer \
     --install-crds true \
     --install-admission-policies true \
+    --chart-set dualPodsController.verbosity=5 \
+    --chart-set launcherPopulator.verbosity=5 \
     --enable-launcher-populator false
 
 : Test Pod creation
