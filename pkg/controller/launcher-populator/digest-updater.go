@@ -203,13 +203,16 @@ func (ctl *controller) updateDigestForNode(ctx context.Context, nodeName string)
 	logger := klog.FromContext(ctx)
 
 	node, err := ctl.nodeLister.Get(nodeName)
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			logger.Info("Node deleted, removing from digest", "node", nodeName)
-			delete(ctl.policy.digest, nodeName)
-			return nil
-		}
+	if err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("failed to get node %s: %w", nodeName, err)
+	}
+	if apierrors.IsNotFound(err) || node.DeletionTimestamp != nil {
+		logger.Info("Node unavailable, removing from digest and scheduling launcher cleanup", "node", nodeName)
+		for lcName := range ctl.policy.digest[nodeName] {
+			ctl.keyQueue.Queue.Add(keyItem{NodeLauncherKey{NodeName: nodeName, LauncherConfigName: lcName}})
+		}
+		delete(ctl.policy.digest, nodeName)
+		return nil
 	}
 	ctl.recomputeDigestForNode(node)
 	return nil
