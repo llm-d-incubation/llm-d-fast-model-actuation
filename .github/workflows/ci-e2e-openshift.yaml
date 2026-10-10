@@ -792,14 +792,14 @@ jobs:
           kubectl scale -n "$FMA_NAMESPACE" "deploy/${FMA_CHART_INSTANCE_NAME}-dual-pods-controller" --replicas=1
 
       - name: upload coverage data from dual pods controller
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cover-dpc-data
           path: cover-dpc/data
           retention-days: 14
 
       - name: upload coverage summary from dual pods controller
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           path: cover-dpc-func.txt
           archive: false
