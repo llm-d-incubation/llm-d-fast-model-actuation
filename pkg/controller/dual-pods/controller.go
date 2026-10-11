@@ -161,6 +161,8 @@ func nominalHashIndexFunc(obj any) ([]string, error) {
 type ControllerConfig struct {
 	SleeperLimit                            int
 	NumWorkers                              int
+	SleepDrainTimeout                       time.Duration
+	SleepAbortTimeout                       time.Duration
 	DebugAcceleratorMemory                  bool
 	GlobalAcceleratorSleepingMemoryLimitMiB int64
 }
@@ -310,6 +312,8 @@ func (config ControllerConfig) NewController(
 		lcLister:                  fmaInformerFactory.Fma().V1alpha1().LauncherConfigs().Lister(),
 		httpLatencySecsHistograms: httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"exported_namespace": namespace}),
 		sleeperLimit:              config.SleeperLimit,
+		sleepDrainTimeout:         config.SleepDrainTimeout,
+		sleepAbortTimeout:         config.SleepAbortTimeout,
 		debugAccelMemory:          config.DebugAcceleratorMemory || config.GlobalAcceleratorSleepingMemoryLimitMiB < math.MaxInt64,
 		accelMemoryLimitMiB:       config.GlobalAcceleratorSleepingMemoryLimitMiB,
 		nodeNameToData:            map[string]*nodeData{},
@@ -384,6 +388,8 @@ type controller struct {
 	httpLatencySecsHistograms prometheus.ObserverVec
 
 	sleeperLimit        int
+	sleepDrainTimeout   time.Duration
+	sleepAbortTimeout   time.Duration
 	debugAccelMemory    bool
 	accelMemoryLimitMiB int64
 
