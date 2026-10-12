@@ -81,6 +81,49 @@ object.
   the controller is concerned, remediation is not the controller's
   job.
 
+### Feasible changes
+
+The easiest changes are adding an optional field, or changing the
+interpretation of a field that no source is setting. Also easy is
+deleting a field that no source is setting and no receiver is
+examining.
+
+More disruptive changes are possible with the introduction of a
+webhook that transforms object values from one version to another. We
+do not at present have any such webhooks.
+
+We do not yet support customers doing upgrade/downgrade with
+continuous operations. That means that it is possible to make more
+disruptive changes provided that they are done in carefully
+orchestrated stages, because we ourselves will do the coordination
+among all the users. Following is a worked example of introducing a
+required field.
+
+#### Introducing a required field.
+
+This could be done in the following stages.
+
+1. Introduce the field but as optional rather than required. This is
+   an interface change, but no usage changes at this stage. No sources
+   provide the field, no consumers examine the field. Only after
+   everyone running FMA confirms that they are using this stage (and
+   making a release will facilitate that), and all open PRs are based
+   on this stage, do we proceed to the next stage.
+
+2. Change all sources to provide a value for the new field. Change
+   consumers to examine the field and do the designed thing if the
+   field is present. Consumers must exhibit reasonable default
+   behavior if the field is absent. Only after everyone running FMA
+   confirms that they are using this stage (and making a release will
+   facilitate that), and all open PRs are based on this stage, do we
+   proceed to the next stage.
+
+3. Change the field definition to required, and change consumers to
+   remove handling of the field being absent. Only after everyone
+   running FMA confirms that they are using this stage (and making a
+   release will facilitate that), and all open PRs are based on this
+   stage, do we say that the required field has been fully introduced.
+
 ## Solution for the ValidatingAdmissionPolicy[Binding] Objects
 
 (One design goal is to minimize chores for administrators of shared clusters.)
