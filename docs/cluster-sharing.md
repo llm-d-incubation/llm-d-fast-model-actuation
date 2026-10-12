@@ -92,8 +92,8 @@ More disruptive changes are possible with the introduction of a
 webhook that transforms object values from one version to another. We
 do not at present have any such webhooks.
 
-We do not yet support customers doing upgrade/downgrade with
-continuous operations. That means that it is possible to make more
+FMA does not yet support upgrade in place, and does not have unknown
+or uncooperative users.  That means that it is possible to make more
 disruptive changes provided that they are done in carefully
 orchestrated stages, because we ourselves will do the coordination
 among all the users. Following is a worked example of introducing a
