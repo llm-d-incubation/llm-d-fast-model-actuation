@@ -113,8 +113,10 @@ This could be done in the following stages.
 2. Change all sources to provide a value for the new field. Change
    consumers to examine the field and do the designed thing if the
    field is present. Consumers must exhibit reasonable default
-   behavior if the field is absent. Only after everyone running FMA
-   confirms that they are using this stage (and making a release will
+   behavior if the field is absent. Remember that tests that can be
+   applied to older releases must behave appropriately for whichever
+   release is being tested. Only after everyone running FMA confirms
+   that they are using this stage (and making a release will
    facilitate that), and all open PRs are based on this stage, do we
    proceed to the next stage.
 
