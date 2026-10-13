@@ -680,7 +680,7 @@ class TestVllmMultiProcessManager:
         mock_process = MockProcess()
         mock_process_class.return_value = mock_process
 
-        result = manager.create_instance(vllm_config)
+        result = asyncio.run(manager.create_instance_async(vllm_config))
 
         assert result["status"] == "running"
         assert "instance_id" in result
@@ -1014,16 +1014,19 @@ class TestAsyncStop:
         # ...but not by blocking the loop, which would show up as a long gap.
         assert max(gaps) < timeout / 2, f"the loop stalled for {max(gaps):.2f}s"
 
+    @pytest.mark.parametrize("generated", [False, True], ids=["named", "generated"])
     @patch("launcher.multiprocessing.Process")
     def test_instance_lock_keeps_a_stop_from_eating_a_later_create(
-        self, mock_process_class, manager, vllm_config, fake_procs
+        self, mock_process_class, generated, manager, vllm_config, fake_procs
     ):
         """A create of the same id must not land inside a stop of that id.
 
         Without the per-instance lock the create runs while the instance being
         stopped is still in ``self.instances``, so it is rejected as a duplicate
         and then the stop deletes the entry anyway: the caller loses its create
-        for no real reason.
+        for no real reason.  That goes for a generated id too, since nothing
+        keeps one from coinciding with an id in use; here uuid4 is rigged to
+        make it so.
         """
         procs = [
             SlowExitProcess(SLOW_EXIT_SECS, fake_procs, pid) for pid in (12345, 12346)
@@ -1035,7 +1038,11 @@ class TestAsyncStop:
 
             async def creator():
                 await asyncio.sleep(0.05)  # while the stop is still in flight
-                await manager.create_instance_async(vllm_config, "dup-id")
+                if generated:
+                    with patch("launcher.uuid.uuid4", return_value="dup-id"):
+                        await manager.create_instance_async(vllm_config)
+                else:
+                    await manager.create_instance_async(vllm_config, "dup-id")
 
             await asyncio.gather(manager.stop_instance_async("dup-id"), creator())
 
@@ -1109,6 +1116,37 @@ class TestAsyncStop:
         assert elapsed < 2 * SLOW_EXIT_SECS, f"stopping three took {elapsed:.2f}s"
 
     @patch("launcher.multiprocessing.Process")
+    def test_stop_all_instances_async_stops_instances_created_meanwhile(
+        self, mock_process_class, manager, vllm_config, fake_procs
+    ):
+        """It must return only once no instances are left, late arrivals too."""
+        procs = [
+            SlowExitProcess(SLOW_EXIT_SECS, fake_procs, pid) for pid in (12345, 12346)
+        ]
+        mock_process_class.side_effect = procs
+
+        async def run():
+            manager.create_instance(vllm_config, "early-id")
+
+            async def creator():
+                await asyncio.sleep(0.05)  # while early-id is still stopping
+                await manager.create_instance_async(vllm_config, "late-id")
+
+            result, _ = await asyncio.gather(
+                manager.stop_all_instances_async(), creator()
+            )
+            return result
+
+        try:
+            result = asyncio.run(run())
+        finally:
+            for proc in procs:
+                proc.close()
+        assert manager.instances == {}
+        stopped = [state["instance_id"] for state in result["stopped_instances"]]
+        assert sorted(stopped) == ["early-id", "late-id"]
+
+    @patch("launcher.multiprocessing.Process")
     def test_stop_all_instances_async_reports_the_ones_that_failed(
         self, mock_process_class, manager, vllm_config, fake_procs
     ):
@@ -1164,10 +1202,9 @@ class TestAPIEndpoints:
     @patch("launcher.vllm_manager")
     def test_create_vllm_instance(self, mock_manager, client, vllm_config):
         """Test creating vLLM instance via API"""
-        mock_manager.create_instance.return_value = {
-            "status": "started",
-            "instance_id": "test-id",
-        }
+        mock_manager.create_instance_async = AsyncMock(
+            return_value={"status": "started", "instance_id": "test-id"}
+        )
 
         response = client.post(
             "/v2/vllm/instances", json={"options": "--model test --port 8000"}
