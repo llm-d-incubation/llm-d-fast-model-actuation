@@ -438,14 +438,14 @@ func (ctl *controller) processKey(ctx context.Context, key NodeLauncherKey) (err
 func (ctl *controller) reconcileKey(ctx context.Context, key NodeLauncherKey, desiredCount int, templateHash string, nodeIndependentLauncherTemplate *corev1.Pod, cachePods []*corev1.Pod) (error, bool) {
 	logger := klog.FromContext(ctx)
 
-	// An unavailable Node cannot support a desired launcher population, even
-	// when its population policy has not changed. Keep reconciling so unbound
-	// launchers are removed; bound launchers remain owned by the dual-pods controller.
 	node, err := ctl.nodeLister.Get(key.NodeName)
 	if err != nil && !apierrors.IsNotFound(err) {
 		return err, true
 	}
 	if apierrors.IsNotFound(err) || node.DeletionTimestamp != nil {
+		// An unavailable Node cannot support a desired launcher population, even
+		// when its population policy has not changed. Keep reconciling so unbound
+		// launchers are removed; bound launchers remain owned by the dual-pods controller.
 		desiredCount = 0
 		logger.V(4).Info("Node unavailable, removing unbound launchers", "node", key.NodeName)
 	}

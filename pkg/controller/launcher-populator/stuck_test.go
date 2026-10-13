@@ -27,14 +27,17 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/informers"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
-	corev1listers "k8s.io/client-go/listers/core/v1"
 	k8stesting "k8s.io/client-go/testing"
-	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/klog/v2"
 	testingclock "k8s.io/utils/clock/testing"
 
+	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/api"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/common"
+	fmafake "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/generated/clientset/versioned/fake"
+	fmainformers "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/generated/informers/externalversions"
 )
 
 const (
@@ -47,20 +50,37 @@ const (
 
 var stuckTestNow = time.Date(2026, 6, 21, 12, 0, 0, 0, time.UTC)
 
-func newStuckTestController(now time.Time, objs ...*corev1.Pod) (*controller, *k8sfake.Clientset, *record.FakeRecorder) {
+func newStuckTestControllerWithoutNode(t *testing.T, now time.Time, objs ...*corev1.Pod) (*controller, *k8sfake.Clientset, *record.FakeRecorder) {
+	t.Helper()
 	cs := k8sfake.NewSimpleClientset(podsToObjects(objs)...)
+	fmaCS := fmafake.NewSimpleClientset()
+	ctl, err := NewController(klog.Background(), cs.CoreV1(), fmaCS.FmaV1alpha1(), stuckTestNamespace,
+		informers.NewSharedInformerFactory(cs, 0).Core().V1(), fmainformers.NewSharedInformerFactory(fmaCS, 0),
+		time.Minute, stuckTestSchedThreshold, stuckTestStartThreshold)
+	if err != nil {
+		t.Fatalf("NewController: %v", err)
+	}
+	t.Cleanup(func() {
+		ctl.digestQueue.Queue.ShutDown()
+		ctl.keyQueue.Queue.ShutDown()
+		ctl.eventBroadcaster.Shutdown()
+	})
 	rec := record.NewFakeRecorder(50)
-	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
-	_ = indexer.Add(testNode())
-	ctl := &controller{
-		coreclient:               cs.CoreV1(),
-		namespace:                stuckTestNamespace,
-		recorder:                 rec,
-		clock:                    testingclock.NewFakeClock(now),
-		stuckSchedulingThreshold: stuckTestSchedThreshold,
-		stuckStartingThreshold:   stuckTestStartThreshold,
-		expectations:             newPendingExpectations(time.Minute),
-		nodeLister:               corev1listers.NewNodeLister(indexer),
+	ctl.recorder = rec
+	ctl.clock = testingclock.NewFakeClock(now)
+	for _, pod := range objs {
+		if err := ctl.podInformer.GetStore().Add(pod); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return ctl, cs, rec
+}
+
+func newStuckTestController(t *testing.T, now time.Time, objs ...*corev1.Pod) (*controller, *k8sfake.Clientset, *record.FakeRecorder) {
+	t.Helper()
+	ctl, cs, rec := newStuckTestControllerWithoutNode(t, now, objs...)
+	if err := ctl.nodeInformer.GetStore().Add(testNode()); err != nil {
+		t.Fatal(err)
 	}
 	return ctl, cs, rec
 }
@@ -138,6 +158,7 @@ func nodeTemplate() *corev1.Pod {
 			Labels:      map[string]string{common.LauncherConfigNameLabelKey: stuckTestLauncherConfig},
 			Annotations: map[string]string{common.LauncherTemplateHashAnnotationKey: testTemplateHash},
 		},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: api.InferenceServerContainerName, Image: "launcher:test"}}},
 	}
 }
 
@@ -196,7 +217,7 @@ func podExists(t *testing.T, cs *k8sfake.Clientset, name string) bool {
 // kept, labeled, and reported once.
 func TestReportStuckLaunchersLabelsAndReports(t *testing.T) {
 	pod := scheduledNotReadyAt(stuckLauncherPod("launcher-stuck"), stuckTestNow.Add(-10*time.Minute))
-	ctl, cs, rec := newStuckTestController(stuckTestNow, pod)
+	ctl, cs, rec := newStuckTestController(t, stuckTestNow, pod)
 
 	if err := ctl.reportStuckLaunchers(t.Context(), []*corev1.Pod{pod}, testTemplateHash); err != nil {
 		t.Fatalf("reportStuckLaunchers: %v", err)
@@ -219,7 +240,7 @@ func TestReportStuckLaunchersLabelsAndReports(t *testing.T) {
 func TestReportStuckLaunchersAlreadyLabeledNoEvent(t *testing.T) {
 	pod := scheduledNotReadyAt(stuckLauncherPod("launcher-labeled"), stuckTestNow.Add(-10*time.Minute))
 	pod.Labels[common.LauncherStuckLabelKey] = "true"
-	ctl, _, rec := newStuckTestController(stuckTestNow, pod)
+	ctl, _, rec := newStuckTestController(t, stuckTestNow, pod)
 
 	if err := ctl.reportStuckLaunchers(t.Context(), []*corev1.Pod{pod}, testTemplateHash); err != nil {
 		t.Fatalf("reportStuckLaunchers: %v", err)
@@ -235,7 +256,7 @@ func TestReportStuckLaunchersAlreadyLabeledNoEvent(t *testing.T) {
 func TestReportStuckLaunchersClearsLabelOnRecovery(t *testing.T) {
 	pod := ready(stuckLauncherPod("launcher-recovered"))
 	pod.Labels[common.LauncherStuckLabelKey] = "true"
-	ctl, cs, rec := newStuckTestController(stuckTestNow, pod)
+	ctl, cs, rec := newStuckTestController(t, stuckTestNow, pod)
 
 	if err := ctl.reportStuckLaunchers(t.Context(), []*corev1.Pod{pod}, testTemplateHash); err != nil {
 		t.Fatalf("reportStuckLaunchers: %v", err)
@@ -258,7 +279,7 @@ func TestReportStuckLaunchersClearsLabelOnRecovery(t *testing.T) {
 // enforcement still deletes an excess stuck launcher.
 func TestReconcileKeyDownscaleDeletesStuck(t *testing.T) {
 	pod := scheduledNotReadyAt(stuckLauncherPod("launcher-downscale"), stuckTestNow.Add(-10*time.Minute))
-	ctl, cs, rec := newStuckTestController(stuckTestNow, pod)
+	ctl, cs, rec := newStuckTestController(t, stuckTestNow, pod)
 
 	err, _ := ctl.reconcileKey(t.Context(), stuckTestKey(), 0, testTemplateHash, nodeTemplate(), []*corev1.Pod{pod})
 	if err != nil {
@@ -280,7 +301,7 @@ func TestReconcileKeyDownscaleDeletesStuck(t *testing.T) {
 func TestReconcileKeyDownscaleDeleteConflictDefersStuckReporting(t *testing.T) {
 	healthy := ready(stuckLauncherPod("launcher-healthy"))
 	stuck := scheduledNotReadyAt(stuckLauncherPod("launcher-stuck"), stuckTestNow.Add(-10*time.Minute))
-	ctl, cs, rec := newStuckTestController(stuckTestNow, healthy, stuck)
+	ctl, cs, rec := newStuckTestController(t, stuckTestNow, healthy, stuck)
 	cs.PrependReactor("delete", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
 		deleteAction := action.(k8stesting.DeleteAction)
 		if deleteAction.GetName() != stuck.Name {
@@ -335,7 +356,7 @@ func TestReconcileKeyDownscaleDeleteConflictDefersStuckReporting(t *testing.T) {
 // launcher is left completely untouched.
 func TestReportStuckLaunchersIgnoresHealthy(t *testing.T) {
 	pod := ready(stuckLauncherPod("launcher-healthy"))
-	ctl, cs, rec := newStuckTestController(stuckTestNow, pod)
+	ctl, cs, rec := newStuckTestController(t, stuckTestNow, pod)
 
 	if err := ctl.reportStuckLaunchers(t.Context(), []*corev1.Pod{pod}, testTemplateHash); err != nil {
 		t.Fatalf("reportStuckLaunchers: %v", err)
@@ -360,7 +381,7 @@ func TestReportStuckLaunchersIgnoresHealthy(t *testing.T) {
 func TestReportStuckLaunchersReportsStuckScheduling(t *testing.T) {
 	// Old creation, never scheduled -> stuck_scheduling.
 	pod := createdAt(stuckLauncherPod("launcher-unsched"), stuckTestNow.Add(-10*time.Minute))
-	ctl, cs, rec := newStuckTestController(stuckTestNow, pod)
+	ctl, cs, rec := newStuckTestController(t, stuckTestNow, pod)
 
 	if err := ctl.reportStuckLaunchers(t.Context(), []*corev1.Pod{pod}, testTemplateHash); err != nil {
 		t.Fatalf("reportStuckLaunchers: %v", err)
@@ -378,7 +399,7 @@ func TestReportStuckLaunchersReportsStuckScheduling(t *testing.T) {
 // G4: TestSetStuckLabelIgnoresNotFound verifies labeling a Pod that no longer
 // exists is a no-op (no error), since the Pod may be deleted concurrently.
 func TestSetStuckLabelIgnoresNotFound(t *testing.T) {
-	ctl, _, _ := newStuckTestController(stuckTestNow) // empty clientset
+	ctl, _, _ := newStuckTestController(t, stuckTestNow) // empty clientset
 	pod := stuckLauncherPod("launcher-gone")
 
 	if err := ctl.setStuckLabel(t.Context(), pod, true); err != nil {
@@ -394,7 +415,7 @@ func TestSetStuckLabelIgnoresNotFound(t *testing.T) {
 // sole Pod satisfying desired count, and is labeled and reported.
 func TestReconcileKeyReportsStuckWithoutReplacement(t *testing.T) {
 	pod := scheduledNotReadyAt(stuckLauncherPod("launcher-stuck"), stuckTestNow.Add(-10*time.Minute))
-	ctl, cs, rec := newStuckTestController(stuckTestNow, pod)
+	ctl, cs, rec := newStuckTestController(t, stuckTestNow, pod)
 
 	err, requeue := ctl.reconcileKey(t.Context(), stuckTestKey(), 1, testTemplateHash, nodeTemplate(), []*corev1.Pod{pod})
 	if err != nil {
@@ -439,7 +460,7 @@ func TestReportStuckLaunchersPropagatesLabelPatchError(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ctl, cs, _ := newStuckTestController(stuckTestNow, tc.pod)
+			ctl, cs, _ := newStuckTestController(t, stuckTestNow, tc.pod)
 			cs.PrependReactor("patch", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
 				return true, nil, apierrors.NewInternalError(errors.New("boom"))
 			})

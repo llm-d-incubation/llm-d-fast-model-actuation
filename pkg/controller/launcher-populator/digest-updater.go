@@ -206,32 +206,28 @@ func (ctl *controller) updateDigestForNode(ctx context.Context, nodeName string)
 	if err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("failed to get node %s: %w", nodeName, err)
 	}
-	if apierrors.IsNotFound(err) || node.DeletionTimestamp != nil {
-		logger.Info("Node unavailable, removing from digest and scheduling launcher cleanup", "node", nodeName)
-		for lcName := range ctl.policy.digest[nodeName] {
-			ctl.keyQueue.Queue.Add(keyItem{NodeLauncherKey{NodeName: nodeName, LauncherConfigName: lcName}})
-		}
-		delete(ctl.policy.digest, nodeName)
-		return nil
+	if apierrors.IsNotFound(err) {
+		logger.Info("Node deleted, recomputing digest", "node", nodeName)
+		node = nil
 	}
-	ctl.recomputeDigestForNode(node)
+	ctl.recomputeDigestForNode(nodeName, node)
 	return nil
 }
 
 // recomputeDigestForNode rebuilds digest entries for a single node by replaying
 // every cached LPP. Pure read of ctl.policy.lpps + ctl.policy.lcs.
-func (ctl *controller) recomputeDigestForNode(node *corev1.Node) {
+func (ctl *controller) recomputeDigestForNode(nodeName string, node *corev1.Node) {
 	for lppName, lppd := range ctl.policy.lpps {
 		newDigested := lppd.digested
-		matches := lppd.selectorErr == nil && lppd.labelSelector.Matches(labels.Set(node.Labels)) && matchesResourceConditions(node.Status.Allocatable, lppd.object.Spec.EnhancedNodeSelector.AllocatableResources)
+		matches := node != nil && node.DeletionTimestamp == nil && lppd.selectorErr == nil && lppd.labelSelector.Matches(labels.Set(node.Labels)) && matchesResourceConditions(node.Status.Allocatable, lppd.object.Spec.EnhancedNodeSelector.AllocatableResources)
 		if !matches {
 			newDigested = nil
 		}
-		ctl.applyLPPToDigestForNode(lppName, newDigested, node.Name)
+		ctl.applyLPPToDigestForNode(lppName, newDigested, nodeName)
 	}
 
-	if len(ctl.policy.digest[node.Name]) == 0 {
-		delete(ctl.policy.digest, node.Name)
+	if len(ctl.policy.digest[nodeName]) == 0 {
+		delete(ctl.policy.digest, nodeName)
 	}
 }
 
@@ -258,11 +254,12 @@ func (ctl *controller) applyLPPToDigestForNode(lppName string, lcToCount map[str
 			continue
 		}
 		delete(entry.lpps, lppName)
-		if len(entry.lpps) == 0 {
+		removed := len(entry.lpps) == 0
+		if removed {
 			ctl.policy.deleteEntry(nodeName, lcName)
 		}
 		changed := ctl.recomputeEntryFromLPPs(entry, lcName)
-		if changed {
+		if removed || changed {
 			ctl.keyQueue.Queue.Add(keyItem{NodeLauncherKey{NodeName: nodeName, LauncherConfigName: lcName}})
 		}
 	}
