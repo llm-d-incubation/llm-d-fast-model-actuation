@@ -11,18 +11,27 @@ operational view. It is designed to answer four questions in order:
 
 ## Prerequisites
 
-- Grafana with a Prometheus data source.
-- The scrape target must retain the standard `namespace` and `pod` target
-  labels. Keep `honorLabels` disabled so the workload namespace exported by
-  FMA remains available as `exported_namespace`.
-- The GPU panels require the Prometheus metrics `DCGM_FI_DEV_FB_USED` and
-  `DCGM_FI_DEV_FB_FREE` from DCGM, with the GPU identifier in the `UUID` label.
-  The rest of the dashboard can be used without these metrics.
+- A Prometheus server or equivalent.
+- For the GPU panels to show data, that server must scrape the DCGM Prometheus
+  metrics `DCGM_FI_DEV_FB_USED` and `DCGM_FI_DEV_FB_FREE` from GPU-bearing Nodes,
+  with the GPU identifier in the `UUID` label.
+
+## Configure controller scraping
 
 Prometheus needs to scrape both FMA controller Pods on their named `metrics`
-port (TCP 8002). If the Prometheus Operator is installed, a `PodMonitor` is one
-way to configure this. Save the following example as `fma-podmonitor.yaml`,
-replace both placeholders, and apply it:
+port (TCP 8002). Controller Pods installed by `scripts/install-fma.sh` have the
+labels `app.kubernetes.io/name: fma-controllers` and `scrape: "true"`; either or
+both can be used to select them.
+
+Retain the standard `namespace` and `pod` target labels and the FMA-specific
+labels documented in [Prometheus Metrics](metrics.md). Keep `honorLabels`
+disabled so the workload namespace exported by FMA remains available as
+`exported_namespace`.
+
+With the Prometheus Operator, the `Prometheus` object's `spec` must include a
+`podMonitorSelector` that selects the `PodMonitor`; omitting this field selects
+no PodMonitors. The following example selects the controller Pods in the
+PodMonitor's own namespace and scrapes their `metrics` port:
 
 ```yaml
 apiVersion: monitoring.coreos.com/v1
@@ -40,12 +49,12 @@ spec:
     - port: metrics
 ```
 
-Set the PodMonitor's labels so it is selected by `spec.podMonitorSelector` in
-your `Prometheus` object. The example uses a `release` label; change its key and
-value to match your selector, or omit it if the selector matches all PodMonitors.
-The PodMonitor selects Pods in its own namespace and uses Prometheus's global
-scrape interval by default. Set `podMetricsEndpoints[].interval` if you need a
-different interval.
+Replace the namespace placeholder with the namespace of the FMA controllers.
+The example uses a `release` label; adjust the label keys and values to match
+your Prometheus selector, or omit the labels if it matches all PodMonitors.
+
+The PodMonitor uses Prometheus's global scrape interval by default. Set
+`podMetricsEndpoints[].interval` if you need a different interval.
 
 Verify the scrape before importing the dashboard:
 
@@ -57,6 +66,7 @@ Both controller targets should return `1`.
 
 ## Import
 
+Configure a Prometheus data source in Grafana to connect to the server above.
 All three paths below use the same
 `config/grafana/dashboards/fma-operations.json`. The dashboard uses the classic
 Grafana JSON model and does not require a plugin.
@@ -149,16 +159,6 @@ states that need investigation. A non-zero HTTP status code outside the `2xx`
 range is an application response; status code `0` means that no HTTP response
 was received.
 
-The GPU panels are intentionally optional. An empty GPU panel means the DCGM
-metrics or matching `UUID` labels are absent; it does not make the FMA-only
-panels invalid. GPU framebuffer values are device-level measurements. If more
-than one active FMA binding refers to the same GPU, the joined result can appear
-once per binding and must not be summed as physical GPU capacity.
-
-## Compatibility
-
-The dashboard queries only metrics listed in [Prometheus Metrics](metrics.md)
-plus the two optional DCGM metrics above. If a deployment predates one of those
-FMA metrics, the corresponding panel remains empty while the rest of the
-dashboard continues to work. The Overview population counts show zero when
-their metrics are absent.
+GPU framebuffer values are device-level measurements. If more than one active
+FMA binding refers to the same GPU, the joined result can appear once per
+binding and must not be summed as physical GPU capacity.
