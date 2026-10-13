@@ -591,13 +591,12 @@ class VllmMultiProcessManager:
         loop = asyncio.get_running_loop()
         loop.create_task(self.broadcaster._notify())
 
-    def create_instance(
-        self, vllm_config: VllmConfig, instance_id: Optional[str] = None
-    ) -> dict:
-        """Create and start a new vLLM instance"""
-        if instance_id is None:
-            instance_id = str(uuid.uuid4())
+    def create_instance(self, vllm_config: VllmConfig, instance_id: str) -> dict:
+        """Create and start a new vLLM instance, without taking its id's lock.
 
+        For callers with no event loop, such as the synchronous tests.  Request
+        handling should use create_instance_async instead.
+        """
         if instance_id in self.instances:
             logger.warning(
                 "Rejecting request to create vLLM instance: id=%s already exists",
@@ -639,11 +638,12 @@ class VllmMultiProcessManager:
     async def _instance_lock(self, instance_id: str):
         """Serialize the operations that create and destroy one instance.
 
-        Until stop_instance_async existed, a DELETE held the event loop for its
-        whole duration, so it could not interleave with a PUT of the same id.
-        Now that it awaits, that accidental serialization is gone and has to be
-        explicit.  The lock is per instance id, so unrelated instances still
-        stop concurrently.
+        Stopping an instance awaits, so other requests are served meanwhile.
+        Without this lock a create of the same id could run in the middle of the
+        stop: it would be rejected as a duplicate, because the instance being
+        stopped is still in self.instances, and then the stop would remove that
+        entry anyway.  The lock is per instance id, so operations on different
+        instances still proceed concurrently.
 
         Entries are reference-counted rather than left to accumulate: instance
         ids are one-shot, so a plain dict would grow without bound.  The count
@@ -727,50 +727,66 @@ class VllmMultiProcessManager:
             return self._stop_end(instance)
 
     async def create_instance_async(
-        self, vllm_config: VllmConfig, instance_id: str
+        self, vllm_config: VllmConfig, instance_id: Optional[str] = None
     ) -> dict:
-        """Create an instance with a caller-chosen id, under that id's lock.
+        """Create and start a new vLLM instance, under its id's lock.
 
-        Only needed for the named form: a generated id cannot collide with a
-        concurrent stop.
+        :param instance_id: the id to give the instance, or None to generate one.
+            A generated id is locked like any other, since nothing guarantees
+            that it differs from every id currently locked.
         """
+        if instance_id is None:
+            instance_id = str(uuid.uuid4())
         async with self._instance_lock(instance_id):
             return self.create_instance(vllm_config, instance_id)
 
     async def stop_all_instances_async(self, timeout: int = 10) -> dict:
-        """Stop every instance concurrently, off the event loop.
+        """Stop every instance, concurrently, and return once there are none.
 
-        The synchronous version stops them one after another, so N instances
-        cost up to N times the timeout with the launcher unresponsive
+        That includes instances created while this is in progress.  It works in
+        passes: each pass stops, concurrently, the instances that exist when it
+        begins, and passes repeat until there are no instances left.  So if
+        instances keep being created, this keeps stopping them.
+
+        A pass in which any stop fails is the last: once all of that pass's
+        stops have settled, this raises an ExceptionGroup of the failures.  The
+        instances that failed to stop are still there, so another pass would not
+        get to "none left" either.
+
+        The synchronous version stops instances one after another, so N
+        instances cost up to N times the timeout with the launcher unresponsive
         throughout.
         """
-        instance_ids = list(self.instances.keys())
-        settled = await asyncio.gather(
-            *(
-                self.stop_instance_async(instance_id, timeout)
-                for instance_id in instance_ids
-            ),
-            return_exceptions=True,
-        )
         results = []
-        failures = []
-        for instance_id, outcome in zip(instance_ids, settled):
-            if isinstance(outcome, KeyError):
-                continue  # Instance was already removed
-            if isinstance(outcome, BaseException):
-                logger.error(f"Failed to stop instance {instance_id}: {outcome}")
-                failures.append(outcome)
-                continue
-            results.append(outcome)
-
-        if failures:
-            # Every instance got its chance to stop -- that is why this is raised
-            # after they all settled rather than at the first failure -- but the
-            # caller must not be told the bulk delete succeeded when it did not.
-            raise ExceptionGroup(  # noqa: F821 (builtin since 3.11)
-                f"failed to stop {len(failures)} of {len(instance_ids)} instance(s)",
-                failures,
+        while self.instances:
+            instance_ids = list(self.instances.keys())
+            settled = await asyncio.gather(
+                *(
+                    self.stop_instance_async(instance_id, timeout)
+                    for instance_id in instance_ids
+                ),
+                return_exceptions=True,
             )
+            failures = []
+            for instance_id, outcome in zip(instance_ids, settled):
+                if isinstance(outcome, KeyError):
+                    continue  # Instance was already removed
+                if isinstance(outcome, BaseException):
+                    logger.error(f"Failed to stop instance {instance_id}: {outcome}")
+                    failures.append(outcome)
+                    continue
+                results.append(outcome)
+
+            if failures:
+                # Every instance in the pass got its chance to stop -- that is
+                # why this is raised after they all settled rather than at the
+                # first failure -- but the caller must not be told the bulk
+                # delete succeeded when it did not.
+                raise ExceptionGroup(  # noqa: F821 (builtin since 3.11)
+                    f"failed to stop {len(failures)} of {len(instance_ids)}"
+                    " instance(s)",
+                    failures,
+                )
 
         return {
             "status": "all_stopped",
@@ -994,7 +1010,7 @@ async def create_vllm_instance(vllm_config: VllmConfig):
     """Create a new vLLM instance with random instance ID"""
 
     try:
-        result = vllm_manager.create_instance(vllm_config)
+        result = await vllm_manager.create_instance_async(vllm_config)
         return JSONResponse(content=result, status_code=HTTPStatus.CREATED)
     except Exception as e:
         logger.error(f"Failed to create vLLM instance: {e}")
