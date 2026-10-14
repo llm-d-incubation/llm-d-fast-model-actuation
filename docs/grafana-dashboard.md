@@ -28,10 +28,11 @@ labels documented in [Prometheus Metrics](metrics.md). Keep `honorLabels`
 disabled so the workload namespace exported by FMA remains available as
 `exported_namespace`.
 
-With the Prometheus Operator, the `Prometheus` object's `spec` must include a
-`podMonitorSelector` that selects the `PodMonitor`; omitting this field selects
-no PodMonitors. The following example selects the controller Pods in the
-PodMonitor's own namespace and scrapes their `metrics` port:
+With the Prometheus Operator, a `PodMonitor` defines which Pods and ports to
+scrape. The `Prometheus` object's `spec` must include a `podMonitorSelector` that
+selects the `PodMonitor`; omitting this field selects no PodMonitors.
+The following example selects the controller Pods in the PodMonitor's own
+namespace and scrapes their `metrics` port:
 
 ```yaml
 apiVersion: monitoring.coreos.com/v1
@@ -51,7 +52,7 @@ spec:
 
 Replace the namespace placeholder with the namespace of the FMA controllers.
 The example uses a `release` label; adjust the label keys and values to match
-your Prometheus selector, or omit the labels if it matches all PodMonitors.
+the `podMonitorSelector` of the relevant `Prometheus` object.
 
 The PodMonitor uses Prometheus's global scrape interval by default. Set
 `podMetricsEndpoints[].interval` if you need a different interval.
