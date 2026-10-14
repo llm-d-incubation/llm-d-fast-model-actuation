@@ -193,7 +193,6 @@ metadata:
     fma-e2e-instance: "$inst"
 spec:
   maxInstances: 2
-  inferencePorts: [8005, 8006]
   podTemplate:
     metadata:
       labels:

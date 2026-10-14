@@ -320,7 +320,6 @@ metadata:
   name: lc-hpa
 spec:
   maxInstances: 1
-  inferencePorts: [8005]
   podTemplate:
     spec:
       runtimeClassName: nvidia
