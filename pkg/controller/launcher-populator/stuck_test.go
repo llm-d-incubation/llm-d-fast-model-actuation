@@ -30,10 +30,12 @@ import (
 	"k8s.io/client-go/informers"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
+	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
 	testingclock "k8s.io/utils/clock/testing"
 
+	fmav1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/api"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/common"
 	fmafake "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/generated/clientset/versioned/fake"
@@ -50,12 +52,23 @@ const (
 
 var stuckTestNow = time.Date(2026, 6, 21, 12, 0, 0, 0, time.UTC)
 
-func newStuckTestControllerWithoutNode(t *testing.T, now time.Time, objs ...*corev1.Pod) (*controller, *k8sfake.Clientset, *record.FakeRecorder) {
+func newStuckTestControllerWithoutNode(t *testing.T, now time.Time, objs ...runtime.Object) (*controller, *k8sfake.Clientset, *record.FakeRecorder) {
 	t.Helper()
-	cs := k8sfake.NewSimpleClientset(podsToObjects(objs)...)
-	fmaCS := fmafake.NewSimpleClientset()
-	ctl, err := NewController(klog.Background(), cs.CoreV1(), fmaCS.FmaV1alpha1(), stuckTestNamespace,
-		informers.NewSharedInformerFactory(cs, 0).Core().V1(), fmainformers.NewSharedInformerFactory(fmaCS, 0),
+	var coreObjects, fmaObjects []runtime.Object
+	for _, obj := range objs {
+		switch obj.(type) {
+		case *fmav1alpha1.LauncherConfig, *fmav1alpha1.LauncherPopulationPolicy:
+			fmaObjects = append(fmaObjects, obj)
+		default:
+			coreObjects = append(coreObjects, obj)
+		}
+	}
+	cs := k8sfake.NewSimpleClientset(coreObjects...)
+	fmaCS := fmafake.NewSimpleClientset(fmaObjects...)
+	coreFactory := informers.NewSharedInformerFactory(cs, 0)
+	fmaFactory := fmainformers.NewSharedInformerFactory(fmaCS, 0)
+	ctl, err := NewController(klog.FromContext(t.Context()), cs.CoreV1(), fmaCS.FmaV1alpha1(), stuckTestNamespace,
+		coreFactory.Core().V1(), fmaFactory,
 		time.Minute, stuckTestSchedThreshold, stuckTestStartThreshold)
 	if err != nil {
 		t.Fatalf("NewController: %v", err)
@@ -63,26 +76,25 @@ func newStuckTestControllerWithoutNode(t *testing.T, now time.Time, objs ...*cor
 	t.Cleanup(func() {
 		ctl.digestQueue.Queue.ShutDown()
 		ctl.keyQueue.Queue.ShutDown()
+		coreFactory.Shutdown()
+		fmaFactory.Shutdown()
 		ctl.eventBroadcaster.Shutdown()
 	})
 	rec := record.NewFakeRecorder(50)
 	ctl.recorder = rec
 	ctl.clock = testingclock.NewFakeClock(now)
-	for _, pod := range objs {
-		if err := ctl.podInformer.GetStore().Add(pod); err != nil {
-			t.Fatal(err)
-		}
+	coreFactory.Start(t.Context().Done())
+	fmaFactory.Start(t.Context().Done())
+	if !cache.WaitForCacheSync(t.Context().Done(), ctl.podInformer.HasSynced, ctl.nodeInformer.HasSynced, ctl.lcInformer.HasSynced, ctl.lppInformer.HasSynced) {
+		t.Fatal("test informer caches did not sync")
 	}
+	cs.ClearActions()
 	return ctl, cs, rec
 }
 
 func newStuckTestController(t *testing.T, now time.Time, objs ...*corev1.Pod) (*controller, *k8sfake.Clientset, *record.FakeRecorder) {
 	t.Helper()
-	ctl, cs, rec := newStuckTestControllerWithoutNode(t, now, objs...)
-	if err := ctl.nodeInformer.GetStore().Add(testNode()); err != nil {
-		t.Fatal(err)
-	}
-	return ctl, cs, rec
+	return newStuckTestControllerWithoutNode(t, now, append(podsToObjects(objs), testNode())...)
 }
 
 func podsToObjects(pods []*corev1.Pod) []runtime.Object {
