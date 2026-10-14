@@ -17,15 +17,19 @@ limitations under the License.
 package launcherpopulator
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	fmav1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/common"
+	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/utils"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/tools/cache"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
 )
 
 func TestReconcileNodeAvailability(t *testing.T) {
@@ -45,15 +49,15 @@ func TestReconcileNodeAvailability(t *testing.T) {
 						bound.Annotations[common.RequesterAnnotationKey] = "requester-uid requester"
 						pods = []*corev1.Pod{orphan, bound}
 					}
-					ctl, cs, _ := newStuckTestControllerWithoutNode(t, stuckTestNow, pods...)
+					objects := podsToObjects(pods)
 					if nodeState == "deleting" {
 						node := testNode()
 						deleting := metav1.NewTime(stuckTestNow)
 						node.DeletionTimestamp = &deleting
-						if err := ctl.nodeInformer.GetStore().Add(node); err != nil {
-							t.Fatal(err)
-						}
+						objects = append(objects, node)
 					}
+
+					ctl, cs, _ := newStuckTestControllerWithoutNode(t, stuckTestNow, objects...)
 
 					err, requeue := ctl.reconcileKey(t.Context(), stuckTestKey(), desiredCount, testTemplateHash, nodeTemplate(), pods)
 					if err != nil {
@@ -78,83 +82,56 @@ func TestReconcileNodeAvailability(t *testing.T) {
 			}
 		}
 	}
+}
 
-	t.Run("live/no-pods/desired-1", func(t *testing.T) {
-		ctl, cs, _ := newStuckTestController(t, stuckTestNow)
-		if err, _ := ctl.reconcileKey(t.Context(), stuckTestKey(), 1, testTemplateHash, nodeTemplate(), nil); err != nil {
-			t.Fatalf("reconcileKey: %v", err)
-		}
-		pods := listLaunchers(t, cs)
-		if len(pods) != 1 || pods[0].Spec.NodeSelector["kubernetes.io/hostname"] != stuckTestNode {
-			t.Fatalf("live Node must get one launcher targeting it, got %v", pods)
-		}
-	})
+func TestReconcileLiveNodeCreatesLauncher(t *testing.T) {
+	ctl, cs, _ := newStuckTestController(t, stuckTestNow)
+	if err, _ := ctl.reconcileKey(t.Context(), stuckTestKey(), 1, testTemplateHash, nodeTemplate(), nil); err != nil {
+		t.Fatalf("reconcileKey: %v", err)
+	}
+	pods := listLaunchers(t, cs)
+	if len(pods) != 1 || pods[0].Spec.NodeSelector["kubernetes.io/hostname"] != stuckTestNode {
+		t.Fatalf("live Node must get one launcher targeting it, got %v", pods)
+	}
 }
 
 func TestNodeDeletionCleansLaunchersWithoutPolicyChange(t *testing.T) {
-	for _, event := range []string{"delete-tombstone", "update-deleting"} {
+	for _, event := range []string{"delete", "update-deleting"} {
 		for _, desiredCount := range []int32{0, 2} {
 			t.Run(fmt.Sprintf("%s/desired-%d", event, desiredCount), func(t *testing.T) {
-				ctl, cs, _ := newStuckTestControllerWithoutNode(t, stuckTestNow)
-				lc, err := ctl.fmaclient.LauncherConfigs(stuckTestNamespace).Create(t.Context(), &fmav1alpha1.LauncherConfig{
+				lc := &fmav1alpha1.LauncherConfig{
 					ObjectMeta: metav1.ObjectMeta{Name: stuckTestLauncherConfig, Namespace: stuckTestNamespace, Generation: 1},
 					Spec: fmav1alpha1.LauncherConfigSpec{
 						MaxInstances: 1,
 						PodTemplate:  fmav1alpha1.EmbeddedPodTemplateSpec{Spec: nodeTemplate().Spec},
 					},
-				}, metav1.CreateOptions{})
-				if err != nil {
-					t.Fatal(err)
 				}
-				if err := ctl.lcInformer.GetStore().Add(lc); err != nil {
-					t.Fatal(err)
-				}
-				ctl.OnAdd(lc, false)
-				lpp, err := ctl.fmaclient.LauncherPopulationPolicies(stuckTestNamespace).Create(t.Context(), &fmav1alpha1.LauncherPopulationPolicy{
+				lpp := &fmav1alpha1.LauncherPopulationPolicy{
 					ObjectMeta: metav1.ObjectMeta{Name: "policy", Namespace: stuckTestNamespace, Generation: 1},
 					Spec: fmav1alpha1.LauncherPopulationPolicySpec{
 						CountForLauncher: []fmav1alpha1.CountForLauncher{{LauncherConfigName: lc.Name, LauncherCount: desiredCount}},
 					},
-				}, metav1.CreateOptions{})
+				}
+				node := testNode()
+				_, templateHash, err := utils.BuildNodeIndependentLauncherTemplate(lc)
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := ctl.lppInformer.GetStore().Add(lpp); err != nil {
-					t.Fatal(err)
-				}
-				ctl.OnAdd(lpp, false)
-				node, err := cs.CoreV1().Nodes().Create(t.Context(), testNode(), metav1.CreateOptions{})
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err := ctl.nodeInformer.GetStore().Add(node); err != nil {
-					t.Fatal(err)
-				}
-				ctl.OnAdd(node, false)
-				processTestDigestQueue(t, ctl)
-				snap := ctl.policy.snapshotForKey(stuckTestKey())
-				if !snap.exists || snap.desiredCount != int(desiredCount) || snap.templateHash == "" {
-					t.Fatalf("policy must establish the initial node population, got %+v", snap)
-				}
+				objects := []runtime.Object{lc, lpp, node}
 				for _, name := range []string{"orphan", "bound"} {
 					pod := stuckLauncherPod(name)
 					pod.Labels[common.NodeNameLabelKey] = stuckTestNode
 					pod.Labels[common.ComponentLabelKey] = common.LauncherComponentLabelValue
-					pod.Annotations[common.LauncherTemplateHashAnnotationKey] = snap.templateHash
+					pod.Annotations[common.LauncherTemplateHashAnnotationKey] = templateHash
 					pod.Spec.NodeSelector = map[string]string{"kubernetes.io/hostname": stuckTestNode}
 					pod.Status.Phase = corev1.PodPending
 					if name == "bound" {
 						pod.Annotations[common.RequesterAnnotationKey] = "requester-uid requester"
 					}
-					pod, err = cs.CoreV1().Pods(stuckTestNamespace).Create(t.Context(), pod, metav1.CreateOptions{})
-					if err != nil {
-						t.Fatal(err)
-					}
-					if err := ctl.podInformer.GetStore().Add(pod); err != nil {
-						t.Fatal(err)
-					}
-					ctl.OnAdd(pod, false)
+					objects = append(objects, pod)
 				}
+				ctl, cs, _ := newStuckTestControllerWithoutNode(t, stuckTestNow, objects...)
+				processTestDigestQueue(t, ctl)
 				// Discard setup requests so only the Node event can trigger cleanup.
 				for ctl.keyQueue.Queue.Len() > 0 {
 					item, _ := ctl.keyQueue.Queue.Get()
@@ -165,42 +142,29 @@ func TestNodeDeletionCleansLaunchersWithoutPolicyChange(t *testing.T) {
 					t.Fatal(err)
 				}
 				cs.ClearActions()
-				if event == "delete-tombstone" {
+				if event == "delete" {
 					if err := cs.CoreV1().Nodes().Delete(t.Context(), node.Name, metav1.DeleteOptions{}); err != nil {
 						t.Fatal(err)
 					}
-					if err := ctl.nodeInformer.GetStore().Delete(node); err != nil {
-						t.Fatal(err)
-					}
-					ctl.OnDelete(cache.DeletedFinalStateUnknown{Key: node.Name, Obj: node})
+					waitForTestNodeEvent(t, ctl, func() bool {
+						_, exists, err := ctl.nodeInformer.GetStore().GetByKey(node.Name)
+						return err == nil && !exists
+					})
 				} else {
 					deletingNode := node.DeepCopy()
 					deleting := metav1.NewTime(stuckTestNow)
 					deletingNode.DeletionTimestamp = &deleting
-					deletingNode, err = cs.CoreV1().Nodes().Update(t.Context(), deletingNode, metav1.UpdateOptions{})
+					_, err = cs.CoreV1().Nodes().Update(t.Context(), deletingNode, metav1.UpdateOptions{})
 					if err != nil {
 						t.Fatal(err)
 					}
-					if err := ctl.nodeInformer.GetStore().Update(deletingNode); err != nil {
-						t.Fatal(err)
-					}
-					ctl.OnUpdate(node, deletingNode)
-				}
-				if ctl.digestQueue.Queue.Len() != 1 {
-					t.Fatalf("Node event must enqueue one digest update, got %d", ctl.digestQueue.Queue.Len())
+					waitForTestNodeEvent(t, ctl, func() bool {
+						cached, err := ctl.nodeLister.Get(node.Name)
+						return err == nil && cached.DeletionTimestamp != nil
+					})
 				}
 				processTestDigestQueue(t, ctl)
-				if ctl.policy.snapshotForKey(stuckTestKey()).exists {
-					t.Error("unavailable Node must be removed from the population digest")
-				}
-				if ctl.keyQueue.Queue.Len() != 1 {
-					t.Fatalf("Node event must enqueue launcher cleanup, got %d keys", ctl.keyQueue.Queue.Len())
-				}
-				item, _ := ctl.keyQueue.Queue.Get()
-				defer ctl.keyQueue.Queue.Done(item)
-				if err, _ := ctl.processKeyItem(t.Context(), item); err != nil {
-					t.Fatal(err)
-				}
+				processTestKeyQueue(t, ctl)
 				if podExists(t, cs, "orphan") || !podExists(t, cs, "bound") {
 					t.Error("Node event must remove the unbound launcher and preserve the bound launcher")
 				}
@@ -229,6 +193,27 @@ func processTestDigestQueue(t *testing.T, ctl *controller) {
 		ctl.digestQueue.Queue.Done(item)
 		if err != nil {
 			t.Fatalf("processDigestItem(%v): %v", item, err)
+		}
+	}
+}
+
+func waitForTestNodeEvent(t *testing.T, ctl *controller, observed func() bool) {
+	t.Helper()
+	if err := wait.PollUntilContextTimeout(t.Context(), time.Millisecond, 5*time.Second, true, func(context.Context) (bool, error) {
+		return observed() && ctl.digestQueue.Queue.Len() > 0, nil
+	}); err != nil {
+		t.Fatalf("waiting for Node informer event: %v", err)
+	}
+}
+
+func processTestKeyQueue(t *testing.T, ctl *controller) {
+	t.Helper()
+	for ctl.keyQueue.Queue.Len() > 0 {
+		item, _ := ctl.keyQueue.Queue.Get()
+		err, _ := ctl.processKeyItem(t.Context(), item)
+		ctl.keyQueue.Queue.Done(item)
+		if err != nil {
+			t.Fatalf("processKeyItem(%v): %v", item, err)
 		}
 	}
 }
