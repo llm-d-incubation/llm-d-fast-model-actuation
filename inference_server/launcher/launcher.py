@@ -757,7 +757,7 @@ class VllmMultiProcessManager:
         instances cost up to N times the timeout with the launcher unresponsive
         throughout.
         """
-        results = []
+        results: list[dict] = []
         while self.instances:
             instance_ids = list(self.instances.keys())
             settled = await asyncio.gather(
@@ -767,11 +767,17 @@ class VllmMultiProcessManager:
                 ),
                 return_exceptions=True,
             )
-            failures = []
+            failures: list[Exception] = []
             for instance_id, outcome in zip(instance_ids, settled):
                 if isinstance(outcome, KeyError):
                     continue  # Instance was already removed
-                if isinstance(outcome, BaseException):
+                if isinstance(outcome, BaseException) and not isinstance(
+                    outcome, Exception
+                ):
+                    # Cancellation or the like: not a failure to stop, so do
+                    # not dress it up as one.
+                    raise outcome
+                if isinstance(outcome, Exception):
                     logger.error(f"Failed to stop instance {instance_id}: {outcome}")
                     failures.append(outcome)
                     continue
