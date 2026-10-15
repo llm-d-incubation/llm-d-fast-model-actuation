@@ -161,6 +161,22 @@ spec:
           spec:
             description: Spec defines the desired state of the LauncherConfig.
             properties:
+              inferencePorts:
+                description: |-
+                  InferencePorts is the pool of ports available to inference-engine instances
+                  in each launcher pod.
+                items:
+                  format: int32
+                  maximum: 65535
+                  minimum: 1
+                  type: integer
+                minItems: 1
+                type: array
+                x-kubernetes-list-type: set
+                x-kubernetes-validations:
+                - message: inferencePorts must not contain the launcher service port
+                    8001
+                  rule: self.all(port, port != 8001)
               maxInstances:
                 description: MaxInstances caps the total number of inference-engine
                   instances per launcher pod.
@@ -8595,6 +8611,9 @@ spec:
             required:
             - maxInstances
             type: object
+            x-kubernetes-validations:
+            - message: inferencePorts must contain at least maxInstances ports
+              rule: '!has(self.inferencePorts) || size(self.inferencePorts) >= self.maxInstances'
           status:
             description: Status represents the observed status of the LauncherConfig.
             properties:
