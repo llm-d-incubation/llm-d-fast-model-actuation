@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -163,7 +164,6 @@ func TestNodeDeletionCleansLaunchersWithoutPolicyChange(t *testing.T) {
 						return err == nil && cached.DeletionTimestamp != nil
 					})
 				}
-				processTestDigestQueue(t, ctl)
 				processTestKeyQueue(t, ctl)
 				if podExists(t, cs, "orphan") || !podExists(t, cs, "bound") {
 					t.Error("Node event must remove the unbound launcher and preserve the bound launcher")
@@ -185,22 +185,31 @@ func TestNodeDeletionCleansLaunchersWithoutPolicyChange(t *testing.T) {
 	}
 }
 
-func processTestDigestQueue(t *testing.T, ctl *controller) {
+func processTestDigestQueue(t *testing.T, ctl *controller, kinds ...resourceKind) int {
 	t.Helper()
+	processed := 0
 	for ctl.digestQueue.Queue.Len() > 0 {
 		item, _ := ctl.digestQueue.Queue.Get()
+		if len(kinds) > 0 && !slices.Contains(kinds, item.(funcItem).Kind) {
+			ctl.digestQueue.Queue.Done(item)
+			continue
+		}
 		err, _ := ctl.processDigestItem(t.Context(), item)
 		ctl.digestQueue.Queue.Done(item)
 		if err != nil {
 			t.Fatalf("processDigestItem(%v): %v", item, err)
 		}
+		processed++
 	}
+	return processed
 }
 
 func waitForTestNodeEvent(t *testing.T, ctl *controller, observed func() bool) {
 	t.Helper()
 	if err := wait.PollUntilContextTimeout(t.Context(), time.Millisecond, 5*time.Second, true, func(context.Context) (bool, error) {
-		return observed() && ctl.digestQueue.Queue.Len() > 0, nil
+		// Wait for and process the actual Node item. Delayed LC/LPP status updates
+		// from setup must neither satisfy the wait nor substitute for Node cleanup.
+		return observed() && processTestDigestQueue(t, ctl, kindNode) > 0, nil
 	}); err != nil {
 		t.Fatalf("waiting for Node informer event: %v", err)
 	}
