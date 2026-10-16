@@ -29,6 +29,10 @@ dualPodsController:
   # Limit on the number of server-running Pods with a sleeping
   # inference server, per GPU.
   sleeperLimit: 2
+  # Maximum time to wait for in-flight inference requests before aborting them.
+  sleepDrainTimeout: 5m
+  # Maximum time to wait for forced sleep after graceful drain times out.
+  sleepAbortTimeout: 30s
   # Whether to debug the accelerator memory usage.
   # This involves querying the requester;
   # the test-requester does not support the query.

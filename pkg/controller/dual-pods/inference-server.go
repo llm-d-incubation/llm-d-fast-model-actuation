@@ -1765,10 +1765,10 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 				}
 			}
 			endpoint := fmt.Sprintf("%s:%d", providingPod.Status.PodIP, serverPort)
-			sleepURL := "http://" + endpoint + "/sleep"
-			_, err := doHTTP(ctx, "sleep", "POST", sleepURL, nil, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": iscName}), nil, httpResultConsumer{})
+			baseURL := "http://" + endpoint
+			err := sleepInferenceServer(ctx, baseURL, ctl.sleepDrainTimeout, ctl.sleepAbortTimeout, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": iscName}))
 			if err != nil {
-				return fmt.Errorf("failed to put provider %q to sleep, POST %s: %w", serverDat.ProvidingPodName, sleepURL, err)
+				return fmt.Errorf("failed to put provider %q to sleep: %w", serverDat.ProvidingPodName, err)
 			}
 			serverDat.Sleeping = ptr.To(true)
 			logger.V(2).Info("Put inference server to sleep", "endpoint", endpoint)
@@ -1823,6 +1823,58 @@ func (ctl *controller) ensureUnbound(ctx context.Context, serverDat *serverData,
 		logger.V(3).Info("Server-providing Pod remains unbound", "name", providingPod.Name, "resourceVersion", providingPod.ResourceVersion)
 	}
 	return nil
+}
+
+func sleepInferenceServer(ctx context.Context, baseURL string, drainTimeout, abortTimeout time.Duration, latencyHistogramVec ObserverCube) error {
+	sleepCtx, cancelSleep := context.WithCancel(ctx)
+	defer cancelSleep()
+	waitResult := make(chan error, 1)
+	go func() {
+		_, err := doHTTPWithClient(sleepCtx, sleepHTTPClient, "sleep_wait", http.MethodPost, baseURL+"/sleep?level=1&mode=wait", nil, latencyHistogramVec, nil, httpResultConsumer{})
+		waitResult <- err
+	}()
+
+	drainTimer := time.NewTimer(drainTimeout)
+	defer drainTimer.Stop()
+	select {
+	case err := <-waitResult:
+		if err != nil {
+			return fmt.Errorf("graceful sleep failed: %w", err)
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-drainTimer.C:
+	}
+
+	// Check once more before aborting in case graceful sleep completed at the
+	// same time as the timer fired.
+	select {
+	case err := <-waitResult:
+		if err != nil {
+			return fmt.Errorf("graceful sleep failed: %w", err)
+		}
+		return nil
+	default:
+	}
+
+	klog.FromContext(ctx).V(2).Info("Graceful sleep timed out; aborting in-flight requests", "baseURL", baseURL, "drainTimeout", drainTimeout)
+	abortCtx, abortCancel := context.WithTimeout(ctx, abortTimeout)
+	defer abortCancel()
+	_, abortErr := doHTTPWithClient(abortCtx, sleepHTTPClient, "sleep_abort", http.MethodPost, baseURL+"/sleep?level=0&mode=abort", nil, latencyHistogramVec, nil, httpResultConsumer{})
+	if abortErr != nil {
+		return fmt.Errorf("graceful sleep timed out after %s and abort fallback failed: %w", drainTimeout, abortErr)
+	}
+
+	select {
+	case err := <-waitResult:
+		if err != nil {
+			return fmt.Errorf("graceful sleep failed after aborting in-flight requests: %w", err)
+		}
+		return nil
+	case <-abortCtx.Done():
+		return fmt.Errorf("graceful sleep did not complete after aborting in-flight requests: %w", abortCtx.Err())
+	}
 }
 
 // maybeDeleteObsoleteInstance checks whether the launcher-based instance is obsolete
@@ -2260,6 +2312,8 @@ var myHTTPClient = &http.Client{
 	Timeout: 30 * time.Second,
 }
 
+var sleepHTTPClient = &http.Client{}
+
 // ObserverCube is the needed fragment of prometheus.ObserverVec,
 // semantically (but not in the type system) specialized to
 // needing values for three labels: purpose, method, status_code.
@@ -2277,6 +2331,10 @@ type httpResultConsumer struct {
 // Do an HTTP call.
 // latencyHistogramVec needs values for labels purpose, method, status_code
 func doHTTP(ctx context.Context, purpose, method, url string, reqHeaders http.Header, latencyHistogramVec ObserverCube, requestData any, resultConsumer httpResultConsumer) (int, error) {
+	return doHTTPWithClient(ctx, myHTTPClient, purpose, method, url, reqHeaders, latencyHistogramVec, requestData, resultConsumer)
+}
+
+func doHTTPWithClient(ctx context.Context, httpClient *http.Client, purpose, method, url string, reqHeaders http.Header, latencyHistogramVec ObserverCube, requestData any, resultConsumer httpResultConsumer) (int, error) {
 	var reqBody io.Reader
 	if requestData != nil {
 		b, err := json.Marshal(requestData)
@@ -2304,7 +2362,7 @@ func doHTTP(ctx context.Context, purpose, method, url string, reqHeaders http.He
 		}
 	}
 	httpCallStartTime := time.Now()
-	resp, err := myHTTPClient.Do(req)
+	resp, err := httpClient.Do(req)
 	latencySecs := time.Since(httpCallStartTime).Seconds()
 	var statusCode int
 	if resp != nil {
