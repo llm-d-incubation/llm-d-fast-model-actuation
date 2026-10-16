@@ -317,18 +317,18 @@ done
 if [ -z "$release" ]; then
     what=(--image-tag "$(make echo-var VAR=IMAGE_TAG)"
           --oci-registry "$(make echo-var VAR=CONTAINER_IMG_REG)"
+          --chart-set dualPodsController.verbosity=5
+          --chart-set launcherPopulator.verbosity=5
          )
 else
     what=(--release "$release")
-fi
-
-: Set controller verbosity in releases that support it
-
-if [ -z "$release" ]; then
-    what+=( \
-    --chart-set dualPodsController.verbosity=5 \
-    --chart-set launcherPopulator.verbosity=5 \
-    )
+    case "$release" in
+        (0.[2-6].*) ;;
+        (*) what+=(
+            --chart-set dualPodsController.verbosity=5
+            --chart-set launcherPopulator.verbosity=5
+            ) ;;
+    esac
 fi
 
 ./scripts/install-fma.sh \
