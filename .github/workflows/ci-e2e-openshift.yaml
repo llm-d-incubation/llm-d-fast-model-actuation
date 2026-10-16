@@ -593,6 +593,13 @@ jobs:
           echo "github.ref_name='${{ github.ref_name }}'"
           echo "github.ref='${{ github.ref }}'"
           subject=(--release "$FMA_RELEASE")
+          case "$FMA_RELEASE" in
+              (0.[2-6].*) ;;
+              (*) subject+=(
+                  --chart-set dualPodsController.verbosity=5
+                  --chart-set launcherPopulator.verbosity=5
+                  ) ;;
+          esac
           bash <(curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/scripts/install-fma.sh) \
             "${subject[@]}" \
             --chart-set global.produceCoverdata=true \
