@@ -35,9 +35,11 @@ type InferenceServerConfigSpec struct {
 type ModelServerConfig struct {
 	// Port is the port on which the vLLM server will listen
 	// Particularly, management of vLLM instances' sleep state is done through this port
+	// +optional
+	// +kubebuilder:default:=8005
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=65535
-	Port int32 `json:"port"`
+	Port int32 `json:"port,omitempty"`
 
 	// Options are the vLLM startup options, excluding Port
 	// +optional
