@@ -85,8 +85,6 @@ spec:
                     maximum: 65535
                     minimum: 1
                     type: integer
-                required:
-                - port
                 type: object
             required:
             - launcherConfigName
