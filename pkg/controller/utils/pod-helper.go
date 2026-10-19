@@ -110,7 +110,7 @@ func GetInferenceServerContainerIndexAndPort(pod *corev1.Pod) (int, int32, error
 		}
 		return 0, 0, fmt.Errorf("readinessProbe port %q not found in container %q", portIOS.StrVal, isCtr.Name)
 	default:
-		return 0, 0, fmt.Errorf("the readinessProbe port has unexpected type %q", portIOS.Type)
+		return 0, 0, fmt.Errorf("the readinessProbe port has unexpected type %v", portIOS.Type)
 	}
 }
 
