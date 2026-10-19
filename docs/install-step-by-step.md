@@ -1,8 +1,8 @@
 # Step-by-step installation of a release of FMA
 
 This document is about step-by-step installation of a given release of
-FMA. For dev/test of a general commit of the repo, see
-[README.md#devtest](README.md#devtest). There is a [companion document
+FMA. For dev/test of a general commit of the repo, see the
+[local testing guide](local-test.md). There is a [companion document
 about step-by-step removal of FMA](uninstall-step-by-step.md). There
 is also a companion document about [scripted
 installation](install-scripted.md).
@@ -90,7 +90,7 @@ cluster. For example, by `kubectl apply`. If you are not authorized to
 do that then ask a cluster administrator to do it for you or to grant
 you authorization to do it yourself; there is an example `ClusterRole`
 for the latter in
-[config/fma-cluster-admin/fma-crd-admin-clusterrole.yaml](config/fma-cluster-admin/fma-crd-admin-clusterrole.yaml).
+[config/fma-cluster-admin/fma-crd-admin-clusterrole.yaml](../config/fma-cluster-admin/fma-crd-admin-clusterrole.yaml).
 
 If you are automating creation of these `CustomResourceDefinition`
 objects, note that merely getting the object created is not enough for
@@ -117,7 +117,7 @@ in the cluster. For example, by `kubectl apply`. If you are not
 authorized to do that then ask a cluster administrator to do it for
 you or to grant you authorization to do it yourself; there is an
 example `ClusterRole` for the latter in
-[config/fma-cluster-admin/fma-policy-admin-clusterrole.yaml](config/fma-cluster-admin/fma-policy-admin-clusterrole.yaml).
+[config/fma-cluster-admin/fma-policy-admin-clusterrole.yaml](../config/fma-cluster-admin/fma-policy-admin-clusterrole.yaml).
 
 ## Instantiating the chart
 
@@ -153,7 +153,7 @@ The following command is a very simple example.
 
 ```bash
 helm install -n myns fma-example \
-    ghcr.io/llm-d-incubation/llm-d-fast-model-actuation/charts/fma-controllers \
+    oci://ghcr.io/llm-d-incubation/llm-d-fast-model-actuation/charts/fma-controllers \
     --version 0.6.3 \
     --set global.imageTag=v0.6.3 \
     --set global.nodeViewClusterRole=node-view
