@@ -49,7 +49,7 @@ repos:
   # contributor's global PATH. Runs on push, not every commit, because
   # linting the whole module is slow.
   - repo: https://github.com/golangci/golangci-lint
-    rev: c0d3ddc9cf3faa61a4e378e879ece580256d76e5  # frozen: v2.12.2
+    rev: 114493f9b3e7257d29e4130f2b4a4aadefbb6845  # frozen: v2.14.0
     hooks:
       - id: golangci-lint-full
         stages: [pre-push]

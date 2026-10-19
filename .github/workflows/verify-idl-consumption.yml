@@ -34,7 +34,7 @@ jobs:
       # dependency, not a fix for an observed bug.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.4"
+          go-version: "1.27.2"
 
       # Runs the same script the pre-commit `verify-idl-consumption` hook wraps,
       # so the source of truth is shared even though CI invokes it directly.
