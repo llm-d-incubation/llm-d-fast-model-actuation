@@ -17,4 +17,4 @@
 | **vllm/vllm-openai** | `v0.26.0` | tag | `cmd/requester/README.md`; `dockerfiles/Dockerfile.launcher.benchmark` line 1 (`BASE_IMAGE`) | [vllm-project/vllm](https://github.com/vllm-project/vllm) |
 | **vllm (CPU build)** | `v0.26.0` | tag | `dockerfiles/Dockerfile.launcher.cpu` line 5 (`VLLM_VERSION`) | [vllm-project/vllm](https://github.com/vllm-project/vllm) |
 | **nvidia/cuda** | `12.8.0-base-ubuntu22.04` | tag | `dockerfiles/Dockerfile.requester` line 31 | [NVIDIA CUDA](https://hub.docker.com/r/nvidia/cuda) |
-| **projectquay/golang (builder image)** | `1.26` | tag | `dockerfiles/Dockerfile.requester` line 2 | [projectquay/golang](https://quay.io/repository/projectquay/golang) |
+| **projectquay/golang (builder image)** | `1.27` | tag | `dockerfiles/Dockerfile.requester` line 2 | [projectquay/golang](https://quay.io/repository/projectquay/golang) |
