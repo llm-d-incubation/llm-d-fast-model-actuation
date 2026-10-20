@@ -211,12 +211,12 @@ elif already=$(kubectl get ClusterRole "$ensure_nvcr" -o json 2>/dev/null); then
             (.verbs | index("get")) and
             (.verbs | index("list")) and
             (.verbs | index("watch")) and
-            true) ] | length > 0' <<<$already > /dev/null
+            true) ] | length > 0' <<<"$already" > /dev/null
     then
         echo "ClusterRole $ensure_nvcr already exists and is adequate"
     else
-        extended=$(jq '.rules |= . + [{"apiGroups":[""], "resources":["nodes"], "verbs":["get","list","watch"]}]' <<<$already)
-        kubectl apply -f - <<<$extended
+        extended=$(jq '.rules |= . + [{"apiGroups":[""], "resources":["nodes"], "verbs":["get","list","watch"]}]' <<<"$already")
+        kubectl apply -f - <<<"$extended"
     fi
 else
      kubectl apply -f - <<EOF
@@ -244,14 +244,14 @@ if [[ "$install_crds" == "true" ]]; then
         ysrc=$(curl -fsSL "https://raw.githubusercontent.com/llm-d-incubation/llm-d-fast-model-actuation/refs/tags/v$release/config/crds.yaml")
     fi
     yq -o json eval . <<<"$ysrc" | jq -c . | while read -r obj; do
-        crd_name=$(jq -r .metadata.name <<<$obj)
+        crd_name=$(jq -r .metadata.name <<<"$obj")
         if ! kubectl get crd "$crd_name" &>/dev/null; then
-            kubectl create -f - <<<$obj
-        elif kubectl get crd "$crd_name" -o json 2>/dev/null | jq -e --slurpfile desired <(jq .spec <<<$obj) '.spec as $existing | ($existing * $desired[0]) == $existing' &>/dev/null; then
+            kubectl create -f - <<<"$obj"
+        elif kubectl get crd "$crd_name" -o json 2>/dev/null | jq -e --slurpfile desired <(jq .spec <<<"$obj") '.spec as $existing | ($existing * $desired[0]) == $existing' &>/dev/null; then
             echo "  CRD $crd_name already exists with adequate definition"
         else
             echo "  CRD $crd_name needs updating"
-            kubectl apply --server-side -f - <<<$obj
+            kubectl apply --server-side -f - <<<"$obj"
         fi
         sleep 1
         kubectl wait crd "$crd_name" --for condition=Established
