@@ -51,7 +51,7 @@ MAX_LOG_RESPONSE_BYTES = 1 * 1024 * 1024  # 1 MB default for API response
 
 # How often, in seconds, stop_async checks whether the processes of an
 # instance's process group that it is waiting for are gone.
-PROCESS_POLL_INTERVAL = 0.05
+PROCESS_POLL_INTERVAL = 0.1
 
 _MAX_BROADCASTER_EVENTS = 1000
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
