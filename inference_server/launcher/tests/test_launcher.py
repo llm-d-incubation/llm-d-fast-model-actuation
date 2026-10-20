@@ -53,8 +53,10 @@ from launcher import (  # noqa: E402
     VllmMultiProcessManager,
     WatchEvent,
     app,
+    lifespan,
     parse_range_header,
     set_env_vars,
+    watch_instances,
 )
 
 
@@ -1180,6 +1182,63 @@ class TestAsyncStop:
         assert manager.instances["bad-id"]._sentinel_active
         assert group.exceptions == (failure,)
 
+    @patch("launcher.multiprocessing.Process")
+    def test_cancelled_stop_keeps_watching_the_instance(
+        self, mock_process_class, manager, vllm_config, fake_procs
+    ):
+        """A stop cancelled midway must leave the instance tracked and watched.
+
+        CancelledError is not an Exception, so it needs handling of its own; if
+        the sentinel watcher were not put back, the instance's eventual exit
+        would never be reported.
+        """
+        proc = SlowExitProcess(3600, fake_procs)  # still stopping when cancelled
+        mock_process_class.return_value = proc
+
+        async def run():
+            manager.create_instance(vllm_config, "cancelled-id")
+            task = asyncio.create_task(manager.stop_instance_async("cancelled-id"))
+            await asyncio.sleep(0.05)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            return manager.instances["cancelled-id"]._sentinel_active
+
+        try:
+            sentinel_active = asyncio.run(run())
+        finally:
+            proc.close()
+        assert sentinel_active
+
+    @patch("launcher.multiprocessing.Process")
+    def test_shutdown_stops_instances_concurrently(
+        self, mock_process_class, manager, vllm_config, fake_procs
+    ):
+        """Shutting the launcher down must stop instances concurrently, too."""
+        procs = [
+            SlowExitProcess(SLOW_EXIT_SECS, fake_procs, pid)
+            for pid in (12345, 12346, 12347)
+        ]
+        mock_process_class.side_effect = procs
+
+        async def run():
+            for instance_id in ("id-1", "id-2", "id-3"):
+                manager.create_instance(vllm_config, instance_id)
+            started = time.monotonic()
+            with patch("launcher.vllm_manager", manager):
+                async with lifespan(app):
+                    pass
+            return time.monotonic() - started
+
+        try:
+            elapsed = asyncio.run(run())
+        finally:
+            for proc in procs:
+                proc.close()
+        assert manager.instances == {}
+        # Sequentially this would be ~3x SLOW_EXIT_SECS.
+        assert elapsed < 2 * SLOW_EXIT_SECS, f"stopping three took {elapsed:.2f}s"
+
 
 # Tests for API Endpoints
 class TestAPIEndpoints:
@@ -1929,6 +1988,38 @@ class TestWatchAPIEndpoint:
             assert event["object"]["instance_id"] == "existing-1"
             assert event["object"]["revision"] == 3
             assert "revision" not in event
+
+    def test_watch_initial_state_survives_instances_changing(self):
+        """Instances created or deleted while the initial state is being sent
+        must not break the stream: each yield lets other requests run."""
+        manager = MagicMock()
+        manager.revision = 0
+
+        async def no_events(since_revision=0):
+            return
+            yield  # make it an async generator
+
+        manager.broadcaster.watch = no_events
+
+        def instance(instance_id):
+            mock_instance = MagicMock()
+            mock_instance.get_status.return_value = {"instance_id": instance_id}
+            return mock_instance
+
+        manager.instances = {"a": instance("a"), "b": instance("b")}
+
+        async def run():
+            with patch("launcher.vllm_manager", manager):
+                response = await watch_instances(since=None)
+                lines = []
+                async for line in response.body_iterator:
+                    lines.append(line)
+                    # What a create interleaved here would do to the dict.
+                    manager.instances["c"] = instance("c")
+                return lines
+
+        lines = asyncio.run(run())
+        assert len(lines) == 2
 
 
 class TestLogStartOffset:
