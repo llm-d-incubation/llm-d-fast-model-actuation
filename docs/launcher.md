@@ -169,7 +169,7 @@ curl -X GET http://localhost:8001/v2/vllm/instances/a1b2c3d4-e5f6-7890-abcd-ef12
 Once started, the vLLM instance is accessible at its configured port (e.g., `http://localhost:8000`):
 
 ```bash
-curl http://localhost:8000/v2/chat/completions \
+curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "facebook/opt-125m",
@@ -544,7 +544,7 @@ curl -X POST http://localhost:8001/v2/vllm/instances \
   }'
 
 # Use the instance (vLLM API)
-curl http://localhost:8000/v2/models
+curl http://localhost:8000/v1/models
 
 # Delete instance
 curl -X DELETE http://localhost:8001/v2/vllm/instances/abc123...
