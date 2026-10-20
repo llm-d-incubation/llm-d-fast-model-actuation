@@ -475,7 +475,6 @@ metadata:
   name: example
 spec:
   modelServerConfig:
-    port: 8005
     options: >-
       --model TinyLlama/TinyLlama-1.1B-Chat-v1.0
       --enable-sleep-mode
@@ -517,6 +516,9 @@ metadata:
   name: example
 spec:
   maxInstances: 2
+  inferencePorts:
+  - 8005
+  - 8006
   podTemplate:
     metadata:
       labels:
@@ -550,11 +552,14 @@ spec:
               ephemeral-storage: "4.5Gi"
 ```
 
-An optional `inferencePorts` field is being introduced to the Spec of LauncherConfig,
-as part of a multi-stage transition toward having the dual-pods controller manage vLLM
-instance ports (see [#779](https://github.com/llm-d-incubation/llm-d-fast-model-actuation/issues/779)).
-The controller does not consume this field yet, so users should not set it at
-this stage. A later stage will update producers and consumers together.
+`inferencePorts` supplies the pool from which the dual-pods controller assigns a
+distinct port to each vLLM instance in a launcher. It must contain at least
+`maxInstances` ports. During the compatibility stage of this rollout the field
+is optional: when it is absent, the controller continues to use
+`modelServerConfig.port` from the `InferenceServerConfig`, and reports an error
+if that fallback is also absent. New sources should provide `inferencePorts`
+instead of the legacy per-server port (see
+[#779](https://github.com/llm-d-incubation/llm-d-fast-model-actuation/issues/779)).
 
 The settings of various environment variables to refer to `/tmp`
 configures the locations of the various caches that vLLM maintains on

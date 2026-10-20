@@ -79,8 +79,9 @@ spec:
                     type: string
                   port:
                     description: |-
-                      Port is the port on which the vLLM server will listen
-                      Particularly, management of vLLM instances' sleep state is done through this port
+                      Port is the backward-compatible inference port used when the referenced
+                      LauncherConfig does not define InferencePorts. When that pool is present,
+                      the controller assigns a port from it instead.
                     format: int32
                     maximum: 65535
                     minimum: 1

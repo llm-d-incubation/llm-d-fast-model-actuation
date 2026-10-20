@@ -525,7 +525,6 @@ metadata:
   name: my-is-config
 spec:
   modelServerConfig:
-    port: 8005
     options: "--model TinyLlama/TinyLlama-1.1B-Chat-v1.0 --enable-sleep-mode"
     env_vars:
       VLLM_SERVER_DEV_MODE: "1"
@@ -542,6 +541,11 @@ metadata:
   name: my-launcher-config
 spec:
   maxInstances: 4
+  inferencePorts:
+  - 8005
+  - 8006
+  - 8007
+  - 8008
   podTemplate:
     spec:
       containers:
