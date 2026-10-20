@@ -697,9 +697,8 @@ class VllmMultiProcessManager:
     def stop_instance(self, instance_id: str, timeout: int = 10) -> dict:
         """Stop a specific vLLM instance, blocking the caller.
 
-        Kept for callers with no event loop to protect: the lifespan shutdown
-        and the synchronous tests.  Request handling should use
-        stop_instance_async instead.
+        Kept for callers with no event loop, such as the synchronous tests.
+        Request handling should use stop_instance_async instead.
         """
         instance = self._stop_begin(instance_id)
         instance.stop(timeout)
@@ -719,9 +718,11 @@ class VllmMultiProcessManager:
             instance = self._stop_begin(instance_id)
             try:
                 await instance.stop_async(timeout)
-            except Exception:
+            except (Exception, asyncio.CancelledError):
                 # _stop_begin cancelled the sentinel watcher; since the instance
                 # stays tracked, put it back so its eventual exit is still noticed.
+                # That includes being cancelled midway, which CancelledError
+                # reports and which is not an Exception.
                 instance.start_sentinel_watcher(self._on_instance_stopped)
                 raise
             return self._stop_end(instance)
@@ -879,7 +880,10 @@ async def lifespan(application: FastAPI):
     """Manage application lifecycle: clean up all vLLM instances on shutdown."""
     yield
     logger.info("Launcher shutting down, stopping all vLLM instances...")
-    vllm_manager.stop_all_instances()
+    try:
+        await vllm_manager.stop_all_instances_async()
+    except Exception as e:
+        logger.error(f"Failed to stop all vLLM instances on shutdown: {e}")
 
 
 # Create FastAPI application
@@ -988,7 +992,9 @@ async def watch_instances(
             # Initial state: emit a CREATED event for every existing instance
             # and start streaming from the current revision.
             start_revision = vllm_manager.revision
-            for instance in vllm_manager.instances.values():
+            # Iterate over a copy: each yield lets other requests run, and those
+            # can create and delete instances, changing the dict meanwhile.
+            for instance in list(vllm_manager.instances.values()):
                 state = instance.get_status()
                 initial = WatchEvent(
                     type="CREATED",
