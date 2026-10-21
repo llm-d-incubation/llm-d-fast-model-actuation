@@ -43,6 +43,8 @@ func main() {
 	config := dpctlr.ControllerConfig{
 		SleeperLimit:                            1,
 		NumWorkers:                              2,
+		SleepDrainTimeout:                       5 * time.Minute,
+		SleepAbortTimeout:                       30 * time.Second,
 		DebugAcceleratorMemory:                  false,
 		GlobalAcceleratorSleepingMemoryLimitMiB: math.MaxInt64,
 	}
@@ -54,6 +56,8 @@ func main() {
 	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
 	pflag.CommandLine.IntVar(&config.SleeperLimit, "sleeper-limit", config.SleeperLimit, "limit on number of sleeping inference servers per GPU")
 	pflag.CommandLine.IntVar(&config.NumWorkers, "num-workers", config.NumWorkers, "number of queue worker goroutines")
+	pflag.CommandLine.DurationVar(&config.SleepDrainTimeout, "sleep-drain-timeout", config.SleepDrainTimeout, "maximum time to wait for in-flight inference requests before aborting them during sleep")
+	pflag.CommandLine.DurationVar(&config.SleepAbortTimeout, "sleep-abort-timeout", config.SleepAbortTimeout, "maximum time to wait for forced sleep after graceful drain times out")
 	pflag.CommandLine.BoolVar(&config.DebugAcceleratorMemory, "debug-accelerator-memory", config.DebugAcceleratorMemory, "whether to check accelerator memory usage before wake-up")
 	pflag.CommandLine.Int64Var(&config.GlobalAcceleratorSleepingMemoryLimitMiB, "global-accelerator-sleeping-memory-limit", config.GlobalAcceleratorSleepingMemoryLimitMiB, "limit on memory usage allowed at /wake_up, for each GPU regardless of workload")
 	AddFlags(*pflag.CommandLine, loadingRules, overrides)
