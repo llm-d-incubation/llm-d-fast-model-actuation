@@ -455,7 +455,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Completed actuation latency from requester container start through readiness relay. Failed or incomplete actuations are not observed by this histogram; correlate gaps with the HTTP and controller rows.",
+      "description": "Completed actuation latency from requester container start through readiness relay. Failed or incomplete actuations are not observed by this histogram; correlate gaps with the HTTP and controller rows.\n\nBucket upper bounds (seconds, at range end): ${actuation_buckets:join:, }.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -928,7 +928,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "P95 latency of the Kubernetes API call that creates a launcher Pod object. It does not include scheduling, image pull, or container startup.",
+      "description": "P95 latency of the Kubernetes API call that creates a launcher Pod object. It does not include scheduling, image pull, or container startup.\n\nBucket upper bounds (seconds, at range end): ${launcher_create_buckets:join:, }.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1390,7 +1390,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "P95 controller HTTP latency by operation. Compare relay, create, sleep, and wake paths to identify the slow external step.",
+      "description": "P95 controller HTTP latency by operation. Compare relay, create, sleep, and wake paths to identify the slow external step.\n\nBucket upper bounds (seconds, at range end): ${http_latency_buckets:join:, }.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1576,7 +1576,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "P95 time from a unique node-local enqueue to dequeue. Rising values indicate worker backlog or retry pressure.",
+      "description": "P95 time a node-local work item waits after becoming eligible for processing. Rising values indicate worker backlog.\n\nBucket upper bounds (seconds, at range end): ${queue_duration_buckets:join:, }.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -1669,7 +1669,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "P95 time spent processing one node-local work item. Compare with queue latency to distinguish slow work from backlog.",
+      "description": "P95 time spent processing one node-local work item. Compare with queue latency to distinguish slow work from backlog.\n\nBucket upper bounds (seconds, at range end): ${work_duration_buckets:join:, }.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -2362,6 +2362,146 @@
         "refresh": 2,
         "regex": "",
         "sort": 1,
+        "type": "query"
+      },
+      {
+        "allValue": "",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "definition": "query_result(count by (le) (fma_actuation_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\"}) or label_replace(absent(fma_actuation_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\"}), \"le\", \"unavailable\", \"\", \"\"))",
+        "hide": 2,
+        "includeAll": true,
+        "multi": true,
+        "name": "actuation_buckets",
+        "options": [],
+        "query": {
+          "qryType": 3,
+          "query": "query_result(count by (le) (fma_actuation_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\"}) or label_replace(absent(fma_actuation_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\"}), \"le\", \"unavailable\", \"\", \"\"))",
+          "refId": "PrometheusVariableQueryEditor-actuation_buckets"
+        },
+        "refresh": 2,
+        "regex": "/le=\"([^\"]+)\"/",
+        "skipUrlSync": true,
+        "sort": 3,
+        "type": "query"
+      },
+      {
+        "allValue": "",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "definition": "query_result(count by (le) (fma_launcher_create_seconds_bucket{namespace=~\"$namespace\", lcfg_name=~\"$lcfg\"}) or label_replace(absent(fma_launcher_create_seconds_bucket{namespace=~\"$namespace\", lcfg_name=~\"$lcfg\"}), \"le\", \"unavailable\", \"\", \"\"))",
+        "hide": 2,
+        "includeAll": true,
+        "multi": true,
+        "name": "launcher_create_buckets",
+        "options": [],
+        "query": {
+          "qryType": 3,
+          "query": "query_result(count by (le) (fma_launcher_create_seconds_bucket{namespace=~\"$namespace\", lcfg_name=~\"$lcfg\"}) or label_replace(absent(fma_launcher_create_seconds_bucket{namespace=~\"$namespace\", lcfg_name=~\"$lcfg\"}), \"le\", \"unavailable\", \"\", \"\"))",
+          "refId": "PrometheusVariableQueryEditor-launcher_create_buckets"
+        },
+        "refresh": 2,
+        "regex": "/le=\"([^\"]+)\"/",
+        "skipUrlSync": true,
+        "sort": 3,
+        "type": "query"
+      },
+      {
+        "allValue": "",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "definition": "query_result(count by (le) (fma_http_latency_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\"}) or label_replace(absent(fma_http_latency_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\"}), \"le\", \"unavailable\", \"\", \"\"))",
+        "hide": 2,
+        "includeAll": true,
+        "multi": true,
+        "name": "http_latency_buckets",
+        "options": [],
+        "query": {
+          "qryType": 3,
+          "query": "query_result(count by (le) (fma_http_latency_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\"}) or label_replace(absent(fma_http_latency_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\"}), \"le\", \"unavailable\", \"\", \"\"))",
+          "refId": "PrometheusVariableQueryEditor-http_latency_buckets"
+        },
+        "refresh": 2,
+        "regex": "/le=\"([^\"]+)\"/",
+        "skipUrlSync": true,
+        "sort": 3,
+        "type": "query"
+      },
+      {
+        "allValue": "",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "definition": "query_result(count by (le) (fma_dpc_innerqueue_queue_duration_seconds_bucket{namespace=~\"$namespace\", node=~\"$node\"}) or label_replace(absent(fma_dpc_innerqueue_queue_duration_seconds_bucket{namespace=~\"$namespace\", node=~\"$node\"}), \"le\", \"unavailable\", \"\", \"\"))",
+        "hide": 2,
+        "includeAll": true,
+        "multi": true,
+        "name": "queue_duration_buckets",
+        "options": [],
+        "query": {
+          "qryType": 3,
+          "query": "query_result(count by (le) (fma_dpc_innerqueue_queue_duration_seconds_bucket{namespace=~\"$namespace\", node=~\"$node\"}) or label_replace(absent(fma_dpc_innerqueue_queue_duration_seconds_bucket{namespace=~\"$namespace\", node=~\"$node\"}), \"le\", \"unavailable\", \"\", \"\"))",
+          "refId": "PrometheusVariableQueryEditor-queue_duration_buckets"
+        },
+        "refresh": 2,
+        "regex": "/le=\"([^\"]+)\"/",
+        "skipUrlSync": true,
+        "sort": 3,
+        "type": "query"
+      },
+      {
+        "allValue": "",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "definition": "query_result(count by (le) (fma_dpc_innerqueue_work_duration_seconds_bucket{namespace=~\"$namespace\", node=~\"$node\"}) or label_replace(absent(fma_dpc_innerqueue_work_duration_seconds_bucket{namespace=~\"$namespace\", node=~\"$node\"}), \"le\", \"unavailable\", \"\", \"\"))",
+        "hide": 2,
+        "includeAll": true,
+        "multi": true,
+        "name": "work_duration_buckets",
+        "options": [],
+        "query": {
+          "qryType": 3,
+          "query": "query_result(count by (le) (fma_dpc_innerqueue_work_duration_seconds_bucket{namespace=~\"$namespace\", node=~\"$node\"}) or label_replace(absent(fma_dpc_innerqueue_work_duration_seconds_bucket{namespace=~\"$namespace\", node=~\"$node\"}), \"le\", \"unavailable\", \"\", \"\"))",
+          "refId": "PrometheusVariableQueryEditor-work_duration_buckets"
+        },
+        "refresh": 2,
+        "regex": "/le=\"([^\"]+)\"/",
+        "skipUrlSync": true,
+        "sort": 3,
         "type": "query"
       }
     ]
