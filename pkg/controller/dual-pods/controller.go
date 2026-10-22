@@ -35,6 +35,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	apitypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	corev1preinformers "k8s.io/client-go/informers/core/v1"
@@ -703,6 +704,8 @@ func (ctl *controller) OnAdd(obj any, isInInitialList bool) {
 			iscCountGauges.WithLabelValues(lcfgName).Inc()
 		}
 		ctl.enqueueInfSvrItemsByISC(typed, isInInitialList)
+	case *fmav1alpha1.LauncherConfig:
+		ctl.enqueueInfSvrItemsByLauncherConfig(typed, isInInitialList)
 	case *corev1.ConfigMap:
 		if typed.Name != GPUMapName {
 			ctl.enqueueLogger.V(5).Info("Ignoring ConfigMap that is not the GPU map", "ref", cache.MetaObjectToName(typed))
@@ -768,6 +771,14 @@ func (ctl *controller) OnUpdate(prev, obj any) {
 			ctl.enqueueInstanceGCItemsForISC(typed.Name)
 		}
 		ctl.enqueueInfSvrItemsByISC(typed, false)
+	case *fmav1alpha1.LauncherConfig:
+		// Status-only updates (e.g., from the launcher populator) cannot change
+		// how requesters are processed.
+		if prevTyped, ok := prev.(*fmav1alpha1.LauncherConfig); ok && reflect.DeepEqual(prevTyped.Spec, typed.Spec) {
+			ctl.enqueueLogger.V(5).Info("Ignoring LauncherConfig update that does not change Spec", "ref", cache.MetaObjectToName(typed))
+			return
+		}
+		ctl.enqueueInfSvrItemsByLauncherConfig(typed, false)
 	case *corev1.ConfigMap:
 		if typed.Name != GPUMapName {
 			ctl.enqueueLogger.V(5).Info("Ignoring ConfigMap that is not the GPU map", "ref", cache.MetaObjectToName(typed))
@@ -865,6 +876,8 @@ func (ctl *controller) OnDelete(obj any) {
 			iscCountGauges.WithLabelValues(lcfgName).Dec()
 		}
 		ctl.enqueueInfSvrItemsByISC(typed, false)
+	case *fmav1alpha1.LauncherConfig:
+		ctl.enqueueInfSvrItemsByLauncherConfig(typed, false)
 	case *corev1.ConfigMap:
 		if typed.Name != GPUMapName {
 			ctl.enqueueLogger.V(5).Info("Ignoring ConfigMap that is not the GPU map", "ref", cache.MetaObjectToName(typed))
@@ -999,6 +1012,24 @@ func (ctl *controller) enqueueInfSvrItemsByISC(isc *fmav1alpha1.InferenceServerC
 	}
 	for nodeName := range nodeNames {
 		ctl.Queue.Add(nodeItem{nodeName})
+	}
+}
+
+// enqueueInfSvrItemsByLauncherConfig enqueues the server-requesting Pods whose
+// InferenceServerConfig references the given LauncherConfig, so that a requester
+// rejected because of that LauncherConfig is reconsidered once it changes.
+func (ctl *controller) enqueueInfSvrItemsByLauncherConfig(lc *fmav1alpha1.LauncherConfig, isInInitialList bool) {
+	iscs, err := ctl.iscLister.InferenceServerConfigs(ctl.namespace).List(labels.Everything())
+	if err != nil {
+		ctl.enqueueLogger.Error(err, "Failed to list InferenceServerConfigs that may use LauncherConfig", "ref", cache.MetaObjectToName(lc))
+		return
+	}
+	for _, isc := range iscs {
+		if isc.Spec.LauncherConfigName != lc.Name {
+			continue
+		}
+		ctl.enqueueLogger.V(5).Info("Enqueuing users of InferenceServerConfig due to notification of LauncherConfig", "inferenceServerConfigName", isc.Name, "launcherConfigName", lc.Name, "isInInitialList", isInInitialList, "resourceVersion", lc.ResourceVersion)
+		ctl.enqueueInfSvrItemsByISC(isc, isInInitialList)
 	}
 }
 
