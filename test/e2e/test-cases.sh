@@ -537,6 +537,16 @@ kubectl wait --for condition=Ready pod/$launcher1 -n "$NS" --timeout=0s
 
 check_gpu_pin $req3
 
+if [ -z "$FMA_RELEASE" ] || ! version_leq "$FMA_RELEASE" 0.7.1; then
+    # Pool-aware fixtures omit legacy ports. Their coexistence proves that the
+    # controller allocated distinct ports from LauncherConfig.spec.inferencePorts.
+    isc_port=$(kubectl get inferenceserverconfig "$isc" -n "$NS" -o jsonpath='{.spec.modelServerConfig.port}')
+    isc2_port=$(kubectl get inferenceserverconfig "$isc2" -n "$NS" -o jsonpath='{.spec.modelServerConfig.port}')
+    [ -z "$isc_port" ] && [ -z "$isc2_port" ] || { echo "ERROR: pool-aware InferenceServerConfigs unexpectedly specify legacy ports $isc_port and $isc2_port" >&2; exit 1; }
+    launcher_instance_ports=$(kubectl exec -n "$NS" "$launcher1" -- python3 -c 'import json,urllib.request; instances=json.load(urllib.request.urlopen("http://127.0.0.1:8001/v2/vllm/instances"))["instances"]; print(",".join(sorted(instance["annotations"]["inference-port"] for instance in instances)))')
+    [ "$launcher_instance_ports" = "8005,8006" ] || { echo "ERROR: pooled launcher ports are $launcher_instance_ports, expected 8005,8006" >&2; exit 1; }
+fi
+
 note displaying storage space in launcher /tmp
 
 kubectl exec -n "$NS" $launcher1 -- du -h /tmp
@@ -611,11 +621,14 @@ if [ -z "${FMA_RELEASE}" ] || ! version_leq "${FMA_RELEASE}" 0.6.5; then
     # the proxy port is served by the bound instance.
     #
     # Assumed starting state: $req4 is bound to $launcher1, both Ready. Also
-    # assumed: the InferenceServerConfig of $req4 is $isc, which is where the
-    # inference server's port is read from below.
+    # assumed: the InferenceServerConfig of $req4 is $isc.
 
     launcher1_ip=$(kubectl get pod "$launcher1" -n "$NS" -o jsonpath='{.status.podIP}')
-    launcher1_port=$(kubectl get inferenceserverconfig "$isc" -n "$NS" -o jsonpath='{.spec.modelServerConfig.port}')
+    if [ -z "$FMA_RELEASE" ] || ! version_leq "$FMA_RELEASE" 0.7.1; then
+        launcher1_port=$(kubectl get pod "$launcher1" -n "$NS" -o jsonpath='{.metadata.annotations.dual-pods\.llm-d\.ai/server-port}')
+    else
+        launcher1_port=$(kubectl get inferenceserverconfig "$isc" -n "$NS" -o jsonpath='{.spec.modelServerConfig.port}')
+    fi
     expected_target=$(printf '{"address":"%s","port":%d}' "$launcher1_ip" "$launcher1_port")
 
     note "Checking proxy config on requester Pod $req4; expect port-forward and curl noise"
