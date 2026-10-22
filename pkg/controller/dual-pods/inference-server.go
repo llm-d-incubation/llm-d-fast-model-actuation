@@ -845,7 +845,8 @@ type launcherSelection struct {
 // that needs the most vLLM instance deletions, using LRU as a tie-breaker.
 // If it finds an unbound launcher's malformed instance state, it repairs that
 // state by deleting the malformed instance and asks the caller to retry with a
-// fresh launcher snapshot.
+// fresh launcher snapshot. It does the same for an instance matching
+// targetInstanceID whose port is no longer in a non-empty inferencePorts.
 // The selection includes the port to use. A matching sleeping instance keeps
 // its existing port. A new instance gets an unused port from inferencePorts,
 // or desiredPort when inferencePorts is empty (the backward-compatible mode).
@@ -911,25 +912,22 @@ func (ctl *controller) selectOrReclaimLauncherPod(
 					"annotations", inst.Annotations,
 					"options", inst.Options,
 					"err", err)
-				launcherBaseURL := fmt.Sprintf("http://%s:%d", launcherPod.Status.PodIP, ctlrcommon.LauncherServicePort)
-				iscName := inst.Annotations[VllmConfigISCNameAnnotationKey]
-				lClient, clientErr := NewLauncherClient(launcherBaseURL, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": iscName}))
-				if clientErr != nil {
-					return nil, true, fmt.Errorf("failed to create launcher client for deleting instance %q from launcher Pod %q: %w", inst.InstanceID, launcherPod.Name, clientErr)
-				}
-				_, delErr := lClient.DeleteInstance(ctx, inst.InstanceID)
-				if delErr != nil && !IsInstanceNotFoundError(delErr) {
-					return nil, true, fmt.Errorf("failed to delete instance %q with no usable inference port from launcher Pod %q: %w", inst.InstanceID, launcherPod.Name, delErr)
-				}
-				instancesDeleted.Insert(inst.InstanceID)
-				delete(launcherDat.Instances, inst.InstanceID)
-				logger.V(2).Info("Ensured vLLM instance absent because it reports no usable port",
-					"launcherPod", launcherPod.Name, "instanceID", inst.InstanceID)
-				return nil, true, nil
+				return nil, true, ctl.ensureUnusableInstanceAbsent(ctx, launcherPod, launcherDat, instancesDeleted, inst, "it reports no usable port")
 			}
 			usedPorts.Insert(instPort)
 			portsByInstance[inst.InstanceID] = instPort
 			if inst.InstanceID == targetInstanceID {
+				// The pooled instance ID does not cover the port, so an instance
+				// left on a port since removed from inferencePorts still matches.
+				// Delete it so that it can be recreated on a pool port.
+				if useInferencePortPool && !slices.Contains(inferencePorts, instPort) {
+					logger.V(5).Info("Deleting matching vLLM instance because its port is outside inferencePorts",
+						"name", launcherPod.Name,
+						"instanceID", inst.InstanceID,
+						"port", instPort,
+						"inferencePorts", inferencePorts)
+					return nil, true, ctl.ensureUnusableInstanceAbsent(ctx, launcherPod, launcherDat, instancesDeleted, inst, "its port is outside inferencePorts")
+				}
 				if inst.Status != InstanceStatusStopped {
 					hasSleepingInstance = true
 					sleepingInstancePort = instPort
@@ -1036,6 +1034,34 @@ func (ctl *controller) selectOrReclaimLauncherPod(
 	// No suitable launcher Pod found.
 	logger.V(4).Info("No suitable launcher Pod found with sleeping instance, capacity, or reclaimable capacity")
 	return nil, false, nil
+}
+
+// ensureUnusableInstanceAbsent deletes, from an unbound launcher Pod, a vLLM
+// instance that cannot be used as it is. reason completes the phrase
+// "because ..." in the log and error messages.
+func (ctl *controller) ensureUnusableInstanceAbsent(
+	ctx context.Context,
+	launcherPod *corev1.Pod,
+	launcherDat *launcherData,
+	instancesDeleted sets.Set[string],
+	inst InstanceState,
+	reason string,
+) error {
+	launcherBaseURL := fmt.Sprintf("http://%s:%d", launcherPod.Status.PodIP, ctlrcommon.LauncherServicePort)
+	iscName := inst.Annotations[VllmConfigISCNameAnnotationKey]
+	lClient, err := NewLauncherClient(launcherBaseURL, ctl.httpLatencySecsHistograms.MustCurryWith(prometheus.Labels{"isc_name": iscName}))
+	if err != nil {
+		return fmt.Errorf("failed to create launcher client for deleting instance %q from launcher Pod %q: %w", inst.InstanceID, launcherPod.Name, err)
+	}
+	_, err = lClient.DeleteInstance(ctx, inst.InstanceID)
+	if err != nil && !IsInstanceNotFoundError(err) {
+		return fmt.Errorf("failed to delete instance %q from launcher Pod %q because %s: %w", inst.InstanceID, launcherPod.Name, reason, err)
+	}
+	instancesDeleted.Insert(inst.InstanceID)
+	delete(launcherDat.Instances, inst.InstanceID)
+	klog.FromContext(ctx).V(2).Info("Ensured vLLM instance absent because "+reason,
+		"launcherPod", launcherPod.Name, "instanceID", inst.InstanceID)
+	return nil
 }
 
 // firstAvailableInferencePort returns the lowest pool port not in used. The
