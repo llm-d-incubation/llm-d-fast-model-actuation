@@ -1990,8 +1990,11 @@ class TestWatchAPIEndpoint:
             assert "revision" not in event
 
     def test_watch_initial_state_survives_instances_changing(self):
-        """Instances created or deleted while the initial state is being sent
-        must not break the stream: each yield lets other requests run."""
+        """Changes made while the initial state is being sent must neither break
+        the stream nor show up in it: each yield lets other requests run, and
+        the initial state is the state as of the starting revision."""
+        import json
+
         manager = MagicMock()
         manager.revision = 0
 
@@ -2003,7 +2006,10 @@ class TestWatchAPIEndpoint:
 
         def instance(instance_id):
             mock_instance = MagicMock()
-            mock_instance.get_status.return_value = {"instance_id": instance_id}
+            mock_instance.get_status.return_value = {
+                "instance_id": instance_id,
+                "status": "running",
+            }
             return mock_instance
 
         manager.instances = {"a": instance("a"), "b": instance("b")}
@@ -2016,10 +2022,18 @@ class TestWatchAPIEndpoint:
                     lines.append(line)
                     # What a create interleaved here would do to the dict.
                     manager.instances["c"] = instance("c")
+                    # And what a stop interleaved here would do to a status.
+                    manager.instances["b"].get_status.return_value = {
+                        "instance_id": "b",
+                        "status": "stopped",
+                    }
                 return lines
 
-        lines = asyncio.run(run())
-        assert len(lines) == 2
+        events = [json.loads(line) for line in asyncio.run(run())]
+        assert [event["object"] for event in events] == [
+            {"instance_id": "a", "status": "running"},
+            {"instance_id": "b", "status": "running"},
+        ]
 
 
 class TestLogStartOffset:

@@ -992,10 +992,13 @@ async def watch_instances(
             # Initial state: emit a CREATED event for every existing instance
             # and start streaming from the current revision.
             start_revision = vllm_manager.revision
-            # Iterate over a copy: each yield lets other requests run, and those
-            # can create and delete instances, changing the dict meanwhile.
-            for instance in list(vllm_manager.instances.values()):
-                state = instance.get_status()
+            # Take every instance's state before the first yield: each yield
+            # lets other requests run, and those can create, stop and delete
+            # instances meanwhile.  This is the state as of start_revision.
+            states = [
+                instance.get_status() for instance in vllm_manager.instances.values()
+            ]
+            for state in states:
                 initial = WatchEvent(
                     type="CREATED",
                     object=state,
