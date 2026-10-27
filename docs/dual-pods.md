@@ -177,6 +177,11 @@ objects call for a proactive population of launchers, as follows.
   that `LauncherConfig` exists and has a malformed Pod template, the
   FMA controllers will not create or delete launchers.
 
+Launcher Pods list their `LauncherConfig` as their controlling owner, so
+`kubectl drain` recognizes them as managed Pods. The owner reference also
+allows Kubernetes garbage collection to delete launcher Pods when their
+`LauncherConfig` is deleted, independently of the FMA controllers.
+
 ### User-initiated changes to relevant API objects
 
 FMA is written in the usual Kubernetes style: it primarily reacts to
