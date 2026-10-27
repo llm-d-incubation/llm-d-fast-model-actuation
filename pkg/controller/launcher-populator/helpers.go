@@ -19,7 +19,9 @@ package launcherpopulator
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/common"
 	corev1 "k8s.io/api/core/v1"
@@ -122,18 +124,25 @@ func (ctl *controller) createLaunchers(ctx context.Context, node *corev1.Node, k
 
 	// Create the specified number of launcher pods
 	for i := 0; i < count; i++ {
-
-		createdPod, err := ctl.coreclient.Pods(ctl.namespace).Create(ctx, launcherPodTemplate.DeepCopy(), metav1.CreateOptions{})
+		desiredPod := launcherPodTemplate.DeepCopy()
+		createStart := ctl.clock.Now()
+		createdPod, err := ctl.coreclient.Pods(ctl.namespace).Create(ctx, desiredPod, metav1.CreateOptions{})
+		latencySecs := ctl.clock.Since(createStart).Seconds()
+		launcherCreateSecsHistograms.WithLabelValues(ctl.namespace, key.LauncherConfigName, strconv.FormatBool(err == nil)).Observe(latencySecs)
 		if err != nil {
+			logger.V(2).Info("Failed to create launcher pod", "node", node.Name, "config", key.LauncherConfigName,
+				"k8sCallStartTime", createStart.Format(time.RFC3339Nano), "latencySecs", latencySecs, "err", err)
 			return fmt.Errorf("failed to create launcher pod: %w", err)
 		}
 		// Record expectation for this specific Pod UID immediately after creation.
 		ctl.expectations.expectCreation(key, createdPod.UID)
-		logger.Info("Created launcher pod",
+		logger.V(2).Info("Created launcher pod",
 			"pod", createdPod.Name,
 			"uid", createdPod.UID,
 			"resourceVersion", createdPod.ResourceVersion,
-			"node", node.Name)
+			"node", node.Name,
+			"k8sCallStartTime", createStart.Format(time.RFC3339Nano),
+			"latencySecs", latencySecs)
 	}
 
 	return nil

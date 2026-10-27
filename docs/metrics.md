@@ -200,14 +200,14 @@ logger.V(5).Info("HTTP call done", "purpose", purpose, "method", method, "url", 
 ### fma_launcher_create_seconds
 
 Vector of histograms: Latency of kube API call to create launcher.
+Emitted by both the dual-pods controller and the launcher-populator.
 This is only the time to get the Kube apiserver to create the Pod _API
 object_; the actual construction by of a running Pod, as well as the
 scheduling by the Kube Pod scheduler, are not included here.
 
 Labels are as follows.
 
-- `exported_namespace`: Kube namespace of requester and provider
+- `exported_namespace`: Kube namespace of the launcher Pod
 - `lcfg_name`: name of the relevant LauncherConfig object
-- `success`: "true" if no error, "false" otherwise. Here "error" means
-  a failure to construct the HTTP request message, send it, or receive
-  the response message. The HTTP "status" code is not germane.
+- `success`: "true" if the Kubernetes client returns no error from the
+  Pod creation call, "false" otherwise.

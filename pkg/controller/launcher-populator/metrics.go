@@ -78,7 +78,8 @@ var (
 	// launcherPodCountGauge is a GaugeVec of the number of launcher Pods, labeled
 	// by LauncherConfig name and phase. It deliberately carries no Node label:
 	// a Node label would make cardinality grow with cluster size.
-	launcherPodCountGauge *kubemetrics.GaugeVec
+	launcherPodCountGauge        *kubemetrics.GaugeVec
+	launcherCreateSecsHistograms *kubemetrics.HistogramVec
 )
 
 // registerMetrics registers the launcher-populator metrics with the k8s legacy
@@ -91,7 +92,14 @@ func registerMetrics() {
 			Help:           "Number of launcher Pods by LauncherConfig and phase (bound, unbound, stuck_scheduling, stuck_starting, stale)",
 			StabilityLevel: kubemetrics.ALPHA,
 		}, []string{lcfgNameLabel, phaseLabel})
-		legacyregistry.MustRegister(launcherPodCountGauge)
+		launcherCreateSecsHistograms = kubemetrics.NewHistogramVec(&kubemetrics.HistogramOpts{
+			Namespace:      "fma",
+			Name:           "launcher_create_seconds",
+			Help:           "Latency of kube API call to create launcher",
+			Buckets:        []float64{0.001, 0.01, 0.1, 1, 2, 3, 4, 5},
+			StabilityLevel: kubemetrics.ALPHA,
+		}, []string{"exported_namespace", "lcfg_name", "success"})
+		legacyregistry.MustRegister(launcherPodCountGauge, launcherCreateSecsHistograms)
 	})
 }
 
