@@ -346,13 +346,15 @@ if [ "$POLICIES_ENABLED" = true ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Same-Node Port Collision
+# Concurrent Same-Node Request
 # ---------------------------------------------------------------------------
 
-intro_case Same-Node Port Collision Creates New Launcher
+intro_case Concurrent Same-Node Request Creates New Launcher
 
-# Check whether the test node has a free GPU for the collision requester.
-# req1 already holds 1 GPU; the collision requester needs 1 more on the same node.
+# This verifies that two awake instances use different launchers; it does not
+# isolate the legacy same-port collision behavior.
+# Check whether the test node has a free GPU for the concurrent requester.
+# req1 already holds 1 GPU; the concurrent requester needs 1 more on the same node.
 allocatable_gpus=$(kubectl get node "$testnode" -o jsonpath='{.status.allocatable.nvidia\.com/gpu}')
 allocated_gpus=$(kubectl get pods --all-namespaces --field-selector spec.nodeName="$testnode" -o json \
   | jq '[.items[]
@@ -365,7 +367,7 @@ echo "Node $testnode: allocatable_gpus=$allocatable_gpus allocated_gpus=$allocat
 
 if false && (( available_gpus < 1 )); then
     echo "FAIL: Node $testnode has no free GPUs ($allocatable_gpus allocatable, $allocated_gpus allocated)." >&2
-    echo "The Same-Node Port Collision test needs 1 free GPU for the collision requester." >&2
+    echo "The Concurrent Same-Node Request test needs 1 free GPU for the concurrent requester." >&2
     echo "This is likely due to GPU saturation on the shared cluster." >&2
     exit 1
 else
@@ -393,13 +395,13 @@ else
     expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$collision_inst | wc -l | grep -w 1"
 
     collision_req=$(kubectl get pods -n "$NS" -o name -l app=dp-example,instance=$collision_inst | sed s%pod/%%)
-    echo "Collision requester Pod is $collision_req"
+    echo "Concurrent requester Pod is $collision_req"
 
     expect '[ "$(kubectl get pod -n '"$NS"' '"$collision_req"' -o jsonpath={.spec.nodeName})" == "'"$testnode"'" ]'
     expect "kubectl get pods -n $NS -o name -l dual-pods.llm-d.ai/dual=$collision_req | wc -l | grep -w 1"
 
     collision_launcher=$(kubectl get pods -n "$NS" -o name -l dual-pods.llm-d.ai/dual=$collision_req | sed s%pod/%%)
-    echo "Collision launcher Pod is $collision_launcher"
+    echo "Concurrent launcher Pod is $collision_launcher"
 
     [ "$collision_launcher" != "$launcher1" ]
 
@@ -421,7 +423,7 @@ else
     kubectl delete pod "$collision_launcher" -n "$NS" --wait=true
     expect '! kubectl get pods -n '"$NS"' -o name | grep -qw pod/'"$collision_launcher"
 
-    cheer Successful same-node collision handling
+    cheer Successful concurrent same-node request handling
 
 fi # available_gpus check
 

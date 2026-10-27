@@ -1151,7 +1151,8 @@ func (ctl *controller) configInferenceServer(isc *fmav1alpha1.InferenceServerCon
 		// The assigned port is launcher-local state, not part of the logical
 		// inference-server configuration or its reusable instance identity. Use
 		// an explicitly port-free shape so this identity remains stable when the
-		// legacy Port field is removed from ModelServerConfig in rollout step 3.
+		// legacy Port field is removed from ModelServerConfig in stage 3 of the
+		// transition.
 		hashedConfig = struct {
 			Options     string            `json:"options,omitempty"`
 			EnvVars     map[string]string `json:"env_vars,omitempty"`
