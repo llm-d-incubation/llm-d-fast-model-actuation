@@ -29,7 +29,7 @@ import sys
 import uuid
 from contextlib import asynccontextmanager
 from http import HTTPStatus  # HTTP Status Codes
-from typing import Dict, List, Optional
+from typing import Dict, Generator, List, Optional
 
 import psutil
 import uvloop
@@ -48,6 +48,11 @@ from vllm.entrypoints.serve.utils.api_utils import cli_env_setup
 from vllm.utils.argparse_utils import FlexibleArgumentParser
 
 MAX_LOG_RESPONSE_BYTES = 1 * 1024 * 1024  # 1 MB default for API response
+
+# How often, in seconds, stop_async checks whether the processes of an
+# instance's process group that it is waiting for are gone.
+PROCESS_POLL_INTERVAL = 0.1
+
 _MAX_BROADCASTER_EVENTS = 1000
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
@@ -192,6 +197,26 @@ def dump_process_group(subject: str, pgpid: int, when: str) -> set[psutil.Proces
     return ans
 
 
+async def _await_procs(procs: set[psutil.Process], timeout: float) -> None:
+    """psutil.wait_procs(procs, timeout), but sleeping on the event loop.
+
+    Apart from the vLLM process itself, these are not children of the launcher,
+    so there is no sentinel fd to watch for them and waiting means polling.
+    psutil.wait_procs polls too, only it sleeps on the calling thread between
+    checks.  Here a zero timeout makes each check non-blocking, and the sleeping
+    is done on the loop.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    alive = list(procs)
+    while True:
+        _, alive = psutil.wait_procs(alive, timeout=0)
+        remaining = deadline - loop.time()
+        if not alive or remaining <= 0:
+            return
+        await asyncio.sleep(min(PROCESS_POLL_INTERVAL, remaining))
+
+
 class VllmInstance:
     """Represents a single vLLM instance"""
 
@@ -268,11 +293,13 @@ class VllmInstance:
 
         return self._make_state("started")
 
-    def stop(self, timeout: int = 10) -> dict:
-        """
-        Stop existing vLLM instance
-        :param timeout: waits for the process to stop, defaults to 10
-        :return: a dictionary with the status "terminated"
+    def _stop_steps(self) -> Generator[Optional[set[psutil.Process]], None, dict]:
+        """The stop sequence, shared by stop() and stop_async().
+
+        This is a generator so that the sequence is written once while each of
+        those does the waiting its own way.  Where it needs a wait it yields what
+        to wait for: None for the vLLM process, or a set of processes from its
+        process group.  It returns the final state.
         """
         if self.process is None:
             raise HalfMade(self.instance_id)
@@ -295,7 +322,7 @@ class VllmInstance:
             self.process.terminate()
         except psutil.Error as exn:
             logger.error(f"For instance {self.instance_id}, terminate threw {exn}")
-        self.process.join(timeout=timeout)
+        yield None
         rounds = 1
         while rounds < 3:
             remains = dump_process_group(
@@ -332,7 +359,7 @@ class VllmInstance:
                         f"For instance {self.instance_id},"
                         f" terminate/kill({proc.pid} threw {exn})"
                     )
-            psutil.wait_procs(remains, timeout=timeout)
+            yield remains
             rounds = rounds + 1
         finals = dump_process_group(self.instance_id, vllm_pid, "at end of stopping")
         if len(finals) > 0:
@@ -342,6 +369,86 @@ class VllmInstance:
             )
         self._cleanup_log_file()
         return self._make_state("terminated")
+
+    async def _await_exit(self, timeout: float) -> None:
+        """Wait for the vLLM process to exit, using the event loop's own poll.
+
+        The kernel makes the sentinel fd readable when the child exits, and the
+        loop is already watching fds; so waiting means adding this one to what the
+        loop polls, rather than blocking the loop in a poll of our own the way
+        process.join() does (it polls the very same fd internally, on the calling
+        thread).  The caller must have removed any other reader for this fd first
+        --- asyncio allows only one --- which stop_instance_async does by way of
+        cancel_sentinel_watcher().
+
+        Returns when the child has exited or *timeout* has elapsed, whichever
+        comes first.
+        """
+        loop = asyncio.get_running_loop()
+        exited = loop.create_future()
+
+        def on_readable():
+            if not exited.done():
+                exited.set_result(True)
+
+        # If the child is already gone the fd is readable now, and the loop calls
+        # on_readable on its next pass; no need to special-case that.
+        loop.add_reader(self.process.sentinel, on_readable)
+        try:
+            await asyncio.wait_for(exited, timeout)
+        except TimeoutError:
+            pass
+        finally:
+            loop.remove_reader(self.process.sentinel)
+
+    def stop(self, timeout: int = 10) -> dict:
+        """
+        Stop existing vLLM instance, blocking the caller.
+
+        The waits block the calling thread; use stop_async() from anything that
+        must not block, such as a request handler.
+        :param timeout: how long each wait for processes to exit may take,
+                        defaults to 10
+        :return: a dictionary with the status "terminated"
+        """
+        steps = self._stop_steps()
+        try:
+            procs = next(steps)
+            while True:
+                if procs is None:
+                    self.process.join(timeout=timeout)
+                else:
+                    psutil.wait_procs(procs, timeout=timeout)
+                procs = next(steps)
+        except StopIteration as done:
+            return done.value
+
+    async def stop_async(self, timeout: int = 10) -> dict:
+        """
+        Stop existing vLLM instance without blocking the event loop.
+
+        Same sequence as stop(); only the waiting differs.  The wait for the vLLM
+        process is the loop polling its sentinel fd, and the waits for the rest
+        of its process group poll psutil between sleeps on the loop.
+        :param timeout: how long each wait for processes to exit may take,
+                        defaults to 10
+        :return: a dictionary with the status "terminated"
+        """
+        steps = self._stop_steps()
+        try:
+            procs = next(steps)
+            while True:
+                if procs is None:
+                    await self._await_exit(timeout)
+                    # Reap the child if it has exited.  A zero timeout makes
+                    # this a WNOHANG waitpid, which returns at once if the child
+                    # is still alive rather than blocking the loop.
+                    self.process.join(timeout=0)
+                else:
+                    await _await_procs(procs, timeout)
+                procs = next(steps)
+        except StopIteration as done:
+            return done.value
 
     def _on_sentinel_exit(self):
         """Handle process exit detected by the sentinel fd.
@@ -446,6 +553,9 @@ class VllmMultiProcessManager:
         debug_gpu_memory: bool = False,
     ):
         self.instances: Dict[str, VllmInstance] = {}
+        # Per-instance-id locks, reference counted; see _instance_lock.
+        self._instance_locks: Dict[str, asyncio.Lock] = {}
+        self._instance_lock_users: Dict[str, int] = {}
         self.broadcaster = EventBroadcaster()
         # Monotonically increasing counter owned by the manager.
         # The manager stamps every event before handing it to the
@@ -481,13 +591,12 @@ class VllmMultiProcessManager:
         loop = asyncio.get_running_loop()
         loop.create_task(self.broadcaster._notify())
 
-    def create_instance(
-        self, vllm_config: VllmConfig, instance_id: Optional[str] = None
-    ) -> dict:
-        """Create and start a new vLLM instance"""
-        if instance_id is None:
-            instance_id = str(uuid.uuid4())
+    def create_instance(self, vllm_config: VllmConfig, instance_id: str) -> dict:
+        """Create and start a new vLLM instance, without taking its id's lock.
 
+        For callers with no event loop, such as the synchronous tests.  Request
+        handling should use create_instance_async instead.
+        """
         if instance_id in self.instances:
             logger.warning(
                 "Rejecting request to create vLLM instance: id=%s already exists",
@@ -525,20 +634,56 @@ class VllmMultiProcessManager:
             pass  # No running event loop (e.g. in sync tests)
         return result
 
-    def stop_instance(self, instance_id: str, timeout: int = 10) -> dict:
-        """Stop a specific vLLM instance"""
+    @asynccontextmanager
+    async def _instance_lock(self, instance_id: str):
+        """Serialize the operations that create and destroy one instance.
+
+        Stopping an instance awaits, so other requests are served meanwhile.
+        Without this lock a create of the same id could run in the middle of the
+        stop: it would be rejected as a duplicate, because the instance being
+        stopped is still in self.instances, and then the stop would remove that
+        entry anyway.  The lock is per instance id, so operations on different
+        instances still proceed concurrently.
+
+        Entries are reference-counted rather than left to accumulate: instance
+        ids are one-shot, so a plain dict would grow without bound.  The count
+        is safe to keep unguarded because it is only touched between awaits.
+        """
+        lock = self._instance_locks.setdefault(instance_id, asyncio.Lock())
+        self._instance_lock_users[instance_id] = (
+            self._instance_lock_users.get(instance_id, 0) + 1
+        )
+        try:
+            async with lock:
+                yield
+        finally:
+            self._instance_lock_users[instance_id] -= 1
+            if self._instance_lock_users[instance_id] == 0:
+                del self._instance_lock_users[instance_id]
+                del self._instance_locks[instance_id]
+
+    def _stop_begin(self, instance_id: str) -> VllmInstance:
+        """What stopping an instance does before the waiting.
+
+        Shared by stop_instance and stop_instance_async.
+        """
         if instance_id not in self.instances:
             raise KeyError(f"Instance {instance_id} not found")
 
         instance = self.instances[instance_id]
         instance.cancel_sentinel_watcher()
-        instance.stop(timeout)
+        return instance
 
+    def _stop_end(self, instance: VllmInstance) -> dict:
+        """What stopping an instance does after the waiting.
+
+        Shared by stop_instance and stop_instance_async.
+        """
         revision = self._next_revision()
         instance.last_revision = revision
         result = instance.get_status()
 
-        del self.instances[instance_id]
+        del self.instances[instance.instance_id]
 
         event = WatchEvent(type="DELETED", object=result)
         self.broadcaster._append(event)
@@ -548,6 +693,113 @@ class VllmMultiProcessManager:
         except RuntimeError:
             pass  # No running event loop (e.g. in sync tests)
         return result
+
+    def stop_instance(self, instance_id: str, timeout: int = 10) -> dict:
+        """Stop a specific vLLM instance, blocking the caller.
+
+        Kept for callers with no event loop, such as the synchronous tests.
+        Request handling should use stop_instance_async instead.
+        """
+        instance = self._stop_begin(instance_id)
+        instance.stop(timeout)
+        return self._stop_end(instance)
+
+    async def stop_instance_async(self, instance_id: str, timeout: int = 10) -> dict:
+        """Stop a specific vLLM instance without blocking the event loop.
+
+        Waiting for a child to exit takes seconds of wall clock in the good case
+        and up to the timeout in the bad one.  Doing that with process.join()
+        blocks the calling thread, so on the event loop the launcher answers
+        nothing meanwhile -- health probes included -- and the liveness probe the
+        controller injects allows each of those only a second before it counts as
+        a failure.  stop_async() does its waiting on the loop instead.
+        """
+        async with self._instance_lock(instance_id):
+            instance = self._stop_begin(instance_id)
+            try:
+                await instance.stop_async(timeout)
+            except (Exception, asyncio.CancelledError):
+                # _stop_begin cancelled the sentinel watcher; since the instance
+                # stays tracked, put it back so its eventual exit is still noticed.
+                # That includes being cancelled midway, which CancelledError
+                # reports and which is not an Exception.
+                instance.start_sentinel_watcher(self._on_instance_stopped)
+                raise
+            return self._stop_end(instance)
+
+    async def create_instance_async(
+        self, vllm_config: VllmConfig, instance_id: Optional[str] = None
+    ) -> dict:
+        """Create and start a new vLLM instance, under its id's lock.
+
+        :param instance_id: the id to give the instance, or None to generate one.
+            A generated id is locked like any other, since nothing guarantees
+            that it differs from every id currently locked.
+        """
+        if instance_id is None:
+            instance_id = str(uuid.uuid4())
+        async with self._instance_lock(instance_id):
+            return self.create_instance(vllm_config, instance_id)
+
+    async def stop_all_instances_async(self, timeout: int = 10) -> dict:
+        """Stop every instance, concurrently, and return once there are none.
+
+        That includes instances created while this is in progress.  It works in
+        passes: each pass stops, concurrently, the instances that exist when it
+        begins, and passes repeat until there are no instances left.  So if
+        instances keep being created, this keeps stopping them.
+
+        A pass in which any stop fails is the last: once all of that pass's
+        stops have settled, this raises an ExceptionGroup of the failures.  The
+        instances that failed to stop are still there, so another pass would not
+        get to "none left" either.
+
+        The synchronous version stops instances one after another, so N
+        instances cost up to N times the timeout with the launcher unresponsive
+        throughout.
+        """
+        results: list[dict] = []
+        while self.instances:
+            instance_ids = list(self.instances.keys())
+            settled = await asyncio.gather(
+                *(
+                    self.stop_instance_async(instance_id, timeout)
+                    for instance_id in instance_ids
+                ),
+                return_exceptions=True,
+            )
+            failures: list[Exception] = []
+            for instance_id, outcome in zip(instance_ids, settled):
+                if isinstance(outcome, KeyError):
+                    continue  # Instance was already removed
+                if isinstance(outcome, BaseException) and not isinstance(
+                    outcome, Exception
+                ):
+                    # Cancellation or the like: not a failure to stop, so do
+                    # not dress it up as one.
+                    raise outcome
+                if isinstance(outcome, Exception):
+                    logger.error(f"Failed to stop instance {instance_id}: {outcome}")
+                    failures.append(outcome)
+                    continue
+                results.append(outcome)
+
+            if failures:
+                # Every instance in the pass got its chance to stop -- that is
+                # why this is raised after they all settled rather than at the
+                # first failure -- but the caller must not be told the bulk
+                # delete succeeded when it did not.
+                raise ExceptionGroup(  # noqa: F821 (builtin since 3.11)
+                    f"failed to stop {len(failures)} of {len(instance_ids)}"
+                    " instance(s)",
+                    failures,
+                )
+
+        return {
+            "status": "all_stopped",
+            "stopped_instances": results,
+            "total_stopped": len(results),
+        }
 
     def stop_all_instances(self, timeout: int = 10) -> dict:
         """Stop all running vLLM instances"""
@@ -628,7 +880,10 @@ async def lifespan(application: FastAPI):
     """Manage application lifecycle: clean up all vLLM instances on shutdown."""
     yield
     logger.info("Launcher shutting down, stopping all vLLM instances...")
-    vllm_manager.stop_all_instances()
+    try:
+        await vllm_manager.stop_all_instances_async()
+    except Exception as e:
+        logger.error(f"Failed to stop all vLLM instances on shutdown: {e}")
 
 
 # Create FastAPI application
@@ -737,8 +992,13 @@ async def watch_instances(
             # Initial state: emit a CREATED event for every existing instance
             # and start streaming from the current revision.
             start_revision = vllm_manager.revision
-            for instance in vllm_manager.instances.values():
-                state = instance.get_status()
+            # Take every instance's state before the first yield: each yield
+            # lets other requests run, and those can create, stop and delete
+            # instances meanwhile.  This is the state as of start_revision.
+            states = [
+                instance.get_status() for instance in vllm_manager.instances.values()
+            ]
+            for state in states:
                 initial = WatchEvent(
                     type="CREATED",
                     object=state,
@@ -765,7 +1025,7 @@ async def create_vllm_instance(vllm_config: VllmConfig):
     """Create a new vLLM instance with random instance ID"""
 
     try:
-        result = vllm_manager.create_instance(vllm_config)
+        result = await vllm_manager.create_instance_async(vllm_config)
         return JSONResponse(content=result, status_code=HTTPStatus.CREATED)
     except Exception as e:
         logger.error(f"Failed to create vLLM instance: {e}")
@@ -781,7 +1041,7 @@ async def create_id_vllm_instance(
 ):
     """Create a new vLLM instance with instance ID"""
     try:
-        result = vllm_manager.create_instance(vllm_config, instance_id)
+        result = await vllm_manager.create_instance_async(vllm_config, instance_id)
         return JSONResponse(content=result, status_code=HTTPStatus.CREATED)
     except ValueError as e:
         raise HTTPException(status_code=HTTPStatus.CONFLICT, detail=str(e))
@@ -798,7 +1058,7 @@ async def delete_vllm_instance(
 ):
     """Delete a specific vLLM instance"""
     try:
-        result = vllm_manager.stop_instance(instance_id)
+        result = await vllm_manager.stop_instance_async(instance_id)
         return JSONResponse(content=result, status_code=HTTPStatus.OK)
     except KeyError:
         raise HTTPException(
@@ -815,7 +1075,7 @@ async def delete_vllm_instance(
 async def delete_all_vllm_instances():
     """Delete all vLLM instances"""
     try:
-        result = vllm_manager.stop_all_instances()
+        result = await vllm_manager.stop_all_instances_async()
         return JSONResponse(content=result, status_code=HTTPStatus.OK)
     except Exception as e:
         logger.error(f"Failed to delete all vLLM instances: {e}")
