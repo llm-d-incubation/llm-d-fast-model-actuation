@@ -254,12 +254,11 @@ func (ctl *controller) applyLPPToDigestForNode(lppName string, lcToCount map[str
 			continue
 		}
 		delete(entry.lpps, lppName)
-		removed := len(entry.lpps) == 0
-		if removed {
+		if len(entry.lpps) == 0 {
 			ctl.policy.deleteEntry(nodeName, lcName)
 		}
 		changed := ctl.recomputeEntryFromLPPs(entry, lcName)
-		if removed || changed {
+		if changed {
 			ctl.keyQueue.Queue.Add(keyItem{NodeLauncherKey{NodeName: nodeName, LauncherConfigName: lcName}})
 		}
 	}

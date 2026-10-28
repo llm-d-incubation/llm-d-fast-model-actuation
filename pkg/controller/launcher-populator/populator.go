@@ -355,8 +355,10 @@ func (ctl *controller) Start(ctx context.Context) error {
 // process per-NodeLauncherKey reconciliation requests.
 func (ctl *controller) onDigestSyncProcessed(ctx context.Context) {
 	logger := klog.FromContext(ctx)
+	ctl.policy.mu.RLock()
 	logger.V(1).Info("Initial digest batch processed; starting key workers",
 		"lpps", len(ctl.policy.lpps), "lcs", len(ctl.policy.lcs), "keys", ctl.keyQueue.Queue.Len())
+	ctl.policy.mu.RUnlock()
 	if err := ctl.keyQueue.StartWorkers(ctx); err != nil {
 		logger.Error(err, "Failed to start key workers")
 	}
