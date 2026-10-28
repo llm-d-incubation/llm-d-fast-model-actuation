@@ -346,13 +346,14 @@ if [ "$POLICIES_ENABLED" = true ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Concurrent Same-Node Request
+# Concurrent Same-Node Request (Common Port Through FMA 0.7.1)
 # ---------------------------------------------------------------------------
 
-intro_case Concurrent Same-Node Request Creates New Launcher
+intro_case "Concurrent Same-Node Request Creates New Launcher (Common Port Through FMA 0.7.1)"
 
-# This verifies that two awake instances use different launchers; it does not
-# isolate the legacy same-port collision behavior.
+# For FMA 0.7.1 and earlier, both awake instances also request the same legacy
+# port. The scenario therefore involves both constraints but does not isolate
+# port-collision handling.
 # Check whether the test node has a free GPU for the concurrent requester.
 # req1 already holds 1 GPU; the concurrent requester needs 1 more on the same node.
 allocatable_gpus=$(kubectl get node "$testnode" -o jsonpath='{.status.allocatable.nvidia\.com/gpu}')
