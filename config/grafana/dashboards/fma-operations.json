@@ -740,6 +740,99 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
+      "description": "Launcher Pod counts over time, stacked by LauncherConfig and summed across lifecycle phases.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 21
+      },
+      "id": 31,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum by (lcfg_name) (fma_launcher_pod_count{namespace=~\"$namespace\", lcfg_name=~\"$lcfg\"})",
+          "legendFormat": "{{lcfg_name}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Launcher counts by LauncherConfig",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "description": "Launcher population by lifecycle phase. stuck_scheduling points to placement/capacity trouble; stuck_starting points to image, runtime, device, or probe trouble; stale indicates an old launcher template.",
       "fieldConfig": {
         "defaults": {
@@ -813,7 +906,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 21
+        "y": 29
       },
       "id": 13,
       "options": {
@@ -889,7 +982,7 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 21
+        "y": 29
       },
       "id": 14,
       "options": {
@@ -985,7 +1078,7 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 21
+        "y": 29
       },
       "id": 15,
       "options": {
@@ -1078,7 +1171,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 29
+        "y": 37
       },
       "id": 16,
       "options": {
@@ -1178,7 +1271,7 @@
         "h": 7,
         "w": 6,
         "x": 12,
-        "y": 29
+        "y": 37
       },
       "id": 17,
       "options": {
@@ -1246,7 +1339,7 @@
         "h": 7,
         "w": 6,
         "x": 18,
-        "y": 29
+        "y": 37
       },
       "id": 18,
       "options": {
@@ -1286,7 +1379,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 36
+        "y": 44
       },
       "id": 19,
       "panels": [],
@@ -1355,7 +1448,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 37
+        "y": 45
       },
       "id": 20,
       "options": {
@@ -1447,7 +1540,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 37
+        "y": 45
       },
       "id": 21,
       "options": {
@@ -1540,7 +1633,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 45
+        "y": 53
       },
       "id": 22,
       "options": {
@@ -1633,7 +1726,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 45
+        "y": 53
       },
       "id": 23,
       "options": {
@@ -1726,7 +1819,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 45
+        "y": 53
       },
       "id": 24,
       "options": {
@@ -1819,7 +1912,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 53
+        "y": 61
       },
       "id": 25,
       "options": {
@@ -1912,7 +2005,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 53
+        "y": 61
       },
       "id": 26,
       "options": {
@@ -1948,7 +2041,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 61
+        "y": 69
       },
       "id": 27,
       "panels": [],
@@ -2017,7 +2110,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 62
+        "y": 70
       },
       "id": 28,
       "options": {
@@ -2119,7 +2212,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 62
+        "y": 70
       },
       "id": 29,
       "options": {
@@ -2185,7 +2278,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 70
+        "y": 78
       },
       "id": 30,
       "options": {
