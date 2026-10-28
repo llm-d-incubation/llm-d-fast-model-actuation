@@ -346,13 +346,16 @@ if [ "$POLICIES_ENABLED" = true ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Same-Node Port Collision
+# Concurrent Same-Node Request (Common Port Through FMA 0.7.1)
 # ---------------------------------------------------------------------------
 
-intro_case Same-Node Port Collision Creates New Launcher
+intro_case "Concurrent Same-Node Request Creates New Launcher (Common Port Through FMA 0.7.1)"
 
-# Check whether the test node has a free GPU for the collision requester.
-# req1 already holds 1 GPU; the collision requester needs 1 more on the same node.
+# For FMA 0.7.1 and earlier, both awake instances also request the same legacy
+# port. The scenario therefore involves both constraints but does not isolate
+# port-collision handling.
+# Check whether the test node has a free GPU for the concurrent requester.
+# req1 already holds 1 GPU; the concurrent requester needs 1 more on the same node.
 allocatable_gpus=$(kubectl get node "$testnode" -o jsonpath='{.status.allocatable.nvidia\.com/gpu}')
 allocated_gpus=$(kubectl get pods --all-namespaces --field-selector spec.nodeName="$testnode" -o json \
   | jq '[.items[]
@@ -365,7 +368,7 @@ echo "Node $testnode: allocatable_gpus=$allocatable_gpus allocated_gpus=$allocat
 
 if false && (( available_gpus < 1 )); then
     echo "FAIL: Node $testnode has no free GPUs ($allocatable_gpus allocatable, $allocated_gpus allocated)." >&2
-    echo "The Same-Node Port Collision test needs 1 free GPU for the collision requester." >&2
+    echo "The Concurrent Same-Node Request test needs 1 free GPU for the concurrent requester." >&2
     echo "This is likely due to GPU saturation on the shared cluster." >&2
     exit 1
 else
@@ -393,13 +396,13 @@ else
     expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$collision_inst | wc -l | grep -w 1"
 
     collision_req=$(kubectl get pods -n "$NS" -o name -l app=dp-example,instance=$collision_inst | sed s%pod/%%)
-    echo "Collision requester Pod is $collision_req"
+    echo "Concurrent requester Pod is $collision_req"
 
     expect '[ "$(kubectl get pod -n '"$NS"' '"$collision_req"' -o jsonpath={.spec.nodeName})" == "'"$testnode"'" ]'
     expect "kubectl get pods -n $NS -o name -l dual-pods.llm-d.ai/dual=$collision_req | wc -l | grep -w 1"
 
     collision_launcher=$(kubectl get pods -n "$NS" -o name -l dual-pods.llm-d.ai/dual=$collision_req | sed s%pod/%%)
-    echo "Collision launcher Pod is $collision_launcher"
+    echo "Concurrent launcher Pod is $collision_launcher"
 
     [ "$collision_launcher" != "$launcher1" ]
 
@@ -421,7 +424,7 @@ else
     kubectl delete pod "$collision_launcher" -n "$NS" --wait=true
     expect '! kubectl get pods -n '"$NS"' -o name | grep -qw pod/'"$collision_launcher"
 
-    cheer Successful same-node collision handling
+    cheer Successful concurrent same-node request handling
 
 fi # available_gpus check
 
@@ -537,6 +540,16 @@ kubectl wait --for condition=Ready pod/$launcher1 -n "$NS" --timeout=0s
 
 check_gpu_pin $req3
 
+if [ -z "$FMA_RELEASE" ] || ! version_leq "$FMA_RELEASE" 0.7.1; then
+    # Pool-aware fixtures omit legacy ports. Their coexistence proves that the
+    # controller allocated distinct ports from LauncherConfig.spec.inferencePorts.
+    isc_port=$(kubectl get inferenceserverconfig "$isc" -n "$NS" -o jsonpath='{.spec.modelServerConfig.port}')
+    isc2_port=$(kubectl get inferenceserverconfig "$isc2" -n "$NS" -o jsonpath='{.spec.modelServerConfig.port}')
+    [ -z "$isc_port" ] && [ -z "$isc2_port" ] || { echo "ERROR: pool-aware InferenceServerConfigs unexpectedly specify legacy ports $isc_port and $isc2_port" >&2; exit 1; }
+    launcher_instance_ports=$(kubectl exec -n "$NS" "$launcher1" -- python3 -c 'import json,urllib.request; instances=json.load(urllib.request.urlopen("http://127.0.0.1:8001/v2/vllm/instances"))["instances"]; print(",".join(sorted(instance["annotations"]["inference-port"] for instance in instances)))')
+    [ "$launcher_instance_ports" = "8005,8006" ] || { echo "ERROR: pooled launcher ports are $launcher_instance_ports, expected 8005,8006" >&2; exit 1; }
+fi
+
 note displaying storage space in launcher /tmp
 
 kubectl exec -n "$NS" $launcher1 -- du -h /tmp
@@ -611,11 +624,14 @@ if [ -z "${FMA_RELEASE}" ] || ! version_leq "${FMA_RELEASE}" 0.6.5; then
     # the proxy port is served by the bound instance.
     #
     # Assumed starting state: $req4 is bound to $launcher1, both Ready. Also
-    # assumed: the InferenceServerConfig of $req4 is $isc, which is where the
-    # inference server's port is read from below.
+    # assumed: the InferenceServerConfig of $req4 is $isc.
 
     launcher1_ip=$(kubectl get pod "$launcher1" -n "$NS" -o jsonpath='{.status.podIP}')
-    launcher1_port=$(kubectl get inferenceserverconfig "$isc" -n "$NS" -o jsonpath='{.spec.modelServerConfig.port}')
+    if [ -z "$FMA_RELEASE" ] || ! version_leq "$FMA_RELEASE" 0.7.1; then
+        launcher1_port=$(kubectl get pod "$launcher1" -n "$NS" -o jsonpath='{.metadata.annotations.dual-pods\.llm-d\.ai/server-port}')
+    else
+        launcher1_port=$(kubectl get inferenceserverconfig "$isc" -n "$NS" -o jsonpath='{.spec.modelServerConfig.port}')
+    fi
     expected_target=$(printf '{"address":"%s","port":%d}' "$launcher1_ip" "$launcher1_port")
 
     note "Checking proxy config on requester Pod $req4; expect port-forward and curl noise"

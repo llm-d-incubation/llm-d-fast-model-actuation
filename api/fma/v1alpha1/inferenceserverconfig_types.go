@@ -33,8 +33,9 @@ type InferenceServerConfigSpec struct {
 
 // ModelServerConfig defines the configuration for a model server
 type ModelServerConfig struct {
-	// Port is the port on which the vLLM server will listen
-	// Particularly, management of vLLM instances' sleep state is done through this port
+	// Port is the backward-compatible inference port used when the referenced
+	// LauncherConfig does not define InferencePorts. When that pool is present,
+	// the controller assigns a port from it instead.
 	// +optional
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=65535
@@ -46,7 +47,7 @@ type ModelServerConfig struct {
 
 	// EnvVars are the environment variables for the vLLM instance
 	// +optional
-	EnvVars     map[string]string `json:"env_vars,omitempty"`
+	EnvVars map[string]string `json:"env_vars,omitempty"`
 
 	// Labels are applied to the server-providing Pod while bound.
 	// Keys must be valid Kubernetes label keys and must not use reserved prefixes

@@ -195,10 +195,27 @@ while the server-requesting Pod is bound to a server-providing Pod.
 #### What happens to existing launcher Pods when a LauncherConfig changes?
 
 Each corresponding launcher Pod that is not bound and was created from
-the wrong LauncherConfig spec is deleted. Then the launcher population
-controller will create a replacement if that is still
-appropriate. While the LauncherConfig object does not exist, FMA does
+the wrong `podTemplate` is deleted. Then the launcher population controller
+will create a replacement if that is still appropriate. Bound launcher Pods
+are not replaced, and while the LauncherConfig object does not exist, FMA does
 not consider any corresponding launcher to be wrong.
+
+The other LauncherConfig fields do not describe the launcher Pod template and
+therefore do not, by themselves, cause launcher replacement. A change to
+`maxInstances` or `inferencePorts` instead takes effect as the dual-pods
+controller processes requests. Adding, changing, or deleting a LauncherConfig
+causes that controller to reconsider every server-requesting Pod whose
+InferenceServerConfig refers to it. This allows a request rejected because its
+LauncherConfig was absent or supplied no usable inference port to proceed once
+the configuration is corrected.
+
+Changing `inferencePorts` affects new instance allocation but does not move an
+awake instance to another port. Nor does it immediately sweep sleeping
+instances. When a request would reuse a matching sleeping instance whose port
+is no longer in a non-empty pool, the controller deletes that instance and
+retries the request so that the instance is recreated on a current pool port.
+Other sleeping instances remain until they are considered for reuse or
+reclamation.
 
 #### What happens to existing vLLM instances when an InferenceServerConfigSpec changes?
 
@@ -475,7 +492,6 @@ metadata:
   name: example
 spec:
   modelServerConfig:
-    port: 8005
     options: >-
       --model TinyLlama/TinyLlama-1.1B-Chat-v1.0
       --enable-sleep-mode
@@ -517,6 +533,9 @@ metadata:
   name: example
 spec:
   maxInstances: 2
+  inferencePorts:
+  - 8005
+  - 8006
   podTemplate:
     metadata:
       labels:
@@ -550,11 +569,15 @@ spec:
               ephemeral-storage: "4.5Gi"
 ```
 
-An optional `inferencePorts` field is being introduced to the Spec of LauncherConfig,
-as part of a multi-stage transition toward having the dual-pods controller manage vLLM
-instance ports (see [#779](https://github.com/llm-d-incubation/llm-d-fast-model-actuation/issues/779)).
-The controller does not consume this field yet, so users should not set it at
-this stage. A later stage will update producers and consumers together.
+`inferencePorts` supplies the pool from which the dual-pods controller assigns a
+distinct port to each vLLM instance in a launcher. It must contain at least
+`maxInstances` ports. During stage 2 of this
+[staged interface transition](cluster-sharing.md#introducing-a-required-field)
+the field is optional: when it is absent, the controller continues to use
+`modelServerConfig.port` from the `InferenceServerConfig`, and reports an error
+if that fallback is also absent. New sources should provide `inferencePorts`
+instead of the legacy per-server port (see
+[#779](https://github.com/llm-d-incubation/llm-d-fast-model-actuation/issues/779)).
 
 The settings of various environment variables to refer to `/tmp`
 configures the locations of the various caches that vLLM maintains on
