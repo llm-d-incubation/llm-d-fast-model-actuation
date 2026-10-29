@@ -31,6 +31,7 @@ cleanup() {
 }
 
 # Trap EXIT to run cleanup
+# shellcheck disable=SC2154  # rc is assigned inside the single-quoted trap body
 trap 'rc=$?; cleanup; exit $rc' EXIT
 
 POD_NAME=${POD_NAME:-my-regular-test}

@@ -256,7 +256,7 @@ rules:
   - watch
 EOF
 
-kubectl create rolebinding testreq --role=testreq --serviceaccount=$(kubectl get sa default -o jsonpath={.metadata.namespace}):testreq
+kubectl create rolebinding testreq --role=testreq --serviceaccount="$(kubectl get sa default -o jsonpath='{.metadata.namespace}')":testreq
 
 kubectl create sa testreq
 
@@ -285,7 +285,7 @@ rules:
   - patch
 EOF
 
-kubectl create rolebinding testlauncher --role=testlauncher --serviceaccount=$(kubectl get sa default -o jsonpath={.metadata.namespace}):testlauncher
+kubectl create rolebinding testlauncher --role=testlauncher --serviceaccount="$(kubectl get sa default -o jsonpath='{.metadata.namespace}')":testlauncher
 
 kubectl create sa testlauncher
 kubectl create cm gpu-map

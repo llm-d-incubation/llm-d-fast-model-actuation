@@ -338,7 +338,8 @@ cleanup_deployment() {
     export SCALER_BACKEND="${SCALER_BACKEND:-prometheus-adapter}"
 
     # Detect actual llm-d namespace (could be llm-d-sim, llm-d-inference-scheduler, etc.)
-    local detected_llmd_ns=$(kubectl get namespace -o name 2>/dev/null | grep 'llm-d' | head -n1 | cut -d'/' -f2)
+    local detected_llmd_ns
+    detected_llmd_ns=$(kubectl get namespace -o name 2>/dev/null | grep 'llm-d' | head -n1 | cut -d'/' -f2)
     if [ -n "$detected_llmd_ns" ]; then
         log_info "Detected llm-d namespace: $detected_llmd_ns"
         export LLMD_NS="$detected_llmd_ns"
@@ -567,9 +568,10 @@ deploy_wva_stack() {
         echo "=========================================="
         log_success "WVA stack deployment complete"
     else
+        rc=$?
         echo ""
         echo "=========================================="
-        log_error "Install script failed with exit code: $?"
+        log_error "Install script failed with exit code: $rc"
         exit 1
     fi
 }
@@ -600,7 +602,8 @@ verify_deployment() {
     # Check llm-d namespace
     if [ "$DEPLOY_LLM_D" = "true" ]; then
         log_info "Checking llm-d infrastructure..."
-        local llmd_ns=$(kubectl get namespace -o name | grep 'llm-d' | head -n1 | cut -d'/' -f2)
+        local llmd_ns
+        llmd_ns=$(kubectl get namespace -o name | grep 'llm-d' | head -n1 | cut -d'/' -f2)
         if [ -n "$llmd_ns" ]; then
             log_success "llm-d namespace found: $llmd_ns"
         else
