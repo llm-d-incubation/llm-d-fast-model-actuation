@@ -44,7 +44,7 @@ func TestCreateLaunchersMetrics(t *testing.T) {
 		{name: "partial", failAt: 2, successes: 1, failures: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctl, cs, _ := newStuckTestController(t, stuckTestNow)
+			ctl, cs, _, _ := newStuckTestControllerWithNode(t, stuckTestNow)
 			key := stuckTestKey()
 			key.LauncherConfigName = "create-metrics-" + tc.name
 			defer launcherCreateSecsHistograms.DeleteLabelValues(ctl.namespace, key.LauncherConfigName, "true")
@@ -62,7 +62,7 @@ func TestCreateLaunchersMetrics(t *testing.T) {
 				return true, pod, nil
 			})
 
-			err := ctl.createLaunchers(t.Context(), testNode(), key, 3, nodeTemplate())
+			err := ctl.createLaunchers(t.Context(), testNode(), key, 3, testNodeTemplate("launcher-template"))
 			if tc.failAt == 0 && err != nil {
 				t.Fatal(err)
 			}

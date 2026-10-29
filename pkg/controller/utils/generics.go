@@ -57,6 +57,17 @@ func SliceMap[Domain, Range any](slice []Domain, mapFn func(Domain) (Range, erro
 	return mapped, errors
 }
 
+// SliceMapErrless applies a given function (that can not return an error) to a slice,
+// returning a new slice holding the results.
+func SliceMapErrless[Domain, Range any](slice []Domain, mapFn func(Domain) Range) []Range {
+	var mapped []Range
+	for _, dom := range slice {
+		rng := mapFn(dom)
+		mapped = append(mapped, rng)
+	}
+	return mapped
+}
+
 // SliceFilter returns the elements for which keep returns true, preserving
 // their original order. This returns a new slice rather than modifying the
 // given one.
