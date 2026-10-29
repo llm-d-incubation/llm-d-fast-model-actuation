@@ -111,6 +111,31 @@ func makeLC() *v1alpha1.LauncherConfig {
 	}
 }
 
+func TestLauncherPodControllingOwner(t *testing.T) {
+	lc := makeLC()
+	template, _, err := BuildNodeIndependentLauncherTemplate(lc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, pod := range map[string]*corev1.Pod{
+		"template":      template,
+		"node-specific": SpecializeLauncherTemplateToNode(template, "node-a"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			owner := metav1.GetControllerOf(pod)
+			if owner == nil {
+				t.Fatal("launcher Pod has no controlling owner")
+			}
+			if owner.APIVersion != v1alpha1.SchemeGroupVersion.String() || owner.Kind != "LauncherConfig" || owner.Name != lc.Name || owner.UID != lc.UID {
+				t.Errorf("controlling owner = %+v, want LauncherConfig %s with UID %s", owner, lc.Name, lc.UID)
+			}
+			if owner.BlockOwnerDeletion == nil || *owner.BlockOwnerDeletion {
+				t.Error("launcher Pod should not block owner deletion")
+			}
+		})
+	}
+}
+
 // TestComputeLauncherTemplateHash_Deterministic asserts that the same template hashes identically across repeated calls.
 func TestComputeLauncherTemplateHash_Deterministic(t *testing.T) {
 	lc := makeLC()

@@ -216,7 +216,7 @@ func BuildNodeIndependentLauncherTemplate(lc *v1alpha1.LauncherConfig) (*corev1.
 				Kind:               "LauncherConfig",
 				Name:               lc.Name,
 				UID:                lc.UID,
-				Controller:         ptr.To(false),
+				Controller:         ptr.To(true),
 				BlockOwnerDeletion: ptr.To(false),
 			}},
 		},
