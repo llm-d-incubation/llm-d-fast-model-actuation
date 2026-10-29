@@ -23,7 +23,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/common"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -31,6 +30,7 @@ import (
 	"k8s.io/klog/v2"
 
 	fmav1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
+	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/common"
 )
 
 // nonNilSlice returns a single-element slice if s is non-empty, or nil otherwise.
