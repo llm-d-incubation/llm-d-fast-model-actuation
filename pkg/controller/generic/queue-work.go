@@ -19,6 +19,7 @@ package generic
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -37,6 +38,10 @@ type QueueAndWorkers[Item comparable] struct {
 	Queue          workqueue.TypedRateLimitingInterface[Item]
 	NumWorkers     int
 	Process        func(ctx context.Context, item Item) (err error, retry bool)
+
+	SyncsStarted         int32
+	SyncsFinished        int32
+	ApproxLastChangeTime atomic.Value
 
 	earlySync func(context.Context, Item) *bool
 }
@@ -57,6 +62,10 @@ func noEarlySync[Item comparable](context.Context, Item) *bool {
 }
 
 // NewQueueAndWorkers makes a new QueueAndWorkers.
+// Syncing each item begins with calling `earlySync` on that item;
+// a return of `nil` means to proceed to `process`,
+// a return of `&true` means to move on to the next item,
+// a return of `&false` means to halt processing.
 func newQueueAndWorkers[Item comparable](
 	controllerName string,
 	numWorkers int,
@@ -77,6 +86,7 @@ func newQueueAndWorkers[Item comparable](
 		Process:    process,
 		earlySync:  earlySync,
 	}
+	ans.ApproxLastChangeTime.Store(time.Now())
 	return ans
 }
 
@@ -109,7 +119,13 @@ func (ctl *QueueAndWorkers[Item]) processNextWorkItem(ctx context.Context) bool 
 	if shutdown {
 		return false
 	}
-	defer ctl.Queue.Done(objRef)
+	atomic.AddInt32(&ctl.SyncsStarted, 1)
+	ctl.ApproxLastChangeTime.Store(time.Now())
+	defer func() {
+		ctl.Queue.Done(objRef)
+		atomic.AddInt32(&ctl.SyncsFinished, 1)
+		ctl.ApproxLastChangeTime.Store(time.Now())
+	}()
 	logger.V(4).Info("Popped workqueue item", "item", objRef, "itemType", fmt.Sprintf("%T", objRef))
 	if ans := ctl.earlySync(ctx, objRef); ans != nil {
 		return *ans
@@ -138,4 +154,30 @@ func (ctl *QueueAndWorkers[Item]) processNextWorkItem(ctx context.Context) bool 
 	}()
 	err, retry = ctl.Process(ctx, objRef)
 	return true
+}
+
+// Status is a snapshot of the state of the controller.
+// This state is not maintained atomically, and this snapshot
+// holds values from slightly different times.
+type Status struct {
+	QueueDepth    int
+	SyncsStarted  int
+	SyncsFinished int
+
+	// ApproxLastChangeTime is updated at each change
+	// to either of the sync counts, at nearly the same time.
+	ApproxLastChangeTime time.Time
+}
+
+func (ctl *QueueAndWorkers[Item]) GetStatus() Status {
+	qd := ctl.Queue.Len()
+	alc := ctl.ApproxLastChangeTime.Load().(time.Time)
+	starts := atomic.LoadInt32(&ctl.SyncsStarted)
+	fins := atomic.LoadInt32(&ctl.SyncsFinished)
+	return Status{
+		QueueDepth:           qd,
+		SyncsStarted:         int(starts),
+		SyncsFinished:        int(fins),
+		ApproxLastChangeTime: alc,
+	}
 }
