@@ -82,6 +82,8 @@ spec:
         - "-v={{ .Values.dualPodsController.verbosity }}"
         - "--namespace={{ .Release.Namespace }}"
         - "--sleeper-limit={{ .Values.dualPodsController.sleeperLimit }}"
+        - "--sleep-drain-timeout={{ .Values.dualPodsController.sleepDrainTimeout }}"
+        - "--sleep-abort-timeout={{ .Values.dualPodsController.sleepAbortTimeout }}"
         - "--debug-accelerator-memory={{ .Values.dualPodsController.debugAcceleratorMemory }}"
         ports:
         - containerPort: 8002
