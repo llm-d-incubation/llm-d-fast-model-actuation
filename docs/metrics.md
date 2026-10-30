@@ -207,7 +207,9 @@ scheduling by the Kube Pod scheduler, are not included here.
 
 Labels are as follows.
 
-- `exported_namespace`: Kube namespace of the launcher Pod
+- `exported_namespace`: Kube namespace of requester and provider
 - `lcfg_name`: name of the relevant LauncherConfig object
 - `success`: "true" if the Kubernetes client returns no error from the
-  Pod creation call, "false" otherwise.
+  Pod creation call, "false" otherwise. Failures include errors constructing
+  or sending the request, receiving or decoding the response, and API server
+  error responses such as 403 Forbidden.
