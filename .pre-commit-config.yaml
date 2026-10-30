@@ -44,6 +44,14 @@ repos:
     hooks:
       - id: typos
 
+  # Shell-script linting. warning severity drops the info/style tier (e.g.
+  # SC2219) to avoid noise; scripts are all #!/usr/bin/env bash.
+  - repo: https://github.com/koalaman/shellcheck-precommit
+    rev: 99470f5e12208ff0fb17ab81c3c494f7620a1d8d  # frozen: v0.11.0
+    hooks:
+      - id: shellcheck
+        args: [--severity=warning, --shell=bash]
+
   # Go linting. Managed by pre-commit in an isolated, version-pinned
   # environment, so it does not require a specific golangci-lint on the
   # contributor's global PATH. Runs on push, not every commit, because
