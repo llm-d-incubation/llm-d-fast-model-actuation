@@ -12,7 +12,8 @@
 # Prerequisites:
 #   - This repo (llm-d-incubation/llm-d-fast-model-actuation) cloned locally
 #   - oc CLI authenticated to an OCP cluster with GPU nodes
-#   - helm, helmfile, kubectl, jq, yq installed
+#   - helm, helmfile, kubectl, jq, yq, curl installed
+#     (curl fetches the release installer in the default FMA_RELEASE mode)
 #   - FMA_RELEASE=local only: container images built from this tree and pushed
 #     to the registry (see IMAGE_TAG and CONTAINER_IMG_REG)
 #   - llm-d/guides repo cloned locally (for EPP/Gateway via helmfile)
@@ -317,7 +318,7 @@ else
         # just the launcher/requester images below.
         installer=$(mktemp)
         trap 'rm -f "$installer"' EXIT
-        if ! curl -fsSL \
+        if ! curl -fsSL --proto '=https' --tlsv1.2 --retry 3 \
             "https://raw.githubusercontent.com/llm-d-incubation/llm-d-fast-model-actuation/refs/tags/v${FMA_RELEASE}/scripts/install-fma.sh" \
             -o "$installer"; then
             echo "ERROR: could not fetch install-fma.sh for FMA release v${FMA_RELEASE}." >&2
