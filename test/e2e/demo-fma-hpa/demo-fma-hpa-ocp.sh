@@ -4,13 +4,17 @@
 #
 # Idempotent: checks each component before deploying, skips if already present.
 # Run from the root of the llm-d-fast-model-actuation repository.
-# Deploys the version of FMA that is checked out locally.
+# By default installs FMA release 0.7.1, using that release's own installer,
+# CRDs, admission policies, chart and images. Set FMA_RELEASE=local to install
+# from the checked-out tree instead (requires IMAGE_TAG of images built from
+# that same tree).
 #
 # Prerequisites:
 #   - This repo (llm-d-incubation/llm-d-fast-model-actuation) cloned locally
 #   - oc CLI authenticated to an OCP cluster with GPU nodes
 #   - helm, helmfile, kubectl, jq, yq installed
-#   - Container images already pushed to registry (see CONTAINER_IMG_REG)
+#   - FMA_RELEASE=local only: container images built from this tree and pushed
+#     to the registry (see IMAGE_TAG and CONTAINER_IMG_REG)
 #   - llm-d/guides repo cloned locally (for EPP/Gateway via helmfile)
 #
 # Required environment variables:
@@ -18,10 +22,15 @@
 #
 # Optional environment variables (with defaults):
 #   NAMESPACE          - target namespace (default: fma-hpa)
+#   FMA_RELEASE        - FMA release to install (default: 0.7.1), or "local"
+#                        to install the checked-out tree
 #   CONTAINER_IMG_REG  - image registry (default: ghcr.io/llm-d-incubation/llm-d-fast-model-actuation)
-#   IMAGE_TAG          - image tag (default: v0.6.0-alpha.12)
-#   LAUNCHER_IMAGE     - launcher image (default: $CONTAINER_IMG_REG/launcher:$IMAGE_TAG)
-#   REQUESTER_IMAGE    - requester image (default: $CONTAINER_IMG_REG/requester:$IMAGE_TAG)
+#   IMAGE_TAG          - image tag for local-tree mode; required when
+#                        FMA_RELEASE=local, unused otherwise
+#   LAUNCHER_IMAGE     - launcher image (default: $CONTAINER_IMG_REG/launcher:v$FMA_RELEASE,
+#                        or $CONTAINER_IMG_REG/launcher:$IMAGE_TAG in local mode)
+#   REQUESTER_IMAGE    - requester image (default: $CONTAINER_IMG_REG/requester:v$FMA_RELEASE,
+#                        or $CONTAINER_IMG_REG/requester:$IMAGE_TAG in local mode)
 #   MODEL              - vLLM model (default: HuggingFaceTB/SmolLM2-360M-Instruct)
 #   GPU_NODE           - node for LPP (default: first node with nvidia.com/gpu.present=true)
 #   HPA_MAX_REPLICAS   - max HPA replicas (default: 4)
@@ -30,9 +39,7 @@ set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-fma-hpa}"
 CONTAINER_IMG_REG="${CONTAINER_IMG_REG:-ghcr.io/llm-d-incubation/llm-d-fast-model-actuation}"
-IMAGE_TAG="${IMAGE_TAG:-v0.6.0-alpha.12}"
-LAUNCHER_IMAGE="${LAUNCHER_IMAGE:-${CONTAINER_IMG_REG}/launcher:${IMAGE_TAG}}"
-REQUESTER_IMAGE="${REQUESTER_IMAGE:-${CONTAINER_IMG_REG}/requester:${IMAGE_TAG}}"
+FMA_RELEASE="${FMA_RELEASE:-0.7.1}"
 MODEL="${MODEL:-HuggingFaceTB/SmolLM2-360M-Instruct}"
 GPU_NODE="${GPU_NODE:-}"
 HPA_MAX_REPLICAS="${HPA_MAX_REPLICAS:-4}"
@@ -46,6 +53,41 @@ if [ -z "${LLM_D_GUIDES_DIR:-}" ]; then
     echo "ERROR: LLM_D_GUIDES_DIR not set. Set it to the path of your llm-d/guides clone." >&2
     echo "  Example: export LLM_D_GUIDES_DIR=/path/to/llm-d/guides" >&2
     exit 1
+fi
+
+# compares two semver-sans-leading-v strings.
+# Both must have non-empty major.minor.patch;
+# second must not have any prerelease or build metadata.
+function version_leq() {
+    red1=${1%%-*}
+    red1=${red1%%+*}
+    (echo "$red1"; echo "$2") | sort -CV
+}
+
+if [ "$FMA_RELEASE" = "local" ]; then
+    if [ -z "${IMAGE_TAG:-}" ]; then
+        echo "ERROR: FMA_RELEASE=local requires IMAGE_TAG, pointing at images built from this tree." >&2
+        exit 1
+    fi
+    image_tag="$IMAGE_TAG"
+else
+    image_tag="v$FMA_RELEASE"
+fi
+LAUNCHER_IMAGE="${LAUNCHER_IMAGE:-${CONTAINER_IMG_REG}/launcher:${image_tag}}"
+REQUESTER_IMAGE="${REQUESTER_IMAGE:-${CONTAINER_IMG_REG}/requester:${image_tag}}"
+
+# Local code and releases after 0.7.1 consume the LauncherConfig inference
+# port pool and do not need the legacy ModelServerConfig port. Older releases
+# need the legacy shape.
+isc_port_yaml="    port: 8000"
+inference_ports_yaml=""
+if [ "$FMA_RELEASE" = "local" ] || ! version_leq "$FMA_RELEASE" 0.7.1; then
+    isc_port_yaml=""
+    inference_ports_yaml="  # 8000 must match the InferencePool targetPorts installed in Step 3
+  # (GAIE chart default). Change both together, or pass
+  # --set inferencePool.targetPorts[0].number=... in Step 3.
+  inferencePorts:
+    - 8000"
 fi
 
 step_num=0
@@ -255,18 +297,39 @@ if kubectl get deployment "${FMA_CHART}-dual-pods-controller" -n "$NAMESPACE" &>
     echo "  FMA controllers already deployed"
 else
     echo "  Deploying FMA controllers via install-fma.sh..."
-    (
-        cd "$REPO_ROOT"
-        scripts/install-fma.sh \
+    if [ "$FMA_RELEASE" = "local" ]; then
+        (
+            cd "$REPO_ROOT"
+            scripts/install-fma.sh \
+                --namespace "$NAMESPACE" \
+                --chart-instance-name "$FMA_CHART" \
+                --oci-registry "$CONTAINER_IMG_REG" \
+                --image-tag "$IMAGE_TAG" \
+                --config-dir config \
+                --ensure-node-view-cluster-role "${FMA_CHART}-node-view" \
+                --install-crds true \
+                --install-admission-policies true
+        )
+    else
+        # Use the release's own installer so that CRDs, admission policies,
+        # chart and controller images all come from that release.
+        installer=$(mktemp) || exit 1
+        if ! curl -fsSL \
+            "https://raw.githubusercontent.com/llm-d-incubation/llm-d-fast-model-actuation/refs/tags/v${FMA_RELEASE}/scripts/install-fma.sh" \
+            -o "$installer"; then
+            echo "ERROR: could not fetch install-fma.sh for FMA release v${FMA_RELEASE}." >&2
+            rm -f "$installer"
+            exit 1
+        fi
+        bash "$installer" \
+            --release "$FMA_RELEASE" \
             --namespace "$NAMESPACE" \
             --chart-instance-name "$FMA_CHART" \
-            --oci-registry "$CONTAINER_IMG_REG" \
-            --image-tag "$IMAGE_TAG" \
-            --config-dir config \
             --ensure-node-view-cluster-role "${FMA_CHART}-node-view" \
             --install-crds true \
-            --install-admission-policies true \
-    )
+            --install-admission-policies true
+        rm -f "$installer"
+    fi
 fi
 
 # =========================================================================
@@ -301,7 +364,7 @@ metadata:
   name: isc-smol
 spec:
   modelServerConfig:
-    port: 8000
+${isc_port_yaml}
     options: "--model ${MODEL} --enable-sleep-mode"
     env_vars:
       VLLM_SERVER_DEV_MODE: "1"
@@ -320,6 +383,7 @@ metadata:
   name: lc-hpa
 spec:
   maxInstances: 1
+${inference_ports_yaml}
   podTemplate:
     spec:
       runtimeClassName: nvidia
