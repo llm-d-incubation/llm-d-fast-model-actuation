@@ -312,23 +312,25 @@ else
         )
     else
         # Use the release's own installer so that CRDs, admission policies,
-        # chart and controller images all come from that release.
-        installer=$(mktemp) || exit 1
+        # chart and controller images all come from that release. --oci-registry
+        # keeps CONTAINER_IMG_REG applied to the chart/controller images too, not
+        # just the launcher/requester images below.
+        installer=$(mktemp)
+        trap 'rm -f "$installer"' EXIT
         if ! curl -fsSL \
             "https://raw.githubusercontent.com/llm-d-incubation/llm-d-fast-model-actuation/refs/tags/v${FMA_RELEASE}/scripts/install-fma.sh" \
             -o "$installer"; then
             echo "ERROR: could not fetch install-fma.sh for FMA release v${FMA_RELEASE}." >&2
-            rm -f "$installer"
             exit 1
         fi
         bash "$installer" \
             --release "$FMA_RELEASE" \
             --namespace "$NAMESPACE" \
             --chart-instance-name "$FMA_CHART" \
+            --oci-registry "$CONTAINER_IMG_REG" \
             --ensure-node-view-cluster-role "${FMA_CHART}-node-view" \
             --install-crds true \
             --install-admission-policies true
-        rm -f "$installer"
     fi
 fi
 
