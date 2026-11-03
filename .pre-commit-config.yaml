@@ -45,7 +45,10 @@ repos:
       - id: typos
 
   # Shell-script linting. warning severity drops the info/style tier (e.g.
-  # SC2219) to avoid noise; scripts are all #!/usr/bin/env bash.
+  # SC2219) to avoid noise; scripts are all #!/usr/bin/env bash. Note this also
+  # silences info-level SC2086 (unquoted expansion), so the hook will not catch
+  # future unquoted-variable regressions; the changed scripts still carry many.
+  # Move to --severity=info in a follow-up once those are cleaned up.
   - repo: https://github.com/koalaman/shellcheck-precommit
     rev: 99470f5e12208ff0fb17ab81c3c494f7620a1d8d  # frozen: v0.11.0
     hooks:
