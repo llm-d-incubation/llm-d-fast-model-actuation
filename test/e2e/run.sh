@@ -25,7 +25,8 @@ note() {
 
 function expect() {
     local elapsed=0
-    local start=$(date)
+    local start
+    start=$(date)
     local limit=${LIMIT:-45}
     note "Expecting $1"
     while true; do
@@ -133,7 +134,7 @@ rules:
   - watch
 EOF
 
-kubectl create rolebinding testreq --role=testreq --serviceaccount=$(kubectl get sa default -o jsonpath={.metadata.namespace}):testreq
+kubectl create rolebinding testreq --role=testreq --serviceaccount="$(kubectl get sa default -o jsonpath='{.metadata.namespace}')":testreq
 
 
 kubectl create sa testreq
@@ -167,7 +168,6 @@ scripts/install-fma.sh --image-tag "$img_tag" --oci-registry "$img_reg" \
 : Test Pod creation
 
 rs=$(test/e2e/mkrs.sh)
-inst=${rs#my-request-}
 
 # Expect only one Pod because controller can not create dual yet
 expect "kubectl get pods -o name | grep -c '^pod/$rs' | grep -w 1"
@@ -184,6 +184,7 @@ done
 
 expect "kubectl get pods -o name | grep -c '^pod/$rs' | grep -w 2"
 
+# shellcheck disable=SC2207  # intentional line-splitting: one array element per pod name
 pods=($(kubectl get pods -o name | grep "^pod/$rs" | sed s%pod/%%))
 req=${pods[0]}
 prv=${pods[1]}
@@ -203,7 +204,7 @@ cheer Successful upside
 : Test node deletion
 : expect nothing to remain on the deleted node, replacement pair to appear on other node
 
-doomed=$(kubectl get pods $req -o jsonpath={.spec.nodeName})
+doomed=$(kubectl get pods "$req" -o jsonpath='{.spec.nodeName}')
 keeper=$(kubectl get nodes -o name | sed s%node/%% | grep -vw $doomed | grep -v control-plane)
 
 kubectl delete node $doomed
@@ -219,6 +220,7 @@ kubectl get pods -o wide
 
 expect "kubectl get pods -o name | grep -c '^pod/$rs' | grep -w 2"
 
+# shellcheck disable=SC2207  # intentional line-splitting: one array element per pod name
 pods=($(kubectl get pods -o name | grep "^pod/$rs" | sed s%pod/%%))
 req=${pods[0]}
 prv=${pods[1]}
@@ -231,7 +233,7 @@ date
 kubectl wait --for condition=Ready pod/$req --timeout=35s
 kubectl wait --for condition=Ready pod/$prv --timeout=1s
 
-used=$(kubectl get pod $req -o jsonpath={.spec.nodeName})
+used=$(kubectl get pod "$req" -o jsonpath='{.spec.nodeName}')
 [ "$used" == "$keeper" ]
 
 assigned_gpu_uuids=$(kubectl get pod "$req" -o jsonpath='{.metadata.annotations.dual-pods\.llm-d\.ai/accelerators}')
@@ -275,6 +277,7 @@ kubectl get pods -o wide
 
 expect "kubectl get pods -o name | grep -c '^pod/$rs' | grep -w 2"
 
+# shellcheck disable=SC2207  # intentional line-splitting: one array element per pod name
 pods=($(kubectl get pods -o name | grep "^pod/$rs" | sed s%pod/%%))
 req=${pods[0]}
 prv=${pods[1]}
@@ -319,6 +322,7 @@ kubectl delete pod $prv
 expect "! kubectl get pods -o name | grep '^pod/$nrq'"
 
 expect "kubectl get pods -o name | grep -c '^pod/$rs' | grep -w 2"
+# shellcheck disable=SC2207  # intentional line-splitting: one array element per pod name
 pods=($(kubectl get pods -o name | grep "^pod/$rs" | sed s%pod/%%))
 rq2=${pods[0]}
 pv2=${pods[1]}
@@ -348,6 +352,7 @@ rs2=$(test/e2e/mkrs.sh)
 
 expect "kubectl get pods -o name | grep -c '^pod/$rs2' | grep -w 2"
 
+# shellcheck disable=SC2207  # intentional line-splitting: one array element per pod name
 pods=($(kubectl get pods -o name | grep "^pod/$rs2" | sed s%pod/%%))
 req2=${pods[0]}
 prv2=${pods[1]}
@@ -373,6 +378,7 @@ rs3=$(test/e2e/mkrs.sh)
 
 expect "kubectl get pods -o name | grep -c '^pod/$rs3' | grep -w 2"
 
+# shellcheck disable=SC2207  # intentional line-splitting: one array element per pod name
 pods=($(kubectl get pods -o name | grep "^pod/$rs3" | sed s%pod/%%))
 req3=${pods[0]}
 prv3=${pods[1]}
@@ -400,6 +406,7 @@ rs4=$(test/e2e/mkrs.sh)
 
 expect "kubectl get pods -o name | grep -c '^pod/$rs4' | grep -w 2"
 
+# shellcheck disable=SC2207  # intentional line-splitting: one array element per pod name
 pods=($(kubectl get pods -o name | grep "^pod/$rs4" | sed s%pod/%%))
 req4=${pods[0]}
 prv4=${pods[1]}
@@ -429,10 +436,11 @@ rs5=$(test/e2e/mkrs.sh)
 expect "kubectl get pods -o name | grep -c '^pod/$rs5' | grep -w 2"
 
 # Provider for RS 2 should be gone or going
-if dsts="$(kubectl get pod $prv2 -o jsonpath={.metadata.deletionTimestamp})"
+if dsts="$(kubectl get pod "$prv2" -o jsonpath='{.metadata.deletionTimestamp}')"
 then [ -n "$dsts" ]
 fi
 
+# shellcheck disable=SC2207  # intentional line-splitting: one array element per pod name
 pods=($(kubectl get pods -o name | grep "^pod/$rs5" | sed s%pod/%%))
 req5=${pods[0]}
 prv5=${pods[1]}

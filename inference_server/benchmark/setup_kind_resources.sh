@@ -69,7 +69,7 @@ rules:
   - watch
 EOF
 
-kubectl create rolebinding testreq --role=testreq --serviceaccount=$(kubectl get sa default -o jsonpath={.metadata.namespace}):testreq
+kubectl create rolebinding testreq --role=testreq --serviceaccount="$(kubectl get sa default -o jsonpath='{.metadata.namespace}')":testreq
 
 kubectl create sa testreq
 kubectl create cm gpu-map
