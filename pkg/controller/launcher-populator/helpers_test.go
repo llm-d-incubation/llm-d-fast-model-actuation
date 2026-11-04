@@ -49,6 +49,10 @@ func TestCreateLaunchersMetrics(t *testing.T) {
 			key.LauncherConfigName = "create-metrics-" + tc.name
 			defer launcherCreateSecsHistograms.DeleteLabelValues(ctl.namespace, key.LauncherConfigName, "true")
 			defer launcherCreateSecsHistograms.DeleteLabelValues(ctl.namespace, key.LauncherConfigName, "false")
+			// Other tests can use the same LauncherConfig name in another namespace.
+			otherNamespace := ctl.namespace + "-other"
+			launcherCreateSecsHistograms.WithLabelValues(otherNamespace, key.LauncherConfigName, "true").Observe(1)
+			defer launcherCreateSecsHistograms.DeleteLabelValues(otherNamespace, key.LauncherConfigName, "true")
 			calls := 0
 			cs.PrependReactor("create", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
 				calls++
@@ -88,11 +92,8 @@ func TestCreateLaunchersMetrics(t *testing.T) {
 					for _, label := range metric.GetLabel() {
 						labels[label.GetName()] = label.GetValue()
 					}
-					if labels["lcfg_name"] != key.LauncherConfigName {
+					if labels["exported_namespace"] != ctl.namespace || labels["lcfg_name"] != key.LauncherConfigName {
 						continue
-					}
-					if labels["exported_namespace"] != ctl.namespace {
-						t.Errorf("exported_namespace = %q, want %q", labels["exported_namespace"], ctl.namespace)
 					}
 					counts[labels["success"]] = metric.GetHistogram().GetSampleCount()
 					sums[labels["success"]] = metric.GetHistogram().GetSampleSum()
