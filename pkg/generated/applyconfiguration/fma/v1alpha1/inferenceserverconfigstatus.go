@@ -23,6 +23,7 @@ package v1alpha1
 type InferenceServerConfigStatusApplyConfiguration struct {
 	ObservedGeneration *int64   `json:"observedGeneration,omitempty"`
 	Errors             []string `json:"errors,omitempty"`
+	Warnings           []string `json:"warnings,omitempty"`
 }
 
 // InferenceServerConfigStatusApplyConfiguration constructs a declarative configuration of the InferenceServerConfigStatus type for use with
@@ -45,6 +46,16 @@ func (b *InferenceServerConfigStatusApplyConfiguration) WithObservedGeneration(v
 func (b *InferenceServerConfigStatusApplyConfiguration) WithErrors(values ...string) *InferenceServerConfigStatusApplyConfiguration {
 	for i := range values {
 		b.Errors = append(b.Errors, values[i])
+	}
+	return b
+}
+
+// WithWarnings adds the given value to the Warnings field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, values provided by each call will be appended to the Warnings field.
+func (b *InferenceServerConfigStatusApplyConfiguration) WithWarnings(values ...string) *InferenceServerConfigStatusApplyConfiguration {
+	for i := range values {
+		b.Warnings = append(b.Warnings, values[i])
 	}
 	return b
 }

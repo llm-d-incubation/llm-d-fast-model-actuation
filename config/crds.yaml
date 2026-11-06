@@ -106,6 +106,13 @@ spec:
                   seen by the controller.'
                 format: int64
                 type: integer
+              warnings:
+                description: |-
+                  `warnings` reports suspicious things seen in the desired state of this object;
+                  in particular, in the version reported by `observedGeneration`.
+                items:
+                  type: string
+                type: array
             type: object
         required:
         - spec
@@ -8627,6 +8634,13 @@ spec:
                   seen by the controller.'
                 format: int64
                 type: integer
+              warnings:
+                description: |-
+                  `warnings` reports suspicious things seen in the desired state of this object;
+                  in particular, in the version reported by `observedGeneration`.
+                items:
+                  type: string
+                type: array
             type: object
         required:
         - spec
@@ -8839,6 +8853,13 @@ spec:
                   seen by the controller.'
                 format: int64
                 type: integer
+              warnings:
+                description: |-
+                  `warnings` reports suspicious things seen in the desired state of this object;
+                  in particular, in the version reported by `observedGeneration`.
+                items:
+                  type: string
+                type: array
             type: object
         type: object
     served: true

@@ -76,6 +76,11 @@ type LauncherConfigStatus struct {
 	// `errors` reports problems seen in the desired state of this object.
 	// +optional
 	Errors []string `json:"errors,omitempty"`
+
+	// `warnings` reports suspicious things seen in the desired state of this object;
+	// in particular, in the version reported by `observedGeneration`.
+	// +optional
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // +genclient
