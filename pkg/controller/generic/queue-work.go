@@ -86,7 +86,6 @@ func newQueueAndWorkers[Item comparable](
 		Process:    process,
 		earlySync:  earlySync,
 	}
-	ans.ApproxLastChangeTime.Store(time.Now())
 	return ans
 }
 
@@ -169,9 +168,17 @@ type Status struct {
 	ApproxLastChangeTime time.Time
 }
 
+func (status Status) IsIdle() bool {
+	return status.QueueDepth == 0 && status.SyncsFinished == status.SyncsStarted
+}
+
+// TotalQueued returns the cumulative total over the controller's lifetime.
+// It may be a little off, due to the asynchrony between the components.
+func (status Status) TotalQueued() int { return status.QueueDepth + status.SyncsStarted }
+
 func (ctl *QueueAndWorkers[Item]) GetStatus() Status {
 	qd := ctl.Queue.Len()
-	alc := ctl.ApproxLastChangeTime.Load().(time.Time)
+	alc, _ := ctl.ApproxLastChangeTime.Load().(time.Time)
 	starts := atomic.LoadInt32(&ctl.SyncsStarted)
 	fins := atomic.LoadInt32(&ctl.SyncsFinished)
 	return Status{
