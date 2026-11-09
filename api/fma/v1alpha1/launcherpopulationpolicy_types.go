@@ -134,7 +134,11 @@ type LauncherPopulationPolicyStatus struct {
 	// in particular, in the version reported by `observedGeneration`.
 	// +optional
 	Errors []string `json:"errors,omitempty"`
-	// Add status fields if needed (e.g., current idle pod counts)
+
+	// `warnings` reports suspicious things seen in the desired state of this object;
+	// in particular, in the version reported by `observedGeneration`.
+	// +optional
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // LauncherPopulationPolicyList contains a list of LauncherPopulationPolicy resources.
