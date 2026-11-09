@@ -46,6 +46,8 @@ type KnowsProcessedSync[Item comparable] struct {
 	processedSync *atomic.Bool
 }
 
+// NewKnowsProcessedSync makes a new one.
+// Its atomics have not been used yet, so copying them is OK.
 func NewKnowsProcessedSync[Item comparable](
 	controllerName string,
 	numWorkers int,

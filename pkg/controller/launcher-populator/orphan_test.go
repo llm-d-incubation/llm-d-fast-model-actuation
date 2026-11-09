@@ -99,7 +99,11 @@ func TestReconcileNodeAvailability(t *testing.T) {
 					if !ctl.runUntilQuiet(t, initialDigestStatus.TotalQueued()+1, false, time.Second*3, time.Second*20) {
 						return
 					}
-					if desiredCount > 0 && templateState != "no-pods" {
+					expectKey := desiredCount > 0 && templateState != "no-pods"
+					if expectKey {
+						if ctl.keyQueue.Queue.Len() < 1 {
+							t.Fatalf("Expected a queued key but there is none")
+						}
 						key, shutdown := ctl.keyQueue.Queue.Get()
 						if shutdown {
 							t.Fatalf("Key queue shutdown without stuck test key")
@@ -108,6 +112,10 @@ func TestReconcileNodeAvailability(t *testing.T) {
 							t.Fatalf("Unexpected key was enqueued: %v", key)
 						}
 						defer ctl.keyQueue.Queue.Done(key)
+					} else {
+						if l := ctl.keyQueue.Queue.Len(); l > 0 {
+							t.Fatalf("Expected key queue to be empty but it has length %v", l)
+						}
 					}
 					err, requeue := ctl.processKey(ctx, stuckTestKey())
 					if err != nil {
@@ -214,7 +222,8 @@ func TestStartupCleansLaunchersWithoutNodeOrPolicy(t *testing.T) {
 	})
 }
 
-// Returns an LC, an LPP, and a Node, plus all 3 in one slice.
+// Returns the node-independent Pod template, an LC, an LPP, and a Node,
+// the last 3 in one slice, and an error.
 // The error should never happen but I don't know how to tell that to the Go type system.
 func orphanSetupObjects(desiredCount int32) (*corev1.Pod, *fmav1alpha1.LauncherConfig, *fmav1alpha1.LauncherPopulationPolicy, *corev1.Node, []runtime.Object, error) {
 	lc := &fmav1alpha1.LauncherConfig{
