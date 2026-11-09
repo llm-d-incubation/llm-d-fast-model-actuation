@@ -75,17 +75,9 @@ spec:
                       Values must be valid Kubernetes label values.
                     type: object
                   options:
-                    description: Options are the vLLM startup options, excluding Port
+                    description: Options are the vLLM startup options, excluding the
+                      controller-managed port.
                     type: string
-                  port:
-                    description: |-
-                      Port is the backward-compatible inference port used when the referenced
-                      LauncherConfig does not define InferencePorts. When that pool is present,
-                      the controller assigns a port from it instead.
-                    format: int32
-                    maximum: 65535
-                    minimum: 1
-                    type: integer
                 type: object
             required:
             - launcherConfigName

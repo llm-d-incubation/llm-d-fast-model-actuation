@@ -423,7 +423,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 				fmt.Sprintf("failed to get LauncherConfig %q: %v", lcName, err),
 			)
 		}
-		_, desiredInstanceID, err = ctl.configInferenceServer(isc, serverDat.GPUIDs, isc.Spec.ModelServerConfig.Port, len(lc.Spec.InferencePorts) > 0)
+		desiredInstanceID, err = inferenceServerInstanceID(isc, serverDat.GPUIDs)
 		if err != nil {
 			return ctl.ensureReqStatus(ctx, requestingPod, serverDat,
 				fmt.Sprintf("failed to configure inference server: %v", err))
@@ -702,8 +702,6 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	// What remains to be done is to wake or create a launcher-based server-providing Pod
 
 	lcName := isc.Spec.LauncherConfigName
-	useInferencePortPool := len(lc.Spec.InferencePorts) > 0
-
 	nodeIndependentLauncherTemplate, _, err := utils.BuildNodeIndependentLauncherTemplate(lc)
 	if err != nil {
 		return processResult{err: fmt.Errorf("failed to build launcher Pod from LauncherConfig %q: %w", lcName, err), retry: true}
@@ -724,7 +722,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 		// then those with capacity for new instances.
 		// Note that multiple vLLM instances could exist in one launcher Pod, but at most one instance could be awake at a time.
 
-		selection, retry, err := ctl.selectOrReclaimLauncherPod(ctx, launcherPodAnys, desiredInstanceID, isc.Spec.ModelServerConfig.Port, lc.Spec.InferencePorts, int(lc.Spec.MaxInstances)-1, nodeDat, serverDat.InstancesDeleted)
+		selection, retry, err := ctl.selectOrReclaimLauncherPod(ctx, launcherPodAnys, desiredInstanceID, lc.Spec.InferencePorts, int(lc.Spec.MaxInstances)-1, nodeDat, serverDat.InstancesDeleted)
 		if err != nil {
 			return processResult{err: err, retry: true}
 		}
@@ -733,7 +731,7 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 			return processResult{retry: true}
 		}
 		if selection != nil {
-			desiredInstanceState, configErr := ctl.computeDesiredInstanceState(isc, serverDat.GPUIDs, selection.serverPort, useInferencePortPool)
+			desiredInstanceState, configErr := ctl.computeDesiredInstanceState(isc, serverDat.GPUIDs, selection.serverPort)
 			if configErr != nil {
 				return ctl.ensureReqStatus(ctx, requestingPod, serverDat,
 					fmt.Sprintf("failed to configure inference server: %v", configErr))
@@ -749,16 +747,12 @@ func (item infSvrItem) process(urCtx context.Context, ctl *controller, nodeDat *
 	// Remains: Zero matching launcher Pods, or the matching launcher Pod cannot host more instances to fulfill the request.
 	// Make a new launcher Pod.
 	serverDat.NeededNewLauncher = true
-	serverPort := isc.Spec.ModelServerConfig.Port
-	if useInferencePortPool {
-		var found bool
-		serverPort, found = firstAvailableInferencePort(lc.Spec.InferencePorts, nil)
-		if !found {
-			return ctl.ensureReqStatus(ctx, requestingPod, serverDat,
-				fmt.Sprintf("LauncherConfig %q has no inference port available for a new launcher", lcName))
-		}
+	serverPort, found := firstAvailableInferencePort(lc.Spec.InferencePorts, nil)
+	if !found {
+		return ctl.ensureReqStatus(ctx, requestingPod, serverDat,
+			fmt.Sprintf("LauncherConfig %q has no inference port available for a new launcher", lcName))
 	}
-	desiredInstanceState, err := ctl.computeDesiredInstanceState(isc, serverDat.GPUIDs, serverPort, useInferencePortPool)
+	desiredInstanceState, err := ctl.computeDesiredInstanceState(isc, serverDat.GPUIDs, serverPort)
 	if err != nil {
 		return ctl.ensureReqStatus(ctx, requestingPod, serverDat,
 			fmt.Sprintf("failed to configure inference server: %v", err))
@@ -846,10 +840,9 @@ type launcherSelection struct {
 // If it finds an unbound launcher's malformed instance state, it repairs that
 // state by deleting the malformed instance and asks the caller to retry with a
 // fresh launcher snapshot. It does the same for an instance matching
-// targetInstanceID whose port is no longer in a non-empty inferencePorts.
+// targetInstanceID whose port is no longer in inferencePorts.
 // The selection includes the port to use. A matching sleeping instance keeps
-// its existing port. A new instance gets an unused port from inferencePorts,
-// or desiredPort when inferencePorts is empty (the backward-compatible mode).
+// its existing port. A new instance gets an unused port from inferencePorts.
 // retry tells the caller to requeue and try again later. Returns
 // (nil, false, nil) if no suitable launcher is found and all launcher Pods are
 // ready or failed.
@@ -857,15 +850,12 @@ func (ctl *controller) selectOrReclaimLauncherPod(
 	ctx context.Context,
 	launcherPodAnys []interface{},
 	targetInstanceID string,
-	desiredPort int32,
 	inferencePorts []int32,
 	maxOthers int,
 	nodeDat *nodeData,
 	instancesDeleted sets.Set[string],
 ) (*launcherSelection, bool, error) {
 	logger := klog.FromContext(ctx)
-	useInferencePortPool := len(inferencePorts) > 0
-
 	var candidateWithCapacity *launcherSelection
 	var somePodsNotReady bool
 	var bestReclaimPlan *launcherReclaimPlan
@@ -901,7 +891,6 @@ func (ctl *controller) selectOrReclaimLauncherPod(
 		var sleepingInstancePort int32
 		usedPorts := sets.New[int32]()
 		portsByInstance := make(map[string]int32, len(insts.Instances))
-		portConflictVictims := make([]string, 0, 1)
 		otherVictims := make([]string, 0, len(insts.Instances))
 		for _, inst := range insts.Instances {
 			instPort, err := getVLLMInstancePort(inst)
@@ -920,7 +909,7 @@ func (ctl *controller) selectOrReclaimLauncherPod(
 				// The pooled instance ID does not cover the port, so an instance
 				// left on a port since removed from inferencePorts still matches.
 				// Delete it so that it can be recreated on a pool port.
-				if useInferencePortPool && !slices.Contains(inferencePorts, instPort) {
+				if !slices.Contains(inferencePorts, instPort) {
 					logger.V(5).Info("Deleting matching vLLM instance because its port is outside inferencePorts",
 						"name", launcherPod.Name,
 						"instanceID", inst.InstanceID,
@@ -934,11 +923,7 @@ func (ctl *controller) selectOrReclaimLauncherPod(
 				}
 				continue
 			}
-			if !useInferencePortPool && instPort == desiredPort {
-				portConflictVictims = append(portConflictVictims, inst.InstanceID)
-			} else {
-				otherVictims = append(otherVictims, inst.InstanceID)
-			}
+			otherVictims = append(otherVictims, inst.InstanceID)
 		}
 		if hasSleepingInstance {
 			// Priority 1: Found a sleeping instance
@@ -951,10 +936,7 @@ func (ctl *controller) selectOrReclaimLauncherPod(
 		}
 
 		// Check if this launcher has capacity for a new instance
-		availablePort, portAvailable := desiredPort, len(portConflictVictims) == 0
-		if useInferencePortPool {
-			availablePort, portAvailable = firstAvailableInferencePort(inferencePorts, usedPorts)
-		}
+		availablePort, portAvailable := firstAvailableInferencePort(inferencePorts, usedPorts)
 		if portAvailable && insts.TotalInstances <= maxOthers {
 			if candidateWithCapacity == nil {
 				// Priority 2: Has capacity for new instance
@@ -968,22 +950,15 @@ func (ctl *controller) selectOrReclaimLauncherPod(
 		}
 
 		toDelete := max(insts.TotalInstances-maxOthers, 1)
-		// In legacy mode any conflicting instance must be deleted; deleting only
-		// other instances would leave the desired port unavailable. Pool mode has
-		// no predetermined port conflict, so retain the existing LRU choice.
-		victims := append(portConflictVictims, pickInstanceVictims(otherVictims, launcherDat.Instances.getLastUsedIfNotStopped, toDelete-len(portConflictVictims))...)
-		reclaimPort := desiredPort
-		if useInferencePortPool {
-			remainingUsedPorts := usedPorts.Clone()
-			for _, victim := range victims {
-				remainingUsedPorts.Delete(portsByInstance[victim])
-			}
-			var found bool
-			reclaimPort, found = firstAvailableInferencePort(inferencePorts, remainingUsedPorts)
-			if !found {
-				logger.V(4).Info("Launcher has no pool port available after planned reclaim", "name", launcherPod.Name, "victims", victims)
-				continue
-			}
+		victims := pickInstanceVictims(otherVictims, launcherDat.Instances.getLastUsedIfNotStopped, toDelete)
+		remainingUsedPorts := usedPorts.Clone()
+		for _, victim := range victims {
+			remainingUsedPorts.Delete(portsByInstance[victim])
+		}
+		reclaimPort, found := firstAvailableInferencePort(inferencePorts, remainingUsedPorts)
+		if !found {
+			logger.V(4).Info("Launcher has no pool port available after planned reclaim", "name", launcherPod.Name, "victims", victims)
+			continue
 		}
 		lruID, lruTime := reclaimPlanLRU(victims, launcherDat.Instances.getLastUsedIfNotStopped)
 		plan := &launcherReclaimPlan{
@@ -1131,10 +1106,7 @@ func compareLastUsed(a string, aTime time.Time, b string, bTime time.Time) int {
 // configInferenceServer computes the VllmConfig.
 // `isc` and `gpuUUIDs` are deeply immutable.
 // The result is deeply immutable.
-func (ctl *controller) configInferenceServer(isc *fmav1alpha1.InferenceServerConfig, gpuUUIDs []string, serverPort int32, useInferencePortPool bool) (*VllmConfig, string, error) {
-	if serverPort == 0 && !useInferencePortPool {
-		return nil, "", fmt.Errorf("InferenceServerConfig %q must specify spec.modelServerConfig.port when LauncherConfig %q does not specify spec.inferencePorts", isc.Name, isc.Spec.LauncherConfigName)
-	}
+func (ctl *controller) configInferenceServer(isc *fmav1alpha1.InferenceServerConfig, gpuUUIDs []string, serverPort int32) (*VllmConfig, string, error) {
 	portS := strconv.Itoa(int(serverPort))
 	options := isc.Spec.ModelServerConfig.Options + " --port " + portS
 	vllmCfg := VllmConfig{
@@ -1146,28 +1118,17 @@ func (ctl *controller) configInferenceServer(isc *fmav1alpha1.InferenceServerCon
 			VllmConfigInferencePortAnnotationKey: portS,
 		},
 	}
-	var hashedConfig any = isc.Spec.ModelServerConfig
-	if useInferencePortPool {
-		// The assigned port is launcher-local state, not part of the logical
-		// inference-server configuration or its reusable instance identity. Use
-		// an explicitly port-free shape so this identity remains stable when the
-		// legacy Port field is removed from ModelServerConfig in stage 3 of the
-		// transition.
-		hashedConfig = struct {
-			Options     string            `json:"options,omitempty"`
-			EnvVars     map[string]string `json:"env_vars,omitempty"`
-			Labels      map[string]string `json:"labels,omitempty"`
-			Annotations map[string]string `json:"annotations,omitempty"`
-		}{
-			Options:     isc.Spec.ModelServerConfig.Options,
-			EnvVars:     isc.Spec.ModelServerConfig.EnvVars,
-			Labels:      isc.Spec.ModelServerConfig.Labels,
-			Annotations: isc.Spec.ModelServerConfig.Annotations,
-		}
-	}
-	iscBytes, err := yaml.Marshal(hashedConfig)
+	instanceID, err := inferenceServerInstanceID(isc, gpuUUIDs)
+	return &vllmCfg, instanceID, err
+}
+
+// inferenceServerInstanceID returns the reusable identity of an inference
+// server configuration on the given GPUs. The assigned port is launcher-local
+// state and does not contribute to this identity.
+func inferenceServerInstanceID(isc *fmav1alpha1.InferenceServerConfig, gpuUUIDs []string) (string, error) {
+	iscBytes, err := yaml.Marshal(isc.Spec.ModelServerConfig)
 	if err != nil {
-		return nil, "", fmt.Errorf("failed to marshal InferenceServerConfig %q: %w", isc.Name, err)
+		return "", fmt.Errorf("failed to marshal InferenceServerConfig %q: %w", isc.Name, err)
 	}
 	hasher := sha256.New()
 	hasher.Write(iscBytes)
@@ -1180,11 +1141,11 @@ func (ctl *controller) configInferenceServer(isc *fmav1alpha1.InferenceServerCon
 	// label value (which must start and end with an alphanumeric character).
 	nominalHash := "I" + base64.RawURLEncoding.EncodeToString(hashSl) + "i"
 
-	return &vllmCfg, nominalHash, nil
+	return nominalHash, nil
 }
 
-func (ctl *controller) computeDesiredInstanceState(isc *fmav1alpha1.InferenceServerConfig, gpuUUIDs []string, serverPort int32, useInferencePortPool bool) (*vllmInstanceState, error) {
-	cfg, instanceID, err := ctl.configInferenceServer(isc, gpuUUIDs, serverPort, useInferencePortPool)
+func (ctl *controller) computeDesiredInstanceState(isc *fmav1alpha1.InferenceServerConfig, gpuUUIDs []string, serverPort int32) (*vllmInstanceState, error) {
+	cfg, instanceID, err := ctl.configInferenceServer(isc, gpuUUIDs, serverPort)
 	if err != nil {
 		return nil, err
 	}
@@ -1767,7 +1728,7 @@ func (item instanceGCItem) process(ctx context.Context, ctl *controller, nodeDat
 		}
 		return processResult{err: err, retry: true}
 	}
-	lc, err := ctl.lcLister.LauncherConfigs(ctl.namespace).Get(isc.Spec.LauncherConfigName)
+	_, err = ctl.lcLister.LauncherConfigs(ctl.namespace).Get(isc.Spec.LauncherConfigName)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			logger.V(4).Info("Skipping instance GC because LauncherConfig is absent", "launcherConfig", isc.Spec.LauncherConfigName)
@@ -1775,8 +1736,6 @@ func (item instanceGCItem) process(ctx context.Context, ctl *controller, nodeDat
 		}
 		return processResult{err: err, retry: true}
 	}
-	useInferencePortPool := len(lc.Spec.InferencePorts) > 0
-
 	for launcherPodName, launcherDat := range nodeDat.Launchers {
 		launcherPod, err := ctl.podLister.Pods(ctl.namespace).Get(launcherPodName)
 		if err != nil {
@@ -1809,7 +1768,7 @@ func (item instanceGCItem) process(ctx context.Context, ctl *controller, nodeDat
 				logger.V(4).Info("Skipping instance GC: no GPU UUIDs", "launcherPod", launcherPodName, "instanceID", inst.InstanceID)
 				continue
 			}
-			_, currentHash, err := ctl.configInferenceServer(isc, inst.GpuUUIDs, isc.Spec.ModelServerConfig.Port, useInferencePortPool)
+			currentHash, err := inferenceServerInstanceID(isc, inst.GpuUUIDs)
 			if err != nil {
 				logger.Error(err, "Failed to compute current hash during instance GC", "launcherPod", launcherPodName, "instanceID", inst.InstanceID)
 				continue
@@ -1987,7 +1946,7 @@ func (ctl *controller) maybeDeleteObsoleteInstance(ctx context.Context, serverDa
 		logger.V(4).Info("Cannot check instance obsolescence: ISC not found", "iscName", iscName, "err", err)
 		return iscName, false
 	}
-	lc, err := ctl.lcLister.LauncherConfigs(ctl.namespace).Get(currentISC.Spec.LauncherConfigName)
+	_, err = ctl.lcLister.LauncherConfigs(ctl.namespace).Get(currentISC.Spec.LauncherConfigName)
 	if err != nil {
 		logger.V(4).Info("Cannot check instance obsolescence: LauncherConfig not found", "launcherConfig", currentISC.Spec.LauncherConfigName, "err", err)
 		return iscName, false
@@ -1996,7 +1955,7 @@ func (ctl *controller) maybeDeleteObsoleteInstance(ctx context.Context, serverDa
 		logger.V(4).Info("Cannot check instance obsolescence: no GPU UUIDs on instance", "instanceID", serverDat.InstanceID)
 		return iscName, false
 	}
-	_, currentHash, err := ctl.configInferenceServer(currentISC, instState.GpuUUIDs, currentISC.Spec.ModelServerConfig.Port, len(lc.Spec.InferencePorts) > 0)
+	currentHash, err := inferenceServerInstanceID(currentISC, instState.GpuUUIDs)
 	if err != nil {
 		logger.V(4).Info("Cannot check instance obsolescence: failed to compute current hash", "iscName", iscName, "err", err)
 		return iscName, false
