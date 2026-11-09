@@ -48,7 +48,6 @@ const ControllerName = "launcher-populator"
 
 type Controller interface {
 	Start(context.Context) error
-	GetStatus() (genctlr.Status, genctlr.Status)
 }
 
 // NewController makes a new dual pods controller.
@@ -694,6 +693,6 @@ func (ctl *controller) getCurrentLaunchersOnNode(ctx context.Context, key NodeLa
 	return nil, ExpectationsSatisfied, nil
 }
 
-func (ctl *controller) GetStatus() (genctlr.Status, genctlr.Status) {
+func (ctl *controller) getStatus() (genctlr.Status, genctlr.Status) {
 	return ctl.digestQueue.GetStatus(), ctl.keyQueue.GetStatus()
 }

@@ -141,6 +141,7 @@ func ready(p *corev1.Pod) *corev1.Pod {
 		Type:   corev1.PodReady,
 		Status: corev1.ConditionTrue,
 	})
+	p.Status.Phase = corev1.PodRunning
 	return p
 }
 
