@@ -33,15 +33,7 @@ type InferenceServerConfigSpec struct {
 
 // ModelServerConfig defines the configuration for a model server
 type ModelServerConfig struct {
-	// Port is the backward-compatible inference port used when the referenced
-	// LauncherConfig does not define InferencePorts. When that pool is present,
-	// the controller assigns a port from it instead.
-	// +optional
-	// +kubebuilder:validation:Minimum=1
-	// +kubebuilder:validation:Maximum=65535
-	Port int32 `json:"port,omitempty"`
-
-	// Options are the vLLM startup options, excluding Port
+	// Options are the vLLM startup options, excluding the controller-managed port.
 	// +optional
 	Options string `json:"options,omitempty"`
 

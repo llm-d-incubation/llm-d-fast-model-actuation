@@ -42,30 +42,6 @@ inst=$(date +%d-%H-%M-%S)
 requester_img=$(make echo-var VAR=TEST_REQUESTER_IMG)
 launcher_img=$(make echo-var VAR=TEST_LAUNCHER_IMG)
 
-# compares two semver-sans-leading-v strings.
-# Both must have non-empty major.minor.patch;
-# second must not have any prerelease or build metadata.
-function version_leq() {
-    red1=${1%%-*}
-    red1=${red1%%+*}
-    (echo "$red1"; echo "$2") | sort -CV
-}
-
-# Local code and releases after v0.7.1 consume the port pool and do not need
-# legacy ModelServerConfig ports. Older releases need their legacy shape.
-isc1_port_yaml="    port: 8005"
-isc2_port_yaml="    port: 8006"
-isc3_port_yaml="    port: 8007"
-inference_ports_yaml=""
-if [ -z "${FMA_RELEASE:-}" ] || ! version_leq "$FMA_RELEASE" 0.7.1; then
-    isc1_port_yaml=""
-    isc2_port_yaml=""
-    isc3_port_yaml=""
-    inference_ports_yaml="  inferencePorts:
-    - 8005
-    - 8006"
-fi
-
 if out=$(kubectl apply "${ns_flag[@]}" -f - 2>&1 <<EOF
 apiVersion: fma.llm-d.ai/v1alpha1
 kind: InferenceServerConfig
@@ -76,7 +52,6 @@ metadata:
     fma-e2e-instance: "$inst"
 spec:
   modelServerConfig:
-${isc1_port_yaml}
     options: "--model HuggingFaceTB/SmolLM2-360M-Instruct"
     env_vars:
       VLLM_SERVER_DEV_MODE: "1"
@@ -97,7 +72,6 @@ metadata:
     fma-e2e-instance: "$inst"
 spec:
   modelServerConfig:
-${isc2_port_yaml}
     options: "--model Qwen/Qwen2.5-0.5B-Instruct"
     env_vars:
       VLLM_SERVER_DEV_MODE: "1"
@@ -118,7 +92,6 @@ metadata:
     fma-e2e-instance: "$inst"
 spec:
   modelServerConfig:
-${isc3_port_yaml}
     options: "--model TinyLlama/TinyLlama-1.1B-Chat-v1.0"
     env_vars:
       VLLM_SERVER_DEV_MODE: "1"
@@ -139,7 +112,9 @@ metadata:
     fma-e2e-instance: "$inst"
 spec:
   maxInstances: 2
-${inference_ports_yaml}
+  inferencePorts:
+  - 8005
+  - 8006
   podTemplate:
     metadata:
       labels:

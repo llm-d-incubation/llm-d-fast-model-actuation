@@ -81,15 +81,6 @@ expect() {
     done
 }
 
-# compares two semver-sans-leading-v strings.
-# Both must have non-empty major.minor.patch;
-# second must not have any prerelease or build metadata.
-function version_leq() {
-    red1=${1%%-*}
-    red1=${red1%%+*}
-    (echo "$red1"; echo "$2") | sort -CV
-}
-
 # pin_gpu patches the ReplicaSet so subsequent pods reuse the same GPU
 # UUID.  Sets nvidia.com/gpu limit/request to 0 (bypassing the NVIDIA
 # device plugin's fresh assignment) and injects
@@ -346,14 +337,11 @@ if [ "$POLICIES_ENABLED" = true ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Concurrent Same-Node Request (Common Port Through FMA 0.7.1)
+# Concurrent Same-Node Request
 # ---------------------------------------------------------------------------
 
-intro_case "Concurrent Same-Node Request Creates New Launcher (Common Port Through FMA 0.7.1)"
+intro_case "Concurrent Same-Node Request Creates New Launcher"
 
-# For FMA 0.7.1 and earlier, both awake instances also request the same legacy
-# port. The scenario therefore involves both constraints but does not isolate
-# port-collision handling.
 # Check whether the test node has a free GPU for the concurrent requester.
 # req1 already holds 1 GPU; the concurrent requester needs 1 more on the same node.
 allocatable_gpus=$(kubectl get node "$testnode" -o jsonpath='{.status.allocatable.nvidia\.com/gpu}')
@@ -373,56 +361,56 @@ if false && (( available_gpus < 1 )); then
     exit 1
 else
 
-    collision_inst="${inst}-collision"
-    collision_rs="my-request-collision-$inst"
+    concurrent_inst="${inst}-concurrent"
+    concurrent_rs="my-request-concurrent-$inst"
 
     kubectl get rs "$rs" -n "$NS" -o json \
       | jq \
-          --arg collision_rs "$collision_rs" \
-          --arg collision_inst "$collision_inst" \
+          --arg concurrent_rs "$concurrent_rs" \
+          --arg concurrent_inst "$concurrent_inst" \
           --arg testnode "$testnode" \
           --arg isc "$isc" \
           '
-          .metadata.name = $collision_rs |
+          .metadata.name = $concurrent_rs |
           del(.metadata.uid, .metadata.resourceVersion, .metadata.creationTimestamp, .metadata.annotations, .metadata.ownerReferences, .status) |
           .spec.replicas = 1 |
-          .spec.selector.matchLabels.instance = $collision_inst |
-          .spec.template.metadata.labels.instance = $collision_inst |
+          .spec.selector.matchLabels.instance = $concurrent_inst |
+          .spec.template.metadata.labels.instance = $concurrent_inst |
           .spec.template.spec.nodeSelector = {"kubernetes.io/hostname": $testnode} |
           .spec.template.metadata.annotations["dual-pods.llm-d.ai/inference-server-config"] = $isc
         ' \
       | kubectl apply -n "$NS" -f -
 
-    expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$collision_inst | wc -l | grep -w 1"
+    expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$concurrent_inst | wc -l | grep -w 1"
 
-    collision_req=$(kubectl get pods -n "$NS" -o name -l app=dp-example,instance=$collision_inst | sed s%pod/%%)
-    echo "Concurrent requester Pod is $collision_req"
+    concurrent_req=$(kubectl get pods -n "$NS" -o name -l app=dp-example,instance=$concurrent_inst | sed s%pod/%%)
+    echo "Concurrent requester Pod is $concurrent_req"
 
-    expect '[ "$(kubectl get pod -n '"$NS"' '"$collision_req"' -o jsonpath={.spec.nodeName})" == "'"$testnode"'" ]'
-    expect "kubectl get pods -n $NS -o name -l dual-pods.llm-d.ai/dual=$collision_req | wc -l | grep -w 1"
+    expect '[ "$(kubectl get pod -n '"$NS"' '"$concurrent_req"' -o jsonpath={.spec.nodeName})" == "'"$testnode"'" ]'
+    expect "kubectl get pods -n $NS -o name -l dual-pods.llm-d.ai/dual=$concurrent_req | wc -l | grep -w 1"
 
-    collision_launcher=$(kubectl get pods -n "$NS" -o name -l dual-pods.llm-d.ai/dual=$collision_req | sed s%pod/%%)
-    echo "Concurrent launcher Pod is $collision_launcher"
+    concurrent_launcher=$(kubectl get pods -n "$NS" -o name -l dual-pods.llm-d.ai/dual=$concurrent_req | sed s%pod/%%)
+    echo "Concurrent launcher Pod is $concurrent_launcher"
 
-    [ "$collision_launcher" != "$launcher1" ]
+    [ "$concurrent_launcher" != "$launcher1" ]
 
-    expect '[ "$(kubectl get pod -n '"$NS"' '"$collision_req"' -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "'"$collision_launcher"'" ]'
+    expect '[ "$(kubectl get pod -n '"$NS"' '"$concurrent_req"' -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "'"$concurrent_launcher"'" ]'
 
-    note "Wait for $collision_req to be ready"
-    kubectl wait --for condition=Ready pod/$collision_req -n "$NS" --timeout=300s
-    note "Wait for $collision_launcher to be ready"
-    kubectl wait --for condition=Ready pod/$collision_launcher -n "$NS" --timeout=0s
+    note "Wait for $concurrent_req to be ready"
+    kubectl wait --for condition=Ready pod/$concurrent_req -n "$NS" --timeout=300s
+    note "Wait for $concurrent_launcher to be ready"
+    kubectl wait --for condition=Ready pod/$concurrent_launcher -n "$NS" --timeout=0s
 
     req_gpus=$(kubectl get pod "$req1" -n "$NS" -o jsonpath='{.metadata.annotations.dual-pods\.llm-d\.ai/accelerators}')
-    collision_gpus=$(kubectl get pod "$collision_req" -n "$NS" -o jsonpath='{.metadata.annotations.dual-pods\.llm-d\.ai/accelerators}')
+    concurrent_gpus=$(kubectl get pod "$concurrent_req" -n "$NS" -o jsonpath='{.metadata.annotations.dual-pods\.llm-d\.ai/accelerators}')
     [ -n "$req_gpus" ]
-    [ -n "$collision_gpus" ]
-    [ "$req_gpus" != "$collision_gpus" ]
+    [ -n "$concurrent_gpus" ]
+    [ "$req_gpus" != "$concurrent_gpus" ]
 
-    kubectl delete rs "$collision_rs" -n "$NS" --wait=true
-    expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$collision_inst | wc -l | grep -w 0"
-    kubectl delete pod "$collision_launcher" -n "$NS" --wait=true
-    expect '! kubectl get pods -n '"$NS"' -o name | grep -qw pod/'"$collision_launcher"
+    kubectl delete rs "$concurrent_rs" -n "$NS" --wait=true
+    expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$concurrent_inst | wc -l | grep -w 0"
+    kubectl delete pod "$concurrent_launcher" -n "$NS" --wait=true
+    expect '! kubectl get pods -n '"$NS"' -o name | grep -qw pod/'"$concurrent_launcher"
 
     cheer Successful concurrent same-node request handling
 
@@ -540,15 +528,10 @@ kubectl wait --for condition=Ready pod/$launcher1 -n "$NS" --timeout=0s
 
 check_gpu_pin $req3
 
-if [ -z "$FMA_RELEASE" ] || ! version_leq "$FMA_RELEASE" 0.7.1; then
-    # Pool-aware fixtures omit legacy ports. Their coexistence proves that the
-    # controller allocated distinct ports from LauncherConfig.spec.inferencePorts.
-    isc_port=$(kubectl get inferenceserverconfig "$isc" -n "$NS" -o jsonpath='{.spec.modelServerConfig.port}')
-    isc2_port=$(kubectl get inferenceserverconfig "$isc2" -n "$NS" -o jsonpath='{.spec.modelServerConfig.port}')
-    [ -z "$isc_port" ] && [ -z "$isc2_port" ] || { echo "ERROR: pool-aware InferenceServerConfigs unexpectedly specify legacy ports $isc_port and $isc2_port" >&2; exit 1; }
-    launcher_instance_ports=$(kubectl exec -n "$NS" "$launcher1" -- python3 -c 'import json,urllib.request; instances=json.load(urllib.request.urlopen("http://127.0.0.1:8001/v2/vllm/instances"))["instances"]; print(",".join(sorted(instance["annotations"]["inference-port"] for instance in instances)))')
-    [ "$launcher_instance_ports" = "8005,8006" ] || { echo "ERROR: pooled launcher ports are $launcher_instance_ports, expected 8005,8006" >&2; exit 1; }
-fi
+# Their coexistence proves that the controller allocated distinct ports from
+# LauncherConfig.spec.inferencePorts.
+launcher_instance_ports=$(kubectl exec -n "$NS" "$launcher1" -- python3 -c 'import json,urllib.request; instances=json.load(urllib.request.urlopen("http://127.0.0.1:8001/v2/vllm/instances"))["instances"]; print(",".join(sorted(instance["annotations"]["inference-port"] for instance in instances)))')
+[ "$launcher_instance_ports" = "8005,8006" ] || { echo "ERROR: pooled launcher ports are $launcher_instance_ports, expected 8005,8006" >&2; exit 1; }
 
 note displaying storage space in launcher /tmp
 
@@ -615,52 +598,43 @@ cheer Successful switching instances in one launcher
 # Reverse Proxy Initialization and Forwarding
 # ---------------------------------------------------------------------------
 
-# Test the TCP proxy only in `main` or a release that has it.
-if [ -z "${FMA_RELEASE}" ] || ! version_leq "${FMA_RELEASE}" 0.6.5; then
-    intro_case Reverse Proxy Initialization and Forwarding
+intro_case Reverse Proxy Initialization and Forwarding
 
-    # This test verifies that the dual-pods controller points the requester Pod's
-    # TCP proxy at the bound launcher Pod, and that an inference request sent to
-    # the proxy port is served by the bound instance.
-    #
-    # Assumed starting state: $req4 is bound to $launcher1, both Ready. Also
-    # assumed: the InferenceServerConfig of $req4 is $isc.
+# This test verifies that the dual-pods controller points the requester Pod's
+# TCP proxy at the bound launcher Pod, and that an inference request sent to
+# the proxy port is served by the bound instance.
+#
+# Assumed starting state: $req4 is bound to $launcher1, both Ready. Also
+# assumed: the InferenceServerConfig of $req4 is $isc.
 
-    launcher1_ip=$(kubectl get pod "$launcher1" -n "$NS" -o jsonpath='{.status.podIP}')
-    if [ -z "$FMA_RELEASE" ] || ! version_leq "$FMA_RELEASE" 0.7.1; then
-        launcher1_port=$(kubectl get pod "$launcher1" -n "$NS" -o jsonpath='{.metadata.annotations.dual-pods\.llm-d\.ai/server-port}')
-    else
-        launcher1_port=$(kubectl get inferenceserverconfig "$isc" -n "$NS" -o jsonpath='{.spec.modelServerConfig.port}')
-    fi
-    expected_target=$(printf '{"address":"%s","port":%d}' "$launcher1_ip" "$launcher1_port")
+launcher1_ip=$(kubectl get pod "$launcher1" -n "$NS" -o jsonpath='{.status.podIP}')
+launcher1_port=$(kubectl get pod "$launcher1" -n "$NS" -o jsonpath='{.metadata.annotations.dual-pods\.llm-d\.ai/server-port}')
+expected_target=$(printf '{"address":"%s","port":%d}' "$launcher1_ip" "$launcher1_port")
 
-    note "Checking proxy config on requester Pod $req4; expect port-forward and curl noise"
-    kubectl port-forward -n "$NS" pod/"$req4" 28091:8081 &
-    pfpid=$!
-    sleep 5
+note "Checking proxy config on requester Pod $req4; expect port-forward and curl noise"
+kubectl port-forward -n "$NS" pod/"$req4" 28091:8081 &
+pfpid=$!
+sleep 5
 
-    # The controller configures the proxy while binding, so this already holds;
-    # retrying only rides out port-forward startup.
-    expect "curl -sf http://localhost:28091/v1/proxy/config | jq -e --argjson want '$expected_target' '. == \$want' &> /dev/null"
+# The controller configures the proxy while binding, so this already holds;
+# retrying only rides out port-forward startup.
+expect "curl -sf http://localhost:28091/v1/proxy/config | jq -e --argjson want '$expected_target' '. == \$want' &> /dev/null"
 
-    kill $pfpid || true
-    pfpid=""
+kill $pfpid || true
+pfpid=""
 
-    note "Checking that the proxy port forwards to the inference server; expect port-forward and curl noise"
-    kubectl port-forward -n "$NS" pod/"$req4" 28092:8082 &
-    pfpid=$!
-    sleep 5
+note "Checking that the proxy port forwards to the inference server; expect port-forward and curl noise"
+kubectl port-forward -n "$NS" pod/"$req4" 28092:8082 &
+pfpid=$!
+sleep 5
 
-    # Both mkobjs scripts configure $isc to serve this model.
-    expect "curl -fsS --max-time 60 http://localhost:28092/v1/completions -H 'Content-Type: application/json' -d '{\"model\":\"HuggingFaceTB/SmolLM2-360M-Instruct\",\"prompt\":\"The capital of France is\",\"max_tokens\":16,\"temperature\":0}' | jq -e '.object == \"text_completion\" and .model == \"HuggingFaceTB/SmolLM2-360M-Instruct\" and (.choices[0].text | type == \"string\" and length > 0)' &> /dev/null"
+# Both mkobjs scripts configure $isc to serve this model.
+expect "curl -fsS --max-time 60 http://localhost:28092/v1/completions -H 'Content-Type: application/json' -d '{\"model\":\"HuggingFaceTB/SmolLM2-360M-Instruct\",\"prompt\":\"The capital of France is\",\"max_tokens\":16,\"temperature\":0}' | jq -e '.object == \"text_completion\" and .model == \"HuggingFaceTB/SmolLM2-360M-Instruct\" and (.choices[0].text | type == \"string\" and length > 0)' &> /dev/null"
 
-    kill $pfpid || true
-    pfpid=""
+kill $pfpid || true
+pfpid=""
 
-    cheer Successful reverse proxy initialization and forwarding
-else
-    note "Skipping reverse proxy test because release $FMA_RELEASE predates proxy configuration"
-fi
+cheer Successful reverse proxy initialization and forwarding
 
 # ---------------------------------------------------------------------------
 # Per-launcher Instance Cap Enforcement
