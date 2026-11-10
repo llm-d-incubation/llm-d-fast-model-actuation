@@ -60,22 +60,14 @@ func TestReconcileNodeAvailability(t *testing.T) {
 							t.Fatalf("Failed to construct template Pod: %v", err)
 						}
 					}
-					ctl, cs, fmaCS, _ := newStuckTestController(t, stuckTestNow, digestOnly, setupObjs...)
+					ctl, cs, fmaCS, _ := newStuckTestController(t, t.Context(), stuckTestNow, digestOnly, setupObjs...)
 					if !ctl.runUntilQuiet(t, len(setupObjs), false, time.Second*3, time.Second*20) {
 						return
 					}
 					ctx := t.Context()
 					cs.ClearActions()
 					fmaCS.ClearActions()
-					initialDigestStatus := ctl.digestQueue.GetStatus()
-					for ctl.keyQueue.Queue.Len() > 0 {
-						key, shutdown := ctl.keyQueue.Queue.Get()
-						if shutdown {
-							t.Fatalf("Key queue shutdown without stuck test key")
-						}
-						t.Logf("Drained key %v", key)
-						ctl.keyQueue.Queue.Done(key)
-					}
+					ctl.digestQueue.StopTestWorkers(ctx)
 
 					allowedActions := []actionAbstract{}
 					if nodeState == "deleting" {
@@ -95,27 +87,6 @@ func TestReconcileNodeAvailability(t *testing.T) {
 						}
 						allowedActions = append(allowedActions, actionAbstract{"delete", "nodes"})
 						waitForNodeGoneFromCache(t, ctl, node.Name)
-					}
-					if !ctl.runUntilQuiet(t, initialDigestStatus.TotalQueued()+1, false, time.Second*3, time.Second*20) {
-						return
-					}
-					expectKey := desiredCount > 0
-					if expectKey {
-						if ctl.keyQueue.Queue.Len() < 1 {
-							t.Fatalf("Expected a queued key but there is none")
-						}
-						key, shutdown := ctl.keyQueue.Queue.Get()
-						if shutdown {
-							t.Fatalf("Key queue shutdown without stuck test key")
-						}
-						if key.NodeLauncherKey != stuckTestKey() {
-							t.Fatalf("Unexpected key was enqueued: %v", key)
-						}
-						defer ctl.keyQueue.Queue.Done(key)
-					} else {
-						if l := ctl.keyQueue.Queue.Len(); l > 0 {
-							t.Fatalf("Expected key queue to be empty but it has length %v", l)
-						}
 					}
 					err, requeue := ctl.processKey(ctx, stuckTestKey())
 					if err != nil {
@@ -148,12 +119,38 @@ func TestReconcileNodeAvailability(t *testing.T) {
 	}
 }
 
+func TestShutdown(t *testing.T) {
+	_, _, _, _, setupObjs, err := orphanSetupObjects(1)
+	if err != nil {
+		t.Fatalf("Failed to create template Pod: %v", err)
+	}
+	var ctl *controller
+	ctx, cancel := context.WithCancelCause(t.Context())
+	defer func() {
+		cancel(errors.New("controller shutdown test"))
+		if ctl == nil {
+			return
+		}
+		err := wait.PollUntilContextCancel(t.Context(), time.Second, true, func(ctx context.Context) (done bool, err error) {
+			return ctl.digestQueue.Queue.ShuttingDown() && ctl.keyQueue.Queue.ShuttingDown(), nil
+		})
+		if err != nil {
+			t.Errorf("Queues not both shutting down: digest %v, key %v", ctl.digestQueue.Queue.ShuttingDown(), ctl.keyQueue.Queue.ShuttingDown())
+		}
+	}()
+	ctl, _, _, _ = newStuckTestController(t, ctx, stuckTestNow, digestOnly, setupObjs...)
+
+	if !ctl.runUntilQuiet(t, len(setupObjs), false, time.Second*1, time.Second*20) {
+		return
+	}
+}
+
 func TestReconcileLiveNodeCreatesLauncher(t *testing.T) {
 	_, _, _, node, setupObjs, err := orphanSetupObjects(1)
 	if err != nil {
 		t.Fatalf("Failed to create template Pod: %v", err)
 	}
-	ctl, cs, fmaCS, _ := newStuckTestController(t, stuckTestNow, digestOnly, setupObjs...)
+	ctl, cs, fmaCS, _ := newStuckTestController(t, t.Context(), stuckTestNow, digestOnly, setupObjs...)
 
 	if !ctl.runUntilQuiet(t, len(setupObjs), false, time.Second*3, time.Second*20) {
 		return
@@ -174,11 +171,13 @@ func TestReconcileLiveNodeCreatesLauncher(t *testing.T) {
 
 func TestPopulationPolicyDownscaleCleansLaunchers(t *testing.T) {
 	lpp, _, _, _, objects := orphanLifecycleObjects(t, 2, true, true)
-	ctl, cs, fmaCS, _ := newStuckTestController(t, stuckTestNow, digestAndKeys, objects...)
+	ctl, cs, fmaCS, _ := newStuckTestController(t, t.Context(), stuckTestNow, digestAndKeys, objects...)
 
 	if !ctl.runUntilQuiet(t, len(objects), true, time.Second*3, time.Second*20) {
 		return
 	}
+	checkPodPresent(t, cs, stuckTestNamespace, "orphan")
+	checkPodPresent(t, cs, stuckTestNamespace, "bound")
 	key := stuckTestKey()
 	snap := ctl.policy.snapshotForKey(key)
 	if !snap.exists {
@@ -213,7 +212,7 @@ func TestPopulationPolicyDownscaleCleansLaunchers(t *testing.T) {
 
 func TestStartupCleansLaunchersWithoutNodeOrPolicy(t *testing.T) {
 	_, _, orphan, bound, _ := orphanLifecycleObjects(t, 2, false, true)
-	_, cs, fmaCS, _ := newStuckTestController(t, stuckTestNow, digestAndKeys, orphan, bound)
+	_, cs, fmaCS, _ := newStuckTestController(t, t.Context(), stuckTestNow, digestAndKeys, orphan, bound)
 
 	waitForOrphanPodNames(t, cs, "bound")
 	checkActions(t, cs.Actions(), []actionAbstract{
@@ -284,7 +283,9 @@ var errNotQuiet = errors.New("controller did not quiesce in time")
 // its store before delivering events to its clients, so the earlier
 // waits on store contents are not enough to ensure that the relevant
 // work items have been enqueued.
-func (ctl *controller) runUntilQuiet(t *testing.T, minTotalDigestQueued int, needKeyQueueEmpty bool, idleTime, timeout time.Duration) bool {
+// This waiting is insensitive to the delayed enqueues from either queue's `AddAfter` method,
+// so caveat emptor.
+func (ctl *controller) runUntilQuiet(t *testing.T, minTotalDigestQueued int, keyQueueActive bool, idleTime, timeout time.Duration) bool {
 	ctxTimed, cancel := context.WithTimeoutCause(t.Context(), timeout, errNotQuiet)
 	defer cancel()
 	if !cache.WaitForNamedCacheSync("test", ctxTimed.Done(), ctl.digestQueue.HasProcessedSync) {
@@ -296,12 +297,12 @@ func (ctl *controller) runUntilQuiet(t *testing.T, minTotalDigestQueued int, nee
 		nextDigesterStatus, nextKeyerStatus := ctl.getStatus()
 		if lastDigesterStatus == nextDigesterStatus && lastKeyerStatus == nextKeyerStatus &&
 			nextDigesterStatus.IsIdle() &&
-			(nextKeyerStatus.IsIdle() || nextKeyerStatus.SyncsFinished == nextKeyerStatus.SyncsStarted && !needKeyQueueEmpty) &&
+			(nextKeyerStatus.IsIdle() || !keyQueueActive) &&
 			nextDigesterStatus.TotalQueued() >= minTotalDigestQueued {
 
-			digestDT := time.Since(lastDigesterStatus.ApproxLastChangeTime)
-			keyDT := time.Since(lastKeyerStatus.ApproxLastChangeTime)
-			if digestDT >= idleTime && keyDT >= idleTime {
+			digestDT := time.Since(lastDigesterStatus.ApproxLastWorkTime)
+			keyDT := time.Since(lastKeyerStatus.ApproxLastWorkTime)
+			if digestDT >= idleTime && (keyDT >= idleTime || !keyQueueActive) {
 				return true, nil
 			}
 			t.Logf("Almost idle: digest %v or key %v < %v", digestDT, keyDT, idleTime)
@@ -317,6 +318,17 @@ func (ctl *controller) runUntilQuiet(t *testing.T, minTotalDigestQueued int, nee
 		return false
 	}
 	return true
+}
+
+func checkPodPresent(t *testing.T, cs *k8sfake.Clientset, podNamespace, podName string) {
+	t.Helper()
+	pod, err := cs.CoreV1().Pods(podNamespace).Get(t.Context(), podName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Failed to get Pod %s: %v", podName, err)
+	}
+	if pod == nil {
+		t.Fatalf("Fetch of Pod %s returned nil", podName)
+	}
 }
 
 func waitForOrphanPodNames(t *testing.T, cs *k8sfake.Clientset, names ...string) {

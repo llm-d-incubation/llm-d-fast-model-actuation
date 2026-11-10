@@ -17,6 +17,7 @@ limitations under the License.
 package launcherpopulator
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -61,7 +62,7 @@ const (
 	digestAndKeys
 )
 
-func newStuckTestController(t *testing.T, now time.Time, activityLevel controllerActivityLevel, objs ...runtime.Object) (*controller, *k8sfake.Clientset, *fmafake.Clientset, *record.FakeRecorder) {
+func newStuckTestController(t *testing.T, ctx context.Context, now time.Time, activityLevel controllerActivityLevel, objs ...runtime.Object) (*controller, *k8sfake.Clientset, *fmafake.Clientset, *record.FakeRecorder) {
 	t.Helper()
 	var coreObjects, fmaObjects []runtime.Object
 	for _, obj := range objs {
@@ -76,7 +77,7 @@ func newStuckTestController(t *testing.T, now time.Time, activityLevel controlle
 	fmaCS := fmafake.NewSimpleClientset(fmaObjects...)
 	coreFactory := informers.NewSharedInformerFactory(cs, 0)
 	fmaFactory := fmainformers.NewSharedInformerFactory(fmaCS, 0)
-	ctl, err := NewController(klog.FromContext(t.Context()), cs.CoreV1(), fmaCS.FmaV1alpha1(), stuckTestNamespace,
+	ctl, err := NewController(klog.FromContext(ctx), cs.CoreV1(), fmaCS.FmaV1alpha1(), stuckTestNamespace,
 		coreFactory.Core().V1(), fmaFactory,
 		time.Minute, stuckTestSchedThreshold, stuckTestStartThreshold)
 	if err != nil {
@@ -89,17 +90,17 @@ func newStuckTestController(t *testing.T, now time.Time, activityLevel controlle
 	rec := record.NewFakeRecorder(50)
 	ctl.recorder = rec
 	ctl.clock = testingclock.NewFakeClock(now)
-	coreFactory.Start(t.Context().Done())
-	fmaFactory.Start(t.Context().Done())
+	coreFactory.Start(ctx.Done())
+	fmaFactory.Start(ctx.Done())
 	cs.ClearActions()
 	switch activityLevel {
 	case noWorkers:
-		err = ctl.startSansWorkers(t.Context())
+		err = ctl.startSansWorkers(ctx)
 	case digestOnly:
 		ctl.noKeyWorkers = true
-		err = ctl.Start(t.Context())
+		err = ctl.Start(ctx)
 	case digestAndKeys:
-		err = ctl.Start(t.Context())
+		err = ctl.Start(ctx)
 	default:
 		t.Fatalf("Impossible activityLevel %v", activityLevel)
 	}
@@ -111,7 +112,7 @@ func newStuckTestController(t *testing.T, now time.Time, activityLevel controlle
 
 func newStuckTestControllerWithNode(t *testing.T, now time.Time, pods ...*corev1.Pod) (*controller, *k8sfake.Clientset, *fmafake.Clientset, *record.FakeRecorder) {
 	t.Helper()
-	return newStuckTestController(t, now, noWorkers, append(utils.SliceMapErrless(pods, podToRO), testNode())...)
+	return newStuckTestController(t, t.Context(), now, noWorkers, append(utils.SliceMapErrless(pods, podToRO), testNode())...)
 }
 
 func podToRO(pod *corev1.Pod) runtime.Object { return pod }

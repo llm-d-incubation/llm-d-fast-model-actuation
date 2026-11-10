@@ -39,11 +39,19 @@ type QueueAndWorkers[Item comparable] struct {
 	NumWorkers     int
 	Process        func(ctx context.Context, item Item) (err error, retry bool)
 
-	syncsStarted         *atomic.Int32
-	syncsFinished        *atomic.Int32
-	approxLastChangeTime *atomic.Value
-
 	earlySync func(context.Context, Item) *bool
+
+	syncsStarted  *atomic.Int32
+	syncsFinished *atomic.Int32
+
+	// Always holds a time.Time.
+	// This is approximately the last time that work on a queue item
+	// started or stopped.
+	approxLastWorkTime *atomic.Value
+
+	// stopChan is normally open.
+	// Closing it suppresses further work on queue items.
+	stopChan chan struct{}
 }
 
 // NewQueueAndWorkers makes a new QueueAndWorkers.
@@ -82,13 +90,16 @@ func newQueueAndWorkers[Item comparable](
 			workqueue.TypedRateLimitingQueueConfig[Item]{
 				Name: controllerName,
 			}),
-		NumWorkers:           numWorkers,
-		Process:              process,
-		syncsStarted:         new(atomic.Int32),
-		syncsFinished:        new(atomic.Int32),
-		approxLastChangeTime: new(atomic.Value),
-		earlySync:            earlySync,
+		NumWorkers: numWorkers,
+		Process:    process,
+		earlySync:  earlySync,
+
+		syncsStarted:       new(atomic.Int32),
+		syncsFinished:      new(atomic.Int32),
+		approxLastWorkTime: new(atomic.Value),
+		stopChan:           make(chan struct{}),
 	}
+	ans.approxLastWorkTime.Store(time.Now())
 	return ans
 }
 
@@ -110,6 +121,19 @@ func (ctl *QueueAndWorkers[Item]) StartWorkers(ctx context.Context) error {
 	return nil
 }
 
+// StopTestWorkers is a hack for use in tests of clients of this controller.
+// Calling this suppresses further work on queue items.
+// This would only be used near the end of a test,
+// when no further queue item processing is intended and the whole
+// controller is about to become unreachable.
+// It is the first simplest step in the direction of giving tests
+// control over the scheduling of processing of queue items.
+func (ctl *QueueAndWorkers[Item]) StopTestWorkers(ctx context.Context) {
+	logger := klog.FromContext(ctx)
+	logger.Info("Stopping workers", "controller", ctl.ControllerName)
+	close(ctl.stopChan)
+}
+
 func (ctl *QueueAndWorkers[Item]) runWorker(ctx context.Context) {
 	for ctl.processNextWorkItem(ctx) {
 	}
@@ -121,12 +145,18 @@ func (ctl *QueueAndWorkers[Item]) processNextWorkItem(ctx context.Context) bool 
 	if shutdown {
 		return false
 	}
+	select {
+	case <-ctl.stopChan:
+		logger.Info("Worker aborted for testing")
+		return false
+	default:
+	}
 	ctl.syncsStarted.Add(1)
-	ctl.approxLastChangeTime.Store(time.Now())
+	ctl.approxLastWorkTime.Store(time.Now())
 	defer func() {
 		ctl.Queue.Done(objRef)
 		ctl.syncsFinished.Add(1)
-		ctl.approxLastChangeTime.Store(time.Now())
+		ctl.approxLastWorkTime.Store(time.Now())
 	}()
 	logger.V(4).Info("Popped workqueue item", "item", objRef, "itemType", fmt.Sprintf("%T", objRef))
 	if ans := ctl.earlySync(ctx, objRef); ans != nil {
@@ -166,9 +196,9 @@ type Status struct {
 	SyncsStarted  int
 	SyncsFinished int
 
-	// ApproxLastChangeTime is updated at each change
+	// ApproxLastWorkTime is updated at each change
 	// to either of the sync counts, at nearly the same time.
-	ApproxLastChangeTime time.Time
+	ApproxLastWorkTime time.Time
 }
 
 func (status Status) IsIdle() bool {
@@ -181,11 +211,11 @@ func (status Status) TotalQueued() int { return status.QueueDepth + status.Syncs
 
 func (ctl *QueueAndWorkers[Item]) GetStatus() Status {
 	qd := ctl.Queue.Len()
-	alc, _ := ctl.approxLastChangeTime.Load().(time.Time)
+	alc, _ := ctl.approxLastWorkTime.Load().(time.Time)
 	return Status{
-		QueueDepth:           qd,
-		SyncsStarted:         int(ctl.syncsStarted.Load()),
-		SyncsFinished:        int(ctl.syncsFinished.Load()),
-		ApproxLastChangeTime: alc,
+		QueueDepth:         qd,
+		SyncsStarted:       int(ctl.syncsStarted.Load()),
+		SyncsFinished:      int(ctl.syncsFinished.Load()),
+		ApproxLastWorkTime: alc,
 	}
 }
