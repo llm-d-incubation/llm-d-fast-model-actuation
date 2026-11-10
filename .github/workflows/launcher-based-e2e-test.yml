@@ -76,7 +76,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        release: [ "", "0.7.1", "0.8.0" ]
+        release: [ "", "0.8.0" ]
     env:
       coverdir: "cover-dpc-${{ matrix.release || 'local' }}"
     runs-on: ubuntu-22.04-arm
