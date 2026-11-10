@@ -138,7 +138,7 @@ func (ctl *QueueAndWorkers[Item]) StopTestWorkers(ctx context.Context) {
 		logger.Info("StopTestWorkers happened", "controller", ctl.ControllerName)
 		close(ctl.stopChan)
 	} else {
-		logger.Info("Redundnt StopTestWorkers happened", "controller", ctl.ControllerName)
+		logger.Info("Redundant StopTestWorkers happened", "controller", ctl.ControllerName)
 	}
 }
 
