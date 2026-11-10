@@ -52,6 +52,8 @@ type QueueAndWorkers[Item comparable] struct {
 	// stopChan is normally open.
 	// Closing it suppresses further work on queue items.
 	stopChan chan struct{}
+
+	stopped *atomic.Bool
 }
 
 // NewQueueAndWorkers makes a new QueueAndWorkers.
@@ -98,6 +100,7 @@ func newQueueAndWorkers[Item comparable](
 		syncsFinished:      new(atomic.Int32),
 		approxLastWorkTime: new(atomic.Value),
 		stopChan:           make(chan struct{}),
+		stopped:            new(atomic.Bool),
 	}
 	ans.approxLastWorkTime.Store(time.Now())
 	return ans
@@ -130,8 +133,13 @@ func (ctl *QueueAndWorkers[Item]) StartWorkers(ctx context.Context) error {
 // control over the scheduling of processing of queue items.
 func (ctl *QueueAndWorkers[Item]) StopTestWorkers(ctx context.Context) {
 	logger := klog.FromContext(ctx)
-	logger.Info("Stopping workers", "controller", ctl.ControllerName)
-	close(ctl.stopChan)
+	changed := ctl.stopped.CompareAndSwap(false, true)
+	if changed {
+		logger.Info("StopTestWorkers happened", "controller", ctl.ControllerName)
+		close(ctl.stopChan)
+	} else {
+		logger.Info("Redundnt StopTestWorkers happened", "controller", ctl.ControllerName)
+	}
 }
 
 func (ctl *QueueAndWorkers[Item]) runWorker(ctx context.Context) {
@@ -148,6 +156,8 @@ func (ctl *QueueAndWorkers[Item]) processNextWorkItem(ctx context.Context) bool 
 	select {
 	case <-ctl.stopChan:
 		logger.Info("Worker aborted for testing")
+		// Not needed at this stage of development, but hygiene for the future
+		ctl.Queue.Done(objRef)
 		return false
 	default:
 	}

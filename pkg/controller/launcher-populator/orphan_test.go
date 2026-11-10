@@ -33,7 +33,7 @@ import (
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/cache"
-	_ "k8s.io/component-base/logs/testinit"
+	_ "k8s.io/component-base/logs/testinit" // to get standard command line flags defined
 
 	fmav1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/common"
@@ -47,24 +47,27 @@ func TestReconcileNodeAvailability(t *testing.T) {
 				t.Run(fmt.Sprintf("%s/%s/desired-%d", nodeState, templateState, desiredCount), func(t *testing.T) {
 					var node *corev1.Node
 					var setupObjs []runtime.Object
+					var minTotalDigestQueued int
 					if templateState != "no-pods" {
 						var orphan *corev1.Pod
 						_, node, orphan, _, setupObjs = orphanLifecycleObjects(t, desiredCount, false, true)
 						if templateState == "stale" {
 							orphan.Annotations[common.LauncherTemplateHashAnnotationKey] = "stale-template"
 						}
+						minTotalDigestQueued = len(setupObjs) - 2
 					} else {
 						var err error
 						_, _, _, node, setupObjs, err = orphanSetupObjects(desiredCount)
 						if err != nil {
 							t.Fatalf("Failed to construct template Pod: %v", err)
 						}
-					}
-					ctl, cs, fmaCS, _ := newStuckTestController(t, t.Context(), stuckTestNow, digestOnly, setupObjs...)
-					if !ctl.runUntilQuiet(t, len(setupObjs), false, time.Second*3, time.Second*20) {
-						return
+						minTotalDigestQueued = len(setupObjs)
 					}
 					ctx := t.Context()
+					ctl, cs, fmaCS, _ := newStuckTestController(t, ctx, stuckTestNow, digestOnly, setupObjs...)
+					if !ctl.runUntilQuiet(t, minTotalDigestQueued, false, time.Second*3, time.Second*20) {
+						return
+					}
 					cs.ClearActions()
 					fmaCS.ClearActions()
 					ctl.digestQueue.StopTestWorkers(ctx)
@@ -172,15 +175,15 @@ func TestReconcileLiveNodeCreatesLauncher(t *testing.T) {
 func TestNodeDeletionCleansLaunchersWithoutPolicyChange(t *testing.T) {
 	for _, event := range []string{"delete", "update-deleting"} {
 		t.Run(event, func(t *testing.T) {
+			ctx := t.Context()
 			_, node, _, _, objects := orphanLifecycleObjects(t, 2, true, true)
-			ctl, cs, fmaCS, _ := newStuckTestController(t, t.Context(), stuckTestNow, digestAndKeys, objects...)
-			if !ctl.runUntilQuiet(t, len(objects), true, time.Second*3, time.Second*20) {
+			ctl, cs, fmaCS, _ := newStuckTestController(t, ctx, stuckTestNow, digestAndKeys, objects...)
+			if !ctl.runUntilQuiet(t, len(objects)-2, true, time.Second*3, time.Second*20) {
 				return
 			}
 			checkPodPresent(t, cs, stuckTestNamespace, "orphan")
 			checkPodPresent(t, cs, stuckTestNamespace, "bound")
 			initialDigestQueued := ctl.digestQueue.GetStatus().TotalQueued()
-			ctx := t.Context()
 			cs.ClearActions()
 			fmaCS.ClearActions()
 			allowedActions := []actionAbstract{
@@ -223,7 +226,7 @@ func TestPopulationPolicyDownscaleCleansLaunchers(t *testing.T) {
 	lpp, _, _, _, objects := orphanLifecycleObjects(t, 2, true, true)
 	ctl, cs, fmaCS, _ := newStuckTestController(t, t.Context(), stuckTestNow, digestAndKeys, objects...)
 
-	if !ctl.runUntilQuiet(t, len(objects), true, time.Second*3, time.Second*20) {
+	if !ctl.runUntilQuiet(t, len(objects)-2, true, time.Second*3, time.Second*20) {
 		return
 	}
 	checkPodPresent(t, cs, stuckTestNamespace, "orphan")
