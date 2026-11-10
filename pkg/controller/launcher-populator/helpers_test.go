@@ -49,6 +49,13 @@ func TestCreateLaunchersMetrics(t *testing.T) {
 			key.LauncherConfigName = "create-metrics-" + tc.name
 			defer launcherCreateSecsHistograms.DeleteLabelValues(ctl.namespace, key.LauncherConfigName, "true")
 			defer launcherCreateSecsHistograms.DeleteLabelValues(ctl.namespace, key.LauncherConfigName, "false")
+			// Existing observations must not affect this call's assertions.
+			launcherCreateSecsHistograms.WithLabelValues(ctl.namespace, key.LauncherConfigName, "true").Observe(1)
+			launcherCreateSecsHistograms.WithLabelValues(ctl.namespace, key.LauncherConfigName, "false").Observe(2)
+			// Other tests can use the same LauncherConfig name in another namespace.
+			otherNamespace := ctl.namespace + "-other"
+			launcherCreateSecsHistograms.WithLabelValues(otherNamespace, key.LauncherConfigName, "true").Observe(1)
+			defer launcherCreateSecsHistograms.DeleteLabelValues(otherNamespace, key.LauncherConfigName, "true")
 			calls := 0
 			cs.PrependReactor("create", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
 				calls++
@@ -62,6 +69,33 @@ func TestCreateLaunchersMetrics(t *testing.T) {
 				return true, pod, nil
 			})
 
+			snapshot := func() (map[string]uint64, map[string]float64) {
+				families, err := legacyregistry.DefaultGatherer.Gather()
+				if err != nil {
+					t.Fatal(err)
+				}
+				counts := map[string]uint64{}
+				sums := map[string]float64{}
+				for _, family := range families {
+					if family.GetName() != "fma_launcher_create_seconds" {
+						continue
+					}
+					for _, metric := range family.GetMetric() {
+						labels := map[string]string{}
+						for _, label := range metric.GetLabel() {
+							labels[label.GetName()] = label.GetValue()
+						}
+						if labels["exported_namespace"] != ctl.namespace || labels["lcfg_name"] != key.LauncherConfigName {
+							continue
+						}
+						counts[labels["success"]] = metric.GetHistogram().GetSampleCount()
+						sums[labels["success"]] = metric.GetHistogram().GetSampleSum()
+					}
+				}
+				return counts, sums
+			}
+			beforeCounts, beforeSums := snapshot()
+
 			err := ctl.createLaunchers(t.Context(), testNode(), key, 3, nodeTemplate())
 			if tc.failAt == 0 && err != nil {
 				t.Fatal(err)
@@ -73,37 +107,15 @@ func TestCreateLaunchersMetrics(t *testing.T) {
 				t.Fatalf("Create calls = %d, want %d", calls, tc.successes+tc.failures)
 			}
 
-			families, err := legacyregistry.DefaultGatherer.Gather()
-			if err != nil {
-				t.Fatal(err)
-			}
-			counts := map[string]uint64{}
-			sums := map[string]float64{}
-			for _, family := range families {
-				if family.GetName() != "fma_launcher_create_seconds" {
-					continue
-				}
-				for _, metric := range family.GetMetric() {
-					labels := map[string]string{}
-					for _, label := range metric.GetLabel() {
-						labels[label.GetName()] = label.GetValue()
-					}
-					if labels["lcfg_name"] != key.LauncherConfigName {
-						continue
-					}
-					if labels["exported_namespace"] != ctl.namespace {
-						t.Errorf("exported_namespace = %q, want %q", labels["exported_namespace"], ctl.namespace)
-					}
-					counts[labels["success"]] = metric.GetHistogram().GetSampleCount()
-					sums[labels["success"]] = metric.GetHistogram().GetSampleSum()
-				}
-			}
+			counts, sums := snapshot()
 			for success, want := range map[string]uint64{"true": tc.successes, "false": tc.failures} {
-				if counts[success] != want {
-					t.Errorf("success=%s count = %d, want %d", success, counts[success], want)
+				count := counts[success] - beforeCounts[success]
+				if count != want {
+					t.Errorf("success=%s count delta = %d, want %d", success, count, want)
 				}
-				if sums[success] != float64(want)*0.125 {
-					t.Errorf("success=%s duration sum = %g, want %g", success, sums[success], float64(want)*0.125)
+				sum := sums[success] - beforeSums[success]
+				if sum != float64(want)*0.125 {
+					t.Errorf("success=%s duration sum delta = %g, want %g", success, sum, float64(want)*0.125)
 				}
 			}
 		})
