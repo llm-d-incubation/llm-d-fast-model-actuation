@@ -131,7 +131,7 @@ func TestShutdown(t *testing.T) {
 		if ctl == nil {
 			return
 		}
-		err := wait.PollUntilContextCancel(t.Context(), time.Second, true, func(ctx context.Context) (done bool, err error) {
+		err := wait.PollUntilContextTimeout(t.Context(), time.Second, time.Second*10, true, func(ctx context.Context) (done bool, err error) {
 			return ctl.digestQueue.Queue.ShuttingDown() && ctl.keyQueue.Queue.ShuttingDown(), nil
 		})
 		if err != nil {
@@ -166,6 +166,56 @@ func TestReconcileLiveNodeCreatesLauncher(t *testing.T) {
 	pods := listLaunchers(t, cs)
 	if len(pods) != 1 || pods[0].Spec.NodeSelector["kubernetes.io/hostname"] != node.Name {
 		t.Fatalf("live Node must get one launcher targeting it, got %v", pods)
+	}
+}
+
+func TestNodeDeletionCleansLaunchersWithoutPolicyChange(t *testing.T) {
+	for _, event := range []string{"delete", "update-deleting"} {
+		t.Run(event, func(t *testing.T) {
+			_, node, _, _, objects := orphanLifecycleObjects(t, 2, true, true)
+			ctl, cs, fmaCS, _ := newStuckTestController(t, t.Context(), stuckTestNow, digestAndKeys, objects...)
+			if !ctl.runUntilQuiet(t, len(objects), true, time.Second*3, time.Second*20) {
+				return
+			}
+			checkPodPresent(t, cs, stuckTestNamespace, "orphan")
+			checkPodPresent(t, cs, stuckTestNamespace, "bound")
+			initialDigestQueued := ctl.digestQueue.GetStatus().TotalQueued()
+			ctx := t.Context()
+			cs.ClearActions()
+			fmaCS.ClearActions()
+			allowedActions := []actionAbstract{
+				{"list", "nodes"}, {"watch", "nodes"},
+				{"list", "pods"}, {"watch", "pods"}, {"delete", "pods"},
+			}
+			if event == "delete" {
+				if err := cs.CoreV1().Nodes().Delete(ctx, node.Name, metav1.DeleteOptions{}); err != nil {
+					t.Fatal(err)
+				}
+				allowedActions = append(allowedActions, actionAbstract{"delete", "nodes"})
+			} else {
+				deletingNode := node.DeepCopy()
+				deleting := metav1.NewTime(stuckTestNow)
+				deletingNode.DeletionTimestamp = &deleting
+				if _, err := cs.CoreV1().Nodes().Update(ctx, deletingNode, metav1.UpdateOptions{}); err != nil {
+					t.Fatal(err)
+				}
+				allowedActions = append(allowedActions, actionAbstract{"update", "nodes"})
+			}
+			if !ctl.runUntilQuiet(t, initialDigestQueued+1, true, time.Second*3, time.Second*20) {
+				return
+			}
+			pods, err := cs.CoreV1().Pods(stuckTestNamespace).List(ctx, metav1.ListOptions{})
+			if err != nil {
+				t.Error(err)
+			} else {
+				podNames := utils.SliceMapErrless(pods.Items, func(pod corev1.Pod) string { return pod.Name })
+				if !slices.Equal(podNames, []string{"bound"}) {
+					t.Errorf("Expected only bound Pod to remain, but found %v", podNames)
+				}
+			}
+			checkActions(t, cs.Actions(), allowedActions)
+			checkActions(t, fmaCS.Actions(), nil)
+		})
 	}
 }
 
