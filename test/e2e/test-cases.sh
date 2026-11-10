@@ -64,8 +64,8 @@ note() {
 
 expect() {
     local elapsed=0
-    local start
-    start=$(date)
+    # shellcheck disable=SC2155  # a failing date yielding empty start is acceptable here
+    local start=$(date)
     local limit=${POLL_LIMIT_SECS}
     note "Expecting $1"
     while true; do

@@ -6,7 +6,7 @@
 # This script checks that the IDL processing is correct.
 
 rm -rf config/crd* config/validating-admission-policies.yaml pkg/generated
-find api -name "zz_generated*" -exec rm -rf {} +
+find api -name "zz_generated*" -exec rm -rf {} \;
 make manifests || { echo "Failed to generate CRDs"; exit 1; }
 make generate || { echo "Failed to generate auxiliary API code"; exit 1; }
 make generate_client || { echo "Failed to generate client code"; exit 1; }
