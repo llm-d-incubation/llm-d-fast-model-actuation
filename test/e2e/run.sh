@@ -206,7 +206,7 @@ cheer Successful upside
 : Test node deletion
 : expect nothing to remain on the deleted node, replacement pair to appear on other node
 
-doomed=$(kubectl get pods $req -o 'jsonpath={.spec.nodeName}')
+doomed=$(kubectl get pods "$req" -o 'jsonpath={.spec.nodeName}')
 keeper=$(kubectl get nodes -o name | sed s%node/%% | grep -vw $doomed | grep -v control-plane)
 
 kubectl delete node $doomed
@@ -235,7 +235,7 @@ date
 kubectl wait --for condition=Ready pod/$req --timeout=35s
 kubectl wait --for condition=Ready pod/$prv --timeout=1s
 
-used=$(kubectl get pod $req -o 'jsonpath={.spec.nodeName}')
+used=$(kubectl get pod "$req" -o 'jsonpath={.spec.nodeName}')
 [ "$used" == "$keeper" ]
 
 assigned_gpu_uuids=$(kubectl get pod "$req" -o jsonpath='{.metadata.annotations.dual-pods\.llm-d\.ai/accelerators}')
