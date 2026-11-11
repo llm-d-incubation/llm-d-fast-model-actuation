@@ -30,9 +30,8 @@ cleanup() {
   kubectl delete -n "$FMA_NAMESPACE" pod "${UNBOUND_REQUESTER_POD_NAME}" --ignore-not-found || true
 }
 
-# Trap EXIT to run cleanup
-# shellcheck disable=SC2154  # rc is assigned inside the single-quoted trap body
-trap 'rc=$?; cleanup; exit $rc' EXIT
+# Trap EXIT to run cleanup; EXIT preserves the script's exit status automatically
+trap cleanup EXIT
 
 POD_NAME=${POD_NAME:-my-regular-test}
 UNBOUND_REQUESTER_POD_NAME=${UNBOUND_REQUESTER_POD_NAME:-my-unbound-requester-test}

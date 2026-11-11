@@ -338,9 +338,10 @@ cleanup_deployment() {
     export SCALER_BACKEND="${SCALER_BACKEND:-prometheus-adapter}"
 
     # Detect actual llm-d namespace (could be llm-d-sim, llm-d-inference-scheduler, etc.)
-    local detected_llmd_ns
-    # grep intentionally may match nothing (no llm-d ns yet); tolerate it under set -e/pipefail
-    detected_llmd_ns=$(kubectl get namespace -o name 2>/dev/null | grep 'llm-d' | head -n1 | cut -d'/' -f2) || true
+    # grep intentionally may match nothing (no llm-d ns yet); local masks the rc, so a
+    # failing lookup just leaves detected_llmd_ns empty and we fall back below.
+    # shellcheck disable=SC2155
+    local detected_llmd_ns=$(kubectl get namespace -o name 2>/dev/null | grep 'llm-d' | head -n1 | cut -d'/' -f2)
     if [ -n "$detected_llmd_ns" ]; then
         log_info "Detected llm-d namespace: $detected_llmd_ns"
         export LLMD_NS="$detected_llmd_ns"

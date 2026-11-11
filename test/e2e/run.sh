@@ -25,7 +25,9 @@ note() {
 
 function expect() {
     local elapsed=0
-    # shellcheck disable=SC2155  # a failing date yielding empty start is acceptable here
+    # Keep the assignment on one line; the disable keeps CI green, and we accept
+    # the theoretical risk that date fails and start is empty (only used in a log).
+    # shellcheck disable=SC2155
     local start=$(date)
     local limit=${LIMIT:-45}
     note "Expecting $1"
@@ -204,8 +206,7 @@ cheer Successful upside
 : Test node deletion
 : expect nothing to remain on the deleted node, replacement pair to appear on other node
 
-# shellcheck disable=SC1083  # literal braces are the jsonpath expression; value is a space-free Node name
-doomed=$(kubectl get pods "$req" -o jsonpath={.spec.nodeName})
+doomed=$(kubectl get pods $req -o 'jsonpath={.spec.nodeName}')
 keeper=$(kubectl get nodes -o name | sed s%node/%% | grep -vw $doomed | grep -v control-plane)
 
 kubectl delete node $doomed
@@ -234,8 +235,7 @@ date
 kubectl wait --for condition=Ready pod/$req --timeout=35s
 kubectl wait --for condition=Ready pod/$prv --timeout=1s
 
-# shellcheck disable=SC1083  # literal braces are the jsonpath expression; value is a space-free Node name
-used=$(kubectl get pod "$req" -o jsonpath={.spec.nodeName})
+used=$(kubectl get pod $req -o 'jsonpath={.spec.nodeName}')
 [ "$used" == "$keeper" ]
 
 assigned_gpu_uuids=$(kubectl get pod "$req" -o jsonpath='{.metadata.annotations.dual-pods\.llm-d\.ai/accelerators}')
