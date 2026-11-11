@@ -25,10 +25,8 @@ note() {
 
 function expect() {
     local elapsed=0
-    # Keep the assignment on one line; the disable keeps CI green, and we accept
-    # the theoretical risk that date fails and start is empty (only used in a log).
-    # shellcheck disable=SC2155
-    local start=$(date)
+    local start
+    start=$(date)
     local limit=${LIMIT:-45}
     note "Expecting $1"
     while true; do
