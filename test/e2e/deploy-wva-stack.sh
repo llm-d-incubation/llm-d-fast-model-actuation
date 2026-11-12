@@ -339,7 +339,6 @@ cleanup_deployment() {
 
     # Detect actual llm-d namespace (could be llm-d-sim, llm-d-inference-scheduler, etc.)
     local detected_llmd_ns
-    # grep intentionally may match nothing (no llm-d ns yet); tolerate it under set -e/pipefail
     detected_llmd_ns=$(kubectl get namespace -o name 2>/dev/null | grep 'llm-d' | head -n1 | cut -d'/' -f2) || true
     if [ -n "$detected_llmd_ns" ]; then
         log_info "Detected llm-d namespace: $detected_llmd_ns"
@@ -604,7 +603,6 @@ verify_deployment() {
     if [ "$DEPLOY_LLM_D" = "true" ]; then
         log_info "Checking llm-d infrastructure..."
         local llmd_ns
-        # grep intentionally may match nothing (no llm-d ns yet); tolerate it under set -e/pipefail
         llmd_ns=$(kubectl get namespace -o name | grep 'llm-d' | head -n1 | cut -d'/' -f2) || true
         if [ -n "$llmd_ns" ]; then
             log_success "llm-d namespace found: $llmd_ns"

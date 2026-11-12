@@ -30,7 +30,7 @@ cleanup() {
   kubectl delete -n "$FMA_NAMESPACE" pod "${UNBOUND_REQUESTER_POD_NAME}" --ignore-not-found || true
 }
 
-# Trap EXIT to run cleanup; EXIT preserves the script's exit status automatically
+# Trap EXIT to run cleanup
 trap cleanup EXIT
 
 POD_NAME=${POD_NAME:-my-regular-test}
