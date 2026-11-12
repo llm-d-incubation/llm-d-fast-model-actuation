@@ -64,7 +64,8 @@ note() {
 
 expect() {
     local elapsed=0
-    local start=$(date)
+    local start
+    start=$(date)
     local limit=${POLL_LIMIT_SECS}
     note "Expecting $1"
     while true; do
@@ -218,7 +219,6 @@ lc=$(echo $objs | awk '{print $2}')
 rs=$(echo $objs | awk '{print $3}')
 isc2=$(echo $objs | awk '{print $4}')
 isc3=$(echo $objs | awk '{print $5}')
-lpp=$(echo $objs | awk '{print $6}')
 inst=${rs#my-request-}
 
 # LauncherPopulationPolicy specifies launcherCount per node with nvidia.com/gpu.present=true
@@ -251,14 +251,16 @@ if [ -n "${pfpid:-}" ]; then kill $pfpid || true; fi
 # Expect requester pod to be created
 expect "kubectl get pods -n $NS -o name -l app=dp-example,instance=$inst | wc -l | grep -w 1"
 
-export req1=$(kubectl get pods -n "$NS" -o name -l app=dp-example,instance=$inst | sed s%pod/%%)
+req1=$(kubectl get pods -n "$NS" -o name -l app=dp-example,instance=$inst | sed s%pod/%%)
+export req1
 echo "Server-requesting Pod is $req1"
 # Expect it to get scheduled to the chosen test node
 expect "kubectl get pod $req1 -n $NS -o jsonpath='{.spec.nodeName}' | fgrep -x $testnode"
 
 # Wait for launcher-to-requester binding, then capture the launcher name
 expect "kubectl get pods -n $NS -o name -l dual-pods.llm-d.ai/dual=$req1 | wc -l | grep -w 1"
-export launcher1=$(kubectl get pods -n "$NS" -o name -l dual-pods.llm-d.ai/dual=$req1 | sed s%pod/%%)
+launcher1=$(kubectl get pods -n "$NS" -o name -l dual-pods.llm-d.ai/dual=$req1 | sed s%pod/%%)
+export launcher1
 echo "Launcher Pod is $launcher1"
 
 # Verify requester is bound to launcher (bidirectional check)
@@ -862,7 +864,7 @@ intro_case Delete Obsolete Awake Instance on Unbinding
 # obsolete) and then the requester scales down, the controller deletes the
 # instance during unbinding rather than putting it to sleep.
 
-[ "$(kubectl get pod -n "$NS" $launcher1 -o jsonpath={.metadata.labels.dual-pods\\.llm-d\\.ai/dual})" == "$req_post_restart" ]
+[ "$(kubectl get pod -n "$NS" "$launcher1" -o jsonpath='{.metadata.labels.dual-pods\.llm-d\.ai/dual}')" == "$req_post_restart" ]
 
 old_total_instances=$(get_launcher_total_instances "$launcher1")
 echo "Launcher had $old_total_instances instance(s) before making awake instance obsolete"

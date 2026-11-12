@@ -31,7 +31,7 @@ cleanup() {
 }
 
 # Trap EXIT to run cleanup
-trap 'rc=$?; cleanup; exit $rc' EXIT
+trap cleanup EXIT
 
 POD_NAME=${POD_NAME:-my-regular-test}
 UNBOUND_REQUESTER_POD_NAME=${UNBOUND_REQUESTER_POD_NAME:-my-unbound-requester-test}
