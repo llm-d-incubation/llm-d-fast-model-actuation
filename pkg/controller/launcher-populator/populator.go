@@ -21,14 +21,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/common"
-	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/utils"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
-
 	corev1preinformers "k8s.io/client-go/informers/core/v1"
 	"k8s.io/client-go/kubernetes/scheme"
 	coreclient "k8s.io/client-go/kubernetes/typed/core/v1"
@@ -39,7 +36,9 @@ import (
 	"k8s.io/utils/clock"
 
 	fmav1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
+	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/common"
 	genctlr "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/generic"
+	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/utils"
 	fmaclientv1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/generated/clientset/versioned/typed/fma/v1alpha1"
 	fmainformers "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/generated/informers/externalversions"
 	fmalisters "github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/generated/listers/fma/v1alpha1"
@@ -154,6 +153,10 @@ type controller struct {
 	// digestQueue processes API-object references (LC/LPP/Node). Single worker;
 	// the SOLE writer of ctl.policy.
 	digestQueue *genctlr.KnowsProcessedSync[queueItem]
+
+	// This prevents creating the goroutines that process items
+	// from `keyQueue`. Used for testing.
+	noKeyWorkers bool
 
 	// keyQueue processes per-NodeLauncherKey reconciliation. Started by
 	// onDigestSyncProcessed once the initial batch has drained.
@@ -337,11 +340,11 @@ func (ctl *controller) OnDelete(obj any) {
 	}
 }
 
+// Start causes the controller to start doing all its usual stuff.
+// Does not return until all the informer caches have been initialized.
 func (ctl *controller) Start(ctx context.Context) error {
-	ctl.eventBroadcaster.StartRecordingToSink(&coreclient.EventSinkImpl{Interface: ctl.coreclient.Events("")})
-	context.AfterFunc(ctx, ctl.eventBroadcaster.Shutdown)
-	if !cache.WaitForNamedCacheSync(ControllerName, ctx.Done(), ctl.lppInformer.HasSynced, ctl.lcInformer.HasSynced, ctl.podInformer.HasSynced, ctl.nodeInformer.HasSynced) {
-		return fmt.Errorf("caches not synced before end of Start context")
+	if err := ctl.startSansWorkers(ctx); err != nil {
+		return err
 	}
 
 	// Start digest workers. KnowsProcessedSync appends sentinels behind the
@@ -350,15 +353,34 @@ func (ctl *controller) Start(ctx context.Context) error {
 	return ctl.digestQueue.StartWorkers(ctx)
 }
 
+// startSansWorkers causes the controller to start doing all its usual stuff except run workers.
+// Does not return until all the informer caches have been initialized.
+func (ctl *controller) startSansWorkers(ctx context.Context) error {
+	ctl.eventBroadcaster.StartRecordingToSink(&coreclient.EventSinkImpl{Interface: ctl.coreclient.Events("")})
+	context.AfterFunc(ctx, func() {
+		ctl.digestQueue.Queue.ShutDown()
+		ctl.keyQueue.Queue.ShutDown()
+		ctl.eventBroadcaster.Shutdown()
+	})
+	if !cache.WaitForNamedCacheSync(ControllerName, ctx.Done(), ctl.lppInformer.HasSynced, ctl.lcInformer.HasSynced, ctl.podInformer.HasSynced, ctl.nodeInformer.HasSynced) {
+		return fmt.Errorf("caches not synced before end of Start context")
+	}
+	return nil
+}
+
 // onDigestSyncProcessed is invoked by KnowsProcessedSync after the initial
 // batch of digest items has been drained. It starts keyQueue workers, which
 // process per-NodeLauncherKey reconciliation requests.
 func (ctl *controller) onDigestSyncProcessed(ctx context.Context) {
 	logger := klog.FromContext(ctx)
 	ctl.policy.mu.RLock()
-	logger.V(1).Info("Initial digest batch processed; starting key workers",
+	logger.V(1).Info("Initial digest batch processed",
+		"startingKeyWorkers", !ctl.noKeyWorkers,
 		"lpps", len(ctl.policy.lpps), "lcs", len(ctl.policy.lcs), "keys", ctl.keyQueue.Queue.Len())
 	ctl.policy.mu.RUnlock()
+	if ctl.noKeyWorkers {
+		return
+	}
 	if err := ctl.keyQueue.StartWorkers(ctx); err != nil {
 		logger.Error(err, "Failed to start key workers")
 	}
@@ -669,4 +691,8 @@ func (ctl *controller) getCurrentLaunchersOnNode(ctx context.Context, key NodeLa
 
 	// unreachable
 	return nil, ExpectationsSatisfied, nil
+}
+
+func (ctl *controller) getStatus() (genctlr.Status, genctlr.Status) {
+	return ctl.digestQueue.GetStatus(), ctl.keyQueue.GetStatus()
 }

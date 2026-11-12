@@ -46,6 +46,7 @@ type KnowsProcessedSync[Item comparable] struct {
 	processedSync *atomic.Bool
 }
 
+// NewKnowsProcessedSync makes a new one.
 func NewKnowsProcessedSync[Item comparable](
 	controllerName string,
 	numWorkers int,

@@ -18,57 +18,87 @@ package launcherpopulator
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"reflect"
 	"slices"
-	"sync"
 	"testing"
 	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	apitypes "k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
+	k8sfake "k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
+	"k8s.io/client-go/tools/cache"
+	_ "k8s.io/component-base/logs/testinit" // to get standard command line flags defined
 
 	fmav1alpha1 "github.com/llm-d-incubation/llm-d-fast-model-actuation/api/fma/v1alpha1"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/common"
 	"github.com/llm-d-incubation/llm-d-fast-model-actuation/pkg/controller/utils"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/util/wait"
-	k8sfake "k8s.io/client-go/kubernetes/fake"
 )
 
 func TestReconcileNodeAvailability(t *testing.T) {
 	for _, nodeState := range []string{"missing", "deleting"} {
 		for _, templateState := range []string{"current", "stale", "no-pods"} {
-			for _, desiredCount := range []int{0, 2} {
+			for _, desiredCount := range []int32{0, 2} {
 				t.Run(fmt.Sprintf("%s/%s/desired-%d", nodeState, templateState, desiredCount), func(t *testing.T) {
-					var pods []*corev1.Pod
+					var node *corev1.Node
+					var setupObjs []runtime.Object
+					var minTotalDigestQueued int
 					if templateState != "no-pods" {
-						orphan := stuckLauncherPod("orphan")
+						var orphan *corev1.Pod
+						_, node, orphan, _, setupObjs = orphanLifecycleObjects(t, desiredCount, false, true)
 						if templateState == "stale" {
 							orphan.Annotations[common.LauncherTemplateHashAnnotationKey] = "stale-template"
 						}
-						orphan.Spec.NodeSelector = map[string]string{"kubernetes.io/hostname": stuckTestNode}
-						orphan.Status.Phase = corev1.PodPending
-						bound := stuckLauncherPod("bound")
-						bound.Annotations[common.RequesterAnnotationKey] = "requester-uid requester"
-						pods = []*corev1.Pod{orphan, bound}
+						minTotalDigestQueued = len(setupObjs) - 2
+					} else {
+						var err error
+						_, _, _, node, setupObjs, err = orphanSetupObjects(desiredCount)
+						if err != nil {
+							t.Fatalf("Failed to construct template Pod: %v", err)
+						}
+						minTotalDigestQueued = len(setupObjs)
 					}
-					objects := podsToObjects(pods)
+					ctx := t.Context()
+					ctl, cs, fmaCS, _ := newStuckTestController(t, ctx, stuckTestNow, digestOnly, setupObjs...)
+					if !ctl.runUntilQuiet(t, minTotalDigestQueued, false, time.Second*3, time.Second*20) {
+						return
+					}
+					cs.ClearActions()
+					fmaCS.ClearActions()
+					ctl.digestQueue.StopTestWorkers(ctx)
+
+					allowedActions := []actionAbstract{}
 					if nodeState == "deleting" {
-						node := testNode()
+						node = node.DeepCopy()
 						deleting := metav1.NewTime(stuckTestNow)
 						node.DeletionTimestamp = &deleting
-						objects = append(objects, node)
+						_, err := cs.CoreV1().Nodes().Update(ctx, node, metav1.UpdateOptions{})
+						if err != nil {
+							t.Fatalf("Failed to update test node: %v", err)
+						}
+						allowedActions = append(allowedActions, actionAbstract{"update", "nodes"})
+						waitForNodeDeletingInCache(t, ctl, node.Name)
+					} else {
+						err := cs.CoreV1().Nodes().Delete(ctx, node.Name, *metav1.NewDeleteOptions(0))
+						if err != nil {
+							t.Fatalf("Failed to delete test node: %v", err)
+						}
+						allowedActions = append(allowedActions, actionAbstract{"delete", "nodes"})
+						waitForNodeGoneFromCache(t, ctl, node.Name)
 					}
-
-					ctl, cs, _ := newStuckTestControllerWithoutNode(t, stuckTestNow, objects...)
-
-					err, requeue := ctl.reconcileKey(t.Context(), stuckTestKey(), desiredCount, testTemplateHash, nodeTemplate(), pods)
+					err, requeue := ctl.processKey(ctx, stuckTestKey())
 					if err != nil {
 						t.Fatalf("reconcileKey: %v", err)
 					}
 					if templateState == "no-pods" {
-						if len(cs.Actions()) != 0 || requeue {
-							t.Fatalf("unavailable Node with no launchers must do nothing, actions=%v, requeue=%v", cs.Actions(), requeue)
+						checkActions(t, cs.Actions(), allowedActions)
+						if requeue {
+							t.Fatalf("unavailable Node with no launchers must not requeue")
 						}
 						return
 					}
@@ -81,19 +111,63 @@ func TestReconcileNodeAvailability(t *testing.T) {
 					if !podExists(t, cs, "bound") {
 						t.Error("bound launcher must be left for the dual-pods controller")
 					}
+					allowedActions = append(allowedActions,
+						actionAbstract{"get", "pods"},
+						actionAbstract{"delete", "pods"})
+					checkActions(t, cs.Actions(), allowedActions)
+					checkActions(t, fmaCS.Actions(), []actionAbstract{})
 				})
 			}
 		}
 	}
 }
 
+func TestShutdown(t *testing.T) {
+	_, _, _, _, setupObjs, err := orphanSetupObjects(1)
+	if err != nil {
+		t.Fatalf("Failed to create template Pod: %v", err)
+	}
+	var ctl *controller
+	ctx, cancel := context.WithCancelCause(t.Context())
+	defer func() {
+		cancel(errors.New("controller shutdown test"))
+		if ctl == nil {
+			return
+		}
+		err := wait.PollUntilContextTimeout(t.Context(), time.Second, time.Second*10, true, func(ctx context.Context) (done bool, err error) {
+			return ctl.digestQueue.Queue.ShuttingDown() && ctl.keyQueue.Queue.ShuttingDown(), nil
+		})
+		if err != nil {
+			t.Errorf("Queues not both shutting down: digest %v, key %v", ctl.digestQueue.Queue.ShuttingDown(), ctl.keyQueue.Queue.ShuttingDown())
+		}
+	}()
+	ctl, _, _, _ = newStuckTestController(t, ctx, stuckTestNow, digestOnly, setupObjs...)
+
+	if !ctl.runUntilQuiet(t, len(setupObjs), false, time.Second*1, time.Second*20) {
+		return
+	}
+}
+
 func TestReconcileLiveNodeCreatesLauncher(t *testing.T) {
-	ctl, cs, _ := newStuckTestController(t, stuckTestNow)
-	if err, _ := ctl.reconcileKey(t.Context(), stuckTestKey(), 1, testTemplateHash, nodeTemplate(), nil); err != nil {
+	_, _, _, node, setupObjs, err := orphanSetupObjects(1)
+	if err != nil {
+		t.Fatalf("Failed to create template Pod: %v", err)
+	}
+	ctl, cs, fmaCS, _ := newStuckTestController(t, t.Context(), stuckTestNow, digestOnly, setupObjs...)
+
+	if !ctl.runUntilQuiet(t, len(setupObjs), false, time.Second*3, time.Second*20) {
+		return
+	}
+	cs.ClearActions()
+	fmaCS.ClearActions()
+
+	if err, _ := ctl.processKey(t.Context(), stuckTestKey()); err != nil {
 		t.Fatalf("reconcileKey: %v", err)
 	}
+	checkActions(t, cs.Actions(), []actionAbstract{{"create", "pods"}})
+	checkActions(t, fmaCS.Actions(), []actionAbstract{})
 	pods := listLaunchers(t, cs)
-	if len(pods) != 1 || pods[0].Spec.NodeSelector["kubernetes.io/hostname"] != stuckTestNode {
+	if len(pods) != 1 || pods[0].Spec.NodeSelector["kubernetes.io/hostname"] != node.Name {
 		t.Fatalf("live Node must get one launcher targeting it, got %v", pods)
 	}
 }
@@ -101,74 +175,76 @@ func TestReconcileLiveNodeCreatesLauncher(t *testing.T) {
 func TestNodeDeletionCleansLaunchersWithoutPolicyChange(t *testing.T) {
 	for _, event := range []string{"delete", "update-deleting"} {
 		t.Run(event, func(t *testing.T) {
-			lpp, node, objects := orphanLifecycleObjects(t)
-			ctl, cs, _ := newStuckTestControllerWithoutNode(t, stuckTestNow, objects...)
-			progress := observeOrphanReconciles(ctl)
-			if err := ctl.Start(t.Context()); err != nil {
-				t.Fatal(err)
+			ctx := t.Context()
+			_, node, _, _, objects := orphanLifecycleObjects(t, 2, true, true)
+			ctl, cs, fmaCS, _ := newStuckTestController(t, ctx, stuckTestNow, digestAndKeys, objects...)
+			if !ctl.runUntilQuiet(t, len(objects)-2, true, time.Second*3, time.Second*20) {
+				return
 			}
-			waitForOrphanSetup(t, ctl, progress, lpp.Name)
-			waitForOrphanPodNames(t, cs, "bound", "orphan")
-			policyBefore, err := ctl.fmaclient.LauncherPopulationPolicies(stuckTestNamespace).Get(t.Context(), lpp.Name, metav1.GetOptions{})
-			if err != nil {
-				t.Fatal(err)
+			checkPodPresent(t, cs, stuckTestNamespace, "orphan")
+			checkPodPresent(t, cs, stuckTestNamespace, "bound")
+			initialDigestQueued := ctl.digestQueue.GetStatus().TotalQueued()
+			cs.ClearActions()
+			fmaCS.ClearActions()
+			allowedActions := []actionAbstract{
+				{"list", "nodes"}, {"watch", "nodes"},
+				{"list", "pods"}, {"watch", "pods"}, {"delete", "pods"},
 			}
-			before := progress.snapshot()
 			if event == "delete" {
-				if err := cs.CoreV1().Nodes().Delete(t.Context(), node.Name, metav1.DeleteOptions{}); err != nil {
+				if err := cs.CoreV1().Nodes().Delete(ctx, node.Name, metav1.DeleteOptions{}); err != nil {
 					t.Fatal(err)
 				}
+				allowedActions = append(allowedActions, actionAbstract{"delete", "nodes"})
 			} else {
 				deletingNode := node.DeepCopy()
 				deleting := metav1.NewTime(stuckTestNow)
 				deletingNode.DeletionTimestamp = &deleting
-				if _, err := cs.CoreV1().Nodes().Update(t.Context(), deletingNode, metav1.UpdateOptions{}); err != nil {
+				if _, err := cs.CoreV1().Nodes().Update(ctx, deletingNode, metav1.UpdateOptions{}); err != nil {
 					t.Fatal(err)
 				}
+				allowedActions = append(allowedActions, actionAbstract{"update", "nodes"})
 			}
-			if err := wait.PollUntilContextTimeout(t.Context(), 10*time.Millisecond, 5*time.Second, true, func(context.Context) (bool, error) {
-				after := progress.snapshot()
-				if err := after.err; err != nil {
-					return false, err
-				}
-				for _, item := range after.digests[len(before.digests):] {
-					if item.Kind != kindNode {
-						return false, fmt.Errorf("setup digest item %v arrived after the Node operation", item)
-					}
-				}
-				return len(after.digests) > len(before.digests) && after.keys > before.keys, nil
-			}); err != nil {
-				t.Fatalf("waiting for Node reconciliation: %v", err)
+			if !ctl.runUntilQuiet(t, initialDigestQueued+1, true, time.Second*3, time.Second*20) {
+				return
 			}
-			waitForOrphanPodNames(t, cs, "bound")
-			// A late status event must fail the test, rather than stand in for the
-			// Node event and make a broken Node enqueue path appear to work.
-			for _, item := range progress.snapshot().digests[len(before.digests):] {
-				if item.Kind != kindNode {
-					t.Fatalf("unexpected non-Node digest during cleanup: %v", item)
-				}
-			}
-			assertNoOrphanReplacement(t, cs)
-			policyAfter, err := ctl.fmaclient.LauncherPopulationPolicies(stuckTestNamespace).Get(t.Context(), lpp.Name, metav1.GetOptions{})
+			pods, err := cs.CoreV1().Pods(stuckTestNamespace).List(ctx, metav1.ListOptions{})
 			if err != nil {
-				t.Fatal(err)
+				t.Error(err)
+			} else {
+				podNames := utils.SliceMapErrless(pods.Items, func(pod corev1.Pod) string { return pod.Name })
+				if !slices.Equal(podNames, []string{"bound"}) {
+					t.Errorf("Expected only bound Pod to remain, but found %v", podNames)
+				}
 			}
-			if !reflect.DeepEqual(policyBefore, policyAfter) {
-				t.Error("launcher cleanup must not require a population policy change")
-			}
+			checkActions(t, cs.Actions(), allowedActions)
+			checkActions(t, fmaCS.Actions(), nil)
 		})
 	}
 }
 
 func TestPopulationPolicyDownscaleCleansLaunchers(t *testing.T) {
-	lpp, _, objects := orphanLifecycleObjects(t)
-	ctl, cs, _ := newStuckTestControllerWithoutNode(t, stuckTestNow, objects...)
-	progress := observeOrphanReconciles(ctl)
-	if err := ctl.Start(t.Context()); err != nil {
-		t.Fatal(err)
+	lpp, _, _, _, objects := orphanLifecycleObjects(t, 2, true, true)
+	ctl, cs, fmaCS, _ := newStuckTestController(t, t.Context(), stuckTestNow, digestAndKeys, objects...)
+
+	if !ctl.runUntilQuiet(t, len(objects)-2, true, time.Second*3, time.Second*20) {
+		return
 	}
-	waitForOrphanSetup(t, ctl, progress, lpp.Name)
-	waitForOrphanPodNames(t, cs, "bound", "orphan")
+	checkPodPresent(t, cs, stuckTestNamespace, "orphan")
+	checkPodPresent(t, cs, stuckTestNamespace, "bound")
+	key := stuckTestKey()
+	snap := ctl.policy.snapshotForKey(key)
+	if !snap.exists {
+		t.Fatal("Digested policy lacks expected entry")
+		return
+	}
+	if snap.desiredCount != 2 {
+		t.Fatalf("Expected desiredCount=%v, got desiredCount=%v", 2, snap.desiredCount)
+		return
+	}
+
+	cs.ClearActions()
+	fmaCS.ClearActions()
+
 	lpp, err := ctl.fmaclient.LauncherPopulationPolicies(stuckTestNamespace).Get(t.Context(), lpp.Name, metav1.GetOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -179,149 +255,139 @@ func TestPopulationPolicyDownscaleCleansLaunchers(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForOrphanPodNames(t, cs, "bound")
-	assertNoOrphanReplacement(t, cs)
+	checkActions(t, cs.Actions(), []actionAbstract{
+		{"list", "pods"}, {"delete", "pods"}})
+	checkActions(t, fmaCS.Actions(), []actionAbstract{
+		{"get", "launcherpopulationpolicies"},
+		{"update", "launcherpopulationpolicies"},
+	})
 }
 
 func TestStartupCleansLaunchersWithoutNodeOrPolicy(t *testing.T) {
-	orphan := orphanLifecyclePod("orphan", testTemplateHash)
-	orphan.Status.Phase = corev1.PodPending
-	orphan.Status.Conditions = nil
-	ctl, cs, _ := newStuckTestControllerWithoutNode(t, stuckTestNow,
-		orphan, orphanLifecyclePod("bound", testTemplateHash))
-	if err := ctl.Start(t.Context()); err != nil {
-		t.Fatal(err)
-	}
+	_, _, orphan, bound, _ := orphanLifecycleObjects(t, 2, false, true)
+	_, cs, fmaCS, _ := newStuckTestController(t, t.Context(), stuckTestNow, digestAndKeys, orphan, bound)
+
 	waitForOrphanPodNames(t, cs, "bound")
-	assertNoOrphanReplacement(t, cs)
+	checkActions(t, cs.Actions(), []actionAbstract{
+		{"list", "nodes"}, {"watch", "nodes"},
+		{"list", "pods"}, {"watch", "pods"}, {"delete", "pods"},
+	})
+	checkActions(t, fmaCS.Actions(), []actionAbstract{
+		{"list", "launcherconfigs"}, {"watch", "launcherconfigs"},
+		{"list", "launcherpopulationpolicies"}, {"watch", "launcherpopulationpolicies"},
+	})
 }
 
-func orphanLifecycleObjects(t *testing.T) (*fmav1alpha1.LauncherPopulationPolicy, *corev1.Node, []runtime.Object) {
-	t.Helper()
+// Returns the node-independent Pod template, an LC, an LPP, and a Node,
+// the last 3 in one slice, and an error.
+// The error should never happen but I don't know how to tell that to the Go type system.
+func orphanSetupObjects(desiredCount int32) (*corev1.Pod, *fmav1alpha1.LauncherConfig, *fmav1alpha1.LauncherPopulationPolicy, *corev1.Node, []runtime.Object, error) {
 	lc := &fmav1alpha1.LauncherConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: stuckTestLauncherConfig, Namespace: stuckTestNamespace, Generation: 1},
 		Spec: fmav1alpha1.LauncherConfigSpec{
 			MaxInstances: 1,
-			PodTemplate:  fmav1alpha1.EmbeddedPodTemplateSpec{Spec: nodeTemplate().Spec},
+			PodTemplate:  fmav1alpha1.EmbeddedPodTemplateSpec{Spec: testNodeTemplate("launcher-template").Spec},
 		},
 	}
 	lpp := &fmav1alpha1.LauncherPopulationPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: "policy", Namespace: stuckTestNamespace, Generation: 1},
 		Spec: fmav1alpha1.LauncherPopulationPolicySpec{
-			CountForLauncher: []fmav1alpha1.CountForLauncher{{LauncherConfigName: lc.Name, LauncherCount: 2}},
+			CountForLauncher: []fmav1alpha1.CountForLauncher{{LauncherConfigName: lc.Name, LauncherCount: desiredCount}},
 		},
 	}
 	node := testNode()
-	_, templateHash, err := utils.BuildNodeIndependentLauncherTemplate(lc)
+	templatePod, _, err := utils.BuildNodeIndependentLauncherTemplate(lc)
+	return templatePod, lc, lpp, node, []runtime.Object{lc, lpp, node}, err
+}
+
+// Returns an LPP, a Node, the standard orphan and bound test Pods, and a slice
+// containing the LPP, a corresponding LC, the Node, and the Pods.
+func orphanLifecycleObjects(t *testing.T, desiredCount int32, orphanRunning, boundRunning bool) (*fmav1alpha1.LauncherPopulationPolicy, *corev1.Node, *corev1.Pod, *corev1.Pod, []runtime.Object) {
+	templatePod, _, lpp, node, setupObjs, err := orphanSetupObjects(desiredCount)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return lpp, node, []runtime.Object{lc, lpp, node, orphanLifecyclePod("orphan", templateHash), orphanLifecyclePod("bound", templateHash)}
-}
-
-func orphanLifecyclePod(name, templateHash string) *corev1.Pod {
-	pod := ready(stuckLauncherPod(name))
-	pod.Labels[common.NodeNameLabelKey] = stuckTestNode
-	pod.Labels[common.ComponentLabelKey] = common.LauncherComponentLabelValue
-	pod.Annotations[common.LauncherTemplateHashAnnotationKey] = templateHash
-	pod.Spec.NodeSelector = map[string]string{"kubernetes.io/hostname": stuckTestNode}
-	pod.Status.Phase = corev1.PodRunning
-	if name == "bound" {
-		pod.Annotations[common.RequesterAnnotationKey] = "requester-uid requester"
+	orphan := utils.SpecializeLauncherTemplateToNode(templatePod, stuckTestNode)
+	orphan.Name = "orphan"
+	orphan.UID = apitypes.UID(orphan.Name)
+	bound := utils.SpecializeLauncherTemplateToNode(templatePod, stuckTestNode)
+	bound.Name = "bound"
+	bound.UID = apitypes.UID(bound.Name)
+	bound.Annotations[common.RequesterAnnotationKey] = "requester-uid requester"
+	if orphanRunning {
+		ready(orphan)
+	} else {
+		orphan.Status.Phase = corev1.PodPending
 	}
-	return pod
+	if boundRunning {
+		ready(bound)
+	} else {
+		bound.Status.Phase = corev1.PodPending
+	}
+	return lpp, node, orphan, bound, append(setupObjs, orphan, bound)
 }
 
-// Observe completed work without consuming, filtering, or replacing queue items.
-type orphanReconcileProgress struct {
-	mu      sync.Mutex
-	digests []funcItem
-	keys    int
-	active  int
-	err     error
-}
+var errNotQuiet = errors.New("controller did not quiesce in time")
 
-type orphanProgressSnapshot struct {
-	digests []funcItem
-	keys    int
-	active  int
-	err     error
-}
+// Wait until the controller is idle.
+// The waiting has to use the real clock rather than the controller's possibly-fake one,
+// because it is waiting for concurrent activity that is not visible to clients of k8s.io/client-go.
+// The minTotalDigestQueued parameter is here because an informer updates
+// its store before delivering events to its clients, so the earlier
+// waits on store contents are not enough to ensure that the relevant
+// work items have been enqueued.
+// This waiting is insensitive to the delayed enqueues from either queue's `AddAfter` method,
+// so caveat emptor.
+func (ctl *controller) runUntilQuiet(t *testing.T, minTotalDigestQueued int, keyQueueActive bool, idleTime, timeout time.Duration) bool {
+	ctxTimed, cancel := context.WithTimeoutCause(t.Context(), timeout, errNotQuiet)
+	defer cancel()
+	if !cache.WaitForNamedCacheSync("test", ctxTimed.Done(), ctl.digestQueue.HasProcessedSync) {
+		t.Fatalf("digestQueue.HasProcessedSync not reached in %v", timeout)
+		return false
+	}
+	lastDigesterStatus, lastKeyerStatus := ctl.getStatus()
+	err := wait.PollUntilContextCancel(ctxTimed, idleTime/3, false, func(ctx context.Context) (done bool, err error) {
+		nextDigesterStatus, nextKeyerStatus := ctl.getStatus()
+		if lastDigesterStatus == nextDigesterStatus && lastKeyerStatus == nextKeyerStatus &&
+			nextDigesterStatus.IsIdle() &&
+			(nextKeyerStatus.IsIdle() || !keyQueueActive) &&
+			nextDigesterStatus.TotalQueued() >= minTotalDigestQueued {
 
-func (p *orphanReconcileProgress) snapshot() orphanProgressSnapshot {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return orphanProgressSnapshot{digests: slices.Clone(p.digests), keys: p.keys, active: p.active, err: p.err}
-}
-
-func observeOrphanReconciles(ctl *controller) *orphanReconcileProgress {
-	p := &orphanReconcileProgress{}
-	processDigest := ctl.digestQueue.Process
-	ctl.digestQueue.Process = func(ctx context.Context, item queueItem) (error, bool) {
-		p.mu.Lock()
-		p.active++
-		p.mu.Unlock()
-		err, retry := processDigest(ctx, item)
-		p.mu.Lock()
-		p.active--
-		p.digests = append(p.digests, item.(funcItem))
-		if err != nil {
-			p.err = err
+			digestDT := time.Since(lastDigesterStatus.ApproxLastWorkTime)
+			keyDT := time.Since(lastKeyerStatus.ApproxLastWorkTime)
+			if digestDT >= idleTime && (keyDT >= idleTime || !keyQueueActive) {
+				return true, nil
+			}
+			t.Logf("Almost idle: digest %v or key %v < %v", digestDT, keyDT, idleTime)
+		} else {
+			t.Logf("Digest queue status = %#v, key queue status = %#v", nextDigesterStatus, nextKeyerStatus)
 		}
-		p.mu.Unlock()
-		return err, retry
+		lastDigesterStatus = nextDigesterStatus
+		lastKeyerStatus = nextKeyerStatus
+		return false, nil
+	})
+	if err != nil {
+		t.Fatalf("controller did not quiesce in %v", timeout)
+		return false
 	}
-	processKey := ctl.keyQueue.Process
-	ctl.keyQueue.Process = func(ctx context.Context, item keyItem) (error, bool) {
-		p.mu.Lock()
-		p.active++
-		p.mu.Unlock()
-		err, retry := processKey(ctx, item)
-		p.mu.Lock()
-		p.active--
-		p.keys++
-		if err != nil {
-			p.err = err
-		}
-		p.mu.Unlock()
-		return err, retry
-	}
-	return p
+	return true
 }
 
-func waitForOrphanSetup(t *testing.T, ctl *controller, progress *orphanReconcileProgress, policyName string) {
+func checkPodPresent(t *testing.T, cs *k8sfake.Clientset, podNamespace, podName string) {
 	t.Helper()
-	var previous orphanProgressSnapshot
-	var settledAt time.Time
-	if err := wait.PollUntilContextTimeout(t.Context(), 10*time.Millisecond, 5*time.Second, true, func(context.Context) (bool, error) {
-		current := progress.snapshot()
-		if current.err != nil {
-			return false, current.err
-		}
-		snap := ctl.policy.snapshotForKey(stuckTestKey())
-		// Inspect the digested objects, rather than only the informer cache: the
-		// final LC/LPP status events must have passed through the digest worker.
-		ctl.policy.mu.RLock()
-		lc, lpp := ctl.policy.lcs[stuckTestLauncherConfig], ctl.policy.lpps[policyName]
-		statusesProcessed := lc != nil && lc.object != nil && lc.object.Status.ObservedGeneration == lc.object.Generation && len(lc.object.Status.Errors) == 0 &&
-			lpp != nil && lpp.object.Status.ObservedGeneration == lpp.object.Generation && len(lpp.object.Status.Errors) == 0
-		ctl.policy.mu.RUnlock()
-		nodeProcessed := slices.ContainsFunc(current.digests, func(item funcItem) bool { return item.Kind == kindNode })
-		settled := ctl.digestQueue.HasProcessedSync() && statusesProcessed && nodeProcessed && snap.exists && snap.desiredCount == 2 && current.keys > 0 && current.active == 0 &&
-			ctl.digestQueue.Queue.Len() == 0 && ctl.keyQueue.Queue.Len() == 0
-		if !settled || current.keys != previous.keys || len(current.digests) != len(previous.digests) {
-			settledAt = time.Now()
-		}
-		previous = current
-		return settled && time.Since(settledAt) >= 50*time.Millisecond, nil
-	}); err != nil {
-		t.Fatalf("waiting for normal setup reconciliation and status events: %v", err)
+	pod, err := cs.CoreV1().Pods(podNamespace).Get(t.Context(), podName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Failed to get Pod %s: %v", podName, err)
+	}
+	if pod == nil {
+		t.Fatalf("Fetch of Pod %s returned nil", podName)
 	}
 }
 
 func waitForOrphanPodNames(t *testing.T, cs *k8sfake.Clientset, names ...string) {
 	t.Helper()
 	slices.Sort(names)
-	if err := wait.PollUntilContextTimeout(t.Context(), 10*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+	if err := wait.PollUntilContextTimeout(t.Context(), 250*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
 		pods, err := cs.CoreV1().Pods(stuckTestNamespace).List(ctx, metav1.ListOptions{})
 		if err != nil {
 			return false, err
@@ -331,17 +397,63 @@ func waitForOrphanPodNames(t *testing.T, cs *k8sfake.Clientset, names ...string)
 			got = append(got, pod.Name)
 		}
 		slices.Sort(got)
+		t.Logf("Current pods are %v", got)
 		return slices.Equal(got, names), nil
 	}); err != nil {
 		t.Fatalf("waiting for launcher Pods %v: %v", names, err)
 	}
 }
 
-func assertNoOrphanReplacement(t *testing.T, cs *k8sfake.Clientset) {
+func waitForNodeGoneFromCache(t *testing.T, ctl *controller, nodeName string) {
+	if err := wait.PollUntilContextTimeout(t.Context(), 250*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+		node, err := ctl.nodeLister.Get(nodeName)
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				return true, nil
+			}
+			t.Logf("Failed to get Node %s from cache: %v", nodeName, err)
+			return false, nil
+		}
+		if node == nil {
+			t.Logf("Got nil from cache for Node %s", nodeName)
+			return true, nil
+		}
+		t.Logf("Got Node %s from the cache", nodeName)
+		return false, nil
+	}); err != nil {
+		t.Fatalf("waiting for Node %v: %v", nodeName, err)
+	}
+}
+
+func waitForNodeDeletingInCache(t *testing.T, ctl *controller, nodeName string) {
+	if err := wait.PollUntilContextTimeout(t.Context(), 250*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+		node, err := ctl.nodeLister.Get(nodeName)
+		if err != nil {
+			t.Logf("Failed to get Node %s from cache: %v", nodeName, err)
+			return false, err
+		}
+		if node == nil {
+			t.Logf("Got nil from cache for Node %s", nodeName)
+			return false, errors.New("Node " + nodeName + " not found")
+		}
+		if node.DeletionTimestamp == nil {
+			t.Logf("Node %v not is not yet being deleted", nodeName)
+			return false, nil
+		}
+		t.Logf("Node %s in the cache shows deletion in progress", nodeName)
+		return true, nil
+	}); err != nil {
+		t.Fatalf("waiting for Node %v: %v", nodeName, err)
+	}
+}
+
+type actionAbstract struct{ Method, Resource string }
+
+func checkActions(t *testing.T, actions []k8stesting.Action, allowed []actionAbstract) {
 	t.Helper()
-	for _, action := range cs.Actions() {
-		if action.Matches("create", "pods") {
-			t.Error("unexpected replacement launcher creation")
+	for _, action := range actions {
+		if slices.Index(allowed, actionAbstract{action.GetVerb(), action.GetResource().Resource}) < 0 {
+			t.Errorf("Unexpected action: %v", action)
 		}
 	}
 }

@@ -19,6 +19,7 @@ package generic
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -39,6 +40,20 @@ type QueueAndWorkers[Item comparable] struct {
 	Process        func(ctx context.Context, item Item) (err error, retry bool)
 
 	earlySync func(context.Context, Item) *bool
+
+	syncsStarted  *atomic.Int32
+	syncsFinished *atomic.Int32
+
+	// Always holds a time.Time.
+	// This is approximately the last time that work on a queue item
+	// started or stopped.
+	approxLastWorkTime *atomic.Value
+
+	// stopChan is normally open.
+	// Closing it suppresses further work on queue items.
+	stopChan chan struct{}
+
+	stopped *atomic.Bool
 }
 
 // NewQueueAndWorkers makes a new QueueAndWorkers.
@@ -56,7 +71,11 @@ func noEarlySync[Item comparable](context.Context, Item) *bool {
 	return nil
 }
 
-// NewQueueAndWorkers makes a new QueueAndWorkers.
+// newQueueAndWorkers makes a new QueueAndWorkers.
+// Syncing each item begins with calling `earlySync` on that item;
+// a return of `nil` means to proceed to `process`,
+// a return of `&true` means to move on to the next item,
+// a return of `&false` means to halt processing.
 func newQueueAndWorkers[Item comparable](
 	controllerName string,
 	numWorkers int,
@@ -76,7 +95,14 @@ func newQueueAndWorkers[Item comparable](
 		NumWorkers: numWorkers,
 		Process:    process,
 		earlySync:  earlySync,
+
+		syncsStarted:       new(atomic.Int32),
+		syncsFinished:      new(atomic.Int32),
+		approxLastWorkTime: new(atomic.Value),
+		stopChan:           make(chan struct{}),
+		stopped:            new(atomic.Bool),
 	}
+	ans.approxLastWorkTime.Store(time.Now())
 	return ans
 }
 
@@ -98,6 +124,24 @@ func (ctl *QueueAndWorkers[Item]) StartWorkers(ctx context.Context) error {
 	return nil
 }
 
+// StopTestWorkers is a hack for use in tests of clients of this controller.
+// Calling this suppresses further work on queue items.
+// This would only be used near the end of a test,
+// when no further queue item processing is intended and the whole
+// controller is about to become unreachable.
+// It is the first simplest step in the direction of giving tests
+// control over the scheduling of processing of queue items.
+func (ctl *QueueAndWorkers[Item]) StopTestWorkers(ctx context.Context) {
+	logger := klog.FromContext(ctx)
+	changed := ctl.stopped.CompareAndSwap(false, true)
+	if changed {
+		logger.Info("StopTestWorkers happened", "controller", ctl.ControllerName)
+		close(ctl.stopChan)
+	} else {
+		logger.Info("Redundant StopTestWorkers happened", "controller", ctl.ControllerName)
+	}
+}
+
 func (ctl *QueueAndWorkers[Item]) runWorker(ctx context.Context) {
 	for ctl.processNextWorkItem(ctx) {
 	}
@@ -109,7 +153,21 @@ func (ctl *QueueAndWorkers[Item]) processNextWorkItem(ctx context.Context) bool 
 	if shutdown {
 		return false
 	}
-	defer ctl.Queue.Done(objRef)
+	select {
+	case <-ctl.stopChan:
+		logger.Info("Worker aborted for testing")
+		// Not needed at this stage of development, but hygiene for the future
+		ctl.Queue.Done(objRef)
+		return false
+	default:
+	}
+	ctl.syncsStarted.Add(1)
+	ctl.approxLastWorkTime.Store(time.Now())
+	defer func() {
+		ctl.Queue.Done(objRef)
+		ctl.syncsFinished.Add(1)
+		ctl.approxLastWorkTime.Store(time.Now())
+	}()
 	logger.V(4).Info("Popped workqueue item", "item", objRef, "itemType", fmt.Sprintf("%T", objRef))
 	if ans := ctl.earlySync(ctx, objRef); ans != nil {
 		return *ans
@@ -138,4 +196,36 @@ func (ctl *QueueAndWorkers[Item]) processNextWorkItem(ctx context.Context) bool 
 	}()
 	err, retry = ctl.Process(ctx, objRef)
 	return true
+}
+
+// Status is a snapshot of the state of the controller.
+// This state is not maintained atomically, and this snapshot
+// holds values from slightly different times.
+type Status struct {
+	QueueDepth    int
+	SyncsStarted  int
+	SyncsFinished int
+
+	// ApproxLastWorkTime is updated at each change
+	// to either of the sync counts, at nearly the same time.
+	ApproxLastWorkTime time.Time
+}
+
+func (status Status) IsIdle() bool {
+	return status.QueueDepth == 0 && status.SyncsFinished == status.SyncsStarted
+}
+
+// TotalQueued returns the cumulative total over the controller's lifetime.
+// It may be a little off, due to the asynchrony between the components.
+func (status Status) TotalQueued() int { return status.QueueDepth + status.SyncsStarted }
+
+func (ctl *QueueAndWorkers[Item]) GetStatus() Status {
+	qd := ctl.Queue.Len()
+	alc, _ := ctl.approxLastWorkTime.Load().(time.Time)
+	return Status{
+		QueueDepth:         qd,
+		SyncsStarted:       int(ctl.syncsStarted.Load()),
+		SyncsFinished:      int(ctl.syncsFinished.Load()),
+		ApproxLastWorkTime: alc,
+	}
 }
