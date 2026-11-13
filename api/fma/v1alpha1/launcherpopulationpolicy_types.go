@@ -30,17 +30,19 @@ import (
 // Call this map `PopulationPolicy`.
 // When multiple CountForLauncher apply to the same (Node, LauncherConfig name) pair
 // the maximum of their counts is what appears in `PopulationPolicy`.
-// When no CountForLauncher applies to a given (Node, LauncherConfig name),
-// `PopulationPolicy` implicitly maps that pair to zero.
+// While no CountForLauncher applies to a given (Node, LauncherConfig name),
+// or there is no LauncherConfig with the given name,
+// `PopulationPolicy` maps that pair to zero.
 //
 // The collective meaning of all the LauncherPopulationPolicy objects
 // and all the server-requesting Pods is that for a given (Node, LauncherConfig name)
 // the number of launchers that should exist is the larger of
 // (a) what `PopulationPolicy` says for that pair, and
 // (b) the number needed to satisfy the server-requesting Pods.
-// While there is no LauncherConfig with the given name or that LauncherConfig
-// exists and has a malformed Pod template,
-// the controllers will not create or delete launchers.
+// While the LauncherConfig exists and has a malformed Pod template,
+// the controllers will not create or delete launchers;
+// while the LauncherConfig does not exist, the controllers
+// will not create launchers.
 //
 // +genclient
 // +kubebuilder:object:root=true

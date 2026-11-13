@@ -165,7 +165,7 @@ objects call for a proactive population of launchers, as follows.
   `LauncherConfig` name) to count. For a given (N, C) this count is
   the maximum of the counts prescribed by the
   `LauncherPopulationPolicy` objects that select N and declare a count
-  for C (zero if there are none).
+  for C (zero if there are none or the `LauncherConfig` does not exist).
 
 - The collective meaning of all the `LauncherPopulationPolicy` objects
   and all the server-requesting Pods is that for a given (`Node`,
@@ -173,9 +173,10 @@ objects call for a proactive population of launchers, as follows.
   is the larger of
     (a) what `PopulationPolicy` says for that pair, and
     (b) the number needed to satisfy the existing server-requesting Pods.
-  However: while there is no `LauncherConfig` with the given name or
-  that `LauncherConfig` exists and has a malformed Pod template, the
-  FMA controllers will not create or delete launchers.
+  However: while the `LauncherConfig` exists and has a malformed Pod
+  template, the FMA controllers will not create or delete launchers;
+  while the LauncherConfig does not exist, the controllers will not
+  create launchers
 
 Launcher Pods list their `LauncherConfig` as their controlling owner, so
 `kubectl drain` recognizes them as managed Pods. The owner reference also
@@ -200,10 +201,11 @@ while the server-requesting Pod is bound to a server-providing Pod.
 #### What happens to existing launcher Pods when a LauncherConfig changes?
 
 Each corresponding launcher Pod that is not bound and was created from
-the wrong `podTemplate` is deleted. Then the launcher population controller
-will create a replacement if that is still appropriate. Bound launcher Pods
-are not replaced, and while the LauncherConfig object does not exist, FMA does
-not consider any corresponding launcher to be wrong.
+the wrong `podTemplate` (which is any template at all while the
+LauncherConfig does not exist) is deleted. Then the launcher
+population controller will create a replacement if that is still
+appropriate (which it is not while the LauncherConfig does not
+exist). Bound launcher Pods are not replaced.
 
 The other LauncherConfig fields do not describe the launcher Pod template and
 therefore do not, by themselves, cause launcher replacement. A change to
