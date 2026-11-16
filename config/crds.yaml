@@ -76,7 +76,7 @@ spec:
                     type: object
                   options:
                     description: Options are the vLLM startup options, excluding the
-                      controller-managed port.
+                      controller-managed inference port.
                     type: string
                 type: object
             required:

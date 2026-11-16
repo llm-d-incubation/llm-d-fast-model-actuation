@@ -33,7 +33,7 @@ type InferenceServerConfigSpec struct {
 
 // ModelServerConfig defines the configuration for a model server
 type ModelServerConfig struct {
-	// Options are the vLLM startup options, excluding the controller-managed port.
+	// Options are the vLLM startup options, excluding the controller-managed inference port.
 	// +optional
 	Options string `json:"options,omitempty"`
 

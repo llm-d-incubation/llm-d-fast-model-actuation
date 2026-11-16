@@ -217,7 +217,7 @@ the configuration is corrected.
 Changing `inferencePorts` affects new instance allocation but does not move an
 awake instance to another port. Nor does it immediately sweep sleeping
 instances. When a request would reuse a matching sleeping instance whose port
-is no longer in a non-empty pool, the controller deletes that instance and
+is no longer in a pool, the controller deletes that instance and
 retries the request so that the instance is recreated on a current pool port.
 Other sleeping instances remain until they are considered for reuse or
 reclamation.

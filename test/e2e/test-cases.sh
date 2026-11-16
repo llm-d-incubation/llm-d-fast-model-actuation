@@ -530,7 +530,7 @@ kubectl wait --for condition=Ready pod/$launcher1 -n "$NS" --timeout=0s
 
 check_gpu_pin $req3
 
-# Their coexistence proves that the controller allocated distinct ports from
+# The coexistence of the two instances proves that the controller allocated distinct ports from
 # LauncherConfig.spec.inferencePorts.
 launcher_instance_ports=$(kubectl exec -n "$NS" "$launcher1" -- python3 -c 'import json,urllib.request; instances=json.load(urllib.request.urlopen("http://127.0.0.1:8001/v2/vllm/instances"))["instances"]; print(",".join(sorted(instance["annotations"]["inference-port"] for instance in instances)))')
 [ "$launcher_instance_ports" = "8005,8006" ] || { echo "ERROR: pooled launcher ports are $launcher_instance_ports, expected 8005,8006" >&2; exit 1; }
