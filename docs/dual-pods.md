@@ -170,17 +170,21 @@ objects call for a proactive population of launchers, as follows.
 - The collective meaning of all the `LauncherPopulationPolicy` objects
   and all the server-requesting Pods is that for a given (`Node`,
   `LauncherConfig` name) the number of launchers that should exist
-  is the larger of
-    (a) what `PopulationPolicy` says for that pair, and
-    (b) the number needed to satisfy the existing server-requesting Pods.
-  However: while there is no `LauncherConfig` with the given name or
-  that `LauncherConfig` exists and has a malformed Pod template, the
-  FMA controllers will not create or delete launchers.
+  is
+
+    (1) the larger of
+        (a) what `PopulationPolicy` says for that pair, and
+        (b) the number needed to satisfy the existing server-requesting Pods,
+
+    (2) but zero if the `LauncherConfig` object does not exist.
+
+    However: while the `LauncherConfig` exists and has a malformed Pod
+    template, the FMA controllers will not create or delete launchers;
+    while the `LauncherConfig` does not exist, the controllers will
+    not create launchers.
 
 Launcher Pods list their `LauncherConfig` as their controlling owner, so
-`kubectl drain` recognizes them as managed Pods. The owner reference also
-allows Kubernetes garbage collection to delete launcher Pods when their
-`LauncherConfig` is deleted, independently of the FMA controllers.
+`kubectl drain` recognizes them as managed Pods.
 
 ### User-initiated changes to relevant API objects
 
@@ -199,11 +203,14 @@ while the server-requesting Pod is bound to a server-providing Pod.
 
 #### What happens to existing launcher Pods when a LauncherConfig changes?
 
-Each corresponding launcher Pod that is not bound and was created from
-the wrong `podTemplate` is deleted. Then the launcher population controller
-will create a replacement if that is still appropriate. Bound launcher Pods
-are not replaced, and while the LauncherConfig object does not exist, FMA does
-not consider any corresponding launcher to be wrong.
+In the case of a deletion, all of the corresponding launcher Pods get
+deleted. As usual, deletion of a bound launcher is reflected into
+deletion of the corresponding server-requesting Pod.
+
+In the case of a modification rather than deletion: each corresponding
+launcher Pod that (a) is not bound and (b) was created from the wrong
+`podTemplate` is deleted. This naturally leads to a replacement if
+that is still appropriate. Bound launcher Pods are not replaced.
 
 The other LauncherConfig fields do not describe the launcher Pod template and
 therefore do not, by themselves, cause launcher replacement. A change to
