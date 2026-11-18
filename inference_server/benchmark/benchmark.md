@@ -97,9 +97,11 @@ using the team's established terminology:
 > (`llm-d-inference-sim` image or launcher `--mock-mode`) for CI pipelines and scenario
 > prototyping. Simulation is an orthogonal testing mode, not a separate actuation path.
 >
-> **Note on caching:** Model tensor caching (via PVC) and CUDA graph compilation caching
-> are orthogonal to the actuation paths above. Either or both can be enabled for any path
-> besides Hot Start (where the instance is already loaded). Set the cache and volume options in the benchmark scenario.
+> **Note on caching:** For launcher-based FMA runs, override the [FMA volume settings](https://github.com/llm-d/llm-d-benchmark/blob/main/config/templates/values/defaults.yaml)
+> in your scenario. `fma.mountModelVolume` controls whether the launcher mounts the model
+> volume, `fma.modelMountPath` sets its mount path, and `fma.modelPvcName` selects the claim
+> for PVC-backed storage. The launcher stores its vLLM and Triton caches under
+> `fma.modelMountPath`. Hot start reuses the model already loaded in the sleeping instance.
 >
 > **Note on FMA M2:** FMA Milestone 2 (DPC creating standalone server-providing pods
 > without a launcher) is a distinct actuation path from the non-FMA cold start, but is
