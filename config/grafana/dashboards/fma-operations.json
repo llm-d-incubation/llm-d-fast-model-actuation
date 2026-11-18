@@ -2468,7 +2468,7 @@
           "type": "prometheus",
           "uid": "${DS_PROMETHEUS}"
         },
-        "definition": "query_result(count by (le) (present_over_time(fma_actuation_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\"}[$__range])) or label_replace(absent_over_time(fma_actuation_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\"}[$__range]), \"le\", \"unavailable\", \"\", \"\"))",
+        "definition": "query_result(sort(histogram_quantile(1, label_join(group by (le) (present_over_time(fma_actuation_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\", le!=\"+Inf\"}[$__range])), \"bound\", \"\", \"le\") or label_replace(label_join(group by (le) (present_over_time(fma_actuation_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\", le!=\"+Inf\"}[$__range])), \"bound\", \"\", \"le\"), \"le\", \"+Inf\", \"\", \"\")) or label_join(group by (le) (present_over_time(fma_actuation_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\", le=\"+Inf\"}[$__range])), \"bound\", \"\", \"le\") * +Inf or label_replace(absent_over_time(fma_actuation_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\"}[$__range]), \"bound\", \"unavailable\", \"\", \"\")))",
         "hide": 2,
         "includeAll": true,
         "multi": true,
@@ -2476,13 +2476,13 @@
         "options": [],
         "query": {
           "qryType": 3,
-          "query": "query_result(count by (le) (present_over_time(fma_actuation_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\"}[$__range])) or label_replace(absent_over_time(fma_actuation_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\"}[$__range]), \"le\", \"unavailable\", \"\", \"\"))",
+          "query": "query_result(sort(histogram_quantile(1, label_join(group by (le) (present_over_time(fma_actuation_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\", le!=\"+Inf\"}[$__range])), \"bound\", \"\", \"le\") or label_replace(label_join(group by (le) (present_over_time(fma_actuation_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\", le!=\"+Inf\"}[$__range])), \"bound\", \"\", \"le\"), \"le\", \"+Inf\", \"\", \"\")) or label_join(group by (le) (present_over_time(fma_actuation_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\", le=\"+Inf\"}[$__range])), \"bound\", \"\", \"le\") * +Inf or label_replace(absent_over_time(fma_actuation_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\"}[$__range]), \"bound\", \"unavailable\", \"\", \"\")))",
           "refId": "PrometheusVariableQueryEditor-actuation_buckets"
         },
         "refresh": 2,
-        "regex": "/le=\"([^\"]+)\"/",
+        "regex": "/bound=\"([^\"]+)\"/",
         "skipUrlSync": true,
-        "sort": 3,
+        "sort": 0,
         "type": "query"
       },
       {
@@ -2496,7 +2496,7 @@
           "type": "prometheus",
           "uid": "${DS_PROMETHEUS}"
         },
-        "definition": "query_result(count by (le) (present_over_time(fma_launcher_create_seconds_bucket{namespace=~\"$namespace\", lcfg_name=~\"$lcfg\"}[$__range])) or label_replace(absent_over_time(fma_launcher_create_seconds_bucket{namespace=~\"$namespace\", lcfg_name=~\"$lcfg\"}[$__range]), \"le\", \"unavailable\", \"\", \"\"))",
+        "definition": "query_result(sort(histogram_quantile(1, label_join(group by (le) (present_over_time(fma_launcher_create_seconds_bucket{namespace=~\"$namespace\", lcfg_name=~\"$lcfg\", le!=\"+Inf\"}[$__range])), \"bound\", \"\", \"le\") or label_replace(label_join(group by (le) (present_over_time(fma_launcher_create_seconds_bucket{namespace=~\"$namespace\", lcfg_name=~\"$lcfg\", le!=\"+Inf\"}[$__range])), \"bound\", \"\", \"le\"), \"le\", \"+Inf\", \"\", \"\")) or label_join(group by (le) (present_over_time(fma_launcher_create_seconds_bucket{namespace=~\"$namespace\", lcfg_name=~\"$lcfg\", le=\"+Inf\"}[$__range])), \"bound\", \"\", \"le\") * +Inf or label_replace(absent_over_time(fma_launcher_create_seconds_bucket{namespace=~\"$namespace\", lcfg_name=~\"$lcfg\"}[$__range]), \"bound\", \"unavailable\", \"\", \"\")))",
         "hide": 2,
         "includeAll": true,
         "multi": true,
@@ -2504,13 +2504,13 @@
         "options": [],
         "query": {
           "qryType": 3,
-          "query": "query_result(count by (le) (present_over_time(fma_launcher_create_seconds_bucket{namespace=~\"$namespace\", lcfg_name=~\"$lcfg\"}[$__range])) or label_replace(absent_over_time(fma_launcher_create_seconds_bucket{namespace=~\"$namespace\", lcfg_name=~\"$lcfg\"}[$__range]), \"le\", \"unavailable\", \"\", \"\"))",
+          "query": "query_result(sort(histogram_quantile(1, label_join(group by (le) (present_over_time(fma_launcher_create_seconds_bucket{namespace=~\"$namespace\", lcfg_name=~\"$lcfg\", le!=\"+Inf\"}[$__range])), \"bound\", \"\", \"le\") or label_replace(label_join(group by (le) (present_over_time(fma_launcher_create_seconds_bucket{namespace=~\"$namespace\", lcfg_name=~\"$lcfg\", le!=\"+Inf\"}[$__range])), \"bound\", \"\", \"le\"), \"le\", \"+Inf\", \"\", \"\")) or label_join(group by (le) (present_over_time(fma_launcher_create_seconds_bucket{namespace=~\"$namespace\", lcfg_name=~\"$lcfg\", le=\"+Inf\"}[$__range])), \"bound\", \"\", \"le\") * +Inf or label_replace(absent_over_time(fma_launcher_create_seconds_bucket{namespace=~\"$namespace\", lcfg_name=~\"$lcfg\"}[$__range]), \"bound\", \"unavailable\", \"\", \"\")))",
           "refId": "PrometheusVariableQueryEditor-launcher_create_buckets"
         },
         "refresh": 2,
-        "regex": "/le=\"([^\"]+)\"/",
+        "regex": "/bound=\"([^\"]+)\"/",
         "skipUrlSync": true,
-        "sort": 3,
+        "sort": 0,
         "type": "query"
       },
       {
@@ -2524,7 +2524,7 @@
           "type": "prometheus",
           "uid": "${DS_PROMETHEUS}"
         },
-        "definition": "query_result(count by (le) (present_over_time(fma_http_latency_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\"}[$__range])) or label_replace(absent_over_time(fma_http_latency_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\"}[$__range]), \"le\", \"unavailable\", \"\", \"\"))",
+        "definition": "query_result(sort(histogram_quantile(1, label_join(group by (le) (present_over_time(fma_http_latency_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\", le!=\"+Inf\"}[$__range])), \"bound\", \"\", \"le\") or label_replace(label_join(group by (le) (present_over_time(fma_http_latency_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\", le!=\"+Inf\"}[$__range])), \"bound\", \"\", \"le\"), \"le\", \"+Inf\", \"\", \"\")) or label_join(group by (le) (present_over_time(fma_http_latency_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\", le=\"+Inf\"}[$__range])), \"bound\", \"\", \"le\") * +Inf or label_replace(absent_over_time(fma_http_latency_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\"}[$__range]), \"bound\", \"unavailable\", \"\", \"\")))",
         "hide": 2,
         "includeAll": true,
         "multi": true,
@@ -2532,13 +2532,13 @@
         "options": [],
         "query": {
           "qryType": 3,
-          "query": "query_result(count by (le) (present_over_time(fma_http_latency_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\"}[$__range])) or label_replace(absent_over_time(fma_http_latency_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\"}[$__range]), \"le\", \"unavailable\", \"\", \"\"))",
+          "query": "query_result(sort(histogram_quantile(1, label_join(group by (le) (present_over_time(fma_http_latency_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\", le!=\"+Inf\"}[$__range])), \"bound\", \"\", \"le\") or label_replace(label_join(group by (le) (present_over_time(fma_http_latency_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\", le!=\"+Inf\"}[$__range])), \"bound\", \"\", \"le\"), \"le\", \"+Inf\", \"\", \"\")) or label_join(group by (le) (present_over_time(fma_http_latency_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\", le=\"+Inf\"}[$__range])), \"bound\", \"\", \"le\") * +Inf or label_replace(absent_over_time(fma_http_latency_seconds_bucket{namespace=~\"$namespace\", isc_name=~\"$isc\"}[$__range]), \"bound\", \"unavailable\", \"\", \"\")))",
           "refId": "PrometheusVariableQueryEditor-http_latency_buckets"
         },
         "refresh": 2,
-        "regex": "/le=\"([^\"]+)\"/",
+        "regex": "/bound=\"([^\"]+)\"/",
         "skipUrlSync": true,
-        "sort": 3,
+        "sort": 0,
         "type": "query"
       },
       {
@@ -2552,7 +2552,7 @@
           "type": "prometheus",
           "uid": "${DS_PROMETHEUS}"
         },
-        "definition": "query_result(count by (le) (present_over_time(fma_dpc_innerqueue_queue_duration_seconds_bucket{namespace=~\"$namespace\", node=~\"$node\"}[$__range])) or label_replace(absent_over_time(fma_dpc_innerqueue_queue_duration_seconds_bucket{namespace=~\"$namespace\", node=~\"$node\"}[$__range]), \"le\", \"unavailable\", \"\", \"\"))",
+        "definition": "query_result(sort(histogram_quantile(1, label_join(group by (le) (present_over_time(fma_dpc_innerqueue_queue_duration_seconds_bucket{namespace=~\"$namespace\", node=~\"$node\", le!=\"+Inf\"}[$__range])), \"bound\", \"\", \"le\") or label_replace(label_join(group by (le) (present_over_time(fma_dpc_innerqueue_queue_duration_seconds_bucket{namespace=~\"$namespace\", node=~\"$node\", le!=\"+Inf\"}[$__range])), \"bound\", \"\", \"le\"), \"le\", \"+Inf\", \"\", \"\")) or label_join(group by (le) (present_over_time(fma_dpc_innerqueue_queue_duration_seconds_bucket{namespace=~\"$namespace\", node=~\"$node\", le=\"+Inf\"}[$__range])), \"bound\", \"\", \"le\") * +Inf or label_replace(absent_over_time(fma_dpc_innerqueue_queue_duration_seconds_bucket{namespace=~\"$namespace\", node=~\"$node\"}[$__range]), \"bound\", \"unavailable\", \"\", \"\")))",
         "hide": 2,
         "includeAll": true,
         "multi": true,
@@ -2560,13 +2560,13 @@
         "options": [],
         "query": {
           "qryType": 3,
-          "query": "query_result(count by (le) (present_over_time(fma_dpc_innerqueue_queue_duration_seconds_bucket{namespace=~\"$namespace\", node=~\"$node\"}[$__range])) or label_replace(absent_over_time(fma_dpc_innerqueue_queue_duration_seconds_bucket{namespace=~\"$namespace\", node=~\"$node\"}[$__range]), \"le\", \"unavailable\", \"\", \"\"))",
+          "query": "query_result(sort(histogram_quantile(1, label_join(group by (le) (present_over_time(fma_dpc_innerqueue_queue_duration_seconds_bucket{namespace=~\"$namespace\", node=~\"$node\", le!=\"+Inf\"}[$__range])), \"bound\", \"\", \"le\") or label_replace(label_join(group by (le) (present_over_time(fma_dpc_innerqueue_queue_duration_seconds_bucket{namespace=~\"$namespace\", node=~\"$node\", le!=\"+Inf\"}[$__range])), \"bound\", \"\", \"le\"), \"le\", \"+Inf\", \"\", \"\")) or label_join(group by (le) (present_over_time(fma_dpc_innerqueue_queue_duration_seconds_bucket{namespace=~\"$namespace\", node=~\"$node\", le=\"+Inf\"}[$__range])), \"bound\", \"\", \"le\") * +Inf or label_replace(absent_over_time(fma_dpc_innerqueue_queue_duration_seconds_bucket{namespace=~\"$namespace\", node=~\"$node\"}[$__range]), \"bound\", \"unavailable\", \"\", \"\")))",
           "refId": "PrometheusVariableQueryEditor-queue_duration_buckets"
         },
         "refresh": 2,
-        "regex": "/le=\"([^\"]+)\"/",
+        "regex": "/bound=\"([^\"]+)\"/",
         "skipUrlSync": true,
-        "sort": 3,
+        "sort": 0,
         "type": "query"
       },
       {
@@ -2580,7 +2580,7 @@
           "type": "prometheus",
           "uid": "${DS_PROMETHEUS}"
         },
-        "definition": "query_result(count by (le) (present_over_time(fma_dpc_innerqueue_work_duration_seconds_bucket{namespace=~\"$namespace\", node=~\"$node\"}[$__range])) or label_replace(absent_over_time(fma_dpc_innerqueue_work_duration_seconds_bucket{namespace=~\"$namespace\", node=~\"$node\"}[$__range]), \"le\", \"unavailable\", \"\", \"\"))",
+        "definition": "query_result(sort(histogram_quantile(1, label_join(group by (le) (present_over_time(fma_dpc_innerqueue_work_duration_seconds_bucket{namespace=~\"$namespace\", node=~\"$node\", le!=\"+Inf\"}[$__range])), \"bound\", \"\", \"le\") or label_replace(label_join(group by (le) (present_over_time(fma_dpc_innerqueue_work_duration_seconds_bucket{namespace=~\"$namespace\", node=~\"$node\", le!=\"+Inf\"}[$__range])), \"bound\", \"\", \"le\"), \"le\", \"+Inf\", \"\", \"\")) or label_join(group by (le) (present_over_time(fma_dpc_innerqueue_work_duration_seconds_bucket{namespace=~\"$namespace\", node=~\"$node\", le=\"+Inf\"}[$__range])), \"bound\", \"\", \"le\") * +Inf or label_replace(absent_over_time(fma_dpc_innerqueue_work_duration_seconds_bucket{namespace=~\"$namespace\", node=~\"$node\"}[$__range]), \"bound\", \"unavailable\", \"\", \"\")))",
         "hide": 2,
         "includeAll": true,
         "multi": true,
@@ -2588,13 +2588,13 @@
         "options": [],
         "query": {
           "qryType": 3,
-          "query": "query_result(count by (le) (present_over_time(fma_dpc_innerqueue_work_duration_seconds_bucket{namespace=~\"$namespace\", node=~\"$node\"}[$__range])) or label_replace(absent_over_time(fma_dpc_innerqueue_work_duration_seconds_bucket{namespace=~\"$namespace\", node=~\"$node\"}[$__range]), \"le\", \"unavailable\", \"\", \"\"))",
+          "query": "query_result(sort(histogram_quantile(1, label_join(group by (le) (present_over_time(fma_dpc_innerqueue_work_duration_seconds_bucket{namespace=~\"$namespace\", node=~\"$node\", le!=\"+Inf\"}[$__range])), \"bound\", \"\", \"le\") or label_replace(label_join(group by (le) (present_over_time(fma_dpc_innerqueue_work_duration_seconds_bucket{namespace=~\"$namespace\", node=~\"$node\", le!=\"+Inf\"}[$__range])), \"bound\", \"\", \"le\"), \"le\", \"+Inf\", \"\", \"\")) or label_join(group by (le) (present_over_time(fma_dpc_innerqueue_work_duration_seconds_bucket{namespace=~\"$namespace\", node=~\"$node\", le=\"+Inf\"}[$__range])), \"bound\", \"\", \"le\") * +Inf or label_replace(absent_over_time(fma_dpc_innerqueue_work_duration_seconds_bucket{namespace=~\"$namespace\", node=~\"$node\"}[$__range]), \"bound\", \"unavailable\", \"\", \"\")))",
           "refId": "PrometheusVariableQueryEditor-work_duration_buckets"
         },
         "refresh": 2,
-        "regex": "/le=\"([^\"]+)\"/",
+        "regex": "/bound=\"([^\"]+)\"/",
         "skipUrlSync": true,
-        "sort": 3,
+        "sort": 0,
         "type": "query"
       }
     ]
