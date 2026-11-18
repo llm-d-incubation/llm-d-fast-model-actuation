@@ -65,7 +65,9 @@ func TestReconcileNodeAvailability(t *testing.T) {
 					}
 					ctx := t.Context()
 					ctl, cs, fmaCS, _ := newStuckTestController(t, ctx, stuckTestNow, digestOnly, setupObjs...)
-					if !ctl.runUntilQuiet(t, minTotalDigestQueued, false, time.Second*3, time.Second*20) {
+					// Yes, waiting 3 seconds here makes the whole func take over a minute.
+					// This is a deliberate choice, for the sake of reliability.
+					if !ctl.runUntilQuiet(t, numDigestQueueWorkers+minTotalDigestQueued, false, time.Second*3, time.Second*20) {
 						return
 					}
 					cs.ClearActions()
@@ -93,7 +95,7 @@ func TestReconcileNodeAvailability(t *testing.T) {
 					}
 					err, requeue := ctl.processKey(ctx, stuckTestKey())
 					if err != nil {
-						t.Fatalf("reconcileKey: %v", err)
+						t.Fatalf("processKey: %v", err)
 					}
 					if templateState == "no-pods" {
 						checkActions(t, cs.Actions(), allowedActions)
@@ -143,7 +145,7 @@ func TestShutdown(t *testing.T) {
 	}()
 	ctl, _, _, _ = newStuckTestController(t, ctx, stuckTestNow, digestOnly, setupObjs...)
 
-	if !ctl.runUntilQuiet(t, len(setupObjs), false, time.Second*1, time.Second*20) {
+	if !ctl.runUntilQuiet(t, numDigestQueueWorkers+len(setupObjs), false, time.Second*1, time.Second*20) {
 		return
 	}
 }
@@ -155,14 +157,14 @@ func TestReconcileLiveNodeCreatesLauncher(t *testing.T) {
 	}
 	ctl, cs, fmaCS, _ := newStuckTestController(t, t.Context(), stuckTestNow, digestOnly, setupObjs...)
 
-	if !ctl.runUntilQuiet(t, len(setupObjs), false, time.Second*3, time.Second*20) {
+	if !ctl.runUntilQuiet(t, numDigestQueueWorkers+len(setupObjs), false, time.Second*3, time.Second*20) {
 		return
 	}
 	cs.ClearActions()
 	fmaCS.ClearActions()
 
 	if err, _ := ctl.processKey(t.Context(), stuckTestKey()); err != nil {
-		t.Fatalf("reconcileKey: %v", err)
+		t.Fatalf("processKey: %v", err)
 	}
 	checkActions(t, cs.Actions(), []actionAbstract{{"create", "pods"}})
 	checkActions(t, fmaCS.Actions(), []actionAbstract{})
@@ -178,7 +180,7 @@ func TestNodeDeletionCleansLaunchersWithoutPolicyChange(t *testing.T) {
 			ctx := t.Context()
 			_, node, _, _, objects := orphanLifecycleObjects(t, 2, true, true)
 			ctl, cs, fmaCS, _ := newStuckTestController(t, ctx, stuckTestNow, digestAndKeys, objects...)
-			if !ctl.runUntilQuiet(t, len(objects)-2, true, time.Second*3, time.Second*20) {
+			if !ctl.runUntilQuiet(t, numDigestQueueWorkers+len(objects)-2, true, time.Second*3, time.Second*20) {
 				return
 			}
 			checkPodPresent(t, cs, stuckTestNamespace, "orphan")
@@ -226,7 +228,7 @@ func TestPopulationPolicyDownscaleCleansLaunchers(t *testing.T) {
 	lpp, _, _, _, objects := orphanLifecycleObjects(t, 2, true, true)
 	ctl, cs, fmaCS, _ := newStuckTestController(t, t.Context(), stuckTestNow, digestAndKeys, objects...)
 
-	if !ctl.runUntilQuiet(t, len(objects)-2, true, time.Second*3, time.Second*20) {
+	if !ctl.runUntilQuiet(t, numDigestQueueWorkers+len(objects)-2, true, time.Second*3, time.Second*20) {
 		return
 	}
 	checkPodPresent(t, cs, stuckTestNamespace, "orphan")
@@ -338,6 +340,11 @@ var errNotQuiet = errors.New("controller did not quiesce in time")
 // work items have been enqueued.
 // This waiting is insensitive to the delayed enqueues from either queue's `AddAfter` method,
 // so caveat emptor.
+// There is also an unavoidable timing splinter due to the fact that the `Get` method
+// of the imported queue is not atomic wrt behavior added in this package.
+// Callers MUST pass an adequate timeout to give high confidence that the controller
+// really has reached the intended quiescence; if this func returns too early
+// then the remainder of the calling test func can flail arbitrarily.
 func (ctl *controller) runUntilQuiet(t *testing.T, minTotalDigestQueued int, keyQueueActive bool, idleTime, timeout time.Duration) bool {
 	ctxTimed, cancel := context.WithTimeoutCause(t.Context(), timeout, errNotQuiet)
 	defer cancel()
@@ -437,7 +444,7 @@ func waitForNodeDeletingInCache(t *testing.T, ctl *controller, nodeName string) 
 			return false, errors.New("Node " + nodeName + " not found")
 		}
 		if node.DeletionTimestamp == nil {
-			t.Logf("Node %v not is not yet being deleted", nodeName)
+			t.Logf("Node %v is not yet being deleted", nodeName)
 			return false, nil
 		}
 		t.Logf("Node %s in the cache shows deletion in progress", nodeName)

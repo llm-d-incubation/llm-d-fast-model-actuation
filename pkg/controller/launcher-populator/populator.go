@@ -50,6 +50,9 @@ type Controller interface {
 	Start(context.Context) error
 }
 
+// There is only 1 worker for the digest queue, to serialize digest mutations.
+const numDigestQueueWorkers = 1
+
 // NewController makes a new dual pods controller.
 // The given namespace is the one to focus on.
 func NewController(
@@ -87,12 +90,11 @@ func NewController(
 	ctl.recorder = ctl.eventBroadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: ControllerName})
 	ctl.policy = newDigestedPolicy()
 
-	// digestQueue carries funcItem (LC/LPP/Node references). Single worker, so
-	// digest mutations are serial. KnowsProcessedSync emits the
-	// onDigestSyncProcessed hook after the initial batch drains, which is when
-	// keyQueue's workers start.
+	// digestQueue carries funcItem (LC/LPP/Node references). KnowsProcessedSync
+	// calls the onDigestSyncProcessed hook after the initial batch drains,
+	// which is when keyQueue's workers start.
 	digestQueue := genctlr.NewKnowsProcessedSync(
-		ControllerName+"-digest", 1,
+		ControllerName+"-digest", numDigestQueueWorkers,
 		ctl.processDigestItem,
 		makeDigestSentinel, isDigestSentinel,
 		ctl.onDigestSyncProcessed,
@@ -369,8 +371,8 @@ func (ctl *controller) startSansWorkers(ctx context.Context) error {
 }
 
 // onDigestSyncProcessed is invoked by KnowsProcessedSync after the initial
-// batch of digest items has been drained. It starts keyQueue workers, which
-// process per-NodeLauncherKey reconciliation requests.
+// batch of digest items has been drained. (Unless suppressed for testing) it
+// starts keyQueue workers, which process per-NodeLauncherKey reconciliation requests.
 func (ctl *controller) onDigestSyncProcessed(ctx context.Context) {
 	logger := klog.FromContext(ctx)
 	ctl.policy.mu.RLock()
