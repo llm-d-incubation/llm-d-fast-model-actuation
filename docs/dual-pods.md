@@ -879,12 +879,19 @@ Using the proxy remains optional for clients: they can send traffic to
 the requester's proxy port, or continue to reach the inference server
 through another data path.
 
-For a launcher-based provider, the controller applies the
-InferenceServerConfig routing labels queried by the EPP to the launcher
-Pod once its bound instance is serving. It then configures the
-requester's proxy and relays readiness to the requester. The launcher
-can therefore match the EPP's labels before the requester's proxy is
-listening; clients using the proxy should wait for requester readiness.
+For the requester-proxy deployment in the
+[llm-d Fast Model Actuation guide](https://github.com/llm-d/llm-d/tree/main/guides/fast-model-actuation),
+put the labels matched by the InferencePool on the requester Pod template.
+Use the same port for the requester's `--proxy-port` and the
+`InferencePool.spec.targetPorts` entry. The guide uses `8000` for both.
+The EPP selects requester Pods, and the proxy forwards traffic to the
+bound instance's assigned port from `LauncherConfig.spec.inferencePorts`.
+Keep the requester's readiness probe enabled so the pool can route to
+requesters whose bound instance is ready.
+
+The controller applies `InferenceServerConfig.spec.modelServerConfig.labels`
+to the launcher Pod while it is bound. For the requester-proxy deployment,
+use an InferencePool selector that matches only the requester Pods.
 
 The proxy operates as a simple TCP-level forwarder: each incoming
 client connection results in a new outbound connection to the
