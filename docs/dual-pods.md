@@ -885,10 +885,10 @@ ports.
   server-requesting `Pod`.
 
 - **Old API** - The inference port is specified in the
-  `.spec.modelServingConfig.port` of the `InferenceServerConfig`
-  object. Also, that object's `.spec.modelServingConfig.labels`
-  include those that the EPP seeks. Inference requests get to vLLM
-  without going through the requester's TCP proxy.
+  `.spec.modelServerConfig.port` of the `InferenceServerConfig`
+  object. Also, that object's `.spec.modelServerConfig.labels` include
+  those that the EPP seeks. Inference requests get to vLLM without
+  going through the requester's TCP proxy.
 
 **NOTE WELL:** the old API is **DEPRECATED**. It will be removed in
   the next FMA release. Users **MUST** switch to the new API. Users of
