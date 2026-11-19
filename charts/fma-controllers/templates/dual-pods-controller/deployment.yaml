@@ -87,6 +87,9 @@ spec:
         - containerPort: 8002
           name: metrics
           protocol: TCP
+        resources:
+          requests:
+            ephemeral-storage: "250Mi"
 {{- if .Values.global.produceCoverdata }}
         env:
         - name: GOCOVERDIR

@@ -283,6 +283,8 @@ fi)
             initialDelaySeconds: 2
             periodSeconds: 5
           resources:
+            requests:
+              ephemeral-storage: "250Mi"
             limits:
               nvidia.com/gpu: "1"
               cpu: "200m"
