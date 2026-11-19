@@ -877,18 +877,20 @@ Clients normally reach vLLM through this TCP proxy. In FMA release
 0.8.0 users can choose either the old or the new API for inference
 ports.
 
-- **New API** - Inference ports are listed in the
-  `.spec.inferencePorts` of the `LauncherConfig`. The dual-pods
+- **New API** - The model deployer lists allowed inference ports in
+  the `.spec.inferencePorts` of the `LauncherConfig`. The dual-pods
   controller picks the inference port for a given vLLM instance from
   that pool. Inference requests go through the TCP proxy of the
-  requester. The `Pod` labels that the EPP seeks appear on the
-  server-requesting `Pod`.
+  requester. The model deployer ensures that the server-requesting
+  `Pod` matches the label query that the EPP uses to find
+  inference-serving `Pod`s.
 
-- **Old API** - The inference port is specified in the
+- **Old API** - The model deployer specifies the inference port in the
   `.spec.modelServerConfig.port` of the `InferenceServerConfig`
-  object. Also, that object's `.spec.modelServerConfig.labels` include
-  those that the EPP seeks. Inference requests get to vLLM without
-  going through the requester's TCP proxy.
+  object. The model deployer also ensures that the
+  `.spec.modelServerConfig.labels` include those that the EPP
+  seeks. Inference requests get to vLLM without going through the
+  requester's TCP proxy.
 
 **NOTE WELL:** the old API is **DEPRECATED**. It will be removed in
   the next FMA release. Users **MUST** switch to the new API. Users of
