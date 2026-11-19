@@ -284,7 +284,7 @@ fi)
             periodSeconds: 5
           resources:
             requests:
-              ephemeral-storage: "250Mi"
+              ephemeral-storage: "10Mi"
             limits:
               nvidia.com/gpu: "1"
               cpu: "200m"

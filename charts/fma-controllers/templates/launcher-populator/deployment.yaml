@@ -22,6 +22,15 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
         scrape: "true"
     spec:
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - preference:
+              matchExpressions:
+              - key: "nvidia.com/gpu.present"
+                operator: NotIn
+                values: [ "true" ]
+            weight: 10
       serviceAccountName: {{ .Release.Name }}-fma-controllers
       containers:
         - name: launcher-populator
