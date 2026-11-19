@@ -864,6 +864,30 @@ The relay of readiness goes as follows.
   controller tells the requester that the inference server is not
   ready (if the controller has not already done so).
 
+### InferencePool Routing with Launchers
+
+In the InferencePool, set `spec.selector` to match the Pods that receive
+inference traffic and `spec.targetPorts` to the port they serve on.
+
+- **Direct to the launcher Pod.** Put the selector labels in
+  `InferenceServerConfig.spec.modelServerConfig.labels`. The dual-pods
+  controller applies them to the launcher Pod once the bound instance is
+  serving. Ensure requester Pods and unbound launchers do not match the
+  selector. To use a fixed inference port across the selected launchers,
+  set `LauncherConfig.spec.maxInstances` to `1` and configure a single
+  port in `LauncherConfig.spec.inferencePorts`. Set the InferencePool
+  target port to that same port.
+
+- **Through the requester TCP proxy.** Put the selector labels on the
+  requester Pod template and ensure the selector matches only requester
+  Pods, including when the controller applies ISC labels to a launcher.
+  Set the InferencePool target port to the requester's `--proxy-port`.
+  The controller assigns the bound instance a backend port from
+  `LauncherConfig.spec.inferencePorts` and configures the proxy to
+  forward to it. Configure the requester's HTTP readiness probe to call
+  `/ready` on its `--probes-port` so that Pod readiness reflects the
+  bound instance's readiness.
+
 ### Requester TCP Proxy
 
 The requester container includes a TCP proxy server that can forward
@@ -878,20 +902,6 @@ listening on its proxy port before the PUT returns successfully.
 Using the proxy remains optional for clients: they can send traffic to
 the requester's proxy port, or continue to reach the inference server
 through another data path.
-
-For the requester-proxy deployment in the
-[llm-d Fast Model Actuation guide](https://github.com/llm-d/llm-d/tree/main/guides/fast-model-actuation),
-put the labels matched by the InferencePool on the requester Pod template.
-Use the same port for the requester's `--proxy-port` and the
-`InferencePool.spec.targetPorts` entry. The guide uses `8000` for both.
-The EPP selects requester Pods, and the proxy forwards traffic to the
-bound instance's assigned port from `LauncherConfig.spec.inferencePorts`.
-Keep the requester's readiness probe enabled so the pool can route to
-requesters whose bound instance is ready.
-
-The controller applies `InferenceServerConfig.spec.modelServerConfig.labels`
-to the launcher Pod while it is bound. For the requester-proxy deployment,
-use an InferencePool selector that matches only the requester Pods.
 
 The proxy operates as a simple TCP-level forwarder: each incoming
 client connection results in a new outbound connection to the
