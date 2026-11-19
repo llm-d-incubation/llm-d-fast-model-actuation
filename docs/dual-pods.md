@@ -867,24 +867,50 @@ The relay of readiness goes as follows.
 ### Requester TCP Proxy
 
 The requester container includes a TCP proxy server that can forward
-inference requests to the actual vLLM instance running in the
+inference (and any others that use the same port, such as Prometheus
+metrics scraping) requests to the actual vLLM instance running in the
 server-providing Pod (typically managed by the launcher). This lets
 clients send requests to the server-requesting Pod without needing to
 know the port that vLLM is listening on.
 
-After binding the Pods, the dual-pods controller configures the proxy
-when the server-providing Pod has an IP address. The requester then starts
-listening on its proxy port before the PUT returns successfully.
-Using the proxy remains optional for clients: they can send traffic to
-the requester's proxy port, or continue to reach the inference server
-through another data path.
+Clients normally reach vLLM through this TCP proxy. In FMA release
+0.8.0 users can choose either the old or the new API for inference
+ports.
 
-For a launcher-based provider, the controller applies the
-InferenceServerConfig routing labels queried by the EPP to the launcher
-Pod once its bound instance is serving. It then configures the
-requester's proxy and relays readiness to the requester. The launcher
-can therefore match the EPP's labels before the requester's proxy is
-listening; clients using the proxy should wait for requester readiness.
+- **New API** - Inference ports are listed in the
+  `.spec.inferencePorts` of the `LauncherConfig`. The dual-pods
+  controller picks the inference port for a given vLLM instance from
+  that pool. Inference requests go through the TCP proxy of the
+  requester. The `Pod` labels that the EPP seeks appear on the
+  server-requesting `Pod`.
+
+- **Old API** - The inference port is specified in the
+  `.spec.modelServingConfig.port` of the `InferenceServerConfig`
+  object. Also, that object's `.spec.modelServingConfig.labels`
+  include those that the EPP seeks. Inference requests get to vLLM
+  without going through the requester's TCP proxy.
+
+**NOTE WELL:** the old API is **DEPRECATED**. It will be removed in
+  the next FMA release. Users **MUST** switch to the new API. Users of
+  shared clusters will be polled for compliance.
+
+After binding the Pods, the dual-pods controller waits until the IP
+address and inference port number of the vLLM instances are known and
+then configures the proxy. The requester then starts listening on its
+proxy port before the configuration operation returns successfully.
+
+In the case of using a launcher Pod (rather than a direct (i.e., milestone
+2) provider), the dual-pods controller chooses the inference port
+number for vLLM from those listed in the `.spec.inferencePorts` of the
+`LauncherConfig` object, naturally avoiding ones that are being used
+by other vLLM instances in the same launcher.
+
+For a launcher-based provider, the controller applies the labels and
+annotations specified in the InferenceServerConfig (regardless of
+whether the EPP cares about them) to the launcher Pod once its bound
+instance is serving. It then configures the requester's proxy and
+relays readiness to the requester. The inference clients using the
+proxy should wait for requester readiness.
 
 The proxy operates as a simple TCP-level forwarder: each incoming
 client connection results in a new outbound connection to the
