@@ -227,6 +227,14 @@ func TestLauncherPhaseOfEmptyCurrentHash(t *testing.T) {
 	}
 }
 
+func cleanupLcfgPhases(t *testing.T, lcfg string) {
+	t.Cleanup(func() {
+		for phase := range (phaseCounts{}).forEach {
+			launcherPodCountGauge.DeleteLabelValues(lcfg, string(phase))
+		}
+	})
+}
+
 // gatheredPhases returns a map from phase to the value currently reported by the
 // fma_launcher_pod_count metric for the given LauncherConfig name. It reads the
 // registry directly (not WithLabelValues, which would lazily create a missing
@@ -293,7 +301,6 @@ func assertLcfgPhases(t *testing.T, lcfg string, bound, unbound, stuckScheduling
 // it has no launcher Pods on any node.
 func TestMetricsStatePublish(t *testing.T) {
 	registerMetrics()
-	launcherPodCountGauge.Reset() // isolate this test's series from others
 	ms := newMetricsState()
 	const lcfg = "lc-publish-test"
 	keyA := NodeLauncherKey{NodeName: "nodeA", LauncherConfigName: lcfg}
@@ -340,7 +347,6 @@ func TestMetricsStatePublish(t *testing.T) {
 // no series.
 func TestMetricsStatePublishZeroForAbsentKey(t *testing.T) {
 	registerMetrics()
-	launcherPodCountGauge.Reset()
 	ms := newMetricsState()
 	ms.publish(NodeLauncherKey{NodeName: "n", LauncherConfigName: "never"}, phaseCounts{})
 	if len(ms.perLCFG) != 0 {
@@ -356,7 +362,6 @@ func TestMetricsStatePublishZeroForAbsentKey(t *testing.T) {
 // conditions required for deletion.
 func TestMetricsStateDeletesAllLCFGSeries(t *testing.T) {
 	registerMetrics()
-	launcherPodCountGauge.Reset()
 	ms := newMetricsState()
 	const lcfg = "lc-delete-all-series"
 
@@ -371,9 +376,9 @@ func TestMetricsStateDeletesAllLCFGSeries(t *testing.T) {
 // not interfere: aggregation is per-lcfg and deleting one leaves the other.
 func TestMetricsStatePublishIndependentLcfgs(t *testing.T) {
 	registerMetrics()
-	launcherPodCountGauge.Reset()
 	ms := newMetricsState()
 	const lcX, lcY = "lc-x", "lc-y"
+	cleanupLcfgPhases(t, lcY)
 
 	t.Run("both present independently", func(t *testing.T) {
 		ms.publish(NodeLauncherKey{NodeName: "n1", LauncherConfigName: lcX}, phaseCounts{unbound: 2})
@@ -396,10 +401,10 @@ func TestMetricsStatePublishIndependentLcfgs(t *testing.T) {
 // -race to catch unsynchronized access to perLCFG / agg / the gauge.
 func TestMetricsStatePublishConcurrent(t *testing.T) {
 	registerMetrics()
-	launcherPodCountGauge.Reset()
 	ms := newMetricsState()
 	const lcfg = "lc-concurrent"
 	const nKeys = 32
+	cleanupLcfgPhases(t, lcfg)
 
 	var wg sync.WaitGroup
 	for i := 0; i < nKeys; i++ {
@@ -420,7 +425,6 @@ func TestMetricsStatePublishConcurrent(t *testing.T) {
 // series appear as soon as either does and disappear only once neither holds.
 func TestMetricsStateSetLCExists(t *testing.T) {
 	registerMetrics()
-	launcherPodCountGauge.Reset()
 	ms := newMetricsState()
 	const lcfg = "lc-exists"
 	key := NodeLauncherKey{NodeName: "n1", LauncherConfigName: lcfg}
@@ -453,7 +457,6 @@ func TestMetricsStateSetLCExists(t *testing.T) {
 // it.
 func TestMetricsStateLauncherPrecedesLCObject(t *testing.T) {
 	registerMetrics()
-	launcherPodCountGauge.Reset()
 	ms := newMetricsState()
 	const lcfg = "lc-launcher-first"
 	key := NodeLauncherKey{NodeName: "n1", LauncherConfigName: lcfg}
@@ -485,7 +488,6 @@ func TestMetricsStateLauncherPrecedesLCObject(t *testing.T) {
 // explicit zeros, then vanish when the LauncherConfig is deleted.
 func TestMetricsStateLCObjectOutlivesLaunchers(t *testing.T) {
 	registerMetrics()
-	launcherPodCountGauge.Reset()
 	ms := newMetricsState()
 	const lcfg = "lc-outlive"
 	key := NodeLauncherKey{NodeName: "n1", LauncherConfigName: lcfg}
@@ -690,7 +692,6 @@ func TestRecordLauncherPhases(t *testing.T) {
 	base := time.Date(2026, 6, 21, 12, 0, 0, 0, time.UTC)
 
 	setup := func() (*controller, *recordingQueue) {
-		launcherPodCountGauge.Reset()
 		q := &recordingQueue{}
 		ctl := &controller{
 			stuckSchedulingThreshold: stuckSchedulingThreshold,
@@ -705,6 +706,7 @@ func TestRecordLauncherPhases(t *testing.T) {
 	t.Run("publishes counts and schedules the future stuck-starting transition", func(t *testing.T) {
 		ctl, q := setup()
 		key := NodeLauncherKey{NodeName: "n1", LauncherConfigName: "lc-rec"}
+		cleanupLcfgPhases(t, key.LauncherConfigName)
 		// Unbound, not Ready, scheduled exactly at (fake) now -> counts down and
 		// becomes stuck_starting exactly stuckStartingThreshold later.
 		pods := []*corev1.Pod{newBuilder().scheduledAt(base).pod()}
@@ -726,6 +728,7 @@ func TestRecordLauncherPhases(t *testing.T) {
 	t.Run("does not schedule when nothing is counting down", func(t *testing.T) {
 		ctl, q := setup()
 		key := NodeLauncherKey{NodeName: "n1", LauncherConfigName: "lc-rec2"}
+		cleanupLcfgPhases(t, key.LauncherConfigName)
 		// Ready -> unbound but never becomes stuck_starting.
 		pods := []*corev1.Pod{newBuilder().ready().scheduledAt(base).pod()}
 
