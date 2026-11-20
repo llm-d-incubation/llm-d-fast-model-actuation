@@ -73,6 +73,15 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
         scrape: "true"
     spec:
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - preference:
+              matchExpressions:
+              - key: "nvidia.com/gpu.present"
+                operator: NotIn
+                values: [ "true" ]
+            weight: 10
       containers:
       - name: controller
         image: "{{ .Values.global.imageRegistry }}/dual-pods-controller:{{ .Values.global.imageTag }}"
@@ -87,6 +96,9 @@ spec:
         - containerPort: 8002
           name: metrics
           protocol: TCP
+        resources:
+          requests:
+            ephemeral-storage: "250Mi"
 {{- if .Values.global.produceCoverdata }}
         env:
         - name: GOCOVERDIR

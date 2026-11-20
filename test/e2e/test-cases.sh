@@ -169,7 +169,7 @@ spec:
     resources:
       limits:
         nvidia.com/gpu: "2"
-        ephemeral-storage: "10Gi"
+        ephemeral-storage: "10.5Gi"
       requests:
         memory: "11Gi"
         cpu: 2
