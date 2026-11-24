@@ -28,7 +28,7 @@ push-launcher:
 
 .PHONY: build-and-push-launcher
 build-and-push-launcher:
-	docker buildx build --push -t $(LAUNCHER_IMAGE) -f dockerfiles/Dockerfile.launcher.benchmark . --progress=plain --platform linux/amd64
+	docker buildx build --push -t $(LAUNCHER_IMAGE) -f dockerfiles/Dockerfile.launcher.benchmark . --progress=plain --platform linux/amd64,linux/arm64
 
 .PHONY: build-requester
 build-requester:
