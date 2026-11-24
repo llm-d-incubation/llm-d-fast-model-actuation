@@ -136,7 +136,7 @@ spec:
           spec:
             containers:
             - name: inference-server
-              image: docker.io/vllm/vllm-openai:v0.26.0
+              image: docker.io/vllm/vllm-openai:v0.32.0
               imagePullPolicy: IfNotPresent
               command:
               - vllm
@@ -212,7 +212,7 @@ spec:
           spec:
             containers:
             - name: inference-server
-              image: docker.io/vllm/vllm-openai:v0.26.0
+              image: docker.io/vllm/vllm-openai:v0.32.0
               imagePullPolicy: IfNotPresent
               command:
               - vllm
@@ -316,7 +316,7 @@ command:
 env:
   - name: CUDA_VISIBLE_DEVICES
     value: "0"
-image: docker.io/vllm/vllm-openai:v0.26.0
+image: docker.io/vllm/vllm-openai:v0.32.0
 imagePullPolicy: IfNotPresent
 name: inference-server
 ports:
